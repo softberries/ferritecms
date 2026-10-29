@@ -55,9 +55,9 @@ pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MarkCounts,
     MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
-    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
-    retained_marker,
+    PluginRepo, PoolStats, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
+    UserRepo, retained_marker,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,

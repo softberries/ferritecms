@@ -464,10 +464,35 @@ retry `system:write`) have:
   page cache's pending maintenance on each call: fine for an admin page, not for a
   tight polling loop.
 
-**Planned (M4).** A node-local metrics registry and `/metrics` (Prometheus); in cluster
-mode each node writes a 1-minute summary row (`node_metrics`, retained 7 days) so the
-dashboard can show cluster-wide figures and time series. (Prometheus remains the source
-of truth for real monitoring.)
+**As built (M4-2 P34): the registry and `/metrics`.** Each node has one registry
+(`ferrite_http::metrics::Metrics`, built by `serve`); the families, labels and buckets
+are in [01 §7](01-architecture.md#7-observability). `/metrics` is served only when
+`[server] metrics_listen` is set (for example `"127.0.0.1:9464"`; off by default), on
+that separate listener, which answers `GET /metrics` and nothing else (another path is
+`404`, another method `405`). It has no auth: bind it to loopback or a private network
+and let Prometheus scrape each node. The public listener never serves it (`/metrics`
+there is an ordinary page path: a redirect to `/metrics/`, then the 404 page). A bind
+failure stops startup like `server.listen`'s; the listener stops with the background
+tasks at shutdown, so the drain can still be scraped. Counters start at zero when the
+node starts.
+
+Prometheus scrape config, per node:
+
+```yaml
+scrape_configs:
+  - job_name: ferrite
+    static_configs:
+      - targets: ["10.0.0.5:9464", "10.0.0.6:9464"]
+```
+
+`Metrics::snapshot()` gives the cumulative counters (requests, 5xx errors, page views,
+cache hits and misses, plugin calls and failures, jobs completed and failed attempts of
+this node's runner, and the page-class latency buckets) that the per-minute
+`node_metrics` rows are made from.
+
+**Planned (M4-2).** Each node writes a 1-minute summary row (`node_metrics`, retained 7
+days) so the dashboard can show cluster-wide figures and time series. (Prometheus
+remains the source of truth for real monitoring.)
 
 ## 7. Packaging
 
@@ -582,8 +607,8 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (`mode`
-is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `backup` the `[backup] schedule`), exit
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> backup=<off|daily|weekly>` (`mode`
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `metrics` the `server.metrics_listen` address, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.

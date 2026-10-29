@@ -15,8 +15,8 @@ use std::{fs::File, path::PathBuf};
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
-    check_lock_name,
+    Backend, Channel, LockGuard, MigrationStatus, PoolStats, Repos, Store, StoreError,
+    Subscription, Tx, check_lock_name,
 };
 use sqlx::SqlitePool;
 
@@ -44,6 +44,18 @@ pub struct SqliteStore {
 impl Store for SqliteStore {
     fn backend(&self) -> Backend {
         Backend::Sqlite
+    }
+
+    fn pool_stats(&self) -> PoolStats {
+        let (idle, size) = [&self.reader, &self.writer]
+            .into_iter()
+            .fold((0u64, 0u64), |(idle, size), pool| {
+                (idle + pool.num_idle() as u64, size + u64::from(pool.size()))
+            });
+        PoolStats {
+            idle,
+            used: size.saturating_sub(idle),
+        }
     }
 
     fn read(&self) -> &dyn Repos {

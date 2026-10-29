@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use ferrite_domain::Job;
 
 pub use runner::{
-    ABORT_WAIT, EXTEND_EVERY, IDLE_POLL, JOB_DRAIN, JobRunner, LEASE, RELEASE_BUDGET, RunnerConfig,
+    ABORT_WAIT, EXTEND_EVERY, IDLE_POLL, JOB_DRAIN, JobCounters, JobRunner, LEASE, RELEASE_BUDGET,
+    RunnerConfig,
 };
 pub use scheduler::{Periodic, SCHEDULER_TICK, Scheduler, period_key};
 

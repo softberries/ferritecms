@@ -1286,4 +1286,125 @@ backend_tests_spawning!(
     scheduled_post_publishes_via_job,
     purge_job_runs_through_the_runner,
     shutdown_releases_running_job_and_deregisters,
+    metrics_listener_off_by_default,
+    metrics_not_on_public_listener,
 );
+
+/// Finishes at once (`ok`) or fails for good: what the job counters count.
+struct Quick {
+    kind: &'static str,
+    ok: bool,
+}
+
+#[async_trait]
+impl JobHandler for Quick {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        if self.ok {
+            Ok(())
+        } else {
+            Err(JobError::Permanent("test failure".into()))
+        }
+    }
+}
+
+/// M4-2 P34: without `server.metrics_listen` no metrics listener is bound, and the
+/// public site has no `/metrics`.
+async fn metrics_listener_off_by_default(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    assert_eq!(site.config.server.metrics_listen, None);
+    let node = site.start(&db, NodeOptions::default()).await;
+    assert_eq!(node.metrics_addr, None);
+    // A plain page path there: the canonical redirect, then the 404 page.
+    let (status, body) = get(node.addr, "/metrics").await;
+    assert_eq!(status, 301, "{body}");
+    let (status, body) = get(node.addr, "/metrics/").await;
+    assert_eq!(status, 404, "{body}");
+    assert!(!body.contains("ferrite_build_info"), "{body}");
+    node.shutdown().await.unwrap();
+}
+
+/// M4-2 P34: `/metrics` is served on `server.metrics_listen` only (GET `/metrics`,
+/// nothing else there), never on the public listener; it counts the node's requests
+/// and finished jobs.
+async fn metrics_not_on_public_listener(db: Arc<TestDb>) {
+    let mut site = Site::new(&db);
+    site.config.server.metrics_listen = Some("127.0.0.1:0".parse().unwrap());
+    let node = site
+        .start(
+            &db,
+            NodeOptions {
+                extra_handlers: vec![
+                    Arc::new(Quick {
+                        kind: "test.quick",
+                        ok: true,
+                    }),
+                    Arc::new(Quick {
+                        kind: "test.broken",
+                        ok: false,
+                    }),
+                ],
+                ..NodeOptions::default()
+            },
+        )
+        .await;
+    let metrics_addr = node.metrics_addr.expect("metrics listener bound");
+    assert_ne!(metrics_addr, node.addr);
+
+    let (status, body) = get(node.addr, "/").await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = get(node.addr, "/metrics").await;
+    assert_eq!(status, 301, "public listener: {body}");
+    let (status, body) = get(node.addr, "/metrics/").await;
+    assert_eq!(status, 404, "public listener: {body}");
+    assert!(!body.contains("ferrite_build_info"), "{body}");
+
+    let (status, body) = get(metrics_addr, "/metrics").await;
+    assert_eq!(status, 200, "{body}");
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        body.contains(&format!(
+            "ferrite_build_info{{version=\"{version}\",target="
+        )),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"2xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"3xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"4xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(body.contains("ferrite_nodes 1\n"), "{body}");
+    // Only GET /metrics answers there.
+    let (status, _) = get(metrics_addr, "/").await;
+    assert_eq!(status, 404);
+    let (status, _) = get(metrics_addr, "/api/v1/system/status").await;
+    assert_eq!(status, 404);
+
+    // Finished jobs are counted for the per-minute rows (Task 8).
+    let store = db.shared_store();
+    for kind in ["test.quick", "test.broken"] {
+        store
+            .read()
+            .jobs()
+            .enqueue(&NewJob::new(kind, json!({"v": 1})))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    eventually(Duration::from_secs(10), "jobs counted", || {
+        let snap = node.metrics.snapshot();
+        async move { snap.jobs_done >= 1 && snap.jobs_failed >= 1 }
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}

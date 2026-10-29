@@ -2,7 +2,15 @@
 //! registered kinds, runs each on its own task, renews every in-flight lease and records
 //! the outcome under the lease token, so a node that lost its lease writes nothing (P6).
 
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use ferrite_domain::{Job, JobLease, NodeId};
 use ferrite_store::{
@@ -68,6 +76,28 @@ impl RunnerConfig {
     }
 }
 
+/// What a runner finished since it started (M4-2 P35: the per-minute `node_metrics`
+/// rows diff these): jobs it completed, and attempts that failed (a retry or a
+/// permanent failure, recorded under the lease). A `Busy` release, a lost lease and an
+/// outcome that could not be written are not counted.
+#[derive(Debug, Default)]
+pub struct JobCounters {
+    done: AtomicU64,
+    failed: AtomicU64,
+}
+
+impl JobCounters {
+    /// Jobs completed.
+    pub fn done(&self) -> u64 {
+        self.done.load(Ordering::Relaxed)
+    }
+
+    /// Attempts that failed.
+    pub fn failed(&self) -> u64 {
+        self.failed.load(Ordering::Relaxed)
+    }
+}
+
 /// Runs the jobs of its handlers' kinds on this node.
 pub struct JobRunner {
     store: Arc<dyn Store>,
@@ -75,6 +105,7 @@ pub struct JobRunner {
     handlers: HashMap<&'static str, Arc<dyn JobHandler>>,
     /// The handler kinds, sorted: only these are claimed (P5).
     kinds: Vec<String>,
+    counters: Arc<JobCounters>,
 }
 
 impl JobRunner {
@@ -108,7 +139,14 @@ impl JobRunner {
             config,
             handlers: map,
             kinds,
+            counters: Arc::default(),
         })
+    }
+
+    /// Counts finished jobs into `counters` (default: counters of its own, unread).
+    pub fn with_counters(mut self, counters: Arc<JobCounters>) -> Self {
+        self.counters = counters;
+        self
     }
 
     /// Runs the runner on the current runtime until `stop` is cancelled, then drains
@@ -394,7 +432,10 @@ impl State {
     async fn record(&self, job: &InFlight, outcome: Result<(), JobError>) {
         match outcome {
             Ok(()) => match self.bounded(self.jobs().complete(&job.lease)).await {
-                Ok(true) => tracing::debug!(parent: &job.span, "job done"),
+                Ok(true) => {
+                    self.runner.counters.done.fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!(parent: &job.span, "job done");
+                }
                 Ok(false) => {
                     tracing::warn!(parent: &job.span, "lease lost before completion; result dropped");
                 }
@@ -419,6 +460,7 @@ impl State {
             .await
         {
             Ok(Some(status)) => {
+                self.runner.counters.failed.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(parent: span, error, %status, "job attempt failed");
             }
             Ok(None) => {

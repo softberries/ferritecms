@@ -208,6 +208,9 @@ impl Store for CountingStore {
     fn backend(&self) -> Backend {
         self.inner.store.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.store.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         &self.repos
     }

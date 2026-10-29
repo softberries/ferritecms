@@ -275,10 +275,33 @@ fn parse_server(cx: &mut Cx, root: &mut Table) -> ServerConfig {
             }
         }
     }
+    // `/metrics` on a listener of its own (P34); a clash with `listen` is refused here
+    // rather than as a bind error (port 0 asks for a free port each time, so no clash).
+    let metrics_listen = match cx.string(&mut t, "server", "metrics_listen") {
+        Some(s) => match s.parse::<SocketAddr>() {
+            Ok(a) if a == listen && a.port() != 0 => {
+                cx.push(
+                    "server.metrics_listen",
+                    "must differ from server.listen (metrics are never on the public listener)",
+                );
+                None
+            }
+            Ok(a) => Some(a),
+            Err(_) => {
+                cx.push(
+                    "server.metrics_listen",
+                    "must be a socket address such as \"127.0.0.1:9464\"",
+                );
+                None
+            }
+        },
+        None => None,
+    };
     cx.unknown(t, "server");
     ServerConfig {
         listen,
         trusted_proxies,
+        metrics_listen,
     }
 }
 
@@ -1054,7 +1077,9 @@ pub fn render_default_toml(
     out.push_str(&format!("url = {}\n", q(site_url)));
     out.push_str(&format!("title = {}\n", q(title)));
     out.push_str("locale = \"en\"\ntimezone = \"UTC\"\n\n");
-    out.push_str("[server]\nlisten = \"127.0.0.1:8080\"\ntrusted_proxies = []\n\n");
+    out.push_str("[server]\nlisten = \"127.0.0.1:8080\"\ntrusted_proxies = []\n");
+    out.push_str("# Serve GET /metrics (Prometheus text, no auth) on this separate address; off when unset.\n");
+    out.push_str("# metrics_listen = \"127.0.0.1:9464\"\n\n");
     out.push_str("[database]\n");
     out.push_str(&format!(
         "url = {}\n",

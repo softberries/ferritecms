@@ -1303,3 +1303,67 @@ fn backup_template_is_commented_and_parses_uncommented() {
     assert_eq!(c.backup.keep, 7);
     assert!(c.backup.with_media);
 }
+
+#[test]
+fn metrics_listen_is_off_by_default_and_parsed() {
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().server.metrics_listen, None);
+
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n"
+        )),
+        &[],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+
+    let (_d, r) = run(
+        Some(MIN),
+        &[("FERRITE_SERVER__METRICS_LISTEN", "0.0.0.0:9100")],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("0.0.0.0:9100".parse().unwrap())
+    );
+
+    // Not an address, or the public listener's own address: refused.
+    for bad in [
+        "metrics_listen = \"nope\"\n",
+        "metrics_listen = 9464\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{bad}")), &[]);
+        assert_eq!(paths(&r.unwrap_err()), ["server.metrics_listen"], "{bad}");
+    }
+    // Port 0 on both (tests): two different free ports, so not a clash.
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[server]\nlisten = \"127.0.0.1:0\"\nmetrics_listen = \"127.0.0.1:0\"\n"
+        )),
+        &[],
+    );
+    assert!(r.is_ok());
+}
+
+#[test]
+fn metrics_listen_template_is_commented() {
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    assert!(
+        rendered.contains("# metrics_listen = \"127.0.0.1:9464\"\n"),
+        "{rendered}"
+    );
+    let uncommented = rendered.replace(
+        "# metrics_listen = \"127.0.0.1:9464\"\n",
+        "metrics_listen = \"127.0.0.1:9464\"\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ferrite.toml"), uncommented).unwrap();
+    let c = load(dir.path(), env(&[])).unwrap();
+    assert_eq!(
+        c.server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+}
