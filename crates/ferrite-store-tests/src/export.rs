@@ -3,7 +3,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use ferrite_store::{
-    ExportReader, StoreError,
+    ARTIFACT_UNREFERENCED_SQL, ExportReader, StoreError,
     catalogue::{self, BACKEND_SPECIFIC, ColType, Export, Row, TABLES, TableSpec},
 };
 use serde_json::{Value, json};
@@ -61,6 +61,12 @@ pub async fn catalogue_matches_live_schema(db: &TestDb) {
                     "{}.{c}: {ty:?} vs {live_ty}",
                     spec.name
                 );
+                assert_eq!(
+                    spec.is_nullable(c),
+                    t.nullable.iter().any(|n| n == c),
+                    "{}.{c}: nullability",
+                    spec.name
+                );
             }
             continue;
         }
@@ -76,6 +82,11 @@ pub async fn catalogue_matches_live_schema(db: &TestDb) {
         }
         let key: Vec<&str> = t.key.iter().map(String::as_str).collect();
         assert_eq!(spec.key, key.as_slice(), "primary key of {}", spec.name);
+        let mut nullable: Vec<&str> = t.nullable.iter().map(String::as_str).collect();
+        let mut listed = spec.nullable.to_vec();
+        nullable.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(listed, nullable, "nullable columns of {}", spec.name);
     }
 }
 
@@ -94,6 +105,14 @@ pub async fn catalogue_is_fk_ordered(db: &TestDb) {
             continue;
         }
         let spec = &TABLES[pos[table.as_str()]];
+        // A load writes no row of a skipped table, so an exported row referencing one
+        // could never be loaded (A-Minor2).
+        if spec.is_exported() {
+            assert!(
+                TABLES[pos[referenced.as_str()]].is_exported(),
+                "{table}.{column} references {referenced}, which is not exported"
+            );
+        }
         if table == referenced {
             assert_eq!(
                 spec.self_ref,
@@ -113,6 +132,31 @@ pub async fn catalogue_is_fk_ordered(db: &TestDb) {
             self_refs.contains(&spec.name),
             "{}: self_ref without a foreign key",
             spec.name
+        );
+    }
+}
+
+/// Every foreign key to `artifacts` is one of the references the GC's
+/// [`ARTIFACT_UNREFERENCED_SQL`] checks: a missing one would let the GC mark rows that the
+/// key then keeps it from deleting, which stalls step 2 without an error.
+pub async fn artifact_foreign_keys_are_gc_references(db: &TestDb) {
+    let fks: Vec<(String, String)> = db
+        .live_foreign_keys()
+        .await
+        .into_iter()
+        .filter(|(_, _, referenced)| referenced == "artifacts")
+        .map(|(table, column, _)| (table, column))
+        .collect();
+    assert!(
+        !fks.is_empty(),
+        "media, plugins and themes reference artifacts"
+    );
+    for (table, column) in &fks {
+        let reference = format!("FROM {table} WHERE {column} = artifacts.hash");
+        assert!(
+            ARTIFACT_UNREFERENCED_SQL.contains(&reference),
+            "{table}.{column} references artifacts but ARTIFACT_UNREFERENCED_SQL lacks \
+             {reference:?}"
         );
     }
 }
@@ -331,6 +375,7 @@ pub async fn export_reader_pages_by_key(db: &TestDb) {
         columns: &[("key", ColType::Text)],
         key: &["key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     };
     assert!(matches!(

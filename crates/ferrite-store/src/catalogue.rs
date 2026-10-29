@@ -66,9 +66,15 @@ pub struct TableSpec {
     pub columns: &'static [(&'static str, ColType)],
     /// The primary key; rows are paged in this order (keyset).
     pub key: &'static [&'static str],
-    /// The column referencing this same table (a parent), if any. The loader inserts it
-    /// as `NULL` first and sets it once the table is loaded (P4).
+    /// The column referencing this same table (a parent), if any. The loader holds a row
+    /// whose parent is not loaded yet until that parent is inserted (R6, as built; P4's
+    /// insert-`NULL`-then-set was not built), and refuses cycles and self-parents.
     pub self_ref: Option<&'static str>,
+    /// The columns that may hold SQL `NULL`; every other column is `NOT NULL` (a primary
+    /// key column always is). `catalogue_matches_live_schema` checks it on both backends.
+    /// A `null` value of a [`ColType::Json`] column that is not listed here is the JSON
+    /// value `null`, not SQL `NULL` ([`decode_column`]).
+    pub nullable: &'static [&'static str],
     /// What the export takes from this table.
     pub export: Export,
 }
@@ -80,6 +86,11 @@ impl TableSpec {
             .iter()
             .find(|(c, _)| *c == name)
             .map(|(_, t)| *t)
+    }
+
+    /// Whether column `name` may hold SQL `NULL` ([`TableSpec::nullable`]).
+    pub fn is_nullable(&self, name: &str) -> bool {
+        self.nullable.contains(&name)
     }
 
     /// Whether any rows of this table are exported.
@@ -112,6 +123,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["name"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -133,6 +145,12 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &[
+            "password_hash",
+            "totp_secret",
+            "last_login_at",
+            "totp_last_step",
+        ],
         export: Export::Rows,
     },
     TableSpec {
@@ -158,6 +176,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
+        nullable: &["parent_id", "body_html", "published_at", "scheduled_at"],
         export: Export::Rows,
     },
     TableSpec {
@@ -165,6 +184,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("item_id", Id), ("key", Text), ("value", Json)],
         key: &["item_id", "key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -183,6 +203,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &["note"],
         export: Export::Rows,
     },
     TableSpec {
@@ -196,6 +217,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["name"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -210,6 +232,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
+        nullable: &["parent_id"],
         export: Export::Rows,
     },
     TableSpec {
@@ -217,6 +240,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("item_id", Id), ("term_id", Id), ("position", Int)],
         key: &["item_id", "term_id"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -224,6 +248,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("name", Text), ("label", Text)],
         key: &["name"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -240,6 +265,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
+        nullable: &["parent_id", "target_id", "url"],
         export: Export::Rows,
     },
     TableSpec {
@@ -254,6 +280,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["hash"],
         self_ref: None,
+        nullable: &["orphaned_at"],
         export: Export::Rows,
     },
     TableSpec {
@@ -272,6 +299,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["item_id"],
         self_ref: None,
+        nullable: &["width", "height"],
         export: Export::Rows,
     },
     TableSpec {
@@ -279,6 +307,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("hash", Text), ("item_id", Id), ("name", Text)],
         key: &["item_id", "name"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -299,6 +328,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
+        nullable: &["parent_id", "user_id", "ip_hash"],
         export: Export::Rows,
     },
     TableSpec {
@@ -315,6 +345,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &["last_hit_at"],
         export: Export::Rows,
     },
     TableSpec {
@@ -322,6 +353,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("user_id", Id), ("key", Text), ("value", Json)],
         key: &["user_id", "key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -334,6 +366,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -351,6 +384,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["name"],
         self_ref: None,
+        nullable: &["disabled_reason"],
         export: Export::Rows,
     },
     TableSpec {
@@ -363,6 +397,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["plugin", "key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -375,6 +410,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["plugin", "hook", "bucket_start"],
         self_ref: None,
+        nullable: &[],
         export: Export::Skip,
     },
     TableSpec {
@@ -389,6 +425,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["name"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
     TableSpec {
@@ -402,6 +439,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["seq"],
         self_ref: None,
+        nullable: &["origin_node"],
         export: Export::Skip,
     },
     TableSpec {
@@ -409,6 +447,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("key", Text), ("value", Text)],
         key: &["key"],
         self_ref: None,
+        nullable: &[],
         export: Export::OnlyKeys(&["site_id"]),
     },
     TableSpec {
@@ -416,6 +455,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("item_id", Id)],
         key: &["item_id"],
         self_ref: None,
+        nullable: &[],
         export: Export::Skip,
     },
     TableSpec {
@@ -438,6 +478,13 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &[
+            "unique_key",
+            "locked_by",
+            "locked_until",
+            "last_error",
+            "finished_at",
+        ],
         export: Export::Skip,
     },
     TableSpec {
@@ -453,6 +500,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &[],
         export: Export::Skip,
     },
     TableSpec {
@@ -469,6 +517,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id_hash"],
         self_ref: None,
+        nullable: &["ip_hash", "user_agent"],
         export: Export::Skip,
     },
     TableSpec {
@@ -485,6 +534,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &["last_used_at", "expires_at"],
         export: Export::Rows,
     },
     TableSpec {
@@ -492,6 +542,7 @@ pub static TABLES: &[TableSpec] = &[
         columns: &[("bucket", Text), ("window_start", Ts), ("count", Int)],
         key: &["bucket"],
         self_ref: None,
+        nullable: &[],
         export: Export::Skip,
     },
     TableSpec {
@@ -508,6 +559,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &["actor_id", "target_id", "node"],
         export: Export::Rows,
     },
     TableSpec {
@@ -523,6 +575,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["user_id", "key_hash"],
         self_ref: None,
+        nullable: &["status_code", "response"],
         export: Export::Skip,
     },
     TableSpec {
@@ -544,6 +597,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["item_id", "user_id"],
         self_ref: None,
+        nullable: &["excerpt", "slug", "parent_id", "menu_order", "terms", "seo"],
         export: Export::Rows,
     },
     TableSpec {
@@ -565,6 +619,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["id"],
         self_ref: None,
+        nullable: &["finished_at", "job_id", "step", "report_hash"],
         export: Export::Rows,
     },
     TableSpec {
@@ -579,6 +634,7 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["source", "kind", "wp_id"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     },
 ];
@@ -664,6 +720,22 @@ pub fn decode_cell(col: ColType, value: &Value) -> Result<Cell, StoreError> {
     })
 }
 
+/// Decodes the neutral value of column `name` (of type `col`) of `table`. Like
+/// [`decode_cell`], except that `null` in a `NOT NULL` [`ColType::Json`] column is the
+/// JSON value `null` ([`Cell::Json`]): the export writes both SQL `NULL` and a stored JSON
+/// `null` as `null`, and the column's nullability tells them apart.
+pub fn decode_column(
+    table: &TableSpec,
+    name: &str,
+    col: ColType,
+    value: &Value,
+) -> Result<Cell, StoreError> {
+    if value.is_null() && col == ColType::Json && !table.is_nullable(name) {
+        return Ok(Cell::Json(Value::Null));
+    }
+    decode_cell(col, value)
+}
+
 /// The key of `row` in `table`, decoded for binding a keyset predicate (`after`).
 pub fn key_cells(table: &TableSpec, row: &Row) -> Result<Vec<Cell>, StoreError> {
     table
@@ -729,6 +801,14 @@ mod tests {
             }
             if let Some(p) = t.self_ref {
                 assert_eq!(t.column(p), Some(ColType::Id), "{}: self_ref {p}", t.name);
+            }
+            for n in t.nullable {
+                assert!(
+                    t.column(n).is_some(),
+                    "{}: nullable {n} is not a column",
+                    t.name
+                );
+                assert!(!t.key.contains(n), "{}: key column {n} is nullable", t.name);
             }
             if let Export::OnlyKeys(_) = t.export {
                 assert_eq!(t.key.len(), 1, "{}", t.name);
@@ -824,6 +904,25 @@ mod tests {
     }
 
     #[test]
+    fn json_null_is_a_value_in_a_not_null_column() {
+        let meta = table("content_meta").unwrap();
+        assert_eq!(
+            decode_column(meta, "value", ColType::Json, &Value::Null).unwrap(),
+            Cell::Json(Value::Null)
+        );
+        let autosaves = table("autosaves").unwrap();
+        assert_eq!(
+            decode_column(autosaves, "seo", ColType::Json, &Value::Null).unwrap(),
+            Cell::Null
+        );
+        let users = table("users").unwrap();
+        assert_eq!(
+            decode_column(users, "totp_secret", ColType::Text, &Value::Null).unwrap(),
+            Cell::Null
+        );
+    }
+
+    #[test]
     fn key_cells_follow_the_key_order() {
         let t = table("plugin_kv").unwrap();
         let mut row = Row::new();
@@ -849,6 +948,7 @@ mod tests {
             columns: &[("id", ColType::Id)],
             key: &["id"],
             self_ref: None,
+            nullable: &[],
             export: Export::Rows,
         };
         assert!(matches!(check_exported(&fake), Err(StoreError::Invalid(_))));

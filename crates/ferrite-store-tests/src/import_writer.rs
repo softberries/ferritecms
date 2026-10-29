@@ -132,6 +132,9 @@ pub fn rich_site() -> Dump {
                 json!({"item_id": uid(POST), "key": "_seo",
                        "value": {"title": "SEO", "noindex": false}}),
                 json!({"item_id": uid(POST), "key": "count", "value": 0.1}),
+                // A stored JSON `null` (a plugin's `meta_set(.., "null")`) in a NOT NULL
+                // column: exported as `null`, loaded as the JSON value again.
+                json!({"item_id": uid(POST), "key": "nothing", "value": null}),
             ]),
         ),
         (
@@ -242,6 +245,7 @@ pub fn rich_site() -> Dump {
             "user_meta",
             rows(vec![
                 json!({"user_id": uid(U1), "key": "prefs", "value": {"theme": "dark"}}),
+                json!({"user_id": uid(U1), "key": "cleared", "value": null}),
             ]),
         ),
         (
@@ -452,6 +456,11 @@ pub async fn import_writer_round_trip(db: &TestDb) {
         nums["value"],
         json!([1.0, 0.1, 0, 1e3, 9_007_199_254_740_993_i64, -7])
     );
+    let nothing = rows_of(&first, "content_meta")
+        .iter()
+        .find(|r| r["key"] == json!("nothing"))
+        .expect("the JSON-null meta row is loaded");
+    assert_eq!(nothing["value"], Value::Null);
     assert_eq!(
         rows_of(&first, "schema_meta"),
         [row(json!({"key": "site_id", "value": "site-rich"}))]
@@ -741,6 +750,7 @@ pub async fn import_writer_site_id_batches_refusals(db: &TestDb) {
         columns: &[("key", ColType::Text)],
         key: &["key"],
         self_ref: None,
+        nullable: &[],
         export: Export::Rows,
     };
     let mut writer = store.import_writer().await.unwrap();

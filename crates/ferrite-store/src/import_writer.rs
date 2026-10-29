@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     StoreError,
-    catalogue::{self, Cell, ColType, Export, Row, TableSpec, decode_cell},
+    catalogue::{self, Cell, ColType, Export, Row, TableSpec, decode_column},
 };
 
 /// Most rows in one multi-row `INSERT`.
@@ -269,7 +269,7 @@ fn prepare(table: &'static TableSpec, row: &Row) -> Result<Prepared, StoreError>
     let mut cells = Vec::with_capacity(row.len());
     for (name, col) in table.columns {
         if let Some(value) = row.get(*name) {
-            let cell = decode_cell(*col, value)
+            let cell = decode_column(table, name, *col, value)
                 .map_err(|e| StoreError::Invalid(format!("{}.{name}: {e}", table.name)))?;
             columns.push((*name, *col));
             cells.push(cell);
