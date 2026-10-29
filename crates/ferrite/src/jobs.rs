@@ -2,9 +2,12 @@
 //! data purge (M2a-2 P9), plugin actions (P20), media variants (M2a-2b P8,
 //! [`MediaVariantsHandler`]) and permalink-change redirects (M3-2 P30,
 //! [`PermalinkRedirectsHandler`]). The kinds and payloads are fixed in
-//! [`ferrite_core::jobs`]; the per-node 30 s ticker of M1c-2 is the periodic
+//! [`ferrite_core::jobs`]; the WordPress import (M3-2 P27, [`ImportWordpressHandler`])
+//! is built by `serve` with the node's media store and data folder. The per-node 30 s
+//! ticker of M1c-2 is the periodic
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
+mod import;
 mod media;
 mod permalinks;
 
@@ -26,6 +29,7 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};

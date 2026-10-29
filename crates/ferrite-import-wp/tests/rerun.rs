@@ -668,6 +668,16 @@ pub async fn steps_are_reported_in_order(db: &TestDb) {
             "parse", "pass1", "pass2", "pass3", "pass4", "fixup", "report"
         ]
     );
+    // Each step was written to the run too (P28): it ends at `report`.
+    let run = db
+        .store()
+        .read()
+        .imports()
+        .get_run(report.run_id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.step.as_deref(), Some("report"));
 }
 
 /// A nav menu with a long slug beside a site menu of the same name gets a free name

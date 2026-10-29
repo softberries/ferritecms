@@ -115,7 +115,14 @@ impl ZipSource {
                 end.directory, limits.directory
             )));
         }
-        let archive = ZipArchive::new(file).map_err(|e| refused(e.to_string()))?;
+        // A read failure is the file's (worth a retry); anything else is the format's.
+        let archive = ZipArchive::new(file).map_err(|e| match e {
+            zip::result::ZipError::Io(source) => ImportError::File {
+                path: path.to_owned(),
+                source,
+            },
+            e => refused(e.to_string()),
+        })?;
         let mut entries = HashMap::new();
         let mut declared: u64 = 0;
         for index in 0..archive.len() {

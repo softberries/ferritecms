@@ -1110,6 +1110,16 @@ pub trait ImportRepo: Send + Sync {
         stale_before: Timestamp,
         now: Timestamp,
     ) -> Result<bool, StoreError>;
+    /// [`abandon_stale`](Self::abandon_stale) for a start by job `job` (M3-2 P27 as
+    /// built): also only when the run has no job, is `job`'s own, or its job is not
+    /// `running` (no such job included). One statement, like `abandon_stale`.
+    async fn abandon_stale_for_job(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+        job: JobId,
+    ) -> Result<bool, StoreError>;
     /// The run in state `running`, if any.
     async fn running(&self) -> Result<Option<ImportRun>, StoreError>;
     /// Runs, newest first; `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).

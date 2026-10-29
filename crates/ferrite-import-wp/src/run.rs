@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ferrite_core::import::{ImportBatch, ImportHandle, ImportService};
 use ferrite_core::{Actor, SwappablePermalinks};
-use ferrite_domain::{ImportRunState, Timestamp};
+use ferrite_domain::{ImportRunState, JobId, Timestamp};
 use ferrite_media::MediaStore;
 use futures::Stream;
 use sha2::{Digest, Sha256};
@@ -133,6 +133,8 @@ pub struct ImportOptions {
     /// Called as each step that runs begins: `parse`, `pass1`…`pass4`, `fixup`, then
     /// `report` (P28). Steps an earlier run finished are skipped without a call.
     pub on_step: Option<OnStep>,
+    /// The `import.wordpress` job running the import, recorded on its run (P27).
+    pub job_id: Option<JobId>,
     /// Items per batch instead of [`ImportBatch::BATCH_ITEMS`].
     #[cfg(feature = "test-seams")]
     pub batch_items: Option<usize>,
@@ -162,6 +164,7 @@ impl Default for ImportOptions {
             takeover: false,
             max_upload: DEFAULT_MAX_UPLOAD,
             on_step: None,
+            job_id: None,
             #[cfg(feature = "test-seams")]
             batch_items: None,
             #[cfg(feature = "test-seams")]
@@ -184,7 +187,8 @@ impl std::fmt::Debug for ImportOptions {
             .field("tag_base", &self.tag_base)
             .field("takeover", &self.takeover)
             .field("max_upload", &self.max_upload)
-            .field("on_step", &self.on_step.as_ref().map(|_| "Fn"));
+            .field("on_step", &self.on_step.as_ref().map(|_| "Fn"))
+            .field("job_id", &self.job_id);
         #[cfg(feature = "test-seams")]
         d.field("batch_items", &self.batch_items)
             .field("fail_after_batches", &self.fail_after_batches)
@@ -405,7 +409,13 @@ pub async fn run(ctx: ImportContext, wxr: &Path, opts: ImportOptions) -> Result<
     let source = normalise_source(&channel.base_blog_url)?;
     let handle = ctx
         .import
-        .start(&ctx.actor, &source, opts.dry_run, opts.takeover, None)
+        .start(
+            &ctx.actor,
+            &source,
+            opts.dry_run,
+            opts.takeover,
+            opts.job_id,
+        )
         .await
         .map_err(ImportError::from)?;
     let dir = ctx.work_dir.join(handle.run().id.to_string());
@@ -505,7 +515,10 @@ async fn drive(
     if done.is_ok() {
         progress.current = REPORT;
         on_step(opts, REPORT);
-        done = crate::report::finish(report, &ir).await;
+        done = match handle.set_step(&ctx.import, REPORT).await {
+            Ok(()) => crate::report::finish(report, &ir).await,
+            Err(e) => Err(e.into()),
+        };
     }
     match &done {
         // A finished run's work file is never resumed, even if deleting its folder
@@ -533,11 +546,12 @@ struct Progress {
 /// [`begin_step`] for a pass, recording in `progress` whether it runs.
 async fn begin_pass(
     progress: &mut Progress,
+    run: Fence<'_>,
     opts: &ImportOptions,
     ir: &Ir,
     name: &'static str,
 ) -> Result<bool, ImportError> {
-    let runs = begin_step(progress, opts, ir, name).await?;
+    let runs = begin_step(progress, run, opts, ir, name).await?;
     if runs {
         progress.run.push(name.to_owned());
     } else {
@@ -555,7 +569,8 @@ async fn run_steps(
     progress: &mut Progress,
     report: &mut Report,
 ) -> Result<(), ImportError> {
-    if begin_step(progress, opts, ir, PARSE).await? {
+    let fence = Fence { ctx, handle };
+    if begin_step(progress, fence, opts, ir, PARSE).await? {
         parse_into(ir, wxr, ctx, handle).await?;
         ir.mark_pass(PARSE).await?;
     }
@@ -566,29 +581,29 @@ async fn run_steps(
         ir,
         ended: AtomicU32::new(0),
     };
-    if begin_pass(progress, opts, ir, "pass1").await? {
+    if begin_pass(progress, fence, opts, ir, "pass1").await? {
         crate::pass::pass1(&session, report).await?;
         end_step(opts, ir, "pass1").await?;
     }
     if stops_after(opts, "pass1") {
         return Ok(());
     }
-    if begin_pass(progress, opts, ir, "pass2").await? {
+    if begin_pass(progress, fence, opts, ir, "pass2").await? {
         crate::pass::pass2(&session, report).await?;
         end_step(opts, ir, "pass2").await?;
     }
     if stops_after(opts, "pass2") {
         return Ok(());
     }
-    if begin_pass(progress, opts, ir, "pass3").await? {
+    if begin_pass(progress, fence, opts, ir, "pass3").await? {
         crate::pass::content::import(&session, report).await?;
         end_step(opts, ir, "pass3").await?;
     }
-    if begin_pass(progress, opts, ir, "pass4").await? {
+    if begin_pass(progress, fence, opts, ir, "pass4").await? {
         crate::pass::pass4(&session, report).await?;
         end_step(opts, ir, "pass4").await?;
     }
-    if begin_pass(progress, opts, ir, "fixup").await? {
+    if begin_pass(progress, fence, opts, ir, "fixup").await? {
         crate::pass::fixup::run(&session, report).await?;
         end_step(opts, ir, "fixup").await?;
     }
@@ -606,10 +621,20 @@ fn stops_after(opts: &ImportOptions, name: &str) -> bool {
     }
 }
 
+/// What records a run's step: its service and handle.
+#[derive(Clone, Copy)]
+struct Fence<'a> {
+    ctx: &'a ImportContext,
+    handle: &'a ImportHandle,
+}
+
 /// Whether step `name` still has to run (it did not finish on this IR); it becomes
-/// `progress.current`, and when it runs `on_step` and the test hook hear of it.
+/// `progress.current`, and when it runs it is written to the run (fenced, P28; no batch
+/// is open between steps, so SQLite's one writer is free) and `on_step` and the test
+/// hook hear of it.
 async fn begin_step(
     progress: &mut Progress,
+    run: Fence<'_>,
     opts: &ImportOptions,
     ir: &Ir,
     name: &'static str,
@@ -620,6 +645,7 @@ async fn begin_step(
         tracing::debug!(step = name, "import step already done; skipped");
         return Ok(false);
     }
+    run.handle.set_step(&run.ctx.import, name).await?;
     on_step(opts, name);
     #[cfg(feature = "test-seams")]
     if let Some(hook) = &opts.step_hook {
