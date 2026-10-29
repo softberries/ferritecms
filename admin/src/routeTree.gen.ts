@@ -18,6 +18,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppSplatRouteImport } from './routes/_app/$'
 import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as AppAccountRouteImport } from './routes/_app/account'
+import { Route as AppImportRouteImport } from './routes/_app/import'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
@@ -82,6 +83,11 @@ const AppStyleguideRoute = AppStyleguideRouteImport.update({
 const AppAccountRoute = AppAccountRouteImport.update({
   id: '/account',
   path: '/account',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppImportRoute = AppImportRouteImport.update({
+  id: '/import',
+  path: '/import',
   getParentRoute: () => AppRoute,
 } as any)
 const LoginTotpRoute = LoginTotpRouteImport.update({
@@ -201,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/account': typeof AppAccountRoute
+  '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
@@ -231,6 +238,7 @@ export interface FileRoutesByTo {
   '/$': typeof AppSplatRoute
   '/_styleguide': typeof AppStyleguideRoute
   '/account': typeof AppAccountRoute
+  '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
@@ -264,6 +272,7 @@ export interface FileRoutesById {
   '/_app/$': typeof AppSplatRoute
   '/_app/_styleguide': typeof AppStyleguideRoute
   '/_app/account': typeof AppAccountRoute
+  '/_app/import': typeof AppImportRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
   '/_app/appearance/themes': typeof AppAppearanceThemesRoute
@@ -298,6 +307,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/_styleguide'
     | '/account'
+    | '/import'
     | '/login/totp'
     | '/appearance/themes'
     | '/plugins/$name'
@@ -328,6 +338,7 @@ export interface FileRouteTypes {
     | '/$'
     | '/_styleguide'
     | '/account'
+    | '/import'
     | '/login/totp'
     | '/'
     | '/appearance/themes'
@@ -360,6 +371,7 @@ export interface FileRouteTypes {
     | '/_app/$'
     | '/_app/_styleguide'
     | '/_app/account'
+    | '/_app/import'
     | '/login_/totp'
     | '/_app/'
     | '/_app/appearance/themes'
@@ -456,6 +468,13 @@ declare module '@tanstack/react-router' {
       path: '/account'
       fullPath: '/account'
       preLoaderRoute: typeof AppAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/import': {
+      id: '/_app/import'
+      path: '/import'
+      fullPath: '/import'
+      preLoaderRoute: typeof AppImportRouteImport
       parentRoute: typeof AppRoute
     }
     '/login_/totp': {
@@ -612,6 +631,7 @@ interface AppRouteChildren {
   AppSplatRoute: typeof AppSplatRoute
   AppStyleguideRoute: typeof AppStyleguideRoute
   AppAccountRoute: typeof AppAccountRoute
+  AppImportRoute: typeof AppImportRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppPluginsNameRoute: typeof AppPluginsNameRoute
@@ -639,6 +659,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSplatRoute: AppSplatRoute,
   AppStyleguideRoute: AppStyleguideRoute,
   AppAccountRoute: AppAccountRoute,
+  AppImportRoute: AppImportRoute,
   AppIndexRoute: AppIndexRoute,
   AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppPluginsNameRoute: AppPluginsNameRoute,

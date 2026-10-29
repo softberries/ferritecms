@@ -1,0 +1,165 @@
+{
+  "title": "Import",
+  "description": "Bring a WordPress site over: its posts, pages, media, comments, menus and redirects. An import can run again; items edited here since are kept.",
+  "start": {
+    "label": "New import",
+    "wxr": {
+      "title": "WordPress export",
+      "hint": "The .xml file from Tools → Export in WordPress (all content), up to 512 MiB.",
+      "choose": "Choose export",
+      "dropHint": "or drop it here",
+      "overlay": "Drop the export here",
+      "notXml": "{{name}} is not an .xml export.",
+      "tooLarge": "{{name}} is over the 512 MiB limit."
+    },
+    "uploads": {
+      "title": "Uploads folder",
+      "optional": "Optional",
+      "hint": "A .zip of wp-content/uploads, up to 4 GiB. Without it, media is only imported when fetched from the old site.",
+      "choose": "Choose zip",
+      "dropHint": "or drop it here",
+      "overlay": "Drop the zip here",
+      "notZip": "{{name}} is not a .zip file.",
+      "tooLarge": "{{name}} is over the 4 GiB limit."
+    },
+    "remove": "Remove {{name}}",
+    "options": "Options",
+    "dryRun": "Dry run",
+    "dryRunHint": "Run every step, then roll every change back: a report without touching the site.",
+    "keepPermalinks": "Keep permalinks",
+    "keepPermalinksHint": "Take the old site's post URL structure, so old links keep working.",
+    "siteOptions": "Site title and tagline",
+    "siteOptionsHint": "Replace this site's title and tagline with the old site's.",
+    "fetchMedia": "Fetch missing media",
+    "fetchMediaHint": "Download attachments the zip does not have from the old site.",
+    "advanced": "Advanced",
+    "categoryBase": "Category base",
+    "categoryBaseHint": "The old site's category base, for redirects (Settings → Permalinks in WordPress).",
+    "tagBase": "Tag base",
+    "tagBaseHint": "The old site's tag base, for redirects.",
+    "badBase": "Letters, digits, - _ . ~ and slashes between segments, at most {{max}} characters.",
+    "submit": "Start import",
+    "submitDry": "Start dry run",
+    "needsExport": "Choose an export to start.",
+    "uploading": "Uploading {{percent}}%",
+    "uploadLabel": "Upload progress",
+    "cancel": "Cancel upload",
+    "retry": "Retry",
+    "errors": {
+      "network": "The upload stopped: no answer from the server. Retry sends the same files again without starting a second import.",
+      "reply": "The server took the files but its answer could not be read. Retry to see the import.",
+      "busy": "Another import is queued or running. Wait for it to finish, then start again.",
+      "inProgress": "This upload is still being received. Retry in a few seconds.",
+      "forbidden": "Your account may not import.",
+      "unknown": "The import could not start."
+    }
+  },
+  "run": {
+    "label": "Current import",
+    "phase": {
+      "queued": "Waiting for a worker",
+      "running": "Importing",
+      "retrying": "Retrying",
+      "done": "Import finished",
+      "failed": "Import failed"
+    },
+    "phaseBody": {
+      "queued": "The files are in. A node picks the import up within moments.",
+      "running": "You can leave this page; the import runs in the background.",
+      "retrying": "An attempt failed (attempt {{attempts}} of 3). The import starts again shortly and resumes where it stopped.",
+      "done": "Everything ran. The report lists what needs a look.",
+      "doneDry": "Every step ran and every change was rolled back. The report shows what an import would do.",
+      "failed": "The import stopped. Run the same export again to resume where it stopped."
+    },
+    "dryRun": "Dry run",
+    "source": "From {{source}}",
+    "started": "Started",
+    "heartbeat": "Last activity",
+    "finished": "Finished",
+    "stalled": "No activity for over two minutes: the node running it may have stopped. Another node takes it over on the next attempt.",
+    "steps": "Steps",
+    "step": {
+      "parse": "Read export",
+      "pass1": "Authors and terms",
+      "pass2": "Media",
+      "pass3": "Content",
+      "pass4": "Comments, menus, redirects",
+      "fixup": "Fix links",
+      "report": "Report"
+    },
+    "stepState": {
+      "done": "done",
+      "current": "in progress",
+      "failed": "failed",
+      "pending": "to do"
+    },
+    "counts": "What was imported",
+    "noCounts": "Nothing counted yet.",
+    "kind": "Kind",
+    "total": "Total",
+    "error": "What went wrong",
+    "openReport": "Open report",
+    "openPartialReport": "Open partial report",
+    "downloadJson": "Download JSON",
+    "newTab": "(opens in a new tab)",
+    "noReport": "No report was written for this run.",
+    "another": "New import",
+    "notFound": "This import job no longer exists.",
+    "announce": {
+      "queued": "Import queued.",
+      "running": "Import running: {{step}}.",
+      "retrying": "Import attempt failed; retrying.",
+      "done": "Import finished.",
+      "failed": "Import failed."
+    }
+  },
+  "columns": {
+    "created": "Created",
+    "updated": "Updated",
+    "unchanged": "Unchanged",
+    "kept": "Kept",
+    "skipped": "Skipped",
+    "failed": "Failed"
+  },
+  "kinds": {
+    "users": "Users",
+    "types": "Content types",
+    "taxonomies": "Taxonomies",
+    "terms": "Terms",
+    "media": "Media",
+    "post": "Posts",
+    "page": "Pages",
+    "comments": "Comments",
+    "menus": "Menus",
+    "redirects": "Redirects",
+    "options": "Site options",
+    "fixups": "Link fix-ups"
+  },
+  "runs": {
+    "title": "Previous imports",
+    "label": "Import runs",
+    "started": "Started",
+    "source": "Source",
+    "state": "State",
+    "step": "Step",
+    "report": "Report",
+    "html": "Report",
+    "htmlOn": "Open the report of the import from {{source}} (opens in a new tab)",
+    "json": "JSON",
+    "jsonOn": "Download the JSON report of the import from {{source}}",
+    "none": "—",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "empty": {
+      "title": "No imports yet",
+      "body": "Imports started here or with ferrite import wordpress show up here, each with its report."
+    },
+    "status": {
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "abandoned": "Abandoned"
+    },
+    "summary": "{{created}} created · {{updated}} updated · {{kept}} kept · {{skipped}} skipped"
+  }
+}

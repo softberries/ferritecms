@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { setCsrfToken } from "./csrf";
 import { ApiError } from "./problem";
-import { UploadNetworkError, UploadReplyError, uploadMedia, uploadTheme } from "./upload";
+import { DEFAULT_IMPORT_OPTIONS } from "./import";
+import {
+  UploadNetworkError,
+  UploadReplyError,
+  uploadMedia,
+  uploadTheme,
+  uploadWordpressImport,
+} from "./upload";
 
 class FakeXhr {
   static last: FakeXhr;
@@ -218,4 +225,34 @@ test("theme_upload_422_lists_problems", async () => {
   const e = (await promise.catch((x: unknown) => x)) as ApiError;
   expect(e).toBeInstanceOf(ApiError);
   expect(e.problem.errors?.[0]?.detail).toBe("templates/index.html:3: syntax error");
+});
+
+test("wordpress_import_sends_options_uploads_and_wxr_with_the_key", async () => {
+  const wxr = new File(["<rss/>"], "export.xml", { type: "text/xml" });
+  const zip = new File(["PK"], "uploads.zip", { type: "application/zip" });
+  const options = { ...DEFAULT_IMPORT_OPTIONS, dry_run: true, tag_base: "topics" };
+  const promise = uploadWordpressImport(wxr, zip, options, {
+    key: "imp-1",
+    onProgress: noop,
+    signal: new AbortController().signal,
+  });
+  const xhr = FakeXhr.last;
+  expect(xhr.url).toBe("/api/v1/import/wordpress");
+  expect(xhr.headers["Idempotency-Key"]).toBe("imp-1");
+  expect(xhr.headers["X-CSRF-Token"]).toBe("tok-9");
+  const form = xhr.body as FormData;
+  expect([...form.keys()]).toEqual(["options", "uploads", "wxr"]);
+  expect(JSON.parse(form.get("options") as string)).toEqual(options);
+  expect((form.get("uploads") as File).name).toBe("uploads.zip");
+  expect((form.get("wxr") as File).name).toBe("export.xml");
+  xhr.respond(202, { job_id: "j1", status: "queued", attempts: 0 });
+  await expect(promise).resolves.toMatchObject({ job_id: "j1" });
+
+  // Without a zip there is no `uploads` part.
+  void uploadWordpressImport(wxr, null, DEFAULT_IMPORT_OPTIONS, {
+    key: "imp-2",
+    onProgress: noop,
+    signal: new AbortController().signal,
+  });
+  expect([...(FakeXhr.last.body as FormData).keys()]).toEqual(["options", "wxr"]);
 });

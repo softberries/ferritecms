@@ -40,7 +40,7 @@ four with it), `pnpm e2e --project firefox-sqlite` one,
 and `pnpm e2e e2e/menus.spec.ts` only that file. Global setup starts a site per selected
 project with `seed demo`, the harness accounts of `e2e/support/users.ts` and an SMTP sink,
 and logs the accounts in once (`e2e/.auth/<project>/`). The specs that change site-wide
-state (`settings`, `themes`, `system`) run after the rest, one at a time (the project's
+state (`import`, `settings`, `themes`, `system`) run after the rest, one at a time (the project's
 `-site-wide` teardown); a filtered run (a file, `-g`) runs only what it names, without that
 ordering. Screenshots and the contact sheet come from `chromium-sqlite` only. Specs import `test` from
 `e2e/support/fixtures.ts`: `as(role)`, `freshSession`, `snap`, `expectAccessible`, and a
