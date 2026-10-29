@@ -1,5 +1,6 @@
 import { getCsrfToken } from "./csrf";
 import { reportApiError } from "./client";
+import type { ImportJobDto, ImportOptionsDto } from "./import";
 import type { MediaDto } from "./media";
 import type { PermissionReportDto, PluginDto, PluginFiles } from "./plugins";
 import type { ThemeDto } from "./themes";
@@ -215,6 +216,34 @@ export function installPluginUpload(
     url: "/api/v1/plugins",
     headers: {},
     body: pluginParts(files, approve),
+    onProgress: (loaded, total) => {
+      opts.onProgress(loaded, total);
+    },
+    signal: opts.signal,
+  });
+}
+
+/**
+ * `POST /api/v1/import/wordpress` (see `send`): parts `options` (JSON), then `uploads`
+ * (a zip, when given), then `wxr`, with `Idempotency-Key`: a retry after a network error
+ * or an unreadable reply reuses the key and gets the first `202` replayed. `202` with the
+ * queued job; `409` while another import is queued or running (refused before the files
+ * are read).
+ */
+export function uploadWordpressImport(
+  wxr: File,
+  uploads: File | null,
+  options: ImportOptionsDto,
+  opts: Pick<UploadOptions, "key" | "onProgress" | "signal">,
+): Promise<ImportJobDto> {
+  const form = new FormData();
+  form.append("options", JSON.stringify(options));
+  if (uploads) form.append("uploads", uploads, uploads.name);
+  form.append("wxr", wxr, wxr.name);
+  return send<ImportJobDto>({
+    url: "/api/v1/import/wordpress",
+    headers: { "Idempotency-Key": opts.key },
+    body: form,
     onProgress: (loaded, total) => {
       opts.onProgress(loaded, total);
     },

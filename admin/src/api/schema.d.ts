@@ -484,6 +484,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/import/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_import_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_import_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_import_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/runs/{id}/report.html": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_import_report_html"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/runs/{id}/report.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_import_report_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/import/wordpress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["start_wordpress_import"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/media": {
         parameters: {
             query?: never;
@@ -1795,6 +1891,91 @@ export interface components {
              */
             total_micros: number;
         };
+        /** @description What happened to the items of one kind. */
+        ImportCountsDto: {
+            /**
+             * Format: int64
+             * @default 0
+             */
+            created: number;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description Edited here since the last import: kept.
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            unchanged: number;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            updated: number;
+        };
+        /**
+         * @description An import job (`GET /import/jobs/{job_id}`): poll it until `status` is `done` or
+         *     `dead`.
+         */
+        ImportJobDto: {
+            /**
+             * Format: int32
+             * @description Claims so far (at most 3).
+             */
+            attempts: number;
+            /** Format: uuid */
+            job_id: string;
+            /** @description Why the last attempt failed, scrubbed (the node's log has the full text). */
+            last_error?: string | null;
+            run?: components["schemas"]["ImportRunDto"] | null;
+            /** @description `queued`, `running`, `done` or `dead`. */
+            status: string;
+        };
+        /** @description The import's options; a missing field takes the CLI's default. */
+        ImportOptionsDto: {
+            /**
+             * @description The old site's category base, for redirects. Default `category`.
+             * @default category
+             */
+            category_base: string;
+            /**
+             * @description Run everything, then roll every write back. Default `false`.
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * @description Fetch attachments missing from `uploads` from the old site. Default `false`.
+             * @default false
+             */
+            fetch_media: boolean;
+            /**
+             * @description Take the old site's post permalink structure. Default `true`.
+             * @default true
+             */
+            keep_permalinks: boolean;
+            /**
+             * @description Import the site title and description. Default `true`.
+             * @default true
+             */
+            site_options: boolean;
+            /**
+             * @description The old site's tag base, for redirects. Default `tag`.
+             * @default tag
+             */
+            tag_base: string;
+        };
         /** @description `POST /redirects/import`: what the import did. */
         ImportReportDto: {
             /**
@@ -1807,6 +1988,62 @@ export interface components {
              * @description Rows that replaced the target and code of an existing redirect.
              */
             updated: number;
+        };
+        /** @description An import run. */
+        ImportRunDto: {
+            /** @description Outcomes per kind (`posts`, `pages`, `media`, …), as far as the run got. */
+            counts: {
+                [key: string]: components["schemas"]["ImportCountsDto"];
+            };
+            dry_run: boolean;
+            /** @description Why a failed run failed. */
+            error?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Moves while it runs; a `running` run without one for 120 s has stopped.
+             */
+            heartbeat_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description The import job that ran it; `null` for a CLI run.
+             */
+            job_id?: string | null;
+            /** @description `report.json` and `report.html` can be read. */
+            report: boolean;
+            /** @description The old site's address (the WXR's `base_blog_url`). */
+            source: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: uuid */
+            started_by: string;
+            /** @description `running`, `done`, `failed` or `abandoned`. */
+            state: string;
+            /** @description The step it is in or ended in: `parse`, `pass1` … `pass4`, `fixup` or `report`. */
+            step?: string | null;
+        };
+        /** @description `GET /import/runs`: one page, newest first. */
+        ImportRunPageDto: {
+            items: components["schemas"]["ImportRunDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description The multipart body of `POST /import/wordpress`. */
+        ImportStartUpload: {
+            options?: components["schemas"]["ImportOptionsDto"] | null;
+            /**
+             * Format: binary
+             * @description A `.zip` of the old site's `wp-content/uploads`, at most 4 GiB.
+             */
+            uploads?: string | null;
+            /**
+             * Format: binary
+             * @description The WordPress export (Tools → Export), at most 512 MiB; stored as sent (not
+             *     sniffed). Its part's file name names the run in the admin.
+             */
+            wxr: string;
         };
         /** @description Jobs per status. */
         JobCountsDto: {
@@ -3166,7 +3403,13 @@ export type SchemaFieldError = components['schemas']['FieldError'];
 export type SchemaFieldKindDto = components['schemas']['FieldKindDto'];
 export type SchemaGrantReportDto = components['schemas']['GrantReportDto'];
 export type SchemaHookStatsDto = components['schemas']['HookStatsDto'];
+export type SchemaImportCountsDto = components['schemas']['ImportCountsDto'];
+export type SchemaImportJobDto = components['schemas']['ImportJobDto'];
+export type SchemaImportOptionsDto = components['schemas']['ImportOptionsDto'];
 export type SchemaImportReportDto = components['schemas']['ImportReportDto'];
+export type SchemaImportRunDto = components['schemas']['ImportRunDto'];
+export type SchemaImportRunPageDto = components['schemas']['ImportRunPageDto'];
+export type SchemaImportStartUpload = components['schemas']['ImportStartUpload'];
 export type SchemaJobCountsDto = components['schemas']['JobCountsDto'];
 export type SchemaJobDto = components['schemas']['JobDto'];
 export type SchemaJobList = components['schemas']['JobList'];
@@ -5611,6 +5854,345 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_import_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The import job and, once it started one, its run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJobDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such import job (jobs of other kinds included) or a malformed id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_import_runs: {
+        parameters: {
+            query?: {
+                /** @description 1..=200; default 50. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of runs, newest first (CLI runs included) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRunPageDto"];
+                };
+            };
+            /** @description `validation` (`limit`, `cursor`) or `malformed-query` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_import_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportRunDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` (also a malformed id) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_import_report_html: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's report as a page, sandboxed (`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such run (or a malformed id), or it has no report yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_import_report_json: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's report (`Cache-Control: private, no-store`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such run (or a malformed id), or it has no report yet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    start_wordpress_import: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional; 1 to 255 visible ASCII characters (`0x21`-`0x7E`), scoped to the caller and kept 24 h. A retry with a finished key replays the first `202` (`Idempotent-Replayed: true`) without reading the body; the key must be reused with the same method and path */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Parts `wxr` (required, at most 512 MiB), `uploads` (a zip, at most 4 GiB) and `options` (JSON, at most 4 KiB), in any order */
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["ImportStartUpload"];
+            };
+        };
+        responses: {
+            /** @description Queued (`Location`: the job); with a finished `Idempotency-Key`, the first response replayed (`Idempotent-Replayed: true`) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportJobDto"];
+                };
+            };
+            /** @description `malformed-body`: an unknown, unnamed or repeated part, a malformed body or `options` part, or a part that received no bytes for `media.upload_idle_timeout` (`errors[0].field` names it; the upload is aborted); `malformed-header`: a malformed `Idempotency-Key` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`import`, `import:write`), `csrf` or `password-reset-required`; checked before the body is read */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: another import is queued or running (checked before the body is read, and again when the job is queued), or a request with this `Idempotency-Key` is in progress (`Retry-After: 5`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `too-large`: the declared body, a file (`errors[0].field` = `wxr` or `uploads`) or `options` over its limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unsupported-media-type`: not `multipart/form-data` */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: no `wxr` part; an `options` `category_base` or `tag_base` that is not a path of URL-safe segments (`errors[0].field` names it); the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

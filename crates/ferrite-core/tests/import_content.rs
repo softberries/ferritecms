@@ -169,7 +169,7 @@ async fn jobs_of(store: &dyn Store, kind: &str) -> Vec<ferrite_domain::Job> {
 /// Imports `items` in one committed batch of a fresh run.
 async fn import(db: &TestDb, actor: &Actor, items: Vec<ImportContent>) -> Vec<ContentOutcome> {
     let svc = importer(db);
-    let run = svc.start(actor, SOURCE, false, false).await.unwrap();
+    let run = svc.start(actor, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let mut out = Vec::new();
     for c in items {
@@ -375,7 +375,7 @@ pub async fn explicit_dates_author_status(db: &TestDb) {
 
     // A reserved meta key or an unknown author fails the item.
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let mut bad = item(5, "bad-meta", author);
     bad.meta = vec![("import.other".into(), json!(1))];
@@ -427,7 +427,7 @@ pub async fn future_date_schedules_with_job(db: &TestDb) {
     assert_eq!(jobs[0].run_at, at);
     // Scheduled without a date is refused.
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let mut c = item(2, "undated", admin.user);
     c.status = ContentStatus::Scheduled;
@@ -661,7 +661,7 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
     let id = out[0].id;
 
     let imp = importer(db);
-    let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = imp.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
     batch
         .set_body_and_fields(id, 1, body("fixedzebra link"), json!({}))
@@ -706,7 +706,7 @@ pub async fn set_body_keeps_item_unedited(db: &TestDb) {
         )
         .await
         .unwrap();
-    let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = imp.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
     let err = batch
         .set_body_and_fields(id, 1, body("fix"), json!({}))
@@ -739,7 +739,7 @@ pub async fn set_body_and_fields_and_path(db: &TestDb) {
     let id = out[0].id;
 
     let imp = importer(db);
-    let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = imp.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
     let path = batch.path(id).await.unwrap().unwrap();
     assert!(
@@ -861,7 +861,7 @@ pub async fn no_plugin_actions(db: &TestDb) {
     )
     .await;
     let imp = importer(db);
-    let run = imp.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = imp.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&imp).await.unwrap();
     batch
         .set_body_and_fields(out[0].id, 1, body("fixed"), json!({}))

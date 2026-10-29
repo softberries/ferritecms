@@ -7,6 +7,7 @@ import common from "./en/common.json";
 import content from "./en/content.json";
 import dashboard from "./en/dashboard.json";
 import editor from "./en/editor.json";
+import importNs from "./en/import.json";
 import kit from "./en/kit.json";
 import media from "./en/media.json";
 import palette from "./en/palette.json";
@@ -30,6 +31,7 @@ export const resources = {
     structure,
     comments,
     admin,
+    import: importNs,
   },
 } as const;
 

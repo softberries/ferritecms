@@ -8,10 +8,23 @@
 // attempt). The test deletes the item first and then retries the job, which finds the
 // item gone and ends `done`, so no dead job stays behind.
 
+import { readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { uid } from "./support/uid";
+
+/** The highest migration the repository holds (`NNNN_name.up.sql`, same on both backends). */
+const SCHEMA_VERSION = Math.max(
+  ...readdirSync(
+    join(dirname(fileURLToPath(import.meta.url)), "../../crates/ferrite-store-sqlite/migrations"),
+  ).flatMap((f) => {
+    const m = /^(\d+)_.*\.up\.sql$/.exec(f);
+    return m ? [Number(m[1])] : [];
+  }),
+);
 
 const screen = (page: Page) => page.locator("[data-slot=system-screen]");
 const toast = (page: Page, text: string) =>
@@ -64,11 +77,11 @@ test("status_shows_backends_and_schema", async ({ as, site, backend, snap, expec
   await expect(facts.getByText(site.url, { exact: true })).toBeVisible();
   await expect(facts.getByText(/^\d+\.\d+\.\d+/)).toBeVisible();
 
-  // M2b-3 adds no migration: the schema stays at 8.
+  // A fresh site is at the newest migration the binary embeds.
   const schema = region("Database schema");
   await expect(schema.getByText("Up to date", { exact: true })).toBeVisible();
   await expect(schema).toContainText(
-    "The database is at version 8, the version this binary expects.",
+    `The database is at version ${SCHEMA_VERSION}, the version this binary expects.`,
   );
 
   // The E2E site sends mail to a local sink.

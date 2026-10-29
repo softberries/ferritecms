@@ -286,6 +286,9 @@ async fn import_busy_exit_3() {
             finished_at: None,
             stats: serde_json::json!({}),
             dry_run: false,
+            job_id: None,
+            step: None,
+            report_hash: None,
         })
         .await
         .unwrap();
@@ -630,4 +633,86 @@ async fn as_takes_active_admins_only() {
         "{}",
         text(&out)
     );
+}
+
+/// A run that fails after it started (here the WXR file breaks off part-way) still
+/// writes its report, which names the failed step, and exits 1 (P29).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_import_writes_a_partial_report_and_exits_1() {
+    let site = Site::sqlite().await;
+    let whole = std::fs::read_to_string(corpus("site-a.xml")).unwrap();
+    let cut = whole.find("<item>").unwrap() + (whole.len() - whole.find("<item>").unwrap()) / 2;
+    let broken = site.data().join("broken.xml");
+    std::fs::write(&broken, format!("{}<<<", &whole[..cut])).unwrap();
+    let out = site.import(&broken, &[]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the import failed"),
+        "{}",
+        text(&out)
+    );
+    let dir = report_dir(&site);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(dir.join("report.json").to_str().unwrap()),
+        "{}",
+        text(&out)
+    );
+    let json: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("report.json")).unwrap()).unwrap();
+    assert_eq!(json["failed"]["step"], "parse", "{json}");
+    assert!(json["notes"][0].as_str().unwrap().starts_with("failed:"));
+    let html = std::fs::read_to_string(dir.join("report.html")).unwrap();
+    assert!(html.contains("parse"));
+}
+
+/// `--uploads` takes a zip of the uploads as well as a folder; another file is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uploads_zip_is_accepted() {
+    use std::io::Write;
+    let site = Site::sqlite().await;
+    let archive = site.data().join("uploads.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    let root = corpus("site-a-uploads/2026/10");
+    let mut names: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    for name in names {
+        zip.start_file(
+            format!("wp-content/uploads/2026/10/{name}"),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&std::fs::read(root.join(&name)).unwrap())
+            .unwrap();
+    }
+    zip.finish().unwrap();
+    let not_zip = site.data().join("uploads.txt");
+    std::fs::write(&not_zip, "no").unwrap();
+    let out = site
+        .import(
+            &corpus("site-a.xml"),
+            &["--uploads", not_zip.to_str().unwrap()],
+        )
+        .await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("neither a folder nor a .zip file"),
+        "{}",
+        text(&out)
+    );
+    let out = site
+        .import(
+            &corpus("site-a.xml"),
+            &["--uploads", archive.to_str().unwrap()],
+        )
+        .await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let json: Value = serde_json::from_str(
+        &std::fs::read_to_string(report_dir(&site).join("report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json["counts"]["media"]["created"], 4);
+    assert!(json["missing_media"].as_array().unwrap().is_empty());
 }

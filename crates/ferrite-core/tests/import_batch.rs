@@ -15,7 +15,8 @@ use ferrite_core::{
     },
 };
 use ferrite_domain::{
-    ImportMapKind, ImportRunState, NewUser, Role, Taxonomy, TermId, Timestamp, UserId, UserStatus,
+    ImportMapKind, ImportRunState, JobId, NewJob, NewUser, NodeId, Role, Taxonomy, TermId,
+    Timestamp, UserId, UserStatus,
 };
 use ferrite_store::{LOCK_IMPORT, Store};
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -99,7 +100,7 @@ pub async fn start_requires_import_capability(db: &TestDb) {
         Role::Editor,
     );
     let err = service(db)
-        .start(&editor, SOURCE, false, false)
+        .start(&editor, SOURCE, false, false, None)
         .await
         .err()
         .unwrap();
@@ -115,14 +116,14 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert_eq!(a.run().state, ImportRunState::Running);
     assert_eq!(a.run().source, SOURCE);
     assert_eq!(a.run().started_by, admin.user);
 
     for takeover in [false, true] {
         let err = svc
-            .start(&admin, SOURCE, false, takeover)
+            .start(&admin, SOURCE, false, takeover, None)
             .await
             .err()
             .unwrap();
@@ -138,10 +139,14 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
             .await
             .unwrap()
     );
-    let err = svc.start(&admin, SOURCE, false, false).await.err().unwrap();
+    let err = svc
+        .start(&admin, SOURCE, false, false, None)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 
-    let b = svc.start(&admin, SOURCE, true, true).await.unwrap();
+    let b = svc.start(&admin, SOURCE, true, true, None).await.unwrap();
     assert_ne!(a.run().token, b.run().token);
     assert!(b.run().dry_run);
     let old = store
@@ -178,7 +183,7 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
         .find(|r| r.state == ImportRunState::Done)
         .unwrap();
     assert_eq!(done.stats, stats);
-    let c = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let c = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let err = c
         .finish(&svc, ImportRunState::Running, json!({}))
         .await
@@ -191,7 +196,7 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
 
     let mut batch = run.batch(&svc).await.unwrap();
@@ -233,7 +238,7 @@ pub async fn user_matching_order(db: &TestDb) {
     let by_login = user(store, "wpuser", "other@e.test", Role::Editor).await;
     user(store, "john-doe", "john@e.test", Role::Editor).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
 
     let out = batch
@@ -333,7 +338,7 @@ pub async fn term_keeps_slug_and_parent(db: &TestDb) {
     tx.terms().insert(&existing).await.unwrap();
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let parent = batch.term(term(10, "world", None)).await.unwrap();
     assert_eq!(parent.how, TermMatched::Created);
@@ -370,7 +375,7 @@ pub async fn mapped_term_of_other_taxonomy_is_not_used(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let cat = batch.term(term(40, "shared", None)).await.unwrap().id;
     let tag = batch
@@ -398,7 +403,7 @@ pub async fn rolled_back_batch_writes_nothing(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let before = store.read().terms().list("category").await.unwrap().len();
 
@@ -444,7 +449,7 @@ pub async fn stale_map_row_is_not_mapped(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let id = batch.term(term(30, "gone", None)).await.unwrap().id;
     batch.commit().await.unwrap();
@@ -496,7 +501,7 @@ pub async fn schema_batch_registers_types_and_taxonomies(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let genre = Taxonomy {
         name: "genre".into(),
         label: "Genres".into(),
@@ -630,7 +635,7 @@ pub async fn meta_is_written_with_item_key(db: &TestDb) {
     let saved = tx.content().insert(&item).await.unwrap();
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     for bad in ["", "seo.title", "import.other"] {
@@ -670,7 +675,7 @@ pub async fn many_keys_collapse_to_all(db: &TestDb) {
     }
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     for id in &items {
@@ -690,7 +695,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert!(store.try_lock(LOCK_IMPORT).await.unwrap().is_none(), "held");
     run.finish(&svc, ImportRunState::Done, json!({}))
         .await
@@ -699,7 +704,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
     guard.release().await.unwrap();
 
     // A finish that is refused (taken over) still releases the lock.
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert!(
         store
             .read()
@@ -708,7 +713,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
             .await
             .unwrap()
     );
-    let b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    let b = svc.start(&admin, SOURCE, false, true, None).await.unwrap();
     assert!(
         a.finish(&svc, ImportRunState::Done, json!({}))
             .await
@@ -722,13 +727,146 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
         .unwrap();
 }
 
+/// A job in state `running` (fresh lease), or `dead` when `dead`.
+async fn job(store: &dyn Store, dead: bool) -> JobId {
+    let kind = format!("t-{}", uuid::Uuid::now_v7().simple());
+    let jobs = store.read().jobs();
+    let id = jobs
+        .enqueue(&NewJob::new(&kind, json!({})))
+        .await
+        .unwrap()
+        .unwrap();
+    let claimed = jobs
+        .claim(
+            NodeId::new(),
+            std::slice::from_ref(&kind),
+            1,
+            std::time::Duration::from_secs(600),
+        )
+        .await
+        .unwrap();
+    if dead {
+        let lease = claimed[0].lease().unwrap();
+        jobs.fail(&lease, "gone", true).await.unwrap();
+    }
+    id
+}
+
+/// P27 as built: an import job's start takes over a stale run unless that run belongs
+/// to another job that is still `running` (a CLI run, a dead job's, its own); a fresh
+/// run is busy for everyone, and a CLI start still needs `takeover`. The job's
+/// pre-check (`job_may_start`) says the same before anything is fetched.
+pub async fn job_start_takes_over_stale_runs_without_a_live_job(db: &TestDb) {
+    let store = db.store();
+    let admin = admin(store).await;
+    let svc = service(db);
+    let me = job(store, false).await;
+    let live = job(store, false).await;
+    let dead = job(store, true).await;
+    let stale = |run: &ferrite_domain::ImportRun| {
+        let (id, token) = (run.id, run.token);
+        async move {
+            assert!(
+                store
+                    .read()
+                    .imports()
+                    .fence(id, &token, ago(121))
+                    .await
+                    .unwrap()
+            );
+        }
+    };
+    // Fresh: busy, whoever asks.
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
+    assert!(!svc.job_may_start(me).await.unwrap());
+    let err = svc
+        .start(&admin, SOURCE, false, true, Some(me))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
+    let mut previous = a;
+    for (owner, taken) in [
+        (None, true),
+        (Some(dead), true),
+        (Some(JobId::new()), true),
+        (Some(me), true),
+        (Some(live), false),
+    ] {
+        // Free the slot, then a run of `owner` that goes stale.
+        previous
+            .finish(&svc, ImportRunState::Done, json!({}))
+            .await
+            .unwrap();
+        let run = svc
+            .start(&admin, SOURCE, false, false, owner)
+            .await
+            .unwrap();
+        stale(run.run()).await;
+        assert_eq!(svc.job_may_start(me).await.unwrap(), taken, "{owner:?}");
+        // A CLI start never takes over without being asked.
+        let err = svc
+            .start(&admin, SOURCE, false, false, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
+        let started = svc.start(&admin, SOURCE, false, false, Some(me)).await;
+        let state = |id| async move {
+            store
+                .read()
+                .imports()
+                .get_run(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state
+        };
+        if taken {
+            let next = started.unwrap();
+            assert_eq!(
+                state(run.run().id).await,
+                ImportRunState::Abandoned,
+                "{owner:?}"
+            );
+            previous = next;
+        } else {
+            let err = started.err().unwrap();
+            assert!(
+                matches!(err, CoreError::Unavailable(_)),
+                "{owner:?}: {err:?}"
+            );
+            assert_eq!(state(run.run().id).await, ImportRunState::Running);
+            previous = run;
+        }
+    }
+    // Nothing running: free for the job.
+    let id = previous.run().id;
+    previous
+        .finish(&svc, ImportRunState::Done, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read()
+            .imports()
+            .get_run(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ImportRunState::Done
+    );
+    assert!(svc.job_may_start(me).await.unwrap());
+}
+
 /// `heartbeat` moves the heartbeat while the run is the handle's, and is `Changed`
 /// once the run was taken over.
 pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let imports = store.read().imports();
     assert!(
         imports
@@ -745,7 +883,11 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
         .heartbeat_at;
     assert!(beat > ago(5), "heartbeat moved");
     // Fresh again: a takeover is refused.
-    let err = svc.start(&admin, SOURCE, false, true).await.err().unwrap();
+    let err = svc
+        .start(&admin, SOURCE, false, true, None)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 
     assert!(
@@ -754,7 +896,7 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
             .await
             .unwrap()
     );
-    let _b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    let _b = svc.start(&admin, SOURCE, false, true, None).await.unwrap();
     let err = a.heartbeat(&svc).await.unwrap_err();
     assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
     assert_eq!(ImportBatch::BATCH_ITEMS, 500);
@@ -770,6 +912,7 @@ backend_tests!(
     many_keys_collapse_to_all,
     import_lock_held_for_the_run,
     heartbeat_fails_after_takeover,
+    job_start_takes_over_stale_runs_without_a_live_job,
     rolled_back_batch_writes_nothing,
     stale_map_row_is_not_mapped,
     schema_batch_registers_types_and_taxonomies,

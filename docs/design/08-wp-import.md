@@ -3,20 +3,37 @@
 ## 1. Entry points
 
 ```
-ferrite import wordpress export.xml --data ./site [--uploads ./wp-content/uploads]
+ferrite import wordpress export.xml --data ./site [--uploads ./wp-content/uploads|uploads.zip]
     [--fetch-media] [--dry-run] [--report DIR] [--no-keep-permalinks] [--no-site-options]
     [--category-base category] [--tag-base tag] [--as LOGIN] [--takeover]     # M3-1
-POST /api/v1/import/wordpress            # admin; runs as an import.wordpress job (M3-2)
+POST /api/v1/import/wordpress            # multipart wxr, uploads?, options? → 202 + job (M3-2)
+GET  /api/v1/import/jobs/{job_id}        # the job and its run (what the admin polls)
+GET  /api/v1/import/runs[?limit&cursor], /import/runs/{id}, …/report.json, …/report.html
+/admin/import                            # the admin screen (`g i`, 11 §7)
 ```
 
-Both use `ferrite-import-wp`, which writes through core's import API
+All use `ferrite-import-wp`, which writes through core's import API
 (`ferrite_core::import`: `ImportService` starts a run, `ImportBatch` writes one
 transaction; not SQL), so imports work on either backend and media goes to whichever
 MediaStore is configured. Only an active admin may import (`Capability::Import`, checked
 once when the run starts). The CLI exits 0 when done, 2 when done with refused redirects
-or missing or refused media, 3 when another import is running, 1 on any error (it then
-writes no report; a partial report for a failed run is M3-2). Rulings: P1–P22 and R1–R51
-in `superpowers/rulings/m3.md`.
+or missing or refused media, 3 when another import is running, 1 on any error; a run that
+failed after it started still writes its partial report (M3-2 P29). `--uploads` takes the
+uploads folder or a `.zip` of it, read in place (`ZipSource`, P24).
+
+**Through the API (as built, M3-2; 07 §1).** The POST streams `wxr` (at most 512 MiB) and
+the optional `uploads` zip (at most 4 GiB) into the media store as `import` artifacts and
+queues an `import.wordpress` job as the caller, answering `202` with the job and
+`Location: /api/v1/import/jobs/{job_id}`; `options` (JSON, at most 4 KiB) carries
+`dry_run`, `keep_permalinks`, `site_options`, `fetch_media`, `category_base` and
+`tag_base` with the CLI's defaults; `takeover` is never the caller's. While an import job
+is queued or running, or a run is `running` with a fresh heartbeat, it is `409`. The job
+(04 §6; 6 h timeout, 3 attempts) runs on whichever node claims it: it checks the user is
+still an active admin, fetches the inputs to `<data>/import/job-<id>/`, runs the import,
+stores the report (a failed run's partial one too) and deletes the inputs once the run is
+`done` or the job fails for good. A retry on the same node resumes the run's IR; one on
+another node parses again (`import_map` keeps that idempotent). Rulings: P1–P34 and
+R1–R83 in `superpowers/rulings/m3.md`.
 
 ## 2. Pipeline
 
@@ -51,10 +68,14 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
   (and reports) one edited here since (P4). Terms and comments are matched, not updated
   (R46, R15). Items also get `import.wp.id` meta, never read back.
 - Runs: `import_runs(id, source, token, state, started_by, started_at, heartbeat_at,
-  finished_at, stats, dry_run)` (at most one `running`, by a partial unique index).
-  Every batch transaction starts with an `UPDATE` of the run's heartbeat matched on its
-  token, so a taken-over run cannot write (P5); a run is stale after 120 s without a
-  heartbeat and taken over only with `--takeover`. The `import` lock is best-effort.
+  finished_at, stats, dry_run, job_id, step, report_hash)` (at most one `running`, by a
+  partial unique index; the last three since `0010`). Every batch transaction starts
+  with an `UPDATE` of the run's heartbeat matched on its token, so a taken-over run cannot
+  write (P5); the step (`parse`, `pass1`…`pass4`, `fixup`, `report`) is written the same
+  fenced way as each step begins, between batches (P28). A run is stale after 120 s
+  without a heartbeat; the CLI takes one over only with `--takeover`, a job when the run
+  has no job, is its own, or its job is not `running` (R69), and an admin's POST abandons
+  it (R65). The `import` lock is best-effort.
 - Transactions in batches of at most 500 items; each batch emits one `invalidate` event
   (`[all]` past 1 000 keys). Imported items get a revision and their search entry, no
   plugin actions (`post.saved`, `post.published`), and scheduled ones their
@@ -130,13 +151,22 @@ media URL), tags (`/tag/<slug>/`) and categories (`/category/<slug>/`) whose ter
 differs; `--category-base` and `--tag-base` name the old bases. Old == new is skipped;
 rows the redirect rules refuse (2-cycles included, R17) are reported, not fatal. A stored
 redirect the import did not write, or that was changed since, is kept and noted (R41).
-`--no-keep-permalinks` keeps the site's structure and only redirects. Redirects for later
-changes of `permalink.*` (M2a-2b P26) are M3-2.
+`--no-keep-permalinks` keeps the site's structure and only redirects. When the import
+sets `permalink.*`, the write enqueues a `permalink.redirects` job like any other change
+of those options (M3-2 P30, 06 §3), which may add redirects from paths the old
+structure gave the imported posts here, even though they never served (R63).
 
 ## 6. Report
 
 `report.json` + `report.html` (one self-contained page), written by the CLI to
-`<data>/import/reports/<run-id>/` or `--report DIR`:
+`<data>/import/reports/<run-id>/` or `--report DIR`, and by the job as `import`
+artifacts (as built, M3-2 P29): the two files plus a manifest
+`{"v":1,"json":"<sha256>","html":"<sha256>"}` that `import_runs.report_hash` names,
+served by `GET /import/runs/{id}/report.json` and `…/report.html` (the HTML under
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`) and
+linked from the admin's runs table. A run that failed after it started has a report too:
+`failed: {step, error}` and a first note saying so; its counts cover only what that
+attempt did (P29). Contents:
 
 - counts per type, created/updated/unchanged/kept/skipped/failed ("kept": changed in
   WordPress but edited here since the import wrote it, so left alone; an item the
@@ -152,8 +182,8 @@ changes of `permalink.*` (M2a-2b P26) are M3-2.
 - the inferred permalink structure, and notes grouped by kind.
 
 Lists keep at most 1 000 entries with `totals` counting every one seen, notes at most 500
-kinds, the HTML page 200 rows per table (R42). Storing the report as an artifact and
-linking it from the admin import screen is M3-2.
+kinds, the HTML page 200 rows per table (R42). An attempt that replaces an earlier one's
+report leaves the old files until the store is cleaned (M4).
 
 ## 7. Test corpus
 

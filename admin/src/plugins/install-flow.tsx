@@ -25,6 +25,7 @@ import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { inspectPluginUpload, installPluginUpload } from "@/api/upload";
 import { Alert } from "@/auth/auth-layout";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -405,7 +406,9 @@ function InstallBody({
             <Alert tone="error">{failure.lead}</Alert>
           )
         ) : null}
-        {progress !== null ? <ProgressBar value={progress} /> : null}
+        {progress !== null ? (
+          <ProgressBar value={progress} label={t("plugins.install.progress")} />
+        ) : null}
       </div>
       <DialogFooter>{footer}</DialogFooter>
     </div>
@@ -553,26 +556,6 @@ function FileSlot({
           e.currentTarget.value = "";
           if (f) onFile(f);
         }}
-      />
-    </div>
-  );
-}
-
-function ProgressBar({ value }: { value: number }) {
-  const { t } = useTranslation("admin");
-  const percent = Math.round(value * 100);
-  return (
-    <div
-      role="progressbar"
-      aria-label={t("plugins.install.progress")}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className="h-1 w-full overflow-hidden rounded-full bg-muted"
-    >
-      <div
-        className="h-full origin-left rounded-full bg-primary transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none"
-        style={{ transform: `scaleX(${value})` }}
       />
     </div>
   );

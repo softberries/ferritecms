@@ -28,6 +28,9 @@ pub enum ImportError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// The uploads zip is not one, or is over its limits (P24).
+    #[error("the uploads archive {}: {msg}", path.display())]
+    Archive { path: PathBuf, msg: String },
     /// The IR work file failed.
     #[error("the import's work file failed: {0}")]
     Ir(#[from] sqlx::Error),

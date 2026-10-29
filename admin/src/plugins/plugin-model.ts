@@ -7,6 +7,7 @@ import { qk } from "@/api/keys";
 import type { PluginDto, PluginMetricsDto } from "@/api/plugins";
 import type { SchemaGrantReportDto, SchemaPermissionItemDto } from "@/api/schema";
 import { uiLocale } from "@/lib/locale";
+import { sameList } from "@/lib/same-list";
 
 /** Plugin metrics are read again this often while the page is visible (exact values). */
 export const METRICS_REFRESH_MS = 30_000;
@@ -31,9 +32,6 @@ export interface ShownItem {
   isNew: boolean;
   newDetail: ReadonlySet<string>;
 }
-
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
 
 /**
  * The items in display order (high risk first, otherwise the server's order) with the

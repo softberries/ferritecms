@@ -2,8 +2,8 @@
 //!
 //! Opens the site as `seed demo` does (config, store, startup check, media store,
 //! permalink rules), runs [`ferrite_import_wp::run::run`], writes `report.json` and
-//! `report.html`, and prints the counts. A failed run writes no report: the error is
-//! printed and the exit code is 1.
+//! `report.html`, and prints the counts. A run that fails after it started still writes
+//! its report (P29); the error is printed and the exit code is 1.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -13,13 +13,13 @@ use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use ferrite_core::{Actor, CoreError, SwappablePermalinks, import::ImportService};
-use ferrite_domain::{Role, UserStatus};
 use ferrite_http::import_fetch::HttpSource;
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
 use ferrite_import_wp::run::{
-    ByteStream, DirSource, ImportContext, ImportOptions, MediaSource, run as import,
+    ByteStream, DirSource, ImportContext, ImportOptions, MediaSource, RunFailed, run as import,
 };
+use ferrite_import_wp::zip_source::ZipSource;
 use ferrite_store::Store;
 
 use crate::{
@@ -53,7 +53,8 @@ pub struct WordpressArgs {
     /// The site's data folder (contains ferrite.toml).
     #[arg(long)]
     pub data: PathBuf,
-    /// A copy of the old site's `wp-content/uploads` folder.
+    /// A copy of the old site's `wp-content/uploads` folder, or a `.zip` of it (read in
+    /// place; entries are matched below their `uploads/` segment).
     #[arg(long)]
     pub uploads: Option<PathBuf>,
     /// Fetch attachments missing from `--uploads` from the old site (public addresses
@@ -101,9 +102,10 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
         let permalinks = Arc::new(SwappablePermalinks::new(
             permalink_rules(store.as_ref()).await?,
         ));
-        let actor = importer(store.as_ref(), args.as_login.as_deref()).await?;
+        let service = Arc::new(ImportService::new(store.clone(), permalinks.clone()));
+        let actor = importer(store.as_ref(), &service, args.as_login.as_deref()).await?;
         let ctx = ImportContext {
-            import: Arc::new(ImportService::new(store.clone(), permalinks.clone())),
+            import: service,
             permalinks,
             media_store: media,
             actor,
@@ -119,6 +121,8 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
             tag_base: args.tag_base.clone(),
             takeover: args.takeover,
             max_upload: config.uploads.max_upload,
+            on_step: None,
+            job_id: None,
             #[cfg(feature = "test-seams")]
             batch_items: None,
             #[cfg(feature = "test-seams")]
@@ -130,11 +134,7 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
         };
         match import(ctx, &args.file, opts).await {
             Ok(report) => finish(&args, &report),
-            Err(ImportError::Core(CoreError::Unavailable(why))) => {
-                eprintln!("error: {why}");
-                Ok(ExitCode::from(BUSY))
-            }
-            Err(e) => Err(anyhow::Error::new(e).context("the import failed")),
+            Err(e) => failed(&args, e),
         }
     }
     .await;
@@ -142,8 +142,33 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
     done
 }
 
-/// The admin `login` names, or the first active admin.
-async fn importer(store: &dyn Store, login: Option<&str>) -> anyhow::Result<Actor> {
+/// A failed run: writes its report when it has one (P29), then exit 3 when another
+/// import holds the site, else the error (exit 1).
+fn failed(args: &WordpressArgs, failed: RunFailed) -> anyhow::Result<ExitCode> {
+    let RunFailed { error, report } = failed;
+    if let Some(report) = report {
+        let dir = report_dir(args, &report);
+        match write_reports(&dir, &report) {
+            Ok(()) => print_report_paths(&dir),
+            Err(e) => eprintln!("error: {e:#}"),
+        }
+    }
+    match error {
+        ImportError::Core(CoreError::Unavailable(why)) => {
+            eprintln!("error: {why}");
+            Ok(ExitCode::from(BUSY))
+        }
+        error => Err(anyhow::Error::new(error).context("the import failed")),
+    }
+}
+
+/// The admin `login` names, or the first active admin, checked by
+/// [`ImportService::importer`].
+async fn importer(
+    store: &dyn Store,
+    import: &ImportService,
+    login: Option<&str>,
+) -> anyhow::Result<Actor> {
     let user = match login {
         Some(login) => store
             .read()
@@ -160,23 +185,32 @@ async fn importer(store: &dyn Store, login: Option<&str>) -> anyhow::Result<Acto
             .next()
             .context("the site has no active admin (create one with `ferrite user create`)")?,
     };
-    if user.role != Role::Admin || user.status != UserStatus::Active {
-        bail!(
+    match import.importer(user.id).await {
+        Err(CoreError::Forbidden(_)) => bail!(
             "{:?} is not an active admin; only active admins may import",
             user.login
-        );
+        ),
+        actor => Ok(actor?),
     }
-    Ok(Actor::new(user.id, user.role))
 }
 
-/// The uploads folder, then the old site when `--fetch-media` asks for it.
+/// The uploads folder or zip, then the old site when `--fetch-media` asks for it.
 fn media_source(args: &WordpressArgs) -> anyhow::Result<Arc<dyn MediaSource>> {
     let mut sources: Vec<Arc<dyn MediaSource>> = Vec::new();
-    if let Some(dir) = &args.uploads {
-        if !dir.is_dir() {
-            bail!("--uploads {} is not a folder", dir.display());
+    if let Some(path) = &args.uploads {
+        let zip = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+        if path.is_dir() {
+            sources.push(Arc::new(DirSource::new(path)));
+        } else if path.is_file() && zip {
+            sources.push(Arc::new(ZipSource::open(path)?));
+        } else {
+            bail!(
+                "--uploads {} is neither a folder nor a .zip file",
+                path.display()
+            );
         }
-        sources.push(Arc::new(DirSource::new(dir)));
     }
     if args.fetch_media {
         let version = binary_version()?.to_string();
@@ -193,8 +227,9 @@ fn media_source(args: &WordpressArgs) -> anyhow::Result<Arc<dyn MediaSource>> {
     Ok(Arc::new(Sources(sources)))
 }
 
-/// Media sources tried in order; none at all means every attachment is missing.
-struct Sources(Vec<Arc<dyn MediaSource>>);
+/// Media sources tried in order; none at all means every attachment is missing (also
+/// the `import.wordpress` job's).
+pub(crate) struct Sources(pub(crate) Vec<Arc<dyn MediaSource>>);
 
 #[async_trait]
 impl MediaSource for Sources {
@@ -215,12 +250,7 @@ impl MediaSource for Sources {
 
 /// Writes the report files, prints the summary and picks the exit code.
 fn finish(args: &WordpressArgs, report: &Report) -> anyhow::Result<ExitCode> {
-    let dir = args.report.clone().unwrap_or_else(|| {
-        args.data
-            .join("import")
-            .join("reports")
-            .join(&report.run_id)
-    });
+    let dir = report_dir(args, report);
     write_reports(&dir, report)?;
     if report.dry_run
         && let Some(note) = report.notes.iter().find(|n| n.starts_with("dry run:"))
@@ -249,14 +279,28 @@ fn finish(args: &WordpressArgs, report: &Report) -> anyhow::Result<ExitCode> {
     if report.counts.get("media").is_some_and(|c| c.created > 0) && !report.dry_run {
         println!("media variants are made by the next `ferrite serve`");
     }
-    println!("Report: {}", dir.join("report.json").display());
-    println!("        {}", dir.join("report.html").display());
+    print_report_paths(&dir);
     let code = if missing > 0 || refused > 0 || failed > 0 {
         DONE_WITH_PROBLEMS
     } else {
         DONE
     };
     Ok(ExitCode::from(code))
+}
+
+/// `--report`, or `<data>/import/reports/<run-id>/`.
+fn report_dir(args: &WordpressArgs, report: &Report) -> PathBuf {
+    args.report.clone().unwrap_or_else(|| {
+        args.data
+            .join("import")
+            .join("reports")
+            .join(&report.run_id)
+    })
+}
+
+fn print_report_paths(dir: &Path) {
+    println!("Report: {}", dir.join("report.json").display());
+    println!("        {}", dir.join("report.html").display());
 }
 
 /// The total of a capped report list (its length when nothing was dropped).
@@ -279,4 +323,75 @@ fn write_reports(dir: &Path, report: &Report) -> anyhow::Result<()> {
         std::fs::write(&path, body).with_context(|| format!("cannot write {}", path.display()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn args_for(data: &Path) -> WordpressArgs {
+        WordpressArgs {
+            file: data.join("x.xml"),
+            data: data.to_owned(),
+            uploads: None,
+            fetch_media: false,
+            dry_run: false,
+            report: None,
+            no_keep_permalinks: false,
+            no_site_options: false,
+            category_base: "category".into(),
+            tag_base: "tag".into(),
+            as_login: None,
+            takeover: false,
+            #[cfg(feature = "test-seams")]
+            allow_private_fetch: false,
+        }
+    }
+
+    /// A run that turns busy after it started still writes its partial report, and
+    /// exits 3; one with no report (busy before it started) writes nothing.
+    #[test]
+    fn busy_run_writes_its_partial_report() {
+        let data = tempfile::tempdir().unwrap();
+        let args = args_for(data.path());
+        let mut report = Report::default();
+        report.run_id = "run-1".into();
+        let busy = || ImportError::Core(CoreError::Unavailable("another import is running"));
+        let code = failed(
+            &args,
+            RunFailed {
+                error: busy(),
+                report: Some(Box::new(report)),
+            },
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::from(BUSY));
+        let dir = data.path().join("import/reports/run-1");
+        assert!(dir.join("report.json").is_file());
+        assert!(dir.join("report.html").is_file());
+
+        let other = tempfile::tempdir().unwrap();
+        let code = failed(
+            &args_for(other.path()),
+            RunFailed {
+                error: busy(),
+                report: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::from(BUSY));
+        assert!(!other.path().join("import").exists());
+
+        let err = failed(
+            &args,
+            RunFailed {
+                error: ImportError::Stopped,
+                report: None,
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("the import failed"), "{err:#}");
+    }
 }

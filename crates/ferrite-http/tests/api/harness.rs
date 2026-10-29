@@ -29,6 +29,7 @@ use ferrite_core::{
     SystemService, TaxonomyService, UserService,
     auth::SiteKey,
     comments::CommentService,
+    import::ImportService,
     mail::{MailQueue, MemoryMailer},
 };
 use ferrite_domain::{ArtifactHash, InstalledTheme, NodeId, Role, Secret, Timestamp, User};
@@ -37,6 +38,7 @@ use ferrite_http::{
     api::{ApiMail, ApiParts, ApiState, NodeInfo},
     build_site,
     extensions::Installer,
+    import_blobs::MediaArtifacts,
     load_route_table,
     media::Uploader,
 };
@@ -161,6 +163,15 @@ fn node_info(store: &dyn Store, media: &MediaConfig) -> NodeInfo {
             Backend::S3(_) => "s3",
         },
     }
+}
+
+/// The API's import service over `store`, keeping reports in `media` (as `serve` wires
+/// it).
+fn import_service(store: Arc<dyn Store>, media: Arc<MediaStore>) -> Arc<ImportService> {
+    Arc::new(
+        ImportService::new(store, Arc::new(PermalinkRules::default()))
+            .with_artifacts(Arc::new(MediaArtifacts::new(media))),
+    )
 }
 
 /// The address every harness request comes from.
@@ -303,6 +314,7 @@ impl Api {
                     Arc::new(PermalinkRules::default()),
                 )),
                 system: Arc::new(SystemService::new(store.clone())),
+                import: import_service(store.clone(), media_store.clone()),
                 site: app.clone(),
                 node: node_info(store.as_ref(), &media.config),
                 auth,
@@ -469,6 +481,7 @@ impl Api {
             max_upload: a.max_upload,
             comments: a.comments.clone(),
             system: a.system.clone(),
+            import: a.import.clone(),
             site: a.site.clone(),
             node: a.node,
             mail: a.mail.clone(),
@@ -498,6 +511,7 @@ impl Api {
                     Arc::new(PermalinkRules::default()),
                 )),
                 system: Arc::new(SystemService::new(store.clone())),
+                import: import_service(store.clone(), self.api.media.clone()),
                 site: self.app.clone(),
                 node: NodeInfo {
                     id: NodeId::new(),

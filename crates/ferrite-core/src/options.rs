@@ -10,7 +10,11 @@ use crate::{
     Actor, CoreError,
     actor::{Capability, require},
     events,
-    permalink::{self, PAGE_OPTION, POST_OPTION},
+    jobs::{
+        PERMALINK_REDIRECTS_VERSION, PermalinkRedirects, PermalinkStructures,
+        permalink_redirects_job,
+    },
+    permalink::{self, PAGE_OPTION, POST_OPTION, PermalinkRules},
     settings,
     site::FRONT_PAGE_OPTION,
     tx::finish,
@@ -39,7 +43,11 @@ struct Change<'a> {
 /// side can race the other into a combination the router cannot serve. A clash is
 /// `InvalidField { field: "permalink.post" | "permalink.page", .. }` naming the
 /// structure. They emit `invalidate [all]` (R10) besides `options.changed`; each node's
-/// reloader rebuilds its permalink rules and route table from the event.
+/// reloader rebuilds its permalink rules and route table from the event. A write that
+/// changes the structures in effect also enqueues a
+/// [`permalink.redirects`](crate::jobs::PERMALINK_REDIRECTS_KIND) job in its
+/// transaction (M3-2 P30), which redirects the published posts and pages from their old
+/// paths.
 pub struct OptionService {
     store: Arc<dyn Store>,
 }
@@ -140,9 +148,9 @@ impl OptionService {
 
 /// [`OptionService::set_many`] inside the caller's `Tx` (M3-1 P1), without the
 /// capability check: the same validation, front-page and `permalink.*` checks, events
-/// and audit row, except the `invalidate [all]`. Returns whether a `permalink.*` key
-/// changed, so the caller emits that invalidation. A `permalink.*` change needs a `Tx`
-/// that holds [`LOCK_TYPES`](ferrite_store::LOCK_TYPES) ([`touches_permalinks`]).
+/// and audit row (and `permalink.redirects` job), except the `invalidate [all]`.
+/// Returns whether a `permalink.*` key changed, so the caller emits that invalidation.
+/// A `permalink.*` change needs a `Tx` that holds [`LOCK_TYPES`](ferrite_store::LOCK_TYPES) ([`touches_permalinks`]).
 pub(crate) async fn set_many_in(
     repos: &dyn Repos,
     actor: &Actor,
@@ -200,7 +208,8 @@ async fn write_with_invalidation(
 
 /// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
 /// for a `settings_write`, the front page), each set or delete with its
-/// `options.changed`, and for a `settings_write` the audit row `settings.update`.
+/// `options.changed`, the `permalink.redirects` job when the `permalink.*` structures
+/// in effect changed (P30), and for a `settings_write` the audit row `settings.update`.
 /// Returns whether a `permalink.*` key changed: the caller then owes `invalidate [all]`.
 async fn write_changes(
     repos: &dyn Repos,
@@ -209,8 +218,16 @@ async fn write_changes(
     settings_write: bool,
 ) -> Result<bool, CoreError> {
     let permalinks: Vec<&Change<'_>> = changes.iter().filter(|c| is_permalink(c.key)).collect();
+    // The structures before the write; stored values that no longer parse give no
+    // old paths to redirect from.
+    let mut prev = None;
     if !permalinks.is_empty() {
         check_permalinks(repos, &permalinks).await?;
+        prev = match permalink::stored_rules(repos, &[]).await {
+            Ok(rules) => Some(rules),
+            Err(CoreError::Invalid(_)) => None,
+            Err(e) => return Err(e),
+        };
     }
     if settings_write {
         for c in changes {
@@ -221,15 +238,19 @@ async fn write_changes(
             }
         }
     }
+    let mut version = 0;
     for c in changes {
         match c.value {
             Some(v) => repos.options().set(c.key, v, c.autoload).await?,
             None => repos.options().delete(c.key).await?,
         }
-        repos
+        version = repos
             .events()
             .append(&events::options_changed(c.key))
             .await?;
+    }
+    if let Some(prev) = prev {
+        enqueue_redirects(repos, &prev, version).await?;
     }
     if settings_write {
         let keys: Vec<&str> = changes.iter().map(|c| c.key).collect();
@@ -245,6 +266,33 @@ async fn write_changes(
             .await?;
     }
     Ok(!permalinks.is_empty())
+}
+
+/// Enqueues the [`permalink.redirects`](crate::jobs::PERMALINK_REDIRECTS_KIND) job when
+/// the structures stored now (the write's pending changes) differ from `prev`; `version`
+/// keys it (the write's last event sequence number).
+async fn enqueue_redirects(
+    repos: &dyn Repos,
+    prev: &PermalinkRules,
+    version: i64,
+) -> Result<(), CoreError> {
+    let next = permalink::stored_rules(repos, &[]).await?;
+    if next == *prev {
+        return Ok(());
+    }
+    let structures = |r: &PermalinkRules| PermalinkStructures {
+        post: r.post().as_str().to_owned(),
+        page: r.page().as_str().to_owned(),
+    };
+    let job = permalink_redirects_job(&PermalinkRedirects {
+        v: PERMALINK_REDIRECTS_VERSION,
+        prev: structures(prev),
+        next: structures(&next),
+        version,
+        cursor: None,
+    });
+    repos.jobs().enqueue(&job).await?;
+    Ok(())
 }
 
 pub(crate) fn is_permalink(key: &str) -> bool {

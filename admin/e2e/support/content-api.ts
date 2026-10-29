@@ -454,6 +454,28 @@ export class ContentApi {
     return (await this.ok<{ items: Redirect[] }>(res, "list redirects")).items;
   }
 
+  /** Every redirect on the site, page by page (200 each). */
+  async allRedirects(): Promise<Redirect[]> {
+    const all: Redirect[] = [];
+    let cursor: string | null | undefined;
+    do {
+      const query = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const res = await this.ctx.get(`/api/v1/redirects?limit=200${query}`);
+      const page = await this.ok<{ items: Redirect[]; next_cursor?: string | null }>(
+        res,
+        "list redirects",
+      );
+      all.push(...page.items);
+      cursor = page.next_cursor;
+    } while (cursor);
+    return all;
+  }
+
+  /** Deletes redirect `id` (a missing one is fine). */
+  async deleteRedirect(id: string): Promise<void> {
+    await this.ctx.delete(`/api/v1/redirects/${id}`, { headers: this.headers() });
+  }
+
   /** Deletes every redirect whose source or target holds `q` (a test's own, by its id). */
   async deleteRedirects(q: string): Promise<void> {
     for (const r of await this.listRedirects(q)) {

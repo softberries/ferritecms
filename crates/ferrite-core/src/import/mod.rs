@@ -16,10 +16,15 @@
 //! statement); on Postgres that statement waits for a batch holding the row lock and
 //! then sees the heartbeat it committed. The named lock [`LOCK_IMPORT`] is also taken,
 //! best-effort, for the life of the handle; nothing relies on it (R17).
+//!
+//! **Jobs (M3-2).** [`ImportService::enqueue`] queues an `import.wordpress` job for an
+//! upload (P25, P27); the run reads, the importer check and the report artifacts are in
+//! `jobs.rs`.
 
 mod batch;
 mod comments;
 mod content;
+mod jobs;
 mod media;
 mod menus;
 mod redirects;
@@ -28,13 +33,18 @@ mod users;
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{ImportRun, ImportRunId, ImportRunState, Timestamp};
+use async_trait::async_trait;
+use bytes::Bytes;
+use ferrite_domain::{
+    ArtifactHash, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus, Timestamp,
+};
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
 pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
+pub use jobs::{ENQUEUE_LOCK_WAIT, ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};
 pub use media::ImportMedia;
 pub use redirects::RedirectOutcome;
 pub use terms::{ImportTerm, TermMatched, TermOutcome};
@@ -58,10 +68,49 @@ const TAKEN_OVER: &str = "import run was taken over";
 /// The constraint that allows one `running` run.
 const RUNNING_UQ: &str = "import_runs_running_uq";
 
-/// Starts import runs and opens their batches.
+/// The step that reads the WXR into the work file (P28).
+pub const STEP_PARSE: &str = "parse";
+/// Pass 1: users, terms and content types.
+pub const STEP_PASS1: &str = "pass1";
+/// Pass 2: media.
+pub const STEP_PASS2: &str = "pass2";
+/// Pass 3: content.
+pub const STEP_PASS3: &str = "pass3";
+/// Pass 4: comments, menus, options and redirects.
+pub const STEP_PASS4: &str = "pass4";
+/// The fix-up of internal links.
+pub const STEP_FIXUP: &str = "fixup";
+/// The step that builds the report.
+pub const STEP_REPORT: &str = "report";
+
+/// The steps of a run, in order (P28): what [`ImportHandle::set_step`] accepts.
+pub const IMPORT_STEPS: [&str; 7] = [
+    STEP_PARSE,
+    STEP_PASS1,
+    STEP_PASS2,
+    STEP_PASS3,
+    STEP_PASS4,
+    STEP_FIXUP,
+    STEP_REPORT,
+];
+
+/// Where artifact bytes live (the binary's `MediaStore`; `ferrite-core` does not depend
+/// on `ferrite-media`, 01 §1): content-addressed by SHA-256.
+#[async_trait]
+pub trait ArtifactBlobs: Send + Sync {
+    /// Stores `data` (idempotent) and returns its hash.
+    async fn put(&self, data: Bytes) -> Result<ArtifactHash, CoreError>;
+    /// The bytes of `hash`: [`CoreError::NotFound`] when there is no such artifact, and
+    /// an error without reading them when it has more than `max` bytes.
+    async fn get(&self, hash: &ArtifactHash, max: u64) -> Result<Bytes, CoreError>;
+}
+
+/// Starts import runs and opens their batches; enqueues import jobs and reads runs.
 pub struct ImportService {
     store: Arc<dyn Store>,
     permalinks: Arc<dyn Permalinks>,
+    /// Report storage; `None` makes the report methods `Unavailable`.
+    artifacts: Option<Arc<dyn ArtifactBlobs>>,
 }
 
 /// A started run, owned by one process. Pass it to every batch; end it with
@@ -78,7 +127,19 @@ pub struct ImportHandle {
 impl ImportService {
     /// `permalinks` are the site's live rules; each batch pins them when it opens.
     pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
-        Self { store, permalinks }
+        Self {
+            store,
+            permalinks,
+            artifacts: None,
+        }
+    }
+
+    /// The same service storing and reading run reports in `artifacts` (P29).
+    pub fn with_artifacts(self, artifacts: Arc<dyn ArtifactBlobs>) -> Self {
+        Self {
+            artifacts: Some(artifacts),
+            ..self
+        }
     }
 
     /// The permalink rules the stored `permalink.*` options give, with `overrides` on
@@ -94,8 +155,12 @@ impl ImportService {
 
     /// Starts a run of `source` (the normalised `<wp:base_blog_url>`). Needs
     /// [`Capability::Import`]. Another `running` run makes this
-    /// [`CoreError::Unavailable`], unless `takeover` is set and that run's heartbeat is
-    /// older than [`STALE_AFTER`]: then it is marked `abandoned` first (P5).
+    /// [`CoreError::Unavailable`], unless its heartbeat is older than [`STALE_AFTER`]
+    /// and it may be taken over: then it is marked `abandoned` first (P5). `job_id` is
+    /// the `import.wordpress` job running it, if any (P27). A CLI start (no `job_id`)
+    /// takes over only with `takeover`; a job's start ignores `takeover` and takes over
+    /// a stale run that has no job, is its own, or whose job is not `running` (P27 as
+    /// built; checked in the abandoning statement itself).
     ///
     /// On SQLite (one writer) never call this while a batch of this process is open:
     /// it would wait for that batch's transaction and time out (`Store(Busy)`).
@@ -105,6 +170,7 @@ impl ImportService {
         source: &str,
         dry_run: bool,
         takeover: bool,
+        job_id: Option<JobId>,
     ) -> Result<ImportHandle, CoreError> {
         require(actor, Capability::Import)?;
         let mut token = [0u8; 16];
@@ -132,8 +198,11 @@ impl ImportService {
             finished_at: None,
             stats: json!({}),
             dry_run,
+            job_id,
+            step: None,
+            report_hash: None,
         };
-        let created = self.create_run(&run, takeover, now).await;
+        let created = self.create_run(&run, takeover, job_id, now).await;
         match created {
             Ok(()) => Ok(ImportHandle {
                 run,
@@ -148,11 +217,12 @@ impl ImportService {
     }
 
     /// Inserts `run` in one transaction, after abandoning a stale running run when
-    /// `takeover` allows it.
+    /// `takeover` (CLI) or the job rule (`job`, see [`start`](Self::start)) allows it.
     async fn create_run(
         &self,
         run: &ImportRun,
         takeover: bool,
+        job: Option<JobId>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
@@ -163,12 +233,18 @@ impl ImportService {
                 if other.heartbeat_at >= stale_before {
                     return Err(CoreError::Unavailable(BUSY));
                 }
-                if !takeover {
-                    return Err(CoreError::Unavailable(BUSY_STALE));
-                }
                 // Re-checked by the write itself: a batch that fenced since our read
-                // makes this a no-op.
-                if !imports.abandon_stale(other.id, stale_before, now).await? {
+                // (or, for a job, the other run's job running again) makes this a no-op.
+                let abandoned = match job {
+                    Some(job) => {
+                        imports
+                            .abandon_stale_for_job(other.id, stale_before, now, job)
+                            .await?
+                    }
+                    None if !takeover => return Err(CoreError::Unavailable(BUSY_STALE)),
+                    None => imports.abandon_stale(other.id, stale_before, now).await?,
+                };
+                if !abandoned {
                     return Err(CoreError::Unavailable(BUSY));
                 }
                 tracing::warn!(run = %other.id, "took over a stale import run");
@@ -182,6 +258,31 @@ impl ImportService {
         }
         .await;
         finish(tx, done).await
+    }
+}
+
+impl ImportService {
+    /// Whether job `job` could start a run now (P27 as built): no run is `running`, or
+    /// the running one is stale and has no job, is `job`'s own, or its job is not
+    /// `running`. A pre-check, so a busy job fetches nothing; [`start`](Self::start)
+    /// decides for real.
+    pub async fn job_may_start(&self, job: JobId) -> Result<bool, CoreError> {
+        let repos = self.store.read();
+        let Some(run) = repos.imports().running().await? else {
+            return Ok(true);
+        };
+        if run.heartbeat_at >= stale_before(Timestamp::now()) {
+            return Ok(false);
+        }
+        Ok(match run.job_id {
+            None => true,
+            Some(other) if other == job => true,
+            Some(other) => repos
+                .jobs()
+                .get(other)
+                .await?
+                .is_none_or(|j| j.status != JobStatus::Running),
+        })
     }
 }
 
@@ -220,6 +321,27 @@ impl ImportHandle {
             .read()
             .imports()
             .fence(self.run.id, &self.run.token, Timestamp::now())
+            .await?;
+        if fenced {
+            Ok(())
+        } else {
+            Err(CoreError::Changed(TAKEN_OVER))
+        }
+    }
+
+    /// Records that the run begins `step`, one of [`IMPORT_STEPS`] (else `Invalid`),
+    /// under the fence (P28): a run that was taken over is [`CoreError::Changed`].
+    ///
+    /// On SQLite (one writer) never call this while a batch of this handle is open.
+    pub async fn set_step(&self, svc: &ImportService, step: &str) -> Result<(), CoreError> {
+        if !IMPORT_STEPS.contains(&step) {
+            return Err(CoreError::Invalid(format!("unknown import step {step:?}")));
+        }
+        let fenced = svc
+            .store
+            .read()
+            .imports()
+            .set_step(self.run.id, &self.run.token, step)
             .await?;
         if fenced {
             Ok(())

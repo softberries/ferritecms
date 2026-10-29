@@ -14,6 +14,7 @@ import { ApiError } from "@/api/problem";
 import type { ThemeDto } from "@/api/themes";
 import { uploadTheme } from "@/api/upload";
 import { Alert } from "@/auth/auth-layout";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -310,7 +311,9 @@ function UploadBody({
           </div>
         ) : null}
         {failure ? <FailureText failure={failure} /> : null}
-        {progress !== null ? <ProgressBar value={progress} /> : null}
+        {progress !== null ? (
+          <ProgressBar value={progress} label={t("themes.uploadDialog.progress")} />
+        ) : null}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>
@@ -415,26 +418,6 @@ export function LoadProblems({ lead, problems }: { lead: string; problems: reado
           <li key={i}>{p}</li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-function ProgressBar({ value }: { value: number }) {
-  const { t } = useTranslation("admin");
-  const percent = Math.round(value * 100);
-  return (
-    <div
-      role="progressbar"
-      aria-label={t("themes.uploadDialog.progress")}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className="h-1 w-full overflow-hidden rounded-full bg-muted"
-    >
-      <div
-        className="h-full origin-left rounded-full bg-primary transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none"
-        style={{ transform: `scaleX(${value})` }}
-      />
     </div>
   );
 }

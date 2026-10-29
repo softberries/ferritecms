@@ -15,6 +15,8 @@ use ferrite_domain::{
     UserQuery,
 };
 
+use uuid::Uuid;
+
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
 
 /// Which database engine backs a store.
@@ -1108,10 +1110,40 @@ pub trait ImportRepo: Send + Sync {
         stale_before: Timestamp,
         now: Timestamp,
     ) -> Result<bool, StoreError>;
+    /// [`abandon_stale`](Self::abandon_stale) for a start by job `job` (M3-2 P27 as
+    /// built): also only when the run has no job, is `job`'s own, or its job is not
+    /// `running` (no such job included). One statement, like `abandon_stale`.
+    async fn abandon_stale_for_job(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+        job: JobId,
+    ) -> Result<bool, StoreError>;
     /// The run in state `running`, if any.
     async fn running(&self) -> Result<Option<ImportRun>, StoreError>;
     /// Runs, newest first; `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
     async fn list_runs(&self, limit: u32) -> Result<Vec<ImportRun>, StoreError>;
+    /// Runs, newest first by (`started_at`, `id`), after `cursor` (the last row's pair
+    /// of the previous page); `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
+    async fn list_runs_page(
+        &self,
+        limit: u32,
+        cursor: Option<(Timestamp, Uuid)>,
+    ) -> Result<Vec<ImportRun>, StoreError>;
+    /// The newest run of job `job`, if any.
+    async fn run_by_job(&self, job: JobId) -> Result<Option<ImportRun>, StoreError>;
+    /// Sets the run's `step`, fenced like [`fence`](ImportRepo::fence): `true` iff the
+    /// run exists, is `running` and `token` matches.
+    async fn set_step(
+        &self,
+        id: ImportRunId,
+        token: &[u8; 16],
+        step: &str,
+    ) -> Result<bool, StoreError>;
+    /// Sets the run's `report_hash`, whatever its state. A missing run is
+    /// [`StoreError::NotFound`].
+    async fn set_report(&self, id: ImportRunId, hash: &str) -> Result<(), StoreError>;
     /// Sets the state and the stats; `finished_at` is `now` unless the state is
     /// `running`. A missing run is [`StoreError::NotFound`].
     async fn set_state(

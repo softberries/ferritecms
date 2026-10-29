@@ -9,11 +9,12 @@
 // revisions (Task 17) build on it.
 //
 // Custom fields and SEO (M2b-2 Task 8) are panel members too: `meta.fields` (the item's
-// `fields` object as edited, `featured_image` included) and `meta.seo` (title and
-// description as typed). With a field schema (`fieldDefs`), a save sends the fields
-// without the keys the schema no longer has (`toSave`, P39) and is refused here, before
-// any request, while a field is invalid (a required one empty: Review Focus 2); the
-// server's `422` paths land in `fieldErrors` for the inputs to show.
+// `fields` object as edited, `featured_image` included) and `meta.seo` (title,
+// description and canonical URL as typed, the robots directives sorted; M3-2 P33). With
+// a field schema (`fieldDefs`), a save sends the fields without the keys the schema no
+// longer has (`toSave`, P39) and is refused here, before any request, while a field is
+// invalid (a required one empty: Review Focus 2); the server's `422` paths land in
+// `fieldErrors` for the inputs to show.
 //
 // Revisions (Task 17): `restoreRevision` writes an earlier revision back (`POST
 // …/revisions/{rid}/restore` with `If-Match`), through the same failure path as a save
@@ -62,9 +63,11 @@ import type {
   SchemaContentDto,
   SchemaContentInput,
   SchemaContentPatch,
+  SchemaRobotsDto,
   SchemaSeoPatchDto,
 } from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
+import { sameList } from "@/lib/same-list";
 import { pushRecent } from "@/palette/recent";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -73,6 +76,7 @@ import {
   type Draft,
   createAutosaver,
 } from "./autosave";
+import { sortedRobots } from "./conflict";
 import {
   type FieldDef,
   type FieldValues,
@@ -112,7 +116,8 @@ export interface MetaDraft {
   menu_order: number;
   /** The item's custom fields as edited (`featured_image` included). */
   fields: FieldValues;
-  /** The SEO title and description as typed; `""` means not set. */
+  /** The SEO title, description and canonical URL as typed (`""`: not set), and the
+   * robots directives. */
   seo: SeoDraft;
 }
 
@@ -120,7 +125,37 @@ export interface MetaDraft {
 export interface SeoDraft {
   title: string;
   description: string;
+  canonical: string;
+  /** Sorted, as the server stores them; empty: none. */
+  robots: SchemaRobotsDto[];
 }
+
+/** The server's limit for `seo.canonical`. */
+export const MAX_CANONICAL = 2048;
+
+/**
+ * Whether the server takes `text` as `seo.canonical` (core `check_canonical`): blank (it
+ * deletes the value), or, trimmed, an absolute `http(s)` URL with a host, without
+ * whitespace or control characters, at most {@link MAX_CANONICAL} characters.
+ */
+export function canonicalAccepted(text: string): boolean {
+  const s = text.trim();
+  if (s === "") return true;
+  // eslint-disable-next-line no-control-regex
+  if ([...s].length > MAX_CANONICAL || /[\s\u0000-\u001f\u007f-\u009f]/u.test(s)) return false;
+  try {
+    const url = new URL(s);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+const sameRobots = (a: readonly SchemaRobotsDto[], b: readonly SchemaRobotsDto[]) =>
+  sameList(sortedRobots(a), sortedRobots(b));
+
+/** The SEO a reset leaves: nothing set (the page then uses its own values). */
+export const EMPTY_SEO: SeoDraft = { title: "", description: "", canonical: "", robots: [] };
 
 /** A transition the panel runs (`trash` goes through the list's undo logic instead). */
 export type Transition = Exclude<LifecycleAction, "trash" | "restore">;
@@ -141,7 +176,12 @@ export function metaOf(item: ContentDto | null): MetaDraft {
         parent_id: item.parent_id ?? null,
         menu_order: item.menu_order,
         fields: { ...valuesOf(item.fields) },
-        seo: { title: item.seo?.title ?? "", description: item.seo?.description ?? "" },
+        seo: {
+          title: item.seo?.title ?? "",
+          description: item.seo?.description ?? "",
+          canonical: item.seo?.canonical ?? "",
+          robots: sortedRobots(item.seo?.robots ?? []),
+        },
       }
     : {
         slug: "",
@@ -150,17 +190,23 @@ export function metaOf(item: ContentDto | null): MetaDraft {
         parent_id: null,
         menu_order: 0,
         fields: {},
-        seo: { title: "", description: "" },
+        seo: EMPTY_SEO,
       };
 }
 
 /** A typed SEO value as the API takes it: blank is `null` (delete). */
 const seoValue = (s: string): string | null => (s.trim() === "" ? null : s);
 
+/** The directives as the API takes them: none is `null` (delete). */
+const robotsValue = (robots: readonly SchemaRobotsDto[]): SchemaRobotsDto[] | null =>
+  robots.length === 0 ? null : sortedRobots(robots);
+
 /** The SEO members as the slot and the conflict dialog take them. */
 export const seoOfDraft = (seo: SeoDraft) => ({
   title: seoValue(seo.title),
   description: seoValue(seo.description),
+  canonical: seoValue(seo.canonical),
+  robots: robotsValue(seo.robots),
 });
 
 const sameTerms = (a: readonly string[], b: readonly string[]) =>
@@ -185,6 +231,8 @@ export function metaChanges(draft: MetaDraft, base: MetaDraft): SchemaContentPat
   if (draft.seo.description !== base.seo.description) {
     seo.description = seoValue(draft.seo.description);
   }
+  if (draft.seo.canonical !== base.seo.canonical) seo.canonical = seoValue(draft.seo.canonical);
+  if (!sameRobots(draft.seo.robots, base.seo.robots)) seo.robots = robotsValue(draft.seo.robots);
   if (Object.keys(seo).length > 0) out.seo = seo;
   return out;
 }
@@ -203,6 +251,9 @@ function settleMeta(now: MetaDraft, sent: MetaDraft, stored: MetaDraft): MetaDra
       title: now.seo.title === sent.seo.title ? stored.seo.title : now.seo.title,
       description:
         now.seo.description === sent.seo.description ? stored.seo.description : now.seo.description,
+      canonical:
+        now.seo.canonical === sent.seo.canonical ? stored.seo.canonical : now.seo.canonical,
+      robots: sameRobots(now.seo.robots, sent.seo.robots) ? stored.seo.robots : now.seo.robots,
     },
   };
 }
@@ -492,13 +543,29 @@ function metaOfDraft(draft: Draft, item: ContentDto | null): MetaDraft {
             draft.seo.description === undefined
               ? stored.seo.description
               : (draft.seo.description ?? ""),
+          // A slot from before M3-2 has neither: the stored ones stay.
+          canonical:
+            draft.seo.canonical === undefined ? stored.seo.canonical : (draft.seo.canonical ?? ""),
+          robots:
+            draft.seo.robots === undefined
+              ? stored.seo.robots
+              : sortedRobots(draft.seo.robots ?? []),
         }
       : stored.seo,
   };
 }
 
-/** A draft as `PUT …/autosave` takes it. */
+/**
+ * A draft as `PUT …/autosave` takes it. The slot checks `seo` as a save does, so a
+ * canonical URL the server would refuse (one half typed) is left out, "unchanged": a
+ * `422` would refuse the whole draft. The field still holds it and says what is wrong.
+ */
 export function autosaveInput(d: Draft): SchemaAutosaveInput {
+  let seo = d.seo;
+  if (seo && typeof seo.canonical === "string" && !canonicalAccepted(seo.canonical)) {
+    seo = { ...seo };
+    delete seo.canonical;
+  }
   return {
     base_version: d.base_version,
     title: d.title,
@@ -509,7 +576,7 @@ export function autosaveInput(d: Draft): SchemaAutosaveInput {
     parent_id: d.parent_id,
     menu_order: d.menu_order,
     terms: d.terms,
-    ...(d.seo ? { seo: d.seo } : {}),
+    ...(seo ? { seo } : {}),
   };
 }
 
