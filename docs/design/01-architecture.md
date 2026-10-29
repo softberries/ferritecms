@@ -271,7 +271,7 @@ MB/MiB = 1024², GB/GiB = 1024³ (`cx.rs`, `parse_size`). Durations: seconds, `"
 url        = "https://example.com"     # required; absolute http(s) URL
 title      = ""                        # default empty
 locale     = "en"                      # default "en"; must not be empty
-timezone   = "UTC"                     # default "UTC"; must not be empty (not validated as a zone)
+timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. `Europe/Warsaw`), validated at load against the bundled database; an unknown name is a config error. The theme `date` filter formats in it (06 §4); permalinks stay UTC. Config only: a change needs a restart
 
 [server]
 listen     = "127.0.0.1:8080"          # default; a socket address

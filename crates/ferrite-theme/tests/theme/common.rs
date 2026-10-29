@@ -56,6 +56,7 @@ pub fn site() -> SiteInfo {
         url: "https://example.com".into(),
         description: "desc".into(),
         locale: "en".into(),
+        timezone: "UTC".into(),
         settings: Default::default(),
     }
 }

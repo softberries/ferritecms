@@ -454,7 +454,7 @@ M4-1 (data safety) is done: [`m4-1-exit.md`](superpowers/m4-1-exit.md), rulings 
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
 - [ ] `/metrics`, `node_metrics`, dashboard charts wired (the metrics registry and time series; M2a-2b P20 built only a node-local snapshot, 09 §6).
-- [ ] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today).
+- [x] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today).
 - [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
 - [ ] Release builds for all targets, published Docker image (a `Dockerfile` exists since M1.5, built in CI), systemd unit, cluster runbook.
 - [ ] Backward-compat CI job (from first tag).
