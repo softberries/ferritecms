@@ -209,7 +209,7 @@ test("New import moves focus to the start card's heading", async () => {
   await screen.findByRole("heading", { name: "Import finished" });
   await userEvent.click(screen.getByRole("button", { name: "New import" }));
   const heading = await screen.findByRole("heading", { name: "New import" });
-  expect(document.activeElement).toBe(heading);
+  await vi.waitFor(() => expect(document.activeElement).toBe(heading));
 });
 
 /** An XHR that answers every send with `status` and `body` on the next task. */
