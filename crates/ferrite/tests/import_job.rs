@@ -491,12 +491,57 @@ async fn last_attempt_retry_deletes_inputs(db: Arc<TestDb>) {
     assert_eq!(site.artifact_exists(&wxr).await, (true, true));
     assert!(!gone.exists());
     assert!(kept.exists());
+    // Not final: the run's work folder stays for the retry to resume.
+    let first = site.run_of(id).await;
+    assert!(import.join(first.id.to_string()).exists());
     job.attempts = job.max_attempts;
     let err = handler.run(&job).await.unwrap_err();
     assert!(matches!(err, JobError::Retry(_)), "{err:?}");
     for hash in [&wxr, &uploads] {
         assert_eq!(site.artifact_exists(hash).await, (false, false), "{hash}");
     }
+    // Final: the work folder goes too (BE-m3).
+    let last = site.run_of(id).await;
+    assert_ne!(last.id, first.id);
+    for run in [first.id, last.id] {
+        assert!(!import.join(run.to_string()).exists(), "{run}");
+    }
+}
+
+/// Each attempt removes the work folders of runs whose job is over (`done` or `dead`);
+/// a CLI run's folder (no job) stays for the next CLI run of the same file to resume
+/// (M3-1 R27), and so does one whose job may still retry.
+async fn attempt_sweeps_work_folders_of_ended_jobs(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    let folder = site.folder();
+    let import = folder.dir.path().join("import");
+    let dead = site.other_job(true).await;
+    let live = site.other_job(false).await;
+    let ended = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), Some(dead))
+        .await;
+    let retrying = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), Some(live))
+        .await;
+    let cli = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), None)
+        .await;
+    for run in [ended, retrying, cli] {
+        std::fs::create_dir_all(import.join(run.to_string())).unwrap();
+    }
+    // A live CLI run makes the attempt busy; the sweep runs first anyway.
+    site.running_run(Duration::ZERO, None).await;
+    let err = site
+        .handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Busy(_)), "{err:?}");
+    assert!(!import.join(ended.to_string()).exists());
+    assert!(import.join(retrying.to_string()).exists());
+    assert!(import.join(cli.to_string()).exists());
 }
 
 /// An attempt that finds its input gone after its run was `done` (a drop between the
@@ -685,6 +730,7 @@ backend_tests_spawning!(
     job_takes_over_stale_runs_without_a_live_job,
     busy_attempt_fetches_nothing,
     last_attempt_retry_deletes_inputs,
+    attempt_sweeps_work_folders_of_ended_jobs,
     missing_input_of_a_done_run_is_done,
     job_dead_when_user_demoted,
     input_shared_with_media_keeps_its_file,

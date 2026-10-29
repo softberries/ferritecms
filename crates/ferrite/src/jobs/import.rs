@@ -12,7 +12,10 @@
 //! Before it fetches anything an attempt checks that it could start a run
 //! ([`ImportService::job_may_start`]), so a busy job does not copy its inputs every few
 //! seconds. Each attempt also removes the `job-*` folders of jobs that are over (a
-//! crashed node's leftovers).
+//! crashed node's leftovers), and the run work folders `<data>/import/<run-id>/` of runs
+//! whose job is over. When the job fails for good, its run's work folder goes at once
+//! (final review BE-m3). A CLI run's work folder (no job) is never swept: the next CLI
+//! run of the same file resumes from it (M3-1 R27).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,7 +29,9 @@ use ferrite_core::{
     import::ImportService,
     jobs::{IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobPayload},
 };
-use ferrite_domain::{ArtifactHash, ArtifactKind, ImportRunState, Job, JobId, JobStatus};
+use ferrite_domain::{
+    ArtifactHash, ArtifactKind, ImportRunId, ImportRunState, Job, JobId, JobStatus,
+};
 use ferrite_http::import_fetch::HttpSource;
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
@@ -83,6 +88,7 @@ impl JobHandler for ImportWordpressHandler {
             .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
         let import = self.data_dir.join("import");
         self.sweep_job_folders(&import, job.id).await;
+        self.sweep_run_folders(&import).await;
         let folder = import.join(format!("job-{}", job.id));
         let outcome = self.attempt(job.id, &payload, &folder).await;
         if let Err(e) = tokio::fs::remove_dir_all(&folder).await
@@ -100,6 +106,9 @@ impl JobHandler for ImportWordpressHandler {
         };
         if spent {
             self.delete_inputs(&payload).await;
+            if outcome.is_err() {
+                self.remove_run_folder(&import, job.id).await;
+            }
         }
         outcome
     }
@@ -251,6 +260,66 @@ impl ImportWordpressHandler {
             if over && let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
                 tracing::warn!(error = %e, dir = %entry.path().display(), "removing a leftover import job folder failed");
             }
+        }
+    }
+
+    /// Removes the work folders under `import` of runs that are not `running` and whose
+    /// job is over (not queued or running, or gone). Folders of CLI runs (no job) and of
+    /// runs whose job may retry stay; so does any folder whose run cannot be read.
+    async fn sweep_run_folders(&self, import: &Path) {
+        let Ok(mut entries) = tokio::fs::read_dir(import).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Some(id) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<ImportRunId>().ok())
+            else {
+                continue;
+            };
+            let run = match self.store.read().imports().get_run(id).await {
+                Ok(Some(run)) => run,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(error = %e, run = %id, "reading an import run failed; its folder stays");
+                    continue;
+                }
+            };
+            let Some(job) = run.job_id.filter(|_| run.state != ImportRunState::Running) else {
+                continue;
+            };
+            let over = match self.store.read().jobs().get(job).await {
+                Ok(job) => {
+                    job.is_none_or(|j| matches!(j.status, JobStatus::Done | JobStatus::Dead))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, %job, "reading an import job failed; its run's folder stays");
+                    false
+                }
+            };
+            if over && let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                tracing::warn!(error = %e, dir = %entry.path().display(), "removing an import run's work folder failed");
+            }
+        }
+    }
+
+    /// Removes the work folder of job `job`'s newest run (the job failed for good, so no
+    /// attempt resumes it).
+    async fn remove_run_folder(&self, import: &Path, job: JobId) {
+        let run = match self.store.read().imports().run_by_job(job).await {
+            Ok(Some(run)) => run,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, %job, "reading the import job's run failed; its folder stays");
+                return;
+            }
+        };
+        let dir = import.join(run.id.to_string());
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = %e, dir = %dir.display(), "removing an import run's work folder failed");
         }
     }
 
