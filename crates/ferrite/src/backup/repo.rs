@@ -176,10 +176,7 @@ impl Repo {
 
     async fn is_empty(&self) -> anyhow::Result<bool> {
         if let Some(dir) = &self.local {
-            return Ok(std::fs::read_dir(dir)
-                .with_context(|| format!("cannot read {}", dir.display()))?
-                .next()
-                .is_none());
+            return dir_is_empty(dir);
         }
         let root = self.prefix.trim_end_matches('/');
         let root = (!root.is_empty()).then(|| Key::from(root));
@@ -614,6 +611,38 @@ impl Drop for Upload {
 
 /// The folder of a repository holding export archives (the scheduled backup of a Postgres
 /// site, M4-1 P15).
+/// Whether `dir` holds nothing but (at most) a filesystem's `lost+found` (B-M7: a fresh
+/// ext4 volume has one).
+pub(crate) fn dir_is_empty(dir: &Path) -> anyhow::Result<bool> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("cannot read {}", dir.display()))?;
+        if entry.file_name() != "lost+found" {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The R11 check of a local repository folder without writing anything (B-I3, so `config
+/// check` and `serve` refuse it before the first scheduled run): absent, empty (but for
+/// `lost+found`) or holding the repository marker is fine; any other content is refused.
+pub(crate) fn check_dir(dir: &Path) -> anyhow::Result<()> {
+    if std::fs::symlink_metadata(dir).is_err() {
+        return Ok(());
+    }
+    if !dir.is_dir() {
+        bail!("{} exists and is not a folder", dir.display());
+    }
+    if dir.join(MARKER).is_file() || dir_is_empty(dir)? {
+        return Ok(());
+    }
+    bail!(
+        "{} is not empty and is not a ferrite backup repository (it has no {MARKER}); use an \
+         empty or new folder",
+        dir.display()
+    )
+}
+
 pub const EXPORTS: &str = "exports";
 /// The suffix of an export archive's name, after its `yyyymmddThhmmssZ` timestamp.
 pub const EXPORT_SUFFIX: &str = ".ferrite.tar.zst";

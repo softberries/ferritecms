@@ -1253,6 +1253,153 @@ fn restore_is_a_new_install_without_gc_marks() {
     assert!(!stderr(&out).contains("is outside"), "{}", text(&out));
 }
 
+fn config_check(data: &Path, env: &[(&str, &str)]) -> Output {
+    let mut c = ferrite();
+    c.args(["config", "check", "--data"]).arg(data);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    run(c)
+}
+
+/// B-I2: a SQLite site whose database.url names its database by an absolute path (even
+/// to `<data>/ferrite.db`, as `db copy` used to print) is refused by `backup`, by `config
+/// check` when backups are scheduled, and by `serve`'s job setup: its backups could
+/// never be restored.
+#[test]
+fn backup_refuses_a_database_url_restore_cannot_use() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let absolute = format!("sqlite://{}", source.join("ferrite.db").display());
+    let archive = tmp.path().join("b.tar.zst");
+    let mut c = ferrite();
+    c.args(["backup", "--data"])
+        .arg(&source)
+        .arg("--to")
+        .arg(&archive)
+        .env("FERRITE_DATABASE__URL", &absolute);
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("could not be restored")
+            && stderr(&out).contains("sqlite://ferrite.db"),
+        "{}",
+        text(&out)
+    );
+    assert!(!archive.exists());
+    assert!(local_snapshots(&source).is_empty());
+
+    let toml = source.join("ferrite.toml");
+    let mut src = std::fs::read_to_string(&toml).unwrap();
+    src.push_str("\n[backup]\nschedule = \"daily\"\nto = \"../repo\"\n");
+    std::fs::write(&toml, src).unwrap();
+    let out = config_check(&source, &[("FERRITE_DATABASE__URL", &absolute)]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(stderr(&out).contains("database.url"), "{}", text(&out));
+    // The relative form is fine.
+    let out = config_check(&source, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    ok_backup(&source, &archive, &[]);
+}
+
+/// B-I3: `config check` (and `serve`) refuse a non-empty `backup.to` folder that is not a
+/// repository, instead of every scheduled run failing; an absent folder, one holding only
+/// `lost+found` (B-M7) and an existing repository pass.
+#[test]
+fn config_check_refuses_a_non_repository_backup_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let toml = source.join("ferrite.toml");
+    let mut src = std::fs::read_to_string(&toml).unwrap();
+    src.push_str("\n[backup]\nschedule = \"daily\"\nto = \"../repo\"\n");
+    std::fs::write(&toml, src).unwrap();
+    let repo = tmp.path().join("repo");
+    let out = config_check(&source, &[]);
+    assert_eq!(out.status.code(), Some(0), "absent: {}", text(&out));
+
+    std::fs::create_dir_all(repo.join("lost+found")).unwrap();
+    let out = config_check(&source, &[]);
+    assert_eq!(out.status.code(), Some(0), "lost+found: {}", text(&out));
+
+    std::fs::write(repo.join("export-2026.tar.zst"), b"an archive of mine").unwrap();
+    let out = config_check(&source, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("backup.to")
+            && stderr(&out).contains("not a ferrite backup repository"),
+        "{}",
+        text(&out)
+    );
+    std::fs::remove_file(repo.join("export-2026.tar.zst")).unwrap();
+
+    // Once it is a repository (made in the folder holding lost+found), it passes.
+    ok_backup(&source, &repo, &[]);
+    assert!(repo.join("lost+found").is_dir());
+    std::fs::write(repo.join("notes.txt"), b"beside the repository").unwrap();
+    let out = config_check(&source, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+}
+
+/// B-M4: a repository of a newer format is exit 3 from `backup`, as from `restore`.
+#[test]
+fn backup_into_a_newer_repository_exits_3() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join("ferrite-backup-repo.json"),
+        br#"{"format": 99, "created_at": "2030-01-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    let out = backup(&source, &repo, &[]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(stderr(&out).contains("format 99"), "{}", text(&out));
+    let out = restore(&repo, &tmp.path().join("r"), &[]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+}
+
+/// B-M7: a target holding only a filesystem's `lost+found` counts as empty.
+#[test]
+fn restore_into_a_folder_with_only_lost_and_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let target = tmp.path().join("volume");
+    std::fs::create_dir_all(target.join("lost+found")).unwrap();
+    let out = restore(&archive, &target, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(target.join("ferrite.db").is_file());
+    assert!(target.join("lost+found").is_dir());
+}
+
+/// B-M8: a repository holding only a Postgres site's export archives points to
+/// `import-site`.
+#[test]
+fn restore_from_an_exports_only_repository_hints_import_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join("exports")).unwrap();
+    std::fs::write(
+        repo.join("ferrite-backup-repo.json"),
+        br#"{"format": 1, "created_at": "2026-10-29T00:00:00Z"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("exports/20261029T000000Z.ferrite.tar.zst"),
+        b"an export",
+    )
+    .unwrap();
+    let out = restore(&repo, &tmp.path().join("r"), &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("ferrite import-site"),
+        "{}",
+        text(&out)
+    );
+}
+
 #[test]
 fn incomplete_snapshots_are_ignored_and_pruned() {
     let tmp = tempfile::tempdir().unwrap();

@@ -62,6 +62,7 @@ pub fn site_backup(
     let repo = backup_location(config)
         .context("backup.to")?
         .context("backup.to is required unless backup.schedule is \"off\"")?;
+    crate::backup::check_backup_database(config).context("database.url")?;
     if let RepoLocation::Dir(dir) = &repo
         && config.effective_cluster_mode() == ClusterMode::Cluster
     {
@@ -90,7 +91,9 @@ pub fn site_backup(
 
 /// The repository `backup.to` names (`None` without one), checked as `serve` checks it:
 /// a folder or `s3://`, not inside the data folder or the media store (symlinks resolved
-/// where the paths exist). No database or network access, so `config check` runs it too.
+/// where the paths exist), and a local folder absent, empty or already a repository (R11;
+/// an S3 prefix is checked when the job runs). No database or network access, so `config
+/// check` runs it too.
 pub(crate) fn backup_location(config: &Config) -> anyhow::Result<Option<RepoLocation>> {
     let Some(to) = config.backup.to.as_deref() else {
         return Ok(None);
@@ -99,6 +102,11 @@ pub(crate) fn backup_location(config: &Config) -> anyhow::Result<Option<RepoLoca
         bail!("must be a folder or s3://bucket[/prefix]");
     };
     check_repo_location(config, &repo)?;
+    // A local folder is checked now (B-I3); an S3 prefix only when the job runs (no
+    // network here).
+    if let RepoLocation::Dir(dir) = &repo {
+        crate::backup::repo::check_dir(dir)?;
+    }
     Ok(Some(repo))
 }
 

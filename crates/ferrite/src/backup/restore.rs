@@ -124,11 +124,8 @@ fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
     if !dir.is_dir() {
         bail!("{} exists and is not a folder", dir.display());
     }
-    let empty = std::fs::read_dir(dir)
-        .with_context(|| format!("cannot read {}", dir.display()))?
-        .next()
-        .is_none();
-    if empty {
+    // A filesystem's `lost+found` does not count (a fresh volume has one, B-M7).
+    if super::repo::dir_is_empty(dir)? {
         return Ok(TargetState::Empty);
     }
     if !force {
@@ -460,10 +457,16 @@ async fn pick_snapshot(repo: &Repo, wanted: Option<&str>) -> anyhow::Result<Stri
                 snapshots.join(", ")
             }
         ),
-        None => snapshots
-            .last()
-            .cloned()
-            .with_context(|| format!("{} has no snapshots", repo.display())),
+        None => match snapshots.last() {
+            Some(name) => Ok(name.clone()),
+            None if !repo.exports().await?.is_empty() => bail!(
+                "{} has no snapshots, only export archives (in {}/): a Postgres site's \
+                 scheduled backups; load one with `ferrite import-site`",
+                repo.display(),
+                super::repo::EXPORTS
+            ),
+            None => bail!("{} has no snapshots", repo.display()),
+        },
     }
 }
 

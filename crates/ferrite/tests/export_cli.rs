@@ -794,6 +794,7 @@ fn refused_db_copy_removes_the_sqlite_file_it_created() {
     );
     assert!(!dest.join("ferrite.db").exists());
     assert!(!dest.join("ferrite.db-wal").exists());
+    assert!(!dest.join("ferrite.lock").exists(), "B-M14");
 }
 
 #[test]
@@ -908,6 +909,9 @@ fn db_copy_sqlite_to_new_sqlite_file() {
     let out = ok(c);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("[database]"), "{stdout}");
+    // B-I2: relative, the form backup and restore accept; the R16 claim note.
+    assert!(stdout.contains("url = \"sqlite://ferrite.db\""), "{stdout}");
+    assert!(stdout.contains("--claim"), "{stdout}");
     for table in ["content_items", "users", "artifacts", "media"] {
         assert_eq!(count(&source, table), count(&dest, table), "{table}");
     }

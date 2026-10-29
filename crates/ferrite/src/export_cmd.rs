@@ -280,6 +280,7 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<ExitCode> {
     let binary = binary_version()?;
     // Before anything is opened, so a bad URL creates nothing.
     let (url, note) = config_url(&args.to)?;
+    let lock = new_lock_file(&args.to);
     let source = open_store_url(&args.from, args.from_schema.as_deref(), OpenMode::MustExist)
         .await
         .context("--from")?;
@@ -304,7 +305,7 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<ExitCode> {
         Ok(t) => t,
         Err(e) => {
             source.close().await;
-            remove_created(created.as_deref());
+            remove_created(created.as_deref(), lock.as_deref());
             return Err(e);
         }
     };
@@ -326,7 +327,7 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<ExitCode> {
     let stats = match result {
         Ok(stats) => stats,
         Err(e) => {
-            remove_created(created.as_deref());
+            remove_created(created.as_deref(), lock.as_deref());
             return Err(e);
         }
     };
@@ -341,14 +342,56 @@ async fn db_copy(args: CopyArgs) -> anyhow::Result<ExitCode> {
         println!("schema = {}", toml_string(schema));
     }
     println!();
-    if note {
-        println!(
+    match note {
+        UrlNote::None => {}
+        UrlNote::Password => println!(
             "The password is shown as PASSWORD: put the real one there, or the whole URL in a \
              file named by database.url_file."
-        );
+        ),
+        UrlNote::DataFolder(folder) => println!(
+            "The URL is relative to the data folder: use it in {}/ferrite.toml (that folder is \
+             the site's data folder).",
+            folder.display()
+        ),
+        UrlNote::Elsewhere => println!(
+            "The database is not named ferrite.db, so it cannot be a data folder's own database: \
+             `ferrite backup` refuses such a site (restore puts the database at \
+             <data>/ferrite.db). Rename it to <data>/ferrite.db and use url = \
+             \"sqlite://ferrite.db\" to back it up."
+        ),
     }
+    println!(
+        "The copy has its own install id: once the site runs on it, its media GC deletes \
+         nothing from the media store the old database owns until you run `ferrite media gc \
+         --data <DIR> --claim` (do that only when the old database no longer serves the store)."
+    );
     site_copy::print_totp_hint(stats.totp_users, None);
     Ok(ExitCode::SUCCESS)
+}
+
+/// What `db copy` adds under the printed `[database]` lines.
+#[derive(Debug, PartialEq, Eq)]
+enum UrlNote {
+    None,
+    /// A Postgres password was replaced by `PASSWORD`.
+    Password,
+    /// A SQLite `ferrite.db`, given relative to its folder (the data folder).
+    DataFolder(PathBuf),
+    /// A SQLite file with another name, given as an absolute path.
+    Elsewhere,
+}
+
+/// The `ferrite.lock` the target store will create next to a SQLite target when it does
+/// not exist yet (removed again when the copy fails, B-M14).
+fn new_lock_file(url: &str) -> Option<PathBuf> {
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))?;
+    let lock = std::path::absolute(rest)
+        .ok()?
+        .parent()?
+        .join("ferrite.lock");
+    (!lock.exists()).then_some(lock)
 }
 
 /// The path of the SQLite file `url` names when it does not exist yet (this run creates it).
@@ -360,8 +403,12 @@ fn new_sqlite_file(url: &str) -> Option<PathBuf> {
     (!path.exists()).then_some(path)
 }
 
-/// Removes a SQLite database this run created (with its `-wal`/`-shm` files).
-fn remove_created(path: Option<&Path>) {
+/// Removes a SQLite database this run created (with its `-wal`/`-shm` files) and the
+/// `ferrite.lock` it created.
+fn remove_created(path: Option<&Path>, lock: Option<&Path>) {
+    if let Some(lock) = lock {
+        let _ = std::fs::remove_file(lock);
+    }
     let Some(path) = path else { return };
     for suffix in ["", "-wal", "-shm"] {
         let mut p = path.as_os_str().to_owned();
@@ -370,22 +417,31 @@ fn remove_created(path: Option<&Path>) {
     }
 }
 
-/// The `database.url` for `url` and whether a password was hidden: a SQLite path made
-/// absolute; a Postgres password (in the user info or a `password` query parameter)
-/// shown as `PASSWORD`.
-fn config_url(url: &str) -> anyhow::Result<(String, bool)> {
+/// The `database.url` for `url` and its note: a SQLite `ferrite.db` relative to its folder
+/// (`sqlite://ferrite.db`, the form `backup` and `restore` need, B-I2), another SQLite file
+/// absolute; a Postgres password (in the user info or a `password` query parameter) shown
+/// as `PASSWORD`.
+fn config_url(url: &str) -> anyhow::Result<(String, UrlNote)> {
     if let Some(rest) = url
         .strip_prefix("sqlite://")
         .or_else(|| url.strip_prefix("sqlite:"))
     {
         let path = std::path::absolute(rest)?;
-        return Ok((format!("sqlite://{}", path.display()), false));
+        if path.file_name().is_some_and(|n| n == "ferrite.db")
+            && let Some(folder) = path.parent()
+        {
+            return Ok((
+                "sqlite://ferrite.db".to_owned(),
+                UrlNote::DataFolder(folder.to_owned()),
+            ));
+        }
+        return Ok((format!("sqlite://{}", path.display()), UrlNote::Elsewhere));
     }
     let mut parsed = url::Url::parse(url).context("--to is not a valid URL")?;
-    let mut hidden = false;
+    let mut hidden = UrlNote::None;
     if parsed.password().is_some() {
         let _ = parsed.set_password(Some("PASSWORD"));
-        hidden = true;
+        hidden = UrlNote::Password;
     }
     if parsed.query_pairs().any(|(k, _)| k == "password") {
         let pairs: Vec<(String, String)> = parsed
@@ -400,7 +456,7 @@ fn config_url(url: &str) -> anyhow::Result<(String, bool)> {
             })
             .collect();
         parsed.query_pairs_mut().clear().extend_pairs(pairs);
-        hidden = true;
+        hidden = UrlNote::Password;
     }
     Ok((parsed.to_string(), hidden))
 }
@@ -418,20 +474,30 @@ mod tests {
         let url = |u: &str| config_url(u).unwrap();
         assert_eq!(
             url("postgres://u:secret@h:5432/db"),
-            ("postgres://u:PASSWORD@h:5432/db".into(), true)
+            ("postgres://u:PASSWORD@h:5432/db".into(), UrlNote::Password)
         );
         assert_eq!(
             url("postgres://u@h/db"),
-            ("postgres://u@h/db".into(), false)
+            ("postgres://u@h/db".into(), UrlNote::None)
         );
         assert_eq!(
             url("postgres://u@h/db?sslmode=require&password=secret"),
             (
                 "postgres://u@h/db?sslmode=require&password=PASSWORD".into(),
-                true
+                UrlNote::Password
             )
         );
-        assert!(url("sqlite:/x/ferrite.db").0.starts_with("sqlite:///x"));
+        assert_eq!(
+            url("sqlite:/x/ferrite.db"),
+            (
+                "sqlite://ferrite.db".into(),
+                UrlNote::DataFolder(PathBuf::from("/x"))
+            )
+        );
+        assert_eq!(
+            url("sqlite:/x/other.db"),
+            ("sqlite:///x/other.db".into(), UrlNote::Elsewhere)
+        );
         assert_eq!(toml_string("s1"), "\"s1\"");
         // A quote needs a literal string (still valid TOML).
         assert_eq!(toml_string("a\"b"), "'a\"b'");

@@ -33,6 +33,19 @@ pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
                     eprintln!("{}", problems(&e));
                     return Ok(ExitCode::FAILURE);
                 }
+                // A scheduled SQLite backup must be restorable (B-I2).
+                if config.backup.schedule != ferrite_config::BackupSchedule::Off
+                    && let Err(e) = crate::backup::check_backup_database(&config)
+                {
+                    let e = ConfigError {
+                        problems: vec![ConfigProblem {
+                            path: "database.url".to_owned(),
+                            message: format!("{e:#}"),
+                        }],
+                    };
+                    eprintln!("{}", problems(&e));
+                    return Ok(ExitCode::FAILURE);
+                }
                 for warning in warnings(&config) {
                     eprintln!("warning: {warning}");
                 }

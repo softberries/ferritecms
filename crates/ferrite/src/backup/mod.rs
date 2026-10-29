@@ -420,6 +420,40 @@ pub(crate) fn shared_media_warning(config: &Config) -> Option<String> {
     ))
 }
 
+/// Refuses a SQLite site whose database is not `<data>/ferrite.db` (B-I2): `restore` only
+/// restores a database at that path, so such a site's backups could never be restored.
+///
+/// The URL must name it relative to the data folder (`sqlite://ferrite.db`): an absolute
+/// path, even to this very file, is refused too, because the restored `ferrite.toml` would
+/// then point at the original folder instead of the restored one.
+pub(crate) fn check_backup_database(config: &Config) -> anyhow::Result<()> {
+    let DbKind::Sqlite { path } = config.database_kind() else {
+        return Ok(());
+    };
+    let url = config.database.url.expose();
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+        .unwrap_or(url);
+    let rest = Path::new(rest.split('?').next().unwrap_or(rest));
+    let own = config.data_dir.join(DB_FILE);
+    if rest.is_relative() && config.data_dir.join(rest) == own {
+        return Ok(());
+    }
+    bail!(
+        "database.url names {} by {}, not as {DB_FILE} inside the data folder: a backup of \
+         this site could not be restored (restore needs database.url = \"sqlite://{DB_FILE}\", \
+         the database at {}). Move the database there and set that URL first",
+        path.display(),
+        if rest.is_absolute() {
+            "an absolute path"
+        } else {
+            "another path"
+        },
+        own.display()
+    )
+}
+
 /// Refuses a repository inside the data folder or the media store (R11): pruning it, or the
 /// media GC, would delete the other's files.
 pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {
@@ -492,6 +526,7 @@ pub async fn run_backup(
     if store.backend() != Backend::Sqlite {
         bail!("{POSTGRES}");
     }
+    check_backup_database(config)?;
     if opts.keep.is_some() && !matches!(target, Target::Repo(_)) {
         bail!("--keep applies to a repository (a folder or s3://), not to an archive");
     }
@@ -814,13 +849,25 @@ async fn write_archive<W: Write + Send + 'static>(
     .await?
 }
 
-/// `ferrite backup`: exit 0, 2 when artifacts were missing from the media store, 1 on any
-/// error.
+/// `ferrite backup`: exit 0, 2 when artifacts were missing from the media store, 3 when the
+/// repository is of a newer format than this binary, 1 on any other error (clap's usage
+/// errors exit 2 as well).
 pub async fn run_backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
+    match backup_cmd(args).await {
+        Err(e) if e.downcast_ref::<crate::archive::Newer>().is_some() => {
+            eprintln!("error: {e:#}");
+            Ok(ExitCode::from(3))
+        }
+        other => other,
+    }
+}
+
+async fn backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     if let DbKind::Postgres { .. } = config.database_kind() {
         bail!("{POSTGRES}");
     }
+    check_backup_database(&config)?;
     let cwd = std::env::current_dir()?;
     let target = Target::parse(&args.to, &cwd)?;
     if args.keep.is_some() && !matches!(target, Target::Repo(_)) {
