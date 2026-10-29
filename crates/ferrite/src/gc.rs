@@ -315,9 +315,14 @@ async fn ownership(
     }
     let skipped = match current {
         Ok(Some(marker)) => foreign(&describe(&marker)),
-        Ok(None) if opts.dry_run => "the media store has no owner marker yet; a pass writes \
-             ferrite-owner.json for this site, and deletes start with the pass after it"
-            .to_owned(),
+        // Not an error: no pass has claimed the store yet, and a dry run writes nothing.
+        Ok(None) if opts.dry_run => {
+            return Ok(skip(
+                "the media store has no owner marker yet; a pass writes ferrite-owner.json for \
+                 this site, and deletes start with the pass after it"
+                    .to_owned(),
+            ));
+        }
         Ok(None) => {
             if media.write_owner(&mine, false).await? {
                 tracing::info!(install_id = %install, "wrote ferrite-owner.json for this site; the artifacts GC deletes from the next pass that reads it");

@@ -935,6 +935,23 @@ async fn media_gc_cli_exit_codes() {
         .set_modified(std::time::SystemTime::now() - 2 * DAY)
         .unwrap();
 
+    // A dry run on a store without an owner marker writes none, says why it would delete
+    // nothing, and logs no error: nothing is wrong with a store no pass has claimed yet.
+    let out = ferrite(args(&["media", "gc", "--dry-run"], data), Vec::new()).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains("; deletes skipped: the media store has no owner marker yet"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("ERROR"),
+        "{}",
+        text(&out)
+    );
+    assert!(!media_root.join("ferrite-owner.json").exists());
+
     let out = ferrite(args(&["media", "gc"], data), Vec::new()).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     // The first pass writes the owner marker and deletes nothing but tmp/ (R19).
