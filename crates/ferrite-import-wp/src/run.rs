@@ -405,7 +405,7 @@ pub async fn run(ctx: ImportContext, wxr: &Path, opts: ImportOptions) -> Result<
     let source = normalise_source(&channel.base_blog_url)?;
     let handle = ctx
         .import
-        .start(&ctx.actor, &source, opts.dry_run, opts.takeover)
+        .start(&ctx.actor, &source, opts.dry_run, opts.takeover, None)
         .await
         .map_err(ImportError::from)?;
     let dir = ctx.work_dir.join(handle.run().id.to_string());
@@ -1014,7 +1014,7 @@ mod tests {
         let (ctx, ir, _dir) = session_site(db).await;
         let handle = ctx
             .import
-            .start(&ctx.actor, "http://wp.test", true, false)
+            .start(&ctx.actor, "http://wp.test", true, false, None)
             .await
             .unwrap();
         let opts = ImportOptions {
@@ -1066,7 +1066,7 @@ mod tests {
         let (ctx, ir, _dir) = session_site(db).await;
         let handle = ctx
             .import
-            .start(&ctx.actor, "http://wp.test", false, false)
+            .start(&ctx.actor, "http://wp.test", false, false, None)
             .await
             .unwrap();
         let opts = ImportOptions::default();
@@ -1123,7 +1123,7 @@ mod tests {
             let (ctx, ir, _dir) = session_site(db).await;
             let handle = ctx
                 .import
-                .start(&ctx.actor, "http://wp.test", dry_run, false)
+                .start(&ctx.actor, "http://wp.test", dry_run, false, None)
                 .await
                 .unwrap();
             let opts = ImportOptions {

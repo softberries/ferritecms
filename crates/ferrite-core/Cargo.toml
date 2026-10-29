@@ -18,6 +18,7 @@ arc-swap.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
 base64.workspace = true
+bytes.workspace = true
 chacha20poly1305.workspace = true
 chrono.workspace = true
 deunicode.workspace = true
@@ -41,4 +42,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 ferrite-core = { path = ".", features = ["test-seams"] }
+ferrite-media = { path = "../ferrite-media" }
 ferrite-store-tests = { path = "../ferrite-store-tests" }
+tempfile.workspace = true

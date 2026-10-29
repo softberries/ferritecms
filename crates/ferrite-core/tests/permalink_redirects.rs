@@ -424,7 +424,7 @@ pub async fn import_permalink_write_enqueues_too(db: &TestDb) {
     published(&content, &admin, draft("post", "hello", None)).await;
     let svc = ImportService::new(db.shared_store(), Arc::new(PermalinkRules::default()));
     let run = svc
-        .start(&admin, "https://wp.example", false, false)
+        .start(&admin, "https://wp.example", false, false, None)
         .await
         .unwrap();
 
