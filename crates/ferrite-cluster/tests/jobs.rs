@@ -540,6 +540,9 @@ impl Store for FaultyStore {
     async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
         self.inner.export_reader().await
     }
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        self.inner.import_writer().await
+    }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.snapshot(dest).await
     }

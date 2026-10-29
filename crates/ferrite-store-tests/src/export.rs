@@ -152,11 +152,11 @@ async fn seed_typed_rows(db: &TestDb) {
     db.exec_raw(&sql).await;
 }
 
-fn spec(name: &str) -> &'static TableSpec {
+pub(crate) fn spec(name: &str) -> &'static TableSpec {
     catalogue::table(name).unwrap()
 }
 
-fn row(value: Value) -> Row {
+pub(crate) fn row(value: Value) -> Row {
     match value {
         Value::Object(m) => m,
         other => panic!("not an object: {other}"),
@@ -164,7 +164,7 @@ fn row(value: Value) -> Row {
 }
 
 /// Every row of `table`, `limit` per page.
-async fn dump(reader: &mut dyn ExportReader, table: &TableSpec, limit: u32) -> Vec<Row> {
+pub(crate) async fn dump(reader: &mut dyn ExportReader, table: &TableSpec, limit: u32) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     loop {
         let page = reader.page(table, rows.last(), limit).await.unwrap();
@@ -234,7 +234,10 @@ pub async fn export_reader_encodes_neutrally(db: &TestDb) {
 
 pub async fn export_reader_pages_by_key(db: &TestDb) {
     let store = db.store();
-    for k in ["p.03", "p.01", "p.05", "p.02", "p.04"] {
+    // Mixed case and `_`: byte order differs from any linguistic collation.
+    for k in [
+        "p.03", "p.01", "a_b", "p.05", "_x", "B", "p.02", "a", "Z_1", "p.04",
+    ] {
         store
             .read()
             .options()
@@ -242,7 +245,15 @@ pub async fn export_reader_pages_by_key(db: &TestDb) {
             .await
             .unwrap();
     }
-    for (plugin, key) in [("b", "1"), ("a", "2"), ("a", "10"), ("a", "1")] {
+    for (plugin, key) in [
+        ("b", "1"),
+        ("a", "2"),
+        ("a", "10"),
+        ("a", "1"),
+        ("a", "B"),
+        ("a", "_"),
+        ("B", "a"),
+    ] {
         store
             .read()
             .plugin_kv()
@@ -266,14 +277,30 @@ pub async fn export_reader_pages_by_key(db: &TestDb) {
 
     let options = dump(reader.as_mut(), spec("options"), 2).await;
     let keys: Vec<&str> = options.iter().map(|r| r["key"].as_str().unwrap()).collect();
-    assert_eq!(keys, ["p.01", "p.02", "p.03", "p.04", "p.05"]);
+    assert_eq!(
+        keys,
+        [
+            "B", "Z_1", "_x", "a", "a_b", "p.01", "p.02", "p.03", "p.04", "p.05"
+        ]
+    );
 
     let kv = dump(reader.as_mut(), spec("plugin_kv"), 1).await;
     let keys: Vec<(&str, &str)> = kv
         .iter()
         .map(|r| (r["plugin"].as_str().unwrap(), r["key"].as_str().unwrap()))
         .collect();
-    assert_eq!(keys, [("a", "1"), ("a", "10"), ("a", "2"), ("b", "1")]);
+    assert_eq!(
+        keys,
+        [
+            ("B", "a"),
+            ("a", "1"),
+            ("a", "10"),
+            ("a", "2"),
+            ("a", "B"),
+            ("a", "_"),
+            ("b", "1"),
+        ]
+    );
 
     let users = dump(reader.as_mut(), spec("users"), 2).await;
     let got: Vec<&str> = users.iter().map(|r| r["id"].as_str().unwrap()).collect();
@@ -322,7 +349,7 @@ pub async fn export_reader_pages_by_key(db: &TestDb) {
         Err(StoreError::Invalid(_))
     ));
     // The reader still works after refusals.
-    assert_eq!(dump(reader.as_mut(), spec("options"), 10).await.len(), 5);
+    assert_eq!(dump(reader.as_mut(), spec("options"), 10).await.len(), 10);
     reader.finish().await.unwrap();
 }
 
@@ -380,4 +407,40 @@ pub async fn export_reader_sees_one_snapshot(db: &TestDb) {
         .collect();
     assert_eq!(seen, [("after", &json!(2)), ("before", &json!(4))]);
     reader.finish().await.unwrap();
+}
+
+/// A dropped reader (no `finish`) gives its connection back: Postgres closes the
+/// `:export` backend, SQLite returns the reader connection to the pool.
+pub async fn export_reader_drop_releases(db: &TestDb) {
+    let store = db.store();
+    let mut reader = store.export_reader().await.unwrap();
+    reader.page(spec("options"), None, 10).await.unwrap();
+    drop(reader);
+    if let Some((_, schema)) = db.pg_location() {
+        wait_gone(db, &format!("{schema}:export")).await;
+    }
+    // Every reader connection (SQLite: 4) can be taken again.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut open = Vec::new();
+        for _ in 0..4 {
+            open.push(store.export_reader().await.unwrap());
+        }
+        for r in open {
+            r.finish().await.unwrap();
+        }
+    })
+    .await
+    .expect("the dropped reader's connection is free again");
+}
+
+/// Polls until no backend named `application_name*` is left (5 s at most).
+pub(crate) async fn wait_gone(db: &TestDb, application_name: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while db.active_backends(application_name).await > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{application_name}: a dropped connection is still open"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

@@ -6,6 +6,7 @@ mod connect;
 mod constraint;
 mod exec;
 mod export;
+mod import_writer;
 mod lock;
 mod migrate;
 mod repos;
@@ -93,6 +94,14 @@ impl Store for SqliteStore {
         Ok(Box::new(
             export::SqliteExportReader::open(&self.reader).await?,
         ))
+    }
+
+    /// One transaction on the writer connection: other writes wait until the load ends.
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        let tx = self.writer.begin().await.map_err(map_db_err)?;
+        Ok(Box::new(ferrite_store::Loader::new(
+            import_writer::SqliteLoadTarget::new(tx),
+        )))
     }
 
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {

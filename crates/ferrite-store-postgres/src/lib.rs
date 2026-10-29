@@ -4,6 +4,7 @@ mod codec;
 mod connect;
 mod exec;
 mod export;
+mod import_writer;
 mod listen;
 mod lock;
 mod migrate;
@@ -115,6 +116,17 @@ impl Store for PgStore {
         }
         let pool = self.export_pool().await?;
         Ok(Box::new(export::PgExportReader::open(pool).await?))
+    }
+
+    /// One transaction on a dedicated connection (`<application_name>:import`).
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        let pool = self.import_pool().await?;
+        Ok(Box::new(ferrite_store::Loader::new(
+            import_writer::PgLoadTarget::open(pool).await?,
+        )))
     }
 
     async fn snapshot(&self, _dest: &std::path::Path) -> Result<(), StoreError> {
