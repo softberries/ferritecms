@@ -40,6 +40,12 @@ pub fn binary_version() -> anyhow::Result<semver::Version> {
     Ok(semver::Version::parse(env!("CARGO_PKG_VERSION"))?)
 }
 
+/// The target triple this binary was built for (`FERRITE_TARGET` in M4-2 P27), embedded
+/// by `build.rs`; `self-update` picks its release asset by it.
+pub fn binary_target() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/target-triple"))
+}
+
 /// The process environment as UTF-8 pairs. Non-UTF-8 variables are ignored, except a
 /// `FERRITE_*` variable with a non-UTF-8 value, which is an error naming the key only.
 pub(crate) fn utf8_env() -> anyhow::Result<Vec<(String, String)>> {
