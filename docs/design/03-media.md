@@ -386,7 +386,7 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   task's panic is caught as a `JoinError`) is `Permanent`. Its job goes `dead` at the first
   attempt with the reason in `last_error`, the worker carries on, and the original stays
   served. Store and media-backend errors are `Retry`. Variants are re-encoded, so EXIF (GPS
-  included) and XMP never reach them; the stored original keeps its EXIF, GPS included (R11). Regenerating variants after a theme change is M4 (P8).
+  included) and XMP never reach them; the stored original keeps its EXIF, GPS included (R11). Regenerating variants after a theme change is `ferrite media regenerate` (M4-1 P18, 09 §8): in process, no jobs; it makes the sizes of the active theme that an item lacks (a size wider than the original is never made, so it never counts as lacking) with the same code as this job, and the replaced variant files are left for `media gc`.
 - `ferrite seed demo` still runs `process_image` in-process, with the same
   `variant_specs(theme)`. It writes the `media` and `artifacts` rows in one transaction that
   also emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
