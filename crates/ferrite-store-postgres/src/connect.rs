@@ -147,10 +147,28 @@ impl PgStore {
         })
     }
 
+    /// A dedicated one-connection pool for an export reader (M4-1 P3), with
+    /// `application_name` `<application_name>:export`: same schema, no
+    /// `statement_timeout` and no `idle_in_transaction_session_timeout`, since the
+    /// reader's transaction stays open between pages while the caller writes them out.
+    pub(crate) async fn export_pool(&self) -> Result<PgPool, StoreError> {
+        let app = self.connect.get_application_name().unwrap_or("ferrite");
+        let connect = self
+            .connect
+            .clone()
+            .application_name(&format!("{app}:export"));
+        self.dedicated_pool(connect).await
+    }
+
     /// A dedicated one-connection pool for migrations: same schema, no
     /// `statement_timeout`. (A pool rather than a bare connection because sqlx's
     /// `Acquire` for `&mut PgConnection` is not general enough for a `Send` future.)
     pub(crate) async fn migration_pool(&self) -> Result<PgPool, StoreError> {
+        self.dedicated_pool(self.connect.clone()).await
+    }
+
+    /// One connection on `connect` with only the schema's `search_path` set.
+    async fn dedicated_pool(&self, connect: PgConnectOptions) -> Result<PgPool, StoreError> {
         let search_path: Option<Arc<str>> = self.search_path_sql.as_deref().map(Arc::from);
         PgPoolOptions::new()
             .max_connections(1)
@@ -163,7 +181,7 @@ impl PgStore {
                     Ok(())
                 })
             })
-            .connect_with(self.connect.clone())
+            .connect_with(connect)
             .await
             .map_err(map_db_err)
     }

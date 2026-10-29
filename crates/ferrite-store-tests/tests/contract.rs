@@ -2,9 +2,10 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
-    event::*, idempotency::*, import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs,
-    migration_files, migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*,
-    semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    event::*, export::*, idempotency::*, import::*, job::*, job_list::*, lock::*, menu::*,
+    migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
+    plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    user_filters::*,
 };
 
 backend_tests!(
@@ -375,3 +376,11 @@ fn no_unsupported_left() {
     );
     assert!(hits.iter().any(|h| h.contains(expected[0])), "{hits:#?}");
 }
+
+backend_tests!(
+    catalogue_matches_live_schema,
+    catalogue_is_fk_ordered,
+    export_reader_encodes_neutrally,
+    export_reader_pages_by_key,
+    export_reader_sees_one_snapshot,
+);

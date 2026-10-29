@@ -243,6 +243,9 @@ impl Store for CountingStore {
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.inner.store.verify_migrations().await
     }
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        self.inner.store.export_reader().await
+    }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.store.snapshot(dest).await
     }
