@@ -96,6 +96,10 @@ pub trait Store: Send + Sync + 'static {
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
     /// Checks that applied migration checksums match the embedded ones.
     async fn verify_migrations(&self) -> Result<(), StoreError>;
+    /// Opens a reader over one read snapshot of the whole database (M4-1 P3), for an
+    /// export or a copy; see [`ExportReader`](crate::ExportReader). Release it with
+    /// [`ExportReader::finish`](crate::ExportReader::finish).
+    async fn export_reader(&self) -> Result<Box<dyn crate::ExportReader>, StoreError>;
     /// Writes a consistent copy of the database to `dest`; Postgres returns `Unsupported`.
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError>;
     /// Closes the connection pools: waits until every checked-out connection is back

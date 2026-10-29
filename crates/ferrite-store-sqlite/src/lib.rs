@@ -5,6 +5,7 @@ mod codec;
 mod connect;
 mod constraint;
 mod exec;
+mod export;
 mod lock;
 mod migrate;
 mod repos;
@@ -86,6 +87,12 @@ impl Store for SqliteStore {
 
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.verify().await
+    }
+
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        Ok(Box::new(
+            export::SqliteExportReader::open(&self.reader).await?,
+        ))
     }
 
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
