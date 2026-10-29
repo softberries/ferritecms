@@ -1,8 +1,10 @@
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ImportRunDto } from "@/api/import";
+import { qk } from "@/api/keys";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { ImportScreen } from "./import-screen";
 
@@ -262,6 +264,80 @@ test("starting moves focus to the run panel's heading", async () => {
   await chooseAndStart();
   const heading = await screen.findByRole("heading", { name: "Waiting for a worker" });
   await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
+test("a start refreshes the System screen's jobs and status", async () => {
+  stubXhr(202, { job_id: JOB, status: "queued", attempts: 0 });
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [] }),
+    [`/api/v1/import/jobs/${JOB}`]: () => json({ job_id: JOB, status: "queued", attempts: 0 }),
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(qk.system.status, {});
+  client.setQueryData(qk.system.jobs({}), { items: [] });
+  client.setQueryData(qk.types, []);
+  renderWithRouter(<Harness />, client);
+  await chooseAndStart();
+  await screen.findByRole("heading", { name: "Waiting for a worker" });
+  expect(client.getQueryState(qk.system.status)?.isInvalidated).toBe(true);
+  expect(client.getQueryState(qk.system.jobs({}))?.isInvalidated).toBe(true);
+  // Nothing else yet: the import has not written anything.
+  expect(client.getQueryState(qk.types)?.isInvalidated).toBe(false);
+});
+
+/** Active queries on `client` (as screens hold them) counting their fetches. */
+function observe(client: QueryClient, keys: Record<string, readonly unknown[]>) {
+  const fetched: Record<string, number> = {};
+  for (const [name, queryKey] of Object.entries(keys)) {
+    fetched[name] = 0;
+    new QueryObserver(client, {
+      queryKey,
+      staleTime: Infinity,
+      queryFn: () => {
+        fetched[name] = (fetched[name] ?? 0) + 1;
+        return Promise.resolve({});
+      },
+    }).subscribe(() => {});
+  }
+  return fetched;
+}
+
+const KEYS = { types: qk.types, settings: qk.settings, me: qk.me, meta: qk.meta };
+
+test("a finished import refetches every other screen's data, not me or meta", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const fetched = observe(client, KEYS);
+  await vi.waitFor(() => expect(fetched).toEqual({ types: 1, settings: 1, me: 1, meta: 1 }));
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [run({ job_id: JOB })] }),
+    [`/api/v1/import/jobs/${JOB}`]: () =>
+      json({ job_id: JOB, status: "done", attempts: 1, run: run({ job_id: JOB }) }),
+  });
+  renderWithRouter(<Harness initial={JOB} />, client);
+  await screen.findByRole("heading", { name: "Import finished" });
+  await vi.waitFor(() => expect(fetched).toEqual({ types: 2, settings: 2, me: 1, meta: 1 }));
+});
+
+test("a finished dry run or failed import refetches nothing else", async () => {
+  for (const finished of [
+    run({ job_id: JOB, dry_run: true }),
+    run({ job_id: JOB, state: "failed", error: "boom" }),
+  ]) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetched = observe(client, KEYS);
+    await vi.waitFor(() => expect(fetched.types).toBe(1));
+    stubRoutes({
+      "/api/v1/import/runs": () => json({ items: [finished] }),
+      [`/api/v1/import/jobs/${JOB}`]: () =>
+        json({ job_id: JOB, status: "done", attempts: 1, run: finished }),
+    });
+    renderWithRouter(<Harness initial={JOB} />, client);
+    await screen.findByRole("heading", { name: /Import (finished|failed)/ });
+    // The runs list refreshes (the job settled), the rest does not.
+    await vi.waitFor(() => expect(client.getQueryState(qk.import.runs)?.dataUpdateCount).toBe(2));
+    expect(fetched).toEqual({ types: 1, settings: 1, me: 1, meta: 1 });
+    cleanup();
+  }
 });
 
 test("a busy start offers the running import, never following it on its own", async () => {

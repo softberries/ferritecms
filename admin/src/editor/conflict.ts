@@ -5,6 +5,7 @@
 
 import type { ApiError } from "@/api/problem";
 import type { SchemaContentDto } from "@/api/schema";
+import { sameList } from "@/lib/same-list";
 import type { Draft } from "./autosave";
 import { sameValue } from "./fields/fields-model";
 
@@ -53,9 +54,6 @@ export function canonicalBody(body: unknown): string {
   };
   return JSON.stringify(norm(body));
 }
-
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** An SEO member as stored: trimmed, blank is `null` (what the server makes of it). */
 export const seoText = (v: string | null | undefined): string | null => {

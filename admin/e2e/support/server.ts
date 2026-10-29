@@ -231,3 +231,6 @@ export function authFile(siteKey: string, login: string): string {
 
 /** `admin/test-results`, Playwright's output folder. */
 export const RESULTS_DIR = join(adminDir, "test-results");
+
+/** State a spec keeps across its retries on one site; emptied by global setup per run. */
+export const E2E_STATE_DIR = join(RESULTS_DIR, "e2e-state");

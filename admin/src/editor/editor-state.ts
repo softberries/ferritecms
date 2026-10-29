@@ -67,6 +67,7 @@ import type {
   SchemaSeoPatchDto,
 } from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
+import { sameList } from "@/lib/same-list";
 import { pushRecent } from "@/palette/recent";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -150,11 +151,8 @@ export function canonicalAccepted(text: string): boolean {
   }
 }
 
-const sameRobots = (a: readonly SchemaRobotsDto[], b: readonly SchemaRobotsDto[]) => {
-  const x = sortedRobots(a);
-  const y = sortedRobots(b);
-  return x.length === y.length && x.every((r, i) => r === y[i]);
-};
+const sameRobots = (a: readonly SchemaRobotsDto[], b: readonly SchemaRobotsDto[]) =>
+  sameList(sortedRobots(a), sortedRobots(b));
 
 /** The SEO a reset leaves: nothing set (the page then uses its own values). */
 export const EMPTY_SEO: SeoDraft = { title: "", description: "", canonical: "", robots: [] };

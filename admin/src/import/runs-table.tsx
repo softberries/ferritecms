@@ -102,7 +102,7 @@ export function RunsTable() {
 }
 
 /** A run state as a dot plus a label, never colour alone. */
-export function RunStateBadge({ state }: { state: string }) {
+function RunStateBadge({ state }: { state: string }) {
   const { t } = useTranslation("import");
   const known = (RUN_STATES as readonly string[]).includes(state);
   const s = state as RunState;

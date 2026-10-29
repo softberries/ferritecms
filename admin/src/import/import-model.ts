@@ -59,7 +59,6 @@ export const COUNT_COLUMNS = [
   "skipped",
   "failed",
 ] as const satisfies readonly (keyof ImportCountsDto)[];
-export type CountColumn = (typeof COUNT_COLUMNS)[number];
 
 /** Each column summed over every kind. */
 export function countTotals(counts: Record<string, ImportCountsDto>): ImportCountsDto {
