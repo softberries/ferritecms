@@ -298,7 +298,7 @@ root         = "media"                 # default; relative to the data folder
 # access_key_id / secret_access_key (or *_file)        # both or neither; neither = environment credentials
 # allow_http = false
 # virtual_hosted_style = false
-# copy_if_not_exists = "header:x-amz-copy-source-if-none-match:*"   # M4-1: object_store encoding or "multipart"; unset = head + copy fallback (03 §3)
+# copy_if_not_exists = "..."          # M4-1: object_store encoding (header:<name>:<value>, header-with-status:…, multipart); unset = head + copy fallback (03 §3); values per provider and what is verified: 09 §4a
 # conditional_put = "etag"            # M4-1: "etag" (default) | "disabled" for stores that reject If-None-Match
 # prefix = ""
 # public_base_url = "https://cdn.example.com"          # optional, http(s) URL
@@ -412,7 +412,8 @@ figure above holds only with the option off.
 **Artifacts GC grace** (`[media] gc_grace_days`, M4-1 P11, `Config.uploads.gc_grace_days`):
 an integer number of days, 1..=365, default 7, valid with either backend. An artifact row
 is deleted once it has been marked unreferenced for longer than this, and a file under
-`artifacts/` with no row once it is older than this (03 §6); `ferrite media gc
+`artifacts/` with no row once it is older than this (03 §6), and only while the media
+store's owner marker names this database's install id (R16, 03 §6); `ferrite media gc
 --grace-days N` overrides it for one run. `config check` reports an out-of-range value as
 `media.gc_grace_days: must be between 1 and 365`.
 
@@ -426,7 +427,11 @@ to `<to>/exports/`. `to` is kept as written and required unless the schedule is 
 lexically after making the data folder absolute and resolving a relative `to` against it)
 are refused. `config check` and `serve` (which then refuses to start) also run the
 repository location check of `ferrite backup`: symlinks resolved where the paths exist, not
-inside the local media root, no S3 prefix overlapping the media store's.
+inside the local media root, no S3 prefix overlapping the media store's, and a local folder
+absent, empty (but for `lost+found`) or already a repository (its marker present; an S3
+prefix is checked when the job runs). On SQLite they also refuse a `database.url` other than
+`sqlite://ferrite.db` (`database.url: …`), since a backup of a database elsewhere could not be
+restored (09 §4).
 `keep` (1..=1000, default 7) is how many snapshots or archives are kept; `with_media`
 (default `true`) includes the blobs. With Postgres in cluster mode a local `to` is on
 whichever node runs the job; use `s3://` or a shared folder.

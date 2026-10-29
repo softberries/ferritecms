@@ -461,7 +461,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
 | `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1; since M3-2 the Postgres claim is a `UNION ALL` of the due branch on this index and the expired-lease branch on `jobs_lease_idx`, P31) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (no ORDER BY index: SQLite's planner does not use one for the claim after ANALYZE; since `0006` the SQLite claim is a `UNION ALL` of the due branch on `jobs_due_idx` and the expired-lease branch on `jobs_lease_idx`, each named with `INDEXED BY`, sorted by `priority DESC, run_at, id` and limited across the union; the pre-check and the reaper name their index the same way, and the prune names `jobs_finished_idx`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)`, `jobs_created_idx (created_at, id)` and `jobs_kind_created_idx (kind, created_at, id)` (the admin jobs list by status, by kind or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` per `UNION ALL` branch in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
-| `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
+| `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id`, `install_id` (M4-1 R16: this database's own id, written by the migrations when absent, never exported, renewed by `ferrite restore`; key/value, so no migration) |
 
 ### Search
 
@@ -804,7 +804,11 @@ listing the repository blobs the snapshot needs.
 UUID strings; timestamps as RFC 3339 UTC with exactly six fractional digits and `Z`
 (microseconds survive; years before 1970 are fine, years after 9999 are not supported);
 JSON as JSON; booleans as JSON booleans; bytes as standard base64 with padding; text as
-strings; integers as numbers; NULL as `null`. Secrets travel as stored: password and
+strings; integers as numbers; NULL as `null`. A stored JSON `null` (a plugin may write one as
+a meta value) is `null` too: the catalogue lists each table's nullable columns (checked
+against the live schema on both backends), and the loader reads `null` in a `NOT NULL` JSON
+column as the JSON value `null`, so such a row loads again. JSON numbers outside the i64/u64
+range become f64 on export (no arbitrary precision). Secrets travel as stored: password and
 token hashes, sealed TOTP secrets and sealed plugin/theme settings. The keys of a row are
 sorted, so the same data gives the same bytes on both backends.
 
@@ -813,7 +817,10 @@ sorted, so the same data gives the same bytes on both backends.
 them: queued plugin actions and variant jobs are lost; `ferrite media regenerate`
 remakes missing variants) and `search_docs` (SQLite's `search_fts*` and
 `_sqlx_migrations` are not catalogue tables). Of `schema_meta` only `site_id` travels;
-the loader writes it over the target's, so the copy keeps the site's identity.
+the loader writes it over the target's, so the copy keeps the site's identity. The
+`install_id` (R16, [03 §6](03-media.md#6-garbage-collection)) never travels: the target keeps
+its own, so its media GC does not delete from a store the source owns. `artifacts.orphaned_at`
+(the GC mark) is loaded as `NULL`: a mark is the source's GC state.
 `secret.key` is never in an export (00 §5): after `import-site` the tool prints how many
 users have TOTP on and the fix (copy the source's `secret.key`, set `auth.secret_key`,
 or `ferrite user disable-totp`).
@@ -821,8 +828,10 @@ or `ferrite user disable-totp`).
 **Consistency:** the dump reads one snapshot (Postgres: a `REPEATABLE READ READ ONLY`
 transaction, so a live Postgres site can be exported; SQLite: one read transaction, which
 holds one reader connection for the whole dump; `serve` holds the SQLite data-folder
-lock, so stop it first). Table files are spooled to the system temp folder (`TMPDIR`)
-because tar needs their sizes; blobs are streamed.
+lock, so stop it first). Table files are spooled because tar needs their sizes: by the CLI
+to the system temp folder (`TMPDIR`), by the scheduled Postgres export of `site.backup` to
+`<data>/backups/ferrite-export-*` ([09 §4](09-operations.md#4-backup--restore)); blobs are
+streamed.
 
 **Schema rules:** the catalogue describes this binary's latest schema, so `export` and
 the source of `db copy` must be exactly at it (older: exit 1, run `ferrite migrate up`;
@@ -861,15 +870,21 @@ refuses otherwise. After the commit the database is migrated up to the binary's 
 then `search_docs` is rebuilt for every item that is not in the trash, through the same
 core function every content write uses. The freshness check and the load are separate
 transactions: nothing else (a node, another import) may write to the target meanwhile. With `--with-media` the blobs go into the target's
-media store (blobs already there with the same size are skipped).
+media store (blobs already there with the same size are skipped). `import-site` warns when
+that store is outside the data folder: it may be the source's, which the target's GC then
+leaves alone until `ferrite media gc --claim` (R16).
 
 **`db copy`** is export + import streamed from one read snapshot into one write
 transaction with no file in between. It copies no media (`ferrite media sync` does) and
-writes no `ferrite.toml`: it prints the `[database]` lines to use (a SQLite path made
-absolute, a Postgres password shown as `PASSWORD`).
+writes no `ferrite.toml`: it prints the `[database]` lines to use (a SQLite target named
+`ferrite.db` as `sqlite://ferrite.db`, relative to its folder, the only form `ferrite backup`
+accepts; another SQLite file by its absolute path, with a note; a Postgres password shown
+as `PASSWORD`), and a note that the copy has its own install id, so a site moved onto it
+runs `ferrite media gc --claim` once the old database no longer serves the media store. A
+copy that fails removes the SQLite file and the `ferrite.lock` it created.
 
 Uses: a Postgres backup independent of the provider; the SQLite → Postgres move (S7);
-staging copies.
+staging copies (with their own media store: one media store belongs to one site, 03 §6).
 
 ## 11. Open points (for the builder)
 
