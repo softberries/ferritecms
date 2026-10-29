@@ -242,11 +242,11 @@ Placement options (`[media.s3]`, object_store's own encodings, parsed by object_
   `ferrite config check` cannot detect that (it opens nothing): after setting it, test with an
   upload larger than 8 MiB. An invalid value is a configuration error naming
   `media.s3.copy_if_not_exists`.
-- `conditional_put` = `"etag"` (default) or `"disabled"`.
+- `conditional_put` = `"etag"` or `"disabled"` (unset: object_store's default, `etag`).
 
 Both options apply to the explicit-keys path and the environment path alike. Without keys the
 builder also reads `AWS_COPY_IF_NOT_EXISTS` and `AWS_CONDITIONAL_PUT` from the environment; a
-key in `ferrite.toml` wins over them.
+key in `ferrite.toml` wins over them, and `conditional_put` counts as set when the key is present (even `"etag"`); unset, the builder's default or the environment applies.
 
 Provider notes to document (each verified when writing the ops docs, not assumed):
 R2 path-style URLs, B2 region naming, Hetzner/Scaleway endpoints.
@@ -535,8 +535,13 @@ whether the database records it or not (it opens no database, so it runs while t
 serves). A key already at the destination with the same size is skipped; the rest are
 streamed through `put_stream`, which hashes the bytes on the way: an object whose content does
 not hash to its key is reported as failed and not placed under that key. The size at the
-destination is checked after each copy. It never deletes and never reads `tmp/`, and copies 8
-objects at once. Source and destination are `local:<path>` or `s3://bucket[/prefix]`; every
+destination is checked after each copy (a same-size destination object is trusted: content is
+not compared). It never deletes and never reads `tmp/`, and copies 8 objects at once; each copy
+buffers up to the first 8 MiB plus two 8 MiB parts, so memory peaks near 8 x 24 MiB = 192 MiB.
+Keys under `artifacts/` that do not name an artifact are ignored with a notice on stderr. The
+destination is probed (`check`) first: if it is unreachable or not writable the command exits 1
+before copying. A corrupt source object leaves its bytes at the destination under their own
+valid hash, an unrecorded orphan for the destination site's GC. Source and destination are `local:<path>` or `s3://bucket[/prefix]`; every
 `s3://` URL takes its credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`,
 `AWS_COPY_IF_NOT_EXISTS`), while `--data` uses the site's `[media]` settings.

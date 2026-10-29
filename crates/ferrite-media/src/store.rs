@@ -636,12 +636,16 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
         builder = builder.with_endpoint(endpoint);
     }
     // Only what is set overrides the environment path's `AWS_COPY_IF_NOT_EXISTS` /
-    // `AWS_CONDITIONAL_PUT`; the builder's own conditional-put default is `etag`.
+    // `AWS_CONDITIONAL_PUT`; unset, the builder's default (`etag`) stands.
     if let Some(mode) = &cfg.copy_if_not_exists {
         builder = builder.with_config(AmazonS3ConfigKey::CopyIfNotExists, mode);
     }
-    if cfg.conditional_put == ConditionalPut::Disabled {
-        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, "disabled");
+    if let Some(put) = cfg.conditional_put {
+        let value = match put {
+            ConditionalPut::Etag => "etag",
+            ConditionalPut::Disabled => "disabled",
+        };
+        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, value);
     }
     builder
         .build()

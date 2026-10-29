@@ -23,7 +23,9 @@ pub struct S3Config {
     /// (the `AWS_COPY_IF_NOT_EXISTS` variable on the environment path) and, without one,
     /// placement takes the head-then-copy fallback.
     pub copy_if_not_exists: Option<String>,
-    pub conditional_put: ConditionalPut,
+    /// `None` leaves the builder's default (`etag`, or `AWS_CONDITIONAL_PUT` on the environment
+    /// path); a value is always set on the builder.
+    pub conditional_put: Option<ConditionalPut>,
 }
 
 /// Whether the S3 backend creates objects with `If-None-Match` (conditional put).

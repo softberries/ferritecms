@@ -68,7 +68,7 @@ pub enum MediaSection {
         /// object_store's encoding (`header:…`, `header-with-status:…`, `multipart`),
         /// already validated.
         copy_if_not_exists: Option<String>,
-        conditional_put: ConditionalPut,
+        conditional_put: Option<ConditionalPut>,
         prefix: String,
         public_base_url: Option<url::Url>,
     },

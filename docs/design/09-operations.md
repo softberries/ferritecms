@@ -307,7 +307,8 @@ credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_
 `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`), a `--data` S3 store from `[media.s3]`. Copies
 every object under `artifacts/` (recorded in the database or not), skips keys already at the
 destination with the same size, checks the size after each copy, never deletes, never copies
-`tmp/`, 8 copies at once (design 03 §8). Prints `copied N (B bytes), skipped M, failed F` on stdout
+`tmp/`, 8 copies at once (memory peaks near 192 MiB, design 03 §8); the destination is probed first and an
+unusable one exits 1; keys that are not artifacts are ignored with a notice. Prints `copied N (B bytes), skipped M, failed F` on stdout
 and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
 (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
 `--from` nor `--data`, or both) exits 2 as clap does.

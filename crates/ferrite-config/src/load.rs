@@ -490,14 +490,15 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
         cx.push("media.s3.copy_if_not_exists", message);
     }
     let conditional_put = match cx.string(&mut t, b, "conditional_put").as_deref() {
-        None | Some("etag") => ConditionalPut::Etag,
-        Some("disabled") => ConditionalPut::Disabled,
+        None => None,
+        Some("etag") => Some(ConditionalPut::Etag),
+        Some("disabled") => Some(ConditionalPut::Disabled),
         Some(_) => {
             cx.push(
                 "media.s3.conditional_put",
                 "must be \"etag\" or \"disabled\"",
             );
-            ConditionalPut::Etag
+            None
         }
     };
     let prefix = cx.string(&mut t, b, "prefix").unwrap_or_default();

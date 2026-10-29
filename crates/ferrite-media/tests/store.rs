@@ -705,7 +705,7 @@ fn copy_if_not_exists_values() {
 fn with_options(
     mut cfg: MediaConfig,
     copy: Option<&str>,
-    put: ConditionalPut,
+    put: Option<ConditionalPut>,
 ) -> Result<MediaStore, MediaError> {
     let Backend::S3(s3) = &mut cfg.backend else {
         panic!("s3 config expected");
@@ -718,19 +718,22 @@ fn with_options(
 #[tokio::test]
 async fn an_invalid_copy_if_not_exists_is_a_config_error() {
     let cfg = common::s3_config("http://127.0.0.1:1".into(), "");
-    let err = with_options(cfg, Some("nonsense"), ConditionalPut::Etag)
+    let err = with_options(cfg, Some("nonsense"), Some(ConditionalPut::Etag))
         .err()
         .expect("must fail");
     assert!(matches!(err, MediaError::Config(_)), "{err:?}");
 }
 
+// The next two tests show that the options are accepted and the store still works with them.
+// s3s-fs gives no request log, so they cannot tell whether the server honoured `multipart` or
+// `disabled`, or whether placement fell back to head + copy; that is untested here.
 #[tokio::test]
 async fn multipart_copy_places_streamed_artifacts() {
     let backing = common::s3_backend("").await;
     let store = with_options(
         backing.config.clone(),
         Some("multipart"),
-        ConditionalPut::Etag,
+        Some(ConditionalPut::Etag),
     )
     .expect("open");
     let data = Bytes::from(vec![3u8; 9 * 1024 * 1024]);
@@ -744,7 +747,8 @@ async fn multipart_copy_places_streamed_artifacts() {
 #[tokio::test]
 async fn disabled_conditional_put_still_stores_small_artifacts() {
     let backing = common::s3_backend("").await;
-    let store = with_options(backing.config.clone(), None, ConditionalPut::Disabled).expect("open");
+    let store =
+        with_options(backing.config.clone(), None, Some(ConditionalPut::Disabled)).expect("open");
     let data = Bytes::from_static(b"no conditional put");
     let first = store.put_artifact(data.clone()).await.unwrap();
     assert!(first.created);

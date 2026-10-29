@@ -1136,9 +1136,12 @@ fn parse_s3_copy_if_not_exists_values() {
 #[test]
 fn conditional_put_disabled_parses() {
     for (value, want) in [
-        (None, ferrite_media::ConditionalPut::Etag),
-        (Some("etag"), ferrite_media::ConditionalPut::Etag),
-        (Some("disabled"), ferrite_media::ConditionalPut::Disabled),
+        (None, None),
+        (Some("etag"), Some(ferrite_media::ConditionalPut::Etag)),
+        (
+            Some("disabled"),
+            Some(ferrite_media::ConditionalPut::Disabled),
+        ),
     ] {
         let extra = value.map_or(String::new(), |v| format!("conditional_put = \"{v}\"\n"));
         let (_d, r) = run(Some(&s3_toml(&extra)), &[]);

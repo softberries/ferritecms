@@ -137,7 +137,7 @@ pub async fn s3_media() -> Media {
             allow_http: true,
             virtual_hosted_style: false,
             copy_if_not_exists: None,
-            conditional_put: ferrite_media::ConditionalPut::Etag,
+            conditional_put: None,
         }),
         prefix: "site/".into(),
         public: public(),

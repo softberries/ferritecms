@@ -76,7 +76,7 @@ impl S3Server {
                 allow_http: true,
                 virtual_hosted_style: false,
                 copy_if_not_exists: None,
-                conditional_put: ferrite_media::ConditionalPut::Etag,
+                conditional_put: None,
             }),
             prefix: prefix.into(),
             public: PublicUrlMode::ServeViaApp {
@@ -309,8 +309,140 @@ async fn media_sync_rejects_bad_arguments() {
         Vec::new(),
     )
     .await;
-    assert_ne!(out.status.code(), Some(0));
-    assert_ne!(out.status.code(), Some(1));
+    // clap's usage error exits 2 (the same code as "some copies failed", see 09 §8).
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("Usage"), "{}", text(&out.stderr));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn media_sync_unreachable_destination_exits_1() {
+    let src = tempfile::tempdir().unwrap();
+    seed(&local_store(src.path())).await;
+    let env = vec![
+        ("AWS_ACCESS_KEY_ID", ACCESS_KEY.to_owned()),
+        ("AWS_SECRET_ACCESS_KEY", SECRET_KEY.to_owned()),
+        ("AWS_REGION", "us-east-1".to_owned()),
+        ("AWS_ENDPOINT_URL", "http://127.0.0.1:1".to_owned()),
+        ("AWS_ALLOW_HTTP", "yes".to_owned()),
+    ];
+    let out = run(
+        vec![
+            "media".into(),
+            "sync".into(),
+            "--from".into(),
+            format!("local:{}", src.path().display()),
+            "--to".into(),
+            format!("s3://{BUCKET}/x"),
+        ],
+        env,
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("--to"), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn media_sync_local_site_from_data() {
+    let artifacts_dir = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(
+        data.path().join("ferrite.toml"),
+        "[site]\nurl = \"http://127.0.0.1:8080\"\n",
+    )
+    .unwrap();
+    // The default local backend is `media` under the data folder.
+    let artifacts = seed(&local_store(&data.path().join("media"))).await;
+
+    let out = run(
+        vec![
+            "media".into(),
+            "sync".into(),
+            "--data".into(),
+            path_str(data.path()),
+            "--to".into(),
+            format!("local:{}", artifacts_dir.path().display()),
+        ],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout).trim(),
+        format!(
+            "copied 3 ({} bytes), skipped 0, failed 0",
+            total(&artifacts)
+        )
+    );
+    let dest = local_store(artifacts_dir.path());
+    for (hash, bytes) in &artifacts {
+        assert_eq!(dest.head(hash).await.unwrap(), Some(*bytes));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn media_sync_s3_to_s3_between_prefixes() {
+    let server = S3Server::start().await;
+    let artifacts = seed(&server.store("a/")).await;
+    let out = run(
+        vec![
+            "media".into(),
+            "sync".into(),
+            "--from".into(),
+            format!("s3://{BUCKET}/a"),
+            "--to".into(),
+            format!("s3://{BUCKET}/b/c"),
+        ],
+        server.env().to_vec(),
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout).trim(),
+        format!(
+            "copied 3 ({} bytes), skipped 0, failed 0",
+            total(&artifacts)
+        )
+    );
+    let dest = server.store("b/c/");
+    for (hash, bytes) in &artifacts {
+        assert_eq!(dest.head(hash).await.unwrap(), Some(*bytes));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn media_sync_ignores_keys_that_are_not_artifacts() {
+    let src = tempfile::tempdir().unwrap();
+    let store = local_store(src.path());
+    store
+        .put_artifact(Bytes::from_static(b"real"))
+        .await
+        .unwrap();
+    std::fs::create_dir_all(src.path().join("artifacts/zz")).unwrap();
+    std::fs::write(src.path().join("artifacts/zz/stray"), b"x").unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let out = run(
+        vec![
+            "media".into(),
+            "sync".into(),
+            "--from".into(),
+            format!("local:{}", src.path().display()),
+            "--to".into(),
+            format!("local:{}", dest.path().display()),
+        ],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout).trim(),
+        "copied 1 (4 bytes), skipped 0, failed 0"
+    );
+    assert!(
+        text(&out.stderr).contains("ignored 1"),
+        "{}",
+        text(&out.stderr)
+    );
 }
 
 #[test]

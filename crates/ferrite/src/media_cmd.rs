@@ -54,6 +54,8 @@ pub async fn run(cmd: MediaCommand) -> anyhow::Result<ExitCode> {
 enum Outcome {
     Copied(u64),
     Skipped,
+    /// Not an artifact key: neither copied nor counted.
+    Ignored,
     Failed(String),
 }
 
@@ -64,8 +66,12 @@ async fn sync(args: SyncArgs) -> anyhow::Result<ExitCode> {
         (None, None) => anyhow::bail!("one of --from and --data is required"),
     };
     let dst = parse_media_url(&args.to, true).context("--to")?;
+    // Fail fast (exit 1) on a destination that cannot be reached or written.
+    dst.check()
+        .await
+        .context("--to: the destination store is not usable")?;
 
-    let (mut copied, mut bytes, mut skipped, mut failed) = (0u64, 0u64, 0u64, 0u64);
+    let (mut copied, mut bytes, mut skipped, mut failed, mut ignored) = (0u64, 0, 0u64, 0u64, 0u64);
     let mut outcomes = src
         .list_artifacts()
         .map(|listed| {
@@ -75,7 +81,7 @@ async fn sync(args: SyncArgs) -> anyhow::Result<ExitCode> {
                 let outcome = match &object.hash {
                     None => {
                         tracing::warn!(key = %object.key, "not an artifact key; ignored");
-                        Outcome::Skipped
+                        Outcome::Ignored
                     }
                     Some(hash) => match dst.head(hash).await {
                         Ok(Some(size)) if size == object.size => Outcome::Skipped,
@@ -102,7 +108,11 @@ async fn sync(args: SyncArgs) -> anyhow::Result<ExitCode> {
                 bytes += n;
             }
             Outcome::Skipped => skipped += 1,
+            Outcome::Ignored => ignored += 1,
         }
+    }
+    if ignored > 0 {
+        eprintln!("ignored {ignored} key(s) under artifacts/ that are not artifacts");
     }
     println!("copied {copied} ({bytes} bytes), skipped {skipped}, failed {failed}");
     Ok(if failed > 0 {

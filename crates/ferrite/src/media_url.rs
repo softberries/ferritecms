@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 use ferrite_config::InitMedia;
-use ferrite_media::{Backend, ConditionalPut, MediaConfig, MediaStore, PublicUrlMode, S3Config};
+use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 
 /// Opens the store a URL names.
 ///
@@ -53,7 +53,14 @@ pub(crate) fn parse_media_url(url: &str, create: bool) -> anyhow::Result<MediaSt
 /// endpoint and the placement options stay unset and so come from the environment.
 fn s3_from_env(bucket: String) -> S3Config {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-    let flag = |name: &str| var(name).is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1");
+    let flag = |name: &str| {
+        var(name).is_some_and(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes" | "y"
+            )
+        })
+    };
     S3Config {
         bucket,
         region: var("AWS_REGION")
@@ -65,6 +72,6 @@ fn s3_from_env(bucket: String) -> S3Config {
         allow_http: flag("AWS_ALLOW_HTTP"),
         virtual_hosted_style: flag("AWS_VIRTUAL_HOSTED_STYLE_REQUEST"),
         copy_if_not_exists: None,
-        conditional_put: ConditionalPut::Etag,
+        conditional_put: None,
     }
 }
