@@ -372,7 +372,8 @@ fn parse_media(cx: &mut Cx, root: &mut Table) -> (MediaSection, UploadConfig) {
 }
 
 /// `media.max_upload` (1 B..=1 GiB), `media.image_workers` (1..=16) and
-/// `media.upload_idle_timeout` (a positive duration), for either backend.
+/// `media.upload_idle_timeout` (a positive duration) and `media.strip_metadata` (a
+/// boolean, default false), for either backend.
 fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let defaults = UploadConfig::default();
     let max_upload = match cx.size(t, "media", "max_upload", false) {
@@ -395,10 +396,14 @@ fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let idle_timeout_secs = cx
         .duration_secs(t, "media", "upload_idle_timeout", false)
         .unwrap_or(defaults.idle_timeout_secs);
+    let strip_metadata = cx
+        .boolean(t, "media", "strip_metadata")
+        .unwrap_or(defaults.strip_metadata);
     UploadConfig {
         max_upload,
         image_workers,
         idle_timeout_secs,
+        strip_metadata,
     }
 }
 
@@ -897,7 +902,7 @@ impl InitMedia {
 }
 
 /// The upload keys of `[media]` in the `ferrite init` template (commented defaults).
-const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n";
+const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n# Strip EXIF and XMP (GPS included) from uploaded JPEG, PNG and WebP originals.\n# strip_metadata = false\n";
 
 /// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
 /// defaults to `us-east-1`; the operator must still set credentials/endpoint.

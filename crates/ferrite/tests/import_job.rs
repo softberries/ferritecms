@@ -290,6 +290,7 @@ impl Site {
             data_dir: folder.dir.path().to_owned(),
             site_url: SITE_URL.into(),
             max_upload: 256 << 20,
+            strip_metadata: false,
             version: "0.0.0-test".into(),
             fail_after_batches,
         }

@@ -248,7 +248,15 @@ async fn stage(
         }
         Err(e) => return Err(e),
     };
-    let staged = match stage_stream(staging, &file_name, stream, max).await {
+    let staged = match stage_stream(
+        staging,
+        &file_name,
+        stream,
+        max,
+        session.opts().strip_metadata,
+    )
+    .await
+    {
         Ok(staged) => staged,
         Err(
             e @ (MediaError::TooLarge { .. } | MediaError::Unsupported { .. } | MediaError::Svg(_)),

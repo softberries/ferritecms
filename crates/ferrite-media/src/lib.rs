@@ -8,6 +8,7 @@ mod keys;
 mod name;
 mod sniff;
 mod store;
+mod strip;
 pub mod svg;
 
 pub use config::{Backend, MediaConfig, PublicUrlMode, S3Config};
@@ -16,3 +17,4 @@ pub use image::{MAX_PIXELS, Processed, Variant, VariantSpec, default_variants, p
 pub use name::sanitize_filename;
 pub use sniff::{inline_safe, is_raster_image, sniff_mime};
 pub use store::{ArtifactRef, MediaStore, ReadStream};
+pub use strip::strip_metadata;

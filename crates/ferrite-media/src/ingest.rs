@@ -18,6 +18,12 @@
 //! `max_bytes` is cut while it streams; a cut, a stream error and a refused type leave
 //! nothing stored (the store aborts and removes its staging object). File contents are
 //! never logged.
+//!
+//! With `strip` on, a JPEG, PNG or WebP is read whole (at most [`STRIP_MAX_BYTES`]; a
+//! larger one is streamed unchanged), its EXIF and XMP removed losslessly by
+//! [`strip_metadata`] and the result stored, so the artifact's hash is the stripped
+//! file's. A file that cannot be parsed is stored unchanged; stripping never fails an
+//! upload (M4-1 P17).
 
 use std::io;
 
@@ -25,12 +31,21 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _};
 
 use crate::{
-    ArtifactRef, MediaError, MediaStore, inline_safe, is_raster_image, sniff_mime,
+    ArtifactRef, MediaError, MediaStore, inline_safe, is_raster_image, sniff_mime, strip_metadata,
     svg::{MAX_SVG_BYTES, SVG_MIME, looks_like_svg, sanitize_svg},
 };
 
 /// How much of the file decides its type (P4): 8 KiB.
 pub const HEAD_BYTES: usize = 8 * 1024;
+
+/// The largest image held in memory to strip its metadata: 64 MiB (the size variants
+/// are made up to).
+pub const STRIP_MAX_BYTES: usize = 64 << 20;
+
+/// The types [`strip_metadata`] works on.
+fn strippable(mime: &str) -> bool {
+    matches!(mime, "image/jpeg" | "image/png" | "image/webp")
+}
 
 /// The ZIP-based document classes by extension (R1/F13).
 const ZIP_TYPES: [(&str, &str); 7] = [
@@ -82,6 +97,9 @@ pub struct StagedFile {
 /// head, decides the type and stores the file, streamed and hashed as it arrives (an SVG
 /// is read whole, at most [`MAX_SVG_BYTES`], and its sanitised form stored).
 ///
+/// With `strip`, EXIF and XMP are removed from JPEG, PNG and WebP files first (see the
+/// module docs).
+///
 /// Fails with [`MediaError::TooLarge`] past `max_bytes` (or the SVG limit),
 /// [`MediaError::Unsupported`] or [`MediaError::Svg`] for a refused type, and
 /// [`MediaError::Io`] when the stream yields an error; nothing is stored then.
@@ -90,6 +108,7 @@ pub async fn stage_stream<S>(
     file_name: &str,
     stream: S,
     max_bytes: u64,
+    strip: bool,
 ) -> Result<StagedFile, MediaError>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin,
@@ -145,8 +164,65 @@ where
     // The head decides; it is cut when the file goes on past it.
     let cut = !ended || head.len() > HEAD_BYTES;
     let mime = classify(sniff, cut, &original_name)?;
+    if strip && strippable(&mime) {
+        return stage_stripped(store, mime, original_name, head, ended, stream, max_bytes).await;
+    }
     let stream = futures::stream::once(async move { Ok(head.freeze()) }).chain(stream);
     let artifact = store.put_stream(Box::pin(stream), max_bytes).await?;
+    Ok(staged(artifact, mime, original_name, false))
+}
+
+/// Reads the rest of an image after `head`, strips it and stores the result.
+async fn stage_stripped<S>(
+    store: &MediaStore,
+    mime: String,
+    original_name: String,
+    head: BytesMut,
+    mut ended: bool,
+    mut stream: futures::stream::Fuse<S>,
+    max_bytes: u64,
+) -> Result<StagedFile, MediaError>
+where
+    S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin,
+{
+    let mut all = head;
+    let mut oversized = false;
+    while !ended && !oversized {
+        match stream.next().await.transpose().map_err(io_error)? {
+            Some(chunk) => {
+                if (all.len() + chunk.len()) as u64 > max_bytes {
+                    return Err(MediaError::TooLarge { limit: max_bytes });
+                }
+                all.extend_from_slice(&chunk);
+                oversized = all.len() > STRIP_MAX_BYTES;
+            }
+            None => ended = true,
+        }
+    }
+    if oversized {
+        tracing::warn!(
+            limit = STRIP_MAX_BYTES,
+            "image too large to strip its metadata; stored unchanged"
+        );
+        let stream = futures::stream::once(async move { Ok(all.freeze()) }).chain(stream);
+        let artifact = store.put_stream(Box::pin(stream), max_bytes).await?;
+        return Ok(staged(artifact, mime, original_name, false));
+    }
+    let original = all.freeze();
+    let kept = original.clone();
+    let kind = mime.clone();
+    let stripped = tokio::task::spawn_blocking(move || strip_metadata(&kept, &kind))
+        .await
+        .map_err(|e| MediaError::Task(e.to_string()))?;
+    let bytes = match stripped {
+        Ok(Some(clean)) => Bytes::from(clean),
+        Ok(None) => original,
+        Err(e) => {
+            tracing::debug!(error = %e, "metadata strip skipped; image stored unchanged");
+            original
+        }
+    };
+    let artifact = store.put_artifact(bytes).await?;
     Ok(staged(artifact, mime, original_name, false))
 }
 
@@ -278,7 +354,7 @@ mod tests {
     async fn ingest_a_png_is_a_raster_image() {
         let (_dir, store) = local_store();
         let data = png();
-        let staged = stage_stream(&store, "dir/photo.png", chunks(&data, 7), 1 << 20)
+        let staged = stage_stream(&store, "dir/photo.png", chunks(&data, 7), 1 << 20, false)
             .await
             .expect("staged");
         assert_eq!(staged.mime, "image/png");
@@ -293,7 +369,7 @@ mod tests {
     async fn ingest_an_svg_is_sanitised() {
         let (_dir, store) = local_store();
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="1" height="1"/></svg>"#;
-        let staged = stage_stream(&store, "logo.svg", chunks(svg, 5), 1 << 20)
+        let staged = stage_stream(&store, "logo.svg", chunks(svg, 5), 1 << 20, false)
             .await
             .expect("staged");
         assert_eq!(staged.mime, "image/svg+xml");
@@ -309,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn ingest_a_csv_is_text_by_its_extension() {
         let (_dir, store) = local_store();
-        let staged = stage_stream(&store, "data.CSV", chunks(b"a,b\n1,2\n", 3), 1 << 20)
+        let staged = stage_stream(&store, "data.CSV", chunks(b"a,b\n1,2\n", 3), 1 << 20, false)
             .await
             .expect("staged");
         assert_eq!(staged.mime, "text/csv");
@@ -326,12 +402,12 @@ mod tests {
                 left.map(|d| (Ok(Bytes::from(d)), None))
             }))
         };
-        let staged = stage_stream(&store, "a.csv", one(b"a,b\n".to_vec()), 1 << 20)
+        let staged = stage_stream(&store, "a.csv", one(b"a,b\n".to_vec()), 1 << 20, false)
             .await
             .expect("short file");
         assert_eq!(staged.mime, "text/csv");
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#.to_vec();
-        let staged = stage_stream(&store, "a.svg", one(svg), 1 << 20)
+        let staged = stage_stream(&store, "a.svg", one(svg), 1 << 20, false)
             .await
             .expect("short svg");
         assert!(staged.sanitized);
@@ -342,7 +418,7 @@ mod tests {
         let (_dir, store) = local_store();
         let data = png();
         let max = data.len() as u64 - 1;
-        let err = stage_stream(&store, "photo.png", chunks(&data, 16), max)
+        let err = stage_stream(&store, "photo.png", chunks(&data, 16), max, false)
             .await
             .unwrap_err();
         assert!(
@@ -352,7 +428,7 @@ mod tests {
         // Past the head, while it streams.
         let big = [png(), vec![0; 3 * HEAD_BYTES]].concat();
         let max = 2 * HEAD_BYTES as u64;
-        let err = stage_stream(&store, "photo.png", chunks(&big, 1000), max)
+        let err = stage_stream(&store, "photo.png", chunks(&big, 1000), max, false)
             .await
             .unwrap_err();
         assert!(
@@ -428,5 +504,88 @@ mod tests {
         assert_eq!(extension("dir.txt/noext"), None);
         assert_eq!(extension(".bashrc"), None);
         assert_eq!(extension("trailing."), None);
+    }
+
+    /// A JPEG with an XMP APP1 segment and an Exif one (Orientation 6) after SOI.
+    fn jpeg_with_metadata() -> Vec<u8> {
+        let mut plain = Vec::new();
+        image::DynamicImage::new_rgb8(8, 8)
+            .write_to(
+                &mut std::io::Cursor::new(&mut plain),
+                image::ImageFormat::Jpeg,
+            )
+            .expect("encode jpeg");
+        let segment = |payload: &[u8]| {
+            let mut s = vec![0xFF, 0xE1];
+            s.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            s.extend_from_slice(payload);
+            s
+        };
+        let mut xmp = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        xmp.extend_from_slice(b"<x:xmpmeta>where I live</x:xmpmeta>");
+        // Big-endian TIFF with Orientation 6, then junk standing in for a GPS block.
+        let mut exif =
+            b"Exif\0\0MM\0*\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0".to_vec();
+        exif.extend_from_slice(&[0x47; 40]);
+        let mut out = plain[..2].to_vec();
+        out.extend(segment(&xmp));
+        out.extend(segment(&exif));
+        out.extend_from_slice(&plain[2..]);
+        out
+    }
+
+    #[tokio::test]
+    async fn ingest_hashes_stripped_bytes_when_on() {
+        let (_dir, store) = local_store();
+        let data = jpeg_with_metadata();
+        let expected = strip_metadata(&data, "image/jpeg").unwrap().unwrap();
+        assert!(expected.len() < data.len());
+        let staged = stage_stream(&store, "me.jpg", chunks(&data, 13), 1 << 20, true)
+            .await
+            .expect("staged");
+        assert_eq!(staged.mime, "image/jpeg");
+        assert!(staged.raster);
+        assert_eq!(staged.bytes, expected.len() as u64);
+        assert_eq!(store.get(&staged.artifact.hash).await.unwrap(), expected);
+        // The hash is the stripped bytes': staging the stripped file again is a duplicate.
+        let again = stage_stream(&store, "me.jpg", chunks(&expected, 64), 1 << 20, true)
+            .await
+            .expect("staged again");
+        assert_eq!(again.artifact.hash, staged.artifact.hash);
+        assert!(!again.artifact.created);
+    }
+
+    #[tokio::test]
+    async fn off_by_default_keeps_bytes() {
+        let (_dir, store) = local_store();
+        let data = jpeg_with_metadata();
+        let staged = stage_stream(&store, "me.jpg", chunks(&data, 13), 1 << 20, false)
+            .await
+            .expect("staged");
+        assert_eq!(staged.bytes, data.len() as u64);
+        assert_eq!(store.get(&staged.artifact.hash).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn corrupt_image_is_stored_unchanged() {
+        let (_dir, store) = local_store();
+        // A JPEG head that sniffs as JPEG, then a segment that claims more than is there.
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xF0];
+        data.extend_from_slice(b"Exif\0\0 truncated");
+        let staged = stage_stream(&store, "bad.jpg", chunks(&data, 5), 1 << 20, true)
+            .await
+            .expect("an unparseable image is not refused");
+        assert_eq!(staged.mime, "image/jpeg");
+        assert_eq!(store.get(&staged.artifact.hash).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn strip_respects_the_size_limit() {
+        let (_dir, store) = local_store();
+        let data = jpeg_with_metadata();
+        let err = stage_stream(&store, "me.jpg", chunks(&data, 16), 100, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::TooLarge { limit: 100 }));
     }
 }

@@ -100,6 +100,7 @@ pub struct StagedUpload {
 pub struct Uploader {
     media: Arc<MediaStore>,
     max_upload: u64,
+    strip_metadata: bool,
     idle: Duration,
     slots: Arc<Semaphore>,
     started: AtomicU64,
@@ -118,6 +119,7 @@ impl Uploader {
         Self {
             media,
             max_upload,
+            strip_metadata: false,
             idle: DEFAULT_IDLE_TIMEOUT,
             slots: Arc::new(Semaphore::new(MEDIA_UPLOAD_SLOTS)),
             started: AtomicU64::new(0),
@@ -127,6 +129,13 @@ impl Uploader {
     /// Aborts an upload that receives nothing for `idle` (`media.upload_idle_timeout`).
     pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
         self.idle = idle;
+        self
+    }
+
+    /// Strips EXIF and XMP from JPEG, PNG and WebP uploads before they are stored
+    /// (`media.strip_metadata`, default off).
+    pub fn with_strip_metadata(mut self, strip: bool) -> Self {
+        self.strip_metadata = strip;
         self
     }
 
@@ -193,6 +202,7 @@ impl Uploader {
             &original_name,
             Box::pin(stream),
             self.max_upload,
+            self.strip_metadata,
         )
         .await;
         match (result, failure) {

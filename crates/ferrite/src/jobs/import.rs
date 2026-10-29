@@ -62,6 +62,8 @@ pub struct ImportWordpressHandler {
     pub site_url: String,
     /// `media.max_upload`.
     pub max_upload: u64,
+    /// `media.strip_metadata`.
+    pub strip_metadata: bool,
     /// The binary's version, for the `--fetch-media` user agent.
     pub version: String,
     /// Test seam: every attempt fails after this many batches.
@@ -184,6 +186,7 @@ impl ImportWordpressHandler {
             // A job's start decides the takeover itself (P27 as built).
             takeover: false,
             max_upload: self.max_upload,
+            strip_metadata: self.strip_metadata,
             job_id: Some(job),
             #[cfg(feature = "test-seams")]
             fail_after_batches: self.fail_after_batches,

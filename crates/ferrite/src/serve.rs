@@ -495,6 +495,7 @@ async fn boot(
     let max_upload = config.uploads.max_upload;
     let uploader = Arc::new(
         Uploader::new(media.clone(), max_upload)
+            .with_strip_metadata(config.uploads.strip_metadata)
             .with_idle_timeout(Duration::from_secs(config.uploads.idle_timeout_secs)),
     );
     // One install pipeline per node: its compile slots bound the node (P8).
@@ -581,6 +582,7 @@ async fn boot(
         data_dir: config.data_dir.clone(),
         site_url: config.site.url.as_str().trim_end_matches('/').to_owned(),
         max_upload,
+        strip_metadata: config.uploads.strip_metadata,
         version: binary_version()?.to_string(),
         #[cfg(feature = "test-seams")]
         fail_after_batches: opts.import_fail_after_batches,
