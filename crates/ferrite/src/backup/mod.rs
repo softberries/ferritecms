@@ -20,7 +20,7 @@ use clap::Args;
 use ferrite_config::{Config, DbKind, InitMedia, MediaSection};
 use ferrite_domain::{ArtifactHash, to_hex};
 use ferrite_media::MediaStore;
-use ferrite_store::{Backend, Store};
+use ferrite_store::{Backend, LOCK_GC, LockGuard, Store};
 use sha2::{Digest, Sha256};
 use sqlx::Connection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -47,6 +47,42 @@ const MISSING_BLOBS: u8 = 2;
 const POSTGRES: &str = "`ferrite backup` backs up SQLite sites; back up a Postgres site with \
                         the provider's automated backups and point-in-time recovery, and use \
                         `ferrite export --with-media` for a portable copy";
+
+/// How long a backup waits for a running artifacts GC pass before it gives up (R17).
+pub const BACKUP_GC_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// A backup with media could not take the `artifacts.gc` lock within its wait (R17): an
+/// artifacts GC pass is running. The scheduled job turns it into `Busy` (retried soon).
+#[derive(Debug)]
+pub struct GcBusy;
+
+impl std::fmt::Display for GcBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "an artifacts GC pass holds the artifacts.gc lock; a backup copies artifacts only \
+             while no GC deletes them, so run it again once the pass is done",
+        )
+    }
+}
+
+impl std::error::Error for GcBusy {}
+
+/// Takes the `artifacts.gc` lock for a backup's blob copy (R17), waiting up to `wait`.
+async fn hold_gc(
+    store: &dyn Store,
+    wait: std::time::Duration,
+) -> anyhow::Result<Box<dyn LockGuard>> {
+    store
+        .lock_wait(LOCK_GC, wait)
+        .await?
+        .ok_or_else(|| GcBusy.into())
+}
+
+async fn release_gc(guard: Box<dyn LockGuard>) {
+    if let Err(e) = guard.release().await {
+        tracing::warn!(error = %e, "cannot release the artifacts GC lock");
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct BackupArgs {
@@ -81,6 +117,8 @@ pub struct BackupOptions {
     pub secret_key: bool,
     /// Repository only: prune to this many snapshots afterwards.
     pub keep: Option<usize>,
+    /// With media: how long to wait for a running artifacts GC (R17; zero tries once).
+    pub gc_wait: std::time::Duration,
     /// Test seam: damage the local snapshot before the integrity check.
     #[cfg(feature = "test-seams")]
     pub corrupt_snapshot: bool,
@@ -440,7 +478,10 @@ pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow
 /// run writes locally are deleted afterwards, also on failure; leftovers of killed runs older
 /// than a day are removed first. A blob missing from `media` is left out and listed in
 /// [`BackupReport::missing`]; one whose content does not match its hash fails the backup.
-/// Safe next to writers (`Store::snapshot` works next to an open transaction).
+/// Safe next to writers (`Store::snapshot` works next to an open transaction). With media,
+/// the run holds the `artifacts.gc` lock from before the snapshot until the blobs are
+/// written (R17, waiting up to [`BackupOptions::gc_wait`], then [`GcBusy`]), so no GC
+/// deletes a blob the snapshot lists while it is copied.
 pub async fn run_backup(
     config: &Config,
     store: &dyn Store,
@@ -465,8 +506,28 @@ pub async fn run_backup(
         ),
         _ => {}
     }
-    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    sweep_stale(&dir);
+    let gc = match &media {
+        Some(_) => Some(hold_gc(store, opts.gc_wait).await?),
+        None => None,
+    };
+    let result = write_backup(config, store, media, target, opts, &dir).await;
+    if let Some(guard) = gc {
+        release_gc(guard).await;
+    }
+    result
+}
+
+/// [`run_backup`] once its checks passed and, with media, the GC lock is held.
+async fn write_backup(
+    config: &Config,
+    store: &dyn Store,
+    media: Option<Arc<MediaStore>>,
+    target: &Target,
+    opts: &BackupOptions,
+    dir: &Path,
+) -> anyhow::Result<BackupReport> {
+    std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    sweep_stale(dir);
     let ts = chrono::Utc::now().format(repo::SNAPSHOT_FORMAT).to_string();
     let db = dir.join(local_snapshot_name(&ts));
     let toml_copy = dir.join(format!("backup-{ts}.toml"));
@@ -612,13 +673,15 @@ pub struct ExportReport {
 /// uploaded to `<repo>/exports/<ts>.ferrite.tar.zst` and checked by reading it back, then
 /// the newest `keep` archives are kept. The repository follows R11 (marker on first use,
 /// never inside the data or media folder). The local file is deleted on every path;
-/// leftovers of killed runs older than a day are removed first.
+/// leftovers of killed runs older than a day are removed first. With media, the export
+/// holds the `artifacts.gc` lock (R17, waiting up to `gc_wait`, then [`GcBusy`]).
 pub async fn run_export_backup(
     config: &Config,
     store: &dyn Store,
     media: Option<Arc<MediaStore>>,
     loc: &RepoLocation,
     keep: usize,
+    gc_wait: std::time::Duration,
 ) -> anyhow::Result<ExportReport> {
     check_repo_location(config, loc)?;
     let repo = repo::Repo::open(loc, true).await?;
@@ -632,9 +695,16 @@ pub async fn run_export_backup(
     let _local = LocalFiles(vec![tmp.clone()]);
     let file = crate::init::create_private(&tmp)?;
     let binary = binary_version()?;
-    let (manifest, out) =
-        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary, Some(&dir))
-            .await?;
+    let gc = match &media {
+        Some(_) => Some(hold_gc(store, gc_wait).await?),
+        None => None,
+    };
+    let exported =
+        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary, Some(&dir)).await;
+    if let Some(guard) = gc {
+        release_gc(guard).await;
+    }
+    let (manifest, out) = exported?;
     let file = out.into_inner().map_err(|e| e.into_error())?;
     file.sync_all()?;
     drop(file);
@@ -770,6 +840,7 @@ pub async fn run_backup_cmd(args: BackupArgs) -> anyhow::Result<ExitCode> {
     let opts = BackupOptions {
         secret_key: !args.no_secret_key,
         keep: args.keep.map(|k| k as usize),
+        gc_wait: BACKUP_GC_WAIT,
         #[cfg(feature = "test-seams")]
         corrupt_snapshot: args.test_corrupt_snapshot,
     };
