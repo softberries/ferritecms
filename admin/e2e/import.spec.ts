@@ -172,6 +172,15 @@ test("import_export_a_through_the_screen", async ({
         `^Blocked script execution in '${escaped}' because the document's frame is sandboxed`,
       ),
     );
+    // Firefox requests `/favicon.ico` for the page itself, which its `default-src 'none'`
+    // refuses (and logs); that load is the browser's, not the report's.
+    const favicon = new URL("/favicon.ico", site.url).href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    guard.allow(new RegExp(`^img-src blocked ${favicon} at resource:`));
+    guard.allow(
+      new RegExp(
+        `^\\[JavaScript Error: "Content-Security-Policy: The page’s settings blocked the loading of a resource \\(img-src\\) at ${favicon} `,
+      ),
+    );
     const [tab] = await Promise.all([page.context().waitForEvent("page"), report.click()]);
     await tab.waitForLoadState();
     expect(new URL(tab.url()).pathname).toBe(href);

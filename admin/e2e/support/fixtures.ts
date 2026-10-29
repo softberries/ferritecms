@@ -10,7 +10,8 @@
 // - `expectAccessible(page)`: axe in the current colour scheme, then the other.
 // - `guard` (automatic): fails the test on any `securitypolicyviolation`, page error or
 //   `console.error` in any page of the test (Review Focus 2). `guard.allow(re)` accepts
-//   console errors a test expects (for example the browser's log line for a deliberate 401);
+//   console errors and CSP reports a test expects (for example the browser's log line for a
+//   deliberate 401);
 //   `guard.allowFailedResource(url)` accepts only the browser's failed-load line of one URL.
 //   A 404 of a custom type's list or counts, a custom taxonomy's terms or a plugin's
 //   metrics is always accepted (`GONE_ELSEWHERE`), and so
@@ -124,7 +125,8 @@ function retryInterruptedReload(page: Page): void {
 }
 
 export interface Guard {
-  /** Console errors matching `re` do not fail the test. */
+  /** Console errors, and CSP violation reports (`<directive> blocked <url> at …`),
+   * matching `re` do not fail the test. */
   allow(re: RegExp): void;
   /**
    * The browser's own "Failed to load resource" line for a request whose URL matches
@@ -239,6 +241,7 @@ export const test = base.extend<Fixtures & Options>({
           if (watched.has(ctx)) return;
           watched.add(ctx);
           await ctx.exposeBinding("__ferriteCspViolation", (_src, text: string) => {
+            if (allowed.some((re) => re.test(text))) return;
             problems.push(`securitypolicyviolation: ${text}`);
           });
           await ctx.addInitScript(() => {
