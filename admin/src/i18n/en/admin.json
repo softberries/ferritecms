@@ -498,7 +498,7 @@
       "otherTypes": "Items of custom content types stay at /t/<type>/<slug>/.",
       "confirm": {
         "title": "Change the permalinks?",
-        "body": "Every post or page whose address follows the changed structure moves to a new URL. No redirects are created from the old URLs, so links to them elsewhere stop working.",
+        "body": "Every post or page whose address follows the changed structure moves to a new URL. Redirects from the old URLs are created in the background, so links to them elsewhere keep working after a short moment.",
         "cancel": "Cancel",
         "ok": "Change permalinks"
       }

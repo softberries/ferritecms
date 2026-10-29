@@ -250,7 +250,13 @@ every slug change (with or without a public archive) delete the redirects from t
 archive path, either slash variant and any origin, in the same transaction, as publishing does
 for content; the `redirect:` keys are emitted. A taxonomy applies to at most 20 content types
 (`content_types`, refused beyond). Not handled: items whose permalink contains `%category%` move
-with the term without redirects (permalink structure redirects are M3, P26).
+with the term without redirects. A `permalink.post`/`permalink.page` structure change does get
+redirects (M3-2 P30): the write enqueues a `permalink.redirects` job in its transaction, and the
+job moves every published post or page from its path under the previous structure to its path
+under the current one, 500 items per transaction, with the content-move rules (origin
+`slug-change`, no chains); an old path holding a `manual` or `import` redirect keeps it, and an
+old path that is another published item's path now gets none. Until the job has run, the old
+URLs answer 404.
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →

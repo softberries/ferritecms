@@ -1,5 +1,6 @@
 //! Background jobs core enqueues and their payloads (design 04 §6, ruling P12; plugin
-//! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8).
+//! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8; permalink redirects
+//! M3-2 P30).
 //!
 //! The handlers live with the job runner wiring (`ferrite`); this module fixes the kinds,
 //! keys and payload shapes both sides agree on. Payloads carry a version `v` (04 §9).
@@ -182,6 +183,57 @@ pub fn media_variants_job(variants: &MediaVariants) -> NewJob {
     job
 }
 
+/// Redirects every published post or page from its path under the previous
+/// `permalink.*` structures to its path under the current ones (M3-2 P30); payload
+/// [`PermalinkRedirects`]. Enqueued by every `permalink.*` write in its `Tx`
+/// ([`OptionService`](crate::OptionService) and the importer's
+/// [`ImportBatch::options`](crate::import::ImportBatch::options)); the handler runs
+/// [`RedirectService::structure_change`](crate::RedirectService::structure_change).
+pub const PERMALINK_REDIRECTS_KIND: &str = "permalink.redirects";
+
+/// Current version of the [`PermalinkRedirects`] payload.
+pub const PERMALINK_REDIRECTS_VERSION: u32 = 1;
+
+/// The post and page structures in effect (defaults filled in).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermalinkStructures {
+    pub post: String,
+    pub page: String,
+}
+
+/// Payload of a [`PERMALINK_REDIRECTS_KIND`] job:
+/// `{"v":1,"prev":{"post":…,"page":…},"next":{"post":…,"page":…},"version":<seq>}`.
+/// `prev` are the structures before the write, `next` the ones it left (informational:
+/// the job redirects to the structures stored when it runs, so jobs of two quick changes
+/// give the same result in either order). `version` is the options version of the write:
+/// the event sequence number of its last `options.changed` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermalinkRedirects {
+    pub v: u32,
+    pub prev: PermalinkStructures,
+    pub next: PermalinkStructures,
+    pub version: i64,
+}
+
+/// The job for `redirects`: due now, unique key `permalink.redirects:<version>` (one per
+/// options version), default priority and attempts.
+pub fn permalink_redirects_job(redirects: &PermalinkRedirects) -> NewJob {
+    let structures = |s: &PermalinkStructures| {
+        let mut m = Map::new();
+        m.insert("post".into(), Value::String(s.post.clone()));
+        m.insert("page".into(), Value::String(s.page.clone()));
+        Value::Object(m)
+    };
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(redirects.v));
+    payload.insert("prev".into(), structures(&redirects.prev));
+    payload.insert("next".into(), structures(&redirects.next));
+    payload.insert("version".into(), Value::from(redirects.version));
+    let mut job = NewJob::new(PERMALINK_REDIRECTS_KIND, Value::Object(payload));
+    job.unique_key = Some(format!("{PERMALINK_REDIRECTS_KIND}:{}", redirects.version));
+    job
+}
+
 /// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
 /// it only avoids a panic path).
 pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
@@ -267,6 +319,31 @@ mod tests {
         assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
         assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
         let back: MediaVariants = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, typed);
+    }
+
+    #[test]
+    fn permalink_redirects_job_shape() {
+        let typed = PermalinkRedirects {
+            v: PERMALINK_REDIRECTS_VERSION,
+            prev: PermalinkStructures {
+                post: "/%slug%/".into(),
+                page: "/%parent_path%/%slug%/".into(),
+            },
+            next: PermalinkStructures {
+                post: "/blog/%slug%/".into(),
+                page: "/%parent_path%/%slug%/".into(),
+            },
+            version: 42,
+        };
+        let job = permalink_redirects_job(&typed);
+        assert_eq!(job.kind, "permalink.redirects");
+        assert_eq!(job.unique_key.as_deref(), Some("permalink.redirects:42"));
+        assert_eq!(job.run_at, None);
+        assert_eq!(job.priority, 0);
+        assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
+        assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
+        let back: PermalinkRedirects = serde_json::from_value(job.payload).unwrap();
         assert_eq!(back, typed);
     }
 

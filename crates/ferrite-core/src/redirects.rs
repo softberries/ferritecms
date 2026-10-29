@@ -6,14 +6,20 @@ use std::{
 };
 
 use ferrite_domain::{
-    MAX_PAGE, Page, REDIRECT_CODES, Redirect, RedirectId, RedirectOrigin, RedirectQuery, Timestamp,
+    ContentItem, ContentQuery, ContentStatus, MAX_PAGE, MEDIA_KIND, Page, REDIRECT_CODES, Redirect,
+    RedirectId, RedirectOrigin, RedirectQuery, Timestamp,
 };
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store};
 
 use crate::{
-    Actor, CoreError, RowError,
+    Actor, CoreError, MAX_PARENT_DEPTH, RowError,
     actor::{Area, Capability, can, require, require_read},
-    events, slug,
+    events,
+    jobs::PermalinkRedirects,
+    permalink::{
+        self, PermalinkInput, PermalinkRules, Permalinks, ancestors, load_input, primary_term,
+    },
+    slug,
     tx::finish,
 };
 
@@ -25,6 +31,25 @@ const MAX_URL_LEN: usize = 2048;
 pub const MAX_REDIRECT_QUERY: usize = 200;
 /// Most rows one [`RedirectService::import`] takes.
 pub const MAX_IMPORT_ROWS: usize = 10_000;
+
+/// Published posts and pages one transaction of
+/// [`RedirectService::structure_change`] walks.
+pub const STRUCTURE_PAGE: usize = 500;
+
+/// What [`RedirectService::structure_change`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PermalinkRedirectReport {
+    /// Items redirected from their old path to their new one.
+    pub moved: u32,
+    /// Items whose old path (or its slash variant) holds a `manual` or `import` redirect,
+    /// kept as it is.
+    pub kept: u32,
+    /// Items whose old path is now another published item's path (or whose parent chain
+    /// is broken): no redirect.
+    pub refused: u32,
+    /// Transactions of at most [`STRUCTURE_PAGE`] items.
+    pub pages: u32,
+}
 
 /// What an import did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +291,48 @@ impl RedirectService {
         }
         .await;
         finish(tx, done).await
+    }
+
+    /// The `permalink.redirects` job (M3-2 P30): redirects every published post and page
+    /// from its path under `payload.prev` to its path under the structures stored now.
+    /// Only the types whose structure differs are walked, [`STRUCTURE_PAGE`] items per
+    /// transaction, each transaction with one `invalidate` event of the `redirect:` keys
+    /// it touched. A move is a content move's (origin `slug-change`, `301`, earlier
+    /// redirects to the old path re-targeted so no chain forms), except that an old path
+    /// holding a `manual` or `import` redirect keeps it ([`kept`](PermalinkRedirectReport::kept))
+    /// and an old path that is now another published item's path gets none
+    /// ([`refused`](PermalinkRedirectReport::refused)). Re-running it is harmless: the
+    /// second run rewrites the same rows. No capability check (a system job). Term-path
+    /// changes (a `%category%` term renamed) are not covered.
+    pub async fn structure_change(
+        &self,
+        payload: &PermalinkRedirects,
+    ) -> Result<PermalinkRedirectReport, CoreError> {
+        let prev =
+            PermalinkRules::from_options(Some(&payload.prev.post), Some(&payload.prev.page))?;
+        let current = permalink::stored_rules(self.store.read(), &[]).await?;
+        let mut kinds = Vec::new();
+        if prev.post() != current.post() {
+            kinds.push("post".to_owned());
+        }
+        if prev.page() != current.page() {
+            kinds.push("page".to_owned());
+        }
+        let mut report = PermalinkRedirectReport::default();
+        if kinds.is_empty() {
+            return Ok(report);
+        }
+        let mut cursor = None;
+        loop {
+            let tx = self.store.begin().await?;
+            let done =
+                structure_moves(tx.as_ref(), &prev, &current, &kinds, cursor, &mut report).await;
+            cursor = finish(tx, done).await?;
+            report.pages += 1;
+            if cursor.is_none() {
+                return Ok(report);
+            }
+        }
     }
 
     /// Deletes a redirect (a missing one is a no-op).
@@ -614,6 +681,143 @@ pub(crate) async fn move_redirects(
         })
         .await?;
     Ok(changed)
+}
+
+/// One page of [`RedirectService::structure_change`]: up to [`STRUCTURE_PAGE`] published
+/// items of `kinds` from `cursor` on, each moved from its `prev` path to its `next` path,
+/// with one event for the redirects touched. Returns the cursor of the next page (`None`
+/// after the last).
+async fn structure_moves(
+    repos: &dyn Repos,
+    prev: &PermalinkRules,
+    next: &PermalinkRules,
+    kinds: &[String],
+    mut cursor: Option<String>,
+    report: &mut PermalinkRedirectReport,
+) -> Result<Option<String>, CoreError> {
+    let mut walked = 0;
+    let mut changed = Vec::new();
+    while walked < STRUCTURE_PAGE {
+        let page = repos
+            .content()
+            .list(&ContentQuery {
+                kinds: kinds.to_vec(),
+                statuses: vec![ContentStatus::Published],
+                limit: (STRUCTURE_PAGE - walked).min(MAX_PAGE as usize) as u32,
+                cursor: cursor.take(),
+                ..ContentQuery::default()
+            })
+            .await?;
+        walked += page.items.len();
+        let ids: Vec<_> = page.items.iter().map(|i| i.id).collect();
+        let mut terms = if ids.is_empty() {
+            Default::default()
+        } else {
+            repos.terms().for_items(&ids).await?
+        };
+        for item in page.items {
+            let id = item.id;
+            let chain = match ancestors(repos, item.parent_id).await {
+                Ok(chain) => chain,
+                Err(CoreError::Invalid(why)) => {
+                    tracing::warn!(item = %id, why, "no permalink redirect: broken parent chain");
+                    report.refused += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let input = PermalinkInput {
+                primary_term: primary_term(terms.remove(&id).unwrap_or_default()),
+                ancestors: chain,
+                item,
+            };
+            let (old, new) = (prev.path(&input), next.path(&input));
+            if old == new {
+                continue;
+            }
+            if lookup(repos, &old)
+                .await?
+                .is_some_and(|r| r.origin != RedirectOrigin::SlugChange)
+            {
+                report.kept += 1;
+            } else if published_item_at(repos, next, &old).await? {
+                report.refused += 1;
+            } else {
+                changed.extend(move_redirects(repos, &old, &new).await?);
+                report.moved += 1;
+            }
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    emit_redirects_changed(repos, changed).await?;
+    Ok(cursor)
+}
+
+/// Whether `source` (or its slash variant) is the permalink of a published item of a
+/// content type other than media. Candidates are found by walking the path's trailing
+/// segments from the root by slug (`get_by_slug`, the way the site resolves pages), and
+/// each is compared by its computed path; a path with a query, a fragment or more than
+/// `MAX_PARENT_DEPTH + 1` segments is no item's.
+pub(crate) async fn published_item_at(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    source: &str,
+) -> Result<bool, CoreError> {
+    if source.contains(['?', '#']) {
+        return Ok(false);
+    }
+    let segments: Vec<String> = source
+        .trim_matches('/')
+        .split('/')
+        .map(|s| {
+            percent_encoding::percent_decode_str(s)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .collect();
+    if segments.iter().any(String::is_empty) || segments.len() > MAX_PARENT_DEPTH + 1 {
+        return Ok(false);
+    }
+    let alternative = toggled(source);
+    for ty in repos.types().list().await? {
+        if ty.name == MEDIA_KIND {
+            continue;
+        }
+        for skip in 0..segments.len() {
+            let Some(item) = walk(repos, &ty.name, &segments[skip..]).await? else {
+                continue;
+            };
+            if item.status != ContentStatus::Published {
+                continue;
+            }
+            let path = rules.path(&load_input(repos, item).await?);
+            if path == source || alternative.as_deref() == Some(path.as_str()) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The item of `kind` at the end of the slug chain `segments` from the root.
+async fn walk(
+    repos: &dyn Repos,
+    kind: &str,
+    segments: &[String],
+) -> Result<Option<ContentItem>, CoreError> {
+    let mut parent = None;
+    let mut found = None;
+    for segment in segments {
+        found = repos.content().get_by_slug(kind, parent, segment).await?;
+        match &found {
+            Some(item) => parent = Some(item.id),
+            None => return Ok(None),
+        }
+    }
+    Ok(found)
 }
 
 /// The redirect for `path`: exact match first, then the slash-toggled path.

@@ -1,7 +1,7 @@
 // The Settings screen under the real server (M2b-3 Task 8; 07 §3 Settings): a title saved
 // with `mod+s` shows on the public site; a page picked as the front page is what `/`
-// shows; a permalink change says first that URLs move without redirects (Review Focus 4)
-// and a post's URL then follows the new structure; two tabs saving the same group meet
+// shows; a permalink change says first that URLs move and redirects follow (M3-2 P30),
+// then a post's URL follows the new structure and its old URL redirects there; two tabs saving the same group meet
 // the stale question (P58); the Mail panel without mail; and the review screens.
 //
 // Settings are site-wide and other specs run beside this one, so each test changes as
@@ -115,6 +115,7 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
   const api = await ContentApi.as(siteKey, site.url, "admin");
   const before = await api.getSettings();
   const post = await published(api, "post", uid("Moved"));
+  const old = (await api.refs([post.id]))[0]?.permalink ?? "";
   const page = await as("admin");
   try {
     await open(page, "permalinks");
@@ -133,7 +134,8 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
     const confirm = page.getByRole("alertdialog", { name: "Change the permalinks?" });
     await expect(confirm).toContainText(
       "Every post or page whose address follows the changed structure moves to a new URL. " +
-        "No redirects are created from the old URLs, so links to them elsewhere stop working.",
+        "Redirects from the old URLs are created in the background, so links to them " +
+        "elsewhere keep working after a short moment.",
     );
     // Cancel sends nothing (checked again below, after a save that does send).
     await confirm.getByRole("button", { name: "Cancel" }).click();
@@ -158,9 +160,21 @@ test("permalink_change_warns", async ({ as, site, siteKey }) => {
     await expect
       .poll(async () => (await page.request.get(expected)).status(), { timeout: 10_000 })
       .toBe(200);
+    // The job redirects the old URL to the new one.
+    await expect
+      .poll(
+        async () => {
+          const r = await page.request.get(old, { maxRedirects: 0 });
+          return [r.status(), new URL(r.headers()["location"] ?? "", site.url).pathname];
+        },
+        { timeout: 10_000 },
+      )
+      .toEqual([301, expected]);
   } finally {
-    await api.patchSettings({ "permalink.post": before["permalink.post"] ?? null });
+    // Purged first, so putting the structure back redirects nothing of this test's.
     await api.purge(post);
+    await api.patchSettings({ "permalink.post": before["permalink.post"] ?? null });
+    await api.deleteRedirects(post.slug);
     await api.dispose();
   }
 });
