@@ -150,7 +150,7 @@ test("the live region mounts empty, then says the phase", async () => {
   expect(live).toHaveAttribute("aria-live", "polite");
   await vi.waitFor(() => expect(live).toHaveTextContent("Import queued."));
   // Asked to: the heading takes focus when the panel appears (start card → panel).
-  expect(document.activeElement).toBe(title);
+  await vi.waitFor(() => expect(document.activeElement).toBe(title));
   expect(title).toHaveAttribute("tabindex", "-1");
 });
 

@@ -239,7 +239,9 @@ test("cancel keeps the key and moves focus to the card's heading", async () => {
   const user = await startedCard();
   const key = sent[0]!.headers["Idempotency-Key"];
   await user.click(screen.getByRole("button", { name: "Cancel upload" }));
-  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" }));
+  await vi.waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" })),
+  );
   expect(screen.queryByRole("alert")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Start import" }));
   expect(sent[1]!.headers["Idempotency-Key"]).toBe(key);
@@ -272,7 +274,7 @@ test("a 413 shows its error at the file it names", async () => {
 test("focus follows the upload and progress is announced at milestones", async () => {
   await startedCard();
   const progress = document.querySelector<HTMLElement>("[data-slot=import-progress]")!;
-  expect(document.activeElement).toBe(progress);
+  await vi.waitFor(() => expect(document.activeElement).toBe(progress));
   const live = document.querySelector<HTMLElement>("[data-slot=import-progress-live]")!;
   expect(live).toHaveTextContent("Upload started");
   const step = async (loaded: number) => {
@@ -290,5 +292,8 @@ test("focus follows the upload and progress is announced at milestones", async (
   // The upload ends (here: no answer): focus goes to the card's heading, not to <body>.
   sent[0]!.onerror?.();
   await screen.findByRole("button", { name: "Retry" });
-  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" }));
+  // The heading takes focus in an effect after the Retry row renders: wait for it.
+  await vi.waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" })),
+  );
 });
