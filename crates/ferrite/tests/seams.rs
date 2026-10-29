@@ -7,30 +7,29 @@
 
 use std::process::Command;
 
-/// `cargo tree -p ferrite -e <edges>` as text (locked and offline: a test build has
-/// fetched every dependency already).
-fn feature_tree(edges: &str) -> String {
+/// `cargo tree --locked --offline -p ferrite <args>`: whether it succeeded, its stdout and
+/// its stderr (locked and offline: a test build has fetched every dependency already).
+fn cargo_tree(args: &[&str]) -> (bool, String, String) {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "tree",
-            "--locked",
-            "--offline",
-            "-p",
-            "ferrite",
-            "-e",
-            edges,
-        ])
+        .args(["tree", "--locked", "--offline", "-p", "ferrite"])
         .args(["--color", "never"])
+        .args(args)
         .output()
         .expect("cargo tree runs");
-    assert!(
+    (
         out.status.success(),
-        "cargo tree failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap()
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// `cargo tree -p ferrite -e <edges>` as text.
+fn feature_tree(edges: &str) -> String {
+    let (ok, stdout, stderr) = cargo_tree(&["-e", edges]);
+    assert!(ok, "cargo tree failed: {stderr}");
+    stdout
 }
 
 #[test]
@@ -50,32 +49,17 @@ fn release_build_has_no_seams() {
     }
 }
 
-/// `cargo tree -p ferrite -i <krate> -e normal` as text: empty when `krate` is not in
-/// the release binary's dependency tree.
+/// `cargo tree -p ferrite -i <krate> -e normal --target all` as text: empty when `krate`
+/// is not in the release binary's dependency tree on any platform.
 fn inverse_tree(krate: &str) -> String {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let out = Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "tree",
-            "--locked",
-            "--offline",
-            "-p",
-            "ferrite",
-            "-i",
-            krate,
-        ])
-        .args(["-e", "normal", "--color", "never"])
-        .output()
-        .expect("cargo tree runs");
+    let (ok, stdout, stderr) = cargo_tree(&["-i", krate, "-e", "normal", "--target", "all"]);
     // A package missing from `Cargo.lock` altogether is an error, not an empty tree; one
     // that is locked but outside the normal edges prints nothing.
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() && stderr.contains("did not match any packages") {
+    if !ok && stderr.contains("did not match any packages") {
         return String::new();
     }
-    assert!(out.status.success(), "cargo tree failed: {stderr}");
-    String::from_utf8(out.stdout).unwrap()
+    assert!(ok, "cargo tree failed: {stderr}");
+    stdout
 }
 
 /// The release binary links only the `ring` crypto provider (M4-2 P28): aws-lc's C code
@@ -94,7 +78,8 @@ fn no_aws_lc_in_tree() {
 }
 
 /// Tests run on the host they were built for, so the embedded triple is the host's
-/// (M4-2 P27: `self-update` picks its asset by it).
+/// (M4-2 P27: `self-update` picks its asset by it). A `cargo test --target <non-host>` run
+/// would fail here although the binary is right; CI tests only host targets.
 #[test]
 fn build_target_is_embedded() {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());

@@ -8,12 +8,18 @@
 use std::path::PathBuf;
 
 fn main() {
-    // Cargo sets `TARGET` for build scripts: the triple being compiled for, not the build
-    // host's, so a cross build embeds the right one.
-    let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".into());
-    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default());
-    if let Err(e) = std::fs::write(out.join("target-triple"), target) {
-        panic!("cannot write the target triple to OUT_DIR: {e}");
+    // Cargo sets both for every build script. `TARGET` is the triple being compiled for,
+    // not the build host's, so a cross build embeds the right one. A missing value fails
+    // the build: a binary with a made-up triple would find no release asset.
+    let Ok(target) = std::env::var("TARGET") else {
+        panic!("TARGET is not set: build.rs must run under cargo");
+    };
+    let Some(out) = std::env::var_os("OUT_DIR") else {
+        panic!("OUT_DIR is not set: build.rs must run under cargo");
+    };
+    let path = PathBuf::from(out).join("target-triple");
+    if let Err(e) = std::fs::write(&path, target) {
+        panic!("cannot write the target triple to {}: {e}", path.display());
     }
     println!("cargo:rerun-if-changed=build.rs");
 }
