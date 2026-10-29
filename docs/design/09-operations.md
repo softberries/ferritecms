@@ -252,6 +252,7 @@ ferrite serve          --data DIR                      # M1c-2; cluster wiring M
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
+ferrite media gc       --data DIR [--dry-run] [--grace-days N]  # M4-1
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -312,6 +313,20 @@ unusable one exits 1; keys that are not artifacts are ignored with a notice. Pri
 and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
 (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
 `--from` nor `--data`, or both) exits 2 as clap does.
+
+**`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
+03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`
+job runs. It opens the database (with SQLite, stop `serve` first: it holds the data folder's
+lock) and the configured media store, then marks unreferenced artifact rows, deletes rows
+marked longer than the grace period and then their files, files under `artifacts/` with no
+row that are older than the grace period, and `tmp/` objects older than 24 h. Files named
+by a queued or running job or by an import report are kept. `--grace-days N` (1..=365)
+overrides `media.gc_grace_days` (default 7) for this run; `--dry-run` marks and deletes
+nothing and reports what a run would do. Prints `marked N, unmarked M, deleted rows R (B
+bytes), deleted unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: `
+for a dry run). Exit 0 done, 3 another GC is running (the `artifacts.gc` lock, a cluster
+node's job or another `media gc`), 1 on an error; a bad flag (`--grace-days 0`) exits 2 as
+clap does.
 
 **`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
 `http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on
@@ -544,7 +559,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 ```
 ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
-ferrite media gc                                                 # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

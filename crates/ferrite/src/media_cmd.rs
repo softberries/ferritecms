@@ -7,9 +7,12 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use futures::StreamExt;
 
-use crate::load_config;
+use crate::cli::DataArg;
+use crate::gc::{self, GcOptions};
 use crate::media_url::parse_media_url;
+use crate::open::{OpenMode, open_store, startup_check};
 use crate::site::open_media;
+use crate::{binary_version, load_config};
 
 /// Copies running at once.
 const SYNC_CONCURRENCY: usize = 8;
@@ -29,6 +32,30 @@ pub enum MediaCommand {
     /// never deletes and never copies `tmp/`. Prints `copied N (B bytes), skipped M,
     /// failed F`. Exit code: 0, or 2 when some copies failed, or 1 on an error.
     Sync(SyncArgs),
+    /// Delete artifacts nothing references, and staging leftovers (design 03 §6).
+    ///
+    /// One pass of the artifacts GC, as the daily `artifacts.gc` job runs it: marks
+    /// unreferenced artifact rows, deletes rows marked longer than the grace period (then
+    /// their files), files under `artifacts/` with no row that are older than the grace
+    /// period, and `tmp/` objects older than 24 h. Files named by a queued or running job
+    /// or by an import report are kept. With SQLite, stop `serve` first.
+    ///
+    /// Prints `marked N, unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U
+    /// (B bytes), deleted tmp T` (with `--dry-run`, after `dry run: `, counting what would
+    /// happen). Exit code: 0, or 3 when another GC is running, or 1 on an error.
+    Gc(GcArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct GcArgs {
+    #[command(flatten)]
+    data: DataArg,
+    /// Report what would be marked and deleted; change nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Days to keep unreferenced files (1..=365); default `media.gc_grace_days` (7).
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=365))]
+    grace_days: Option<u32>,
 }
 
 #[derive(Debug, Args)]
@@ -47,7 +74,34 @@ pub struct SyncArgs {
 pub async fn run(cmd: MediaCommand) -> anyhow::Result<ExitCode> {
     match cmd {
         MediaCommand::Sync(args) => sync(args).await,
+        MediaCommand::Gc(args) => collect(args).await,
     }
+}
+
+async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
+    let config = load_config(&args.data.data)?;
+    let store = open_store(&config, OpenMode::MustExist).await?;
+    let done = async {
+        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        let media = open_media(&config)?;
+        let opts = GcOptions {
+            grace: gc::grace_days(args.grace_days.unwrap_or(config.uploads.gc_grace_days)),
+            dry_run: args.dry_run,
+            now: ferrite_domain::Timestamp::now(),
+        };
+        gc::run(store.as_ref(), &media, &opts).await
+    }
+    .await;
+    store.close().await;
+    match done? {
+        Some(report) if args.dry_run => println!("dry run: {report}"),
+        Some(report) => println!("{report}"),
+        None => {
+            eprintln!("another artifacts GC is running");
+            return Ok(ExitCode::from(3));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// How one object fared.

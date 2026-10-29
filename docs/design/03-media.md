@@ -512,10 +512,61 @@ Cost: `<style>` sheets, animation, links, external fonts and images are stripped
 
 ## 6. Garbage collection
 
-Artifacts are referenced by `media`, `media.variants`, `plugins`, `themes`, revisions
-(featured images in fields). A periodic job `artifacts.gc` (daily, single-runner via
-unique job key) deletes artifacts unreferenced for > 7 days (grace period protects
-in-flight uploads and rollbacks). Dry-run: `ferrite media gc --dry-run`.
+Built in M4-1 (P10–P12): `crates/ferrite/src/gc.rs` (`gc::run`), run by the daily
+`artifacts.gc` job (`crates/ferrite/src/jobs/gc.rs`, 04 §6) and by `ferrite media gc`
+(09 §8).
+
+**What references an artifact** (P10). A row is referenced when its hash is named by
+`media.artifact_hash`, `media_variants.hash` (the derived table of `media.variants`),
+`plugins.artifact_hash`, `themes.artifact_hash` or `import_runs.report_hash`; the store
+checks these in SQL. On top, the GC computes **protected** hashes in Rust and passes them
+to the store: every 64-lowercase-hex string anywhere in the payload of a `queued` or
+`running` job (object keys included, so it covers `media.variants`, `import.wordpress` and
+any later kind), and the `json` and `html` hashes inside every import report manifest
+(`{"v":1,"json":…,"html":…}`). A manifest that cannot be read (missing, over 1 KiB, not
+that shape) protects every `import`-kind row for that pass. Revisions and
+`content_items.fields` are **not** referrers: they hold media content ids, not hashes (a
+featured image keeps its file through its `media` row).
+
+**Grace and marking** (P11). `artifacts.orphaned_at` (migration `0011_artifact_gc`) records
+since when nothing references a row. One pass, under the `artifacts.gc` lock (`try_lock`: a
+second run at the same time is refused, the job as `Busy`, the CLI with exit 3):
+
+1. **Mark:** unmarked rows that nothing references and that are not protected get
+   `orphaned_at = now`; marked rows that are referenced or protected again lose the mark.
+   `ArtifactRepo::insert_if_absent` on an existing row also clears it: recording the same
+   bytes again counts as a fresh reference.
+2. **Delete rows** marked before `now − grace`, one at a time with `delete_if_orphaned`,
+   which re-checks the references in its own statement (a foreign-key refusal, a reference
+   that raced in, keeps the row). Only when the row is gone is the blob deleted (R74's
+   order).
+3. **Delete row-less blobs:** objects under `artifacts/` whose `last_modified` is older than
+   `now − grace`, that are not protected and have no row (`existing`, asked for each batch
+   of 1 000 right before deleting it). These are uploads whose row never came (R68),
+   refused uploads and staged extension bytes whose install failed.
+4. **Clean `tmp/`:** staging objects, probes included, older than 24 h, whatever the grace.
+
+The grace period is `[media] gc_grace_days` (default 7 days, 1..=365, 01 §4); it covers
+in-flight uploads (every writer stores the blob before its row), rollbacks to an old plugin
+artifact, and the staged bytes of a failed extension install, which the request no longer
+deletes (`Installer::discard_staged` is gone, P12): a concurrent install of the same bytes
+can no longer lose its blob, and refused install bytes stay up to the grace period. With
+the default, nothing is deleted on the first pass after an artifact becomes unreferenced:
+it needs a pass to mark it and one more after the grace period. A pass cut short (the job's
+3 600 s timeout) continues the next day; a blob that cannot be deleted is logged and found
+again as a row-less blob.
+
+**Residual race (accepted).** A writer whose put of a blob that already existed was a no-op
+(same bytes), and that inserts its row in the milliseconds between step 2's row delete and
+its blob delete, ends up with a row and no blob. It needs bytes orphaned for longer than the
+grace period to be uploaded again at that instant; uploading the file again fixes it. Job
+payloads are read before the mark, so a job enqueued during a pass is seen by the next one:
+its artifact row was inserted (or unmarked) before the job, and is at most marked, never
+deleted, within the grace period.
+
+**Dry run** (`ferrite media gc --dry-run`) marks nothing and deletes nothing: steps 1 and 2
+run in a transaction that is rolled back, so their counts are exact; steps 3 and 4 only
+count. It prints the same line as a real run after `dry run: `.
 
 ## 7. WordPress media import
 
