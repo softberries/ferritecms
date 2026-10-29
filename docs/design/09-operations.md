@@ -529,9 +529,12 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 - Refuses (exit 1) when the site already has content, unless `--force`, which adds another
   batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
   both menus and the two options are replaced to point at the new batch).
-- **Not atomic:** each step is its own transaction, so a run that fails part-way leaves what
-  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2a-2b: seed
-  atomicity).
+- **Atomic (M4-1 P20):** the image files are stored first (content-addressed), then every row
+  (user, terms, the image's media item, artifacts and `media` row, posts, pages, menus,
+  options, with the events the services emit) is written in one transaction
+  (`ferrite_core::seed::DemoBatch`). A run that fails part-way writes no row, so a plain
+  re-run without `--force` succeeds. The image files of a failed run stay in the media store
+  until the artifacts GC removes them.
 - Requires an initialised site (with SQLite it fails when `ferrite.db` is missing instead of
   creating it) and runs the same migration check as `serve`.
 

@@ -1424,6 +1424,7 @@ pub async fn media_kind_filters_list_and_count(db: &TestDb) {
                 bytes: 1,
                 mime: mime.into(),
                 created_at: Timestamp::now(),
+                orphaned_at: None,
             })
             .await
             .unwrap();

@@ -170,6 +170,7 @@ impl Site {
                 bytes: i64::try_from(r.bytes).expect("size"),
                 mime: "application/wasm".into(),
                 created_at: Timestamp::now(),
+                orphaned_at: None,
             })
             .await
             .expect("artifact row");

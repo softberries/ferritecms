@@ -363,6 +363,7 @@ impl Installer {
             bytes: i64::try_from(stored.bytes).unwrap_or(i64::MAX),
             mime: PLUGIN_MIME.to_owned(),
             created_at: now,
+            orphaned_at: None,
         };
         let row = InstalledPlugin {
             name: manifest.plugin.name.clone(),
@@ -405,6 +406,7 @@ impl Installer {
             bytes: i64::try_from(stored.bytes).unwrap_or(i64::MAX),
             mime: THEME_MIME.to_owned(),
             created_at: now,
+            orphaned_at: None,
         };
         let m = theme.manifest();
         let row = InstalledTheme {

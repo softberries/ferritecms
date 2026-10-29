@@ -310,6 +310,7 @@ mod tests {
             bytes: stored.bytes as i64,
             mime: THEME_MIME.into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         };
         let row = InstalledTheme {
             name: name.into(),

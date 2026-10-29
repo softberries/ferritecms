@@ -43,6 +43,8 @@ pub struct Artifact {
     pub bytes: i64,
     pub mime: String,
     pub created_at: Timestamp,
+    /// When the artifact GC first saw it unreferenced (`None`: referenced or not seen yet).
+    pub orphaned_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
