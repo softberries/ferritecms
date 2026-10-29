@@ -383,4 +383,9 @@ backend_tests!(
     export_reader_encodes_neutrally,
     export_reader_pages_by_key,
     export_reader_sees_one_snapshot,
+    export_reader_drop_releases,
+    import_writer_round_trip,
+    import_writer_rollback_leaves_nothing,
+    import_writer_self_refs_any_order,
+    import_writer_site_id_batches_refusals,
 );

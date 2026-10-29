@@ -100,6 +100,11 @@ pub trait Store: Send + Sync + 'static {
     /// export or a copy; see [`ExportReader`](crate::ExportReader). Release it with
     /// [`ExportReader::finish`](crate::ExportReader::finish).
     async fn export_reader(&self) -> Result<Box<dyn crate::ExportReader>, StoreError>;
+    /// Opens the single-transaction row loader (M4-1 P4), for import-site and `db copy`;
+    /// see [`ImportWriter`](crate::ImportWriter). Nothing is written until
+    /// [`ImportWriter::commit`](crate::ImportWriter::commit). SQLite: holds the writer
+    /// connection until then; Postgres: one dedicated connection (`<application_name>:import`).
+    async fn import_writer(&self) -> Result<Box<dyn crate::ImportWriter>, StoreError>;
     /// Writes a consistent copy of the database to `dest`; Postgres returns `Unsupported`.
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError>;
     /// Closes the connection pools: waits until every checked-out connection is back
