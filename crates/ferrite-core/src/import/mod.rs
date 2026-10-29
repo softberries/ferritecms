@@ -35,7 +35,9 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use ferrite_domain::{ArtifactHash, ImportRun, ImportRunId, ImportRunState, JobId, Timestamp};
+use ferrite_domain::{
+    ArtifactHash, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus, Timestamp,
+};
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
@@ -132,9 +134,12 @@ impl ImportService {
 
     /// Starts a run of `source` (the normalised `<wp:base_blog_url>`). Needs
     /// [`Capability::Import`]. Another `running` run makes this
-    /// [`CoreError::Unavailable`], unless `takeover` is set and that run's heartbeat is
-    /// older than [`STALE_AFTER`]: then it is marked `abandoned` first (P5). `job_id` is
-    /// the `import.wordpress` job running it, if any (P27).
+    /// [`CoreError::Unavailable`], unless its heartbeat is older than [`STALE_AFTER`]
+    /// and it may be taken over: then it is marked `abandoned` first (P5). `job_id` is
+    /// the `import.wordpress` job running it, if any (P27). A CLI start (no `job_id`)
+    /// takes over only with `takeover`; a job's start ignores `takeover` and takes over
+    /// a stale run that has no job, is its own, or whose job is not `running` (P27 as
+    /// built; checked in the abandoning statement itself).
     ///
     /// On SQLite (one writer) never call this while a batch of this process is open:
     /// it would wait for that batch's transaction and time out (`Store(Busy)`).
@@ -176,7 +181,7 @@ impl ImportService {
             step: None,
             report_hash: None,
         };
-        let created = self.create_run(&run, takeover, now).await;
+        let created = self.create_run(&run, takeover, job_id, now).await;
         match created {
             Ok(()) => Ok(ImportHandle {
                 run,
@@ -191,11 +196,12 @@ impl ImportService {
     }
 
     /// Inserts `run` in one transaction, after abandoning a stale running run when
-    /// `takeover` allows it.
+    /// `takeover` (CLI) or the job rule (`job`, see [`start`](Self::start)) allows it.
     async fn create_run(
         &self,
         run: &ImportRun,
         takeover: bool,
+        job: Option<JobId>,
         now: Timestamp,
     ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
@@ -206,12 +212,18 @@ impl ImportService {
                 if other.heartbeat_at >= stale_before {
                     return Err(CoreError::Unavailable(BUSY));
                 }
-                if !takeover {
-                    return Err(CoreError::Unavailable(BUSY_STALE));
-                }
                 // Re-checked by the write itself: a batch that fenced since our read
-                // makes this a no-op.
-                if !imports.abandon_stale(other.id, stale_before, now).await? {
+                // (or, for a job, the other run's job running again) makes this a no-op.
+                let abandoned = match job {
+                    Some(job) => {
+                        imports
+                            .abandon_stale_for_job(other.id, stale_before, now, job)
+                            .await?
+                    }
+                    None if !takeover => return Err(CoreError::Unavailable(BUSY_STALE)),
+                    None => imports.abandon_stale(other.id, stale_before, now).await?,
+                };
+                if !abandoned {
                     return Err(CoreError::Unavailable(BUSY));
                 }
                 tracing::warn!(run = %other.id, "took over a stale import run");
@@ -225,6 +237,31 @@ impl ImportService {
         }
         .await;
         finish(tx, done).await
+    }
+}
+
+impl ImportService {
+    /// Whether job `job` could start a run now (P27 as built): no run is `running`, or
+    /// the running one is stale and has no job, is `job`'s own, or its job is not
+    /// `running`. A pre-check, so a busy job fetches nothing; [`start`](Self::start)
+    /// decides for real.
+    pub async fn job_may_start(&self, job: JobId) -> Result<bool, CoreError> {
+        let repos = self.store.read();
+        let Some(run) = repos.imports().running().await? else {
+            return Ok(true);
+        };
+        if run.heartbeat_at >= stale_before(Timestamp::now()) {
+            return Ok(false);
+        }
+        Ok(match run.job_id {
+            None => true,
+            Some(other) if other == job => true,
+            Some(other) => repos
+                .jobs()
+                .get(other)
+                .await?
+                .is_none_or(|j| j.status != JobStatus::Running),
+        })
     }
 }
 

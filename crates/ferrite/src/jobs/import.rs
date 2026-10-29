@@ -5,7 +5,14 @@
 //! partial one too), and remove the job folder. The run's own work folder stays under
 //! `<data>/import/` when it fails, so a retry on the same node resumes it; a retry on
 //! another node parses again (P27). The inputs are deleted once the run is `done` or the
-//! job fails for good.
+//! job fails for good: a `Permanent` error, or a `Retry` of the last attempt. A lease
+//! that expires on the last attempt is turned `dead` by the runner's reaper without this
+//! handler, so those inputs stay until the M4 orphan sweep (accepted, P23).
+//!
+//! Before it fetches anything an attempt checks that it could start a run
+//! ([`ImportService::job_may_start`]), so a busy job does not copy its inputs every few
+//! seconds. Each attempt also removes the `job-*` folders of jobs that are over (a
+//! crashed node's leftovers).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +26,7 @@ use ferrite_core::{
     import::ImportService,
     jobs::{IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobPayload},
 };
-use ferrite_domain::{ArtifactHash, ArtifactKind, Job, JobId};
+use ferrite_domain::{ArtifactHash, ArtifactKind, ImportRunState, Job, JobId, JobStatus};
 use ferrite_http::import_fetch::HttpSource;
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
@@ -74,15 +81,24 @@ impl JobHandler for ImportWordpressHandler {
     async fn run(&self, job: &Job) -> Result<(), JobError> {
         let payload: ImportJobPayload = serde_json::from_value(job.payload.clone())
             .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
-        let folder = self.data_dir.join("import").join(format!("job-{}", job.id));
+        let import = self.data_dir.join("import");
+        self.sweep_job_folders(&import, job.id).await;
+        let folder = import.join(format!("job-{}", job.id));
         let outcome = self.attempt(job.id, &payload, &folder).await;
         if let Err(e) = tokio::fs::remove_dir_all(&folder).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
             tracing::warn!(error = %e, dir = %folder.display(), "removing the import job's folder failed");
         }
-        // The inputs are spent once the run is done or the job fails for good (P23).
-        if matches!(outcome, Ok(()) | Err(JobError::Permanent(_))) {
+        // The inputs are spent once the run is done or the job fails for good (P23): the
+        // runner turns a `Retry` of the last attempt (the claim counted it) `dead`.
+        let last = job.attempts >= job.max_attempts;
+        let spent = match &outcome {
+            Ok(()) | Err(JobError::Permanent(_)) => true,
+            Err(JobError::Retry(_)) => last,
+            Err(JobError::Busy(_)) => false,
+        };
+        if spent {
             self.delete_inputs(&payload).await;
         }
         outcome
@@ -101,6 +117,9 @@ impl ImportWordpressHandler {
             .importer(payload.user)
             .await
             .map_err(core_error)?;
+        if !self.import.job_may_start(job).await.map_err(core_error)? {
+            return Err(JobError::Busy("another import is running".into()));
+        }
         // Fresh copies: an earlier attempt's may be partial.
         match tokio::fs::remove_dir_all(folder).await {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -112,11 +131,15 @@ impl ImportWordpressHandler {
             .await
             .map_err(|e| JobError::Retry(format!("{}: {e}", folder.display())))?;
         let wxr = folder.join("export.xml");
-        self.fetch(&payload.wxr, &wxr).await?;
+        if !self.fetch(&payload.wxr, &wxr).await? {
+            return self.missing(job, &payload.wxr).await;
+        }
         let mut sources: Vec<Arc<dyn MediaSource>> = Vec::new();
         if let Some(uploads) = &payload.uploads {
             let archive = folder.join("uploads.zip");
-            self.fetch(uploads, &archive).await?;
+            if !self.fetch(uploads, &archive).await? {
+                return self.missing(job, uploads).await;
+            }
             let zip = tokio::task::spawn_blocking(move || ZipSource::open(&archive))
                 .await
                 .map_err(|e| JobError::Retry(format!("reading the uploads archive: {e}")))?
@@ -149,7 +172,8 @@ impl ImportWordpressHandler {
             site_options: o.site_options,
             category_base: o.category_base.clone(),
             tag_base: o.tag_base.clone(),
-            takeover: self.owns_stale_run(job).await?,
+            // A job's start decides the takeover itself (P27 as built).
+            takeover: false,
             max_upload: self.max_upload,
             job_id: Some(job),
             #[cfg(feature = "test-seams")]
@@ -162,38 +186,81 @@ impl ImportWordpressHandler {
                 Ok(())
             }
             Err(RunFailed { error, report }) => {
-                if let Some(report) = report {
-                    self.store_report(&report).await;
+                if let Some(report) = &report {
+                    self.store_report(report).await;
+                }
+                // A work file that does not read back would fail every resume: drop it,
+                // so the next attempt parses again.
+                if let (ImportError::Record(_), Some(report)) = (&error, &report) {
+                    let dir = self.data_dir.join("import").join(&report.run_id);
+                    if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+                        tracing::warn!(error = %e, dir = %dir.display(), "removing a corrupt import work folder failed");
+                    }
                 }
                 Err(import_error(error))
             }
         }
     }
 
-    /// Whether the running run is this job's own (an earlier attempt that stopped):
-    /// only then may this attempt take it over, and only once it is stale (P27).
-    async fn owns_stale_run(&self, job: JobId) -> Result<bool, JobError> {
-        let running = self
+    /// An input is missing: `done` when this job's run already is (the job was dropped
+    /// while deleting its inputs), else `Permanent`.
+    async fn missing(&self, job: JobId, hash: &str) -> Result<(), JobError> {
+        let run = self
             .store
             .read()
             .imports()
-            .running()
+            .run_by_job(job)
             .await
             .map_err(|e| JobError::Retry(e.to_string()))?;
-        Ok(running.is_some_and(|r| r.job_id == Some(job)))
+        if run.is_some_and(|r| r.state == ImportRunState::Done) {
+            tracing::info!(%job, "the import's run is done and its inputs gone");
+            return Ok(());
+        }
+        Err(JobError::Permanent(format!(
+            "the import artifact {hash} is missing"
+        )))
     }
 
-    /// Copies artifact `hash` to `to`, streaming; a missing one is `Permanent`.
-    async fn fetch(&self, hash: &str, to: &Path) -> Result<(), JobError> {
+    /// Removes the `job-*` folders under `import` of jobs that are over (not queued or
+    /// running, or gone); this job's own is left to it.
+    async fn sweep_job_folders(&self, import: &Path, current: JobId) {
+        let Ok(mut entries) = tokio::fs::read_dir(import).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let Some(id) = name
+                .to_str()
+                .and_then(|n| n.strip_prefix("job-"))
+                .and_then(|id| id.parse::<JobId>().ok())
+            else {
+                continue;
+            };
+            if id == current {
+                continue;
+            }
+            let over = match self.store.read().jobs().get(id).await {
+                Ok(job) => {
+                    job.is_none_or(|j| matches!(j.status, JobStatus::Done | JobStatus::Dead))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, %id, "reading an import job failed; its folder stays");
+                    false
+                }
+            };
+            if over && let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                tracing::warn!(error = %e, dir = %entry.path().display(), "removing a leftover import job folder failed");
+            }
+        }
+    }
+
+    /// Copies artifact `hash` to `to`, streaming; `false` when it is missing.
+    async fn fetch(&self, hash: &str, to: &Path) -> Result<bool, JobError> {
         let hash = ArtifactHash::parse(hash)
             .map_err(|_| JobError::Permanent(format!("invalid artifact hash {hash:?}")))?;
         let mut stream = match self.media.open_read(&hash, None).await {
             Ok(read) => read.stream,
-            Err(MediaError::NotFound) => {
-                return Err(JobError::Permanent(format!(
-                    "the import artifact {hash} is missing"
-                )));
-            }
+            Err(MediaError::NotFound) => return Ok(false),
             Err(e) => return Err(JobError::Retry(format!("reading artifact {hash}: {e}"))),
         };
         let write_err = |e: std::io::Error| JobError::Retry(format!("{}: {e}", to.display()));
@@ -203,7 +270,8 @@ impl ImportWordpressHandler {
                 chunk.map_err(|e| JobError::Retry(format!("reading artifact {hash}: {e}")))?;
             file.write_all(&chunk).await.map_err(write_err)?;
         }
-        file.flush().await.map_err(write_err)
+        file.flush().await.map_err(write_err)?;
+        Ok(true)
     }
 
     /// Stores `report` as the run's report artifacts; a failure is logged (the import
@@ -220,7 +288,9 @@ impl ImportWordpressHandler {
         }
     }
 
-    /// Deletes the payload's input artifacts (row and blob); never one of another kind.
+    /// Deletes the payload's input artifacts, the blob first (a failure then leaves a row
+    /// naming nothing, which readers take as missing, never an unlisted blob); never one
+    /// of another kind.
     async fn delete_inputs(&self, payload: &ImportJobPayload) {
         for hash in std::iter::once(&payload.wxr).chain(&payload.uploads) {
             let Ok(hash) = ArtifactHash::parse(hash) else {
@@ -239,12 +309,12 @@ impl ImportWordpressHandler {
                     continue;
                 }
             }
-            if let Err(e) = artifacts.delete(&hash).await {
-                tracing::warn!(error = %e, %hash, "deleting an import input's row failed");
-                continue;
-            }
             if let Err(e) = self.media.delete(&hash).await {
                 tracing::warn!(error = %e, %hash, "deleting an import input's file failed");
+                continue;
+            }
+            if let Err(e) = artifacts.delete(&hash).await {
+                tracing::warn!(error = %e, %hash, "deleting an import input's row failed");
             }
         }
     }

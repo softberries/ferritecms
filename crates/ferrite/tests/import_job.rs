@@ -12,15 +12,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use ferrite::jobs::ImportWordpressHandler;
 use ferrite::serve::RunnerOverrides;
 use ferrite::{NodeOptions, RunningNode, start};
+use ferrite_cluster::{JobError, JobHandler};
 use ferrite_config::Config;
 use ferrite_core::import::{ImportService, ReportFormat};
 use ferrite_core::jobs::{ImportJobOptions, ImportJobRequest};
 use ferrite_core::{Actor, PermalinkRules};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentQuery, ImportRun, ImportRunId, ImportRunState,
-    Job, JobId, JobStatus, MEDIA_KIND, NewUser, Role, Timestamp, UserId, UserStatus,
+    Job, JobId, JobStatus, MEDIA_KIND, NewJob, NewUser, NodeId, Role, Timestamp, UserId,
+    UserStatus,
 };
 use ferrite_http::import_blobs::MediaArtifacts;
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
@@ -209,6 +212,16 @@ impl Site {
 
     /// Inserts a `running` run, its heartbeat `age` old, started by `job`.
     async fn running_run(&self, age: Duration, job: Option<JobId>) -> ImportRunId {
+        self.run_in(ImportRunState::Running, age, job).await
+    }
+
+    /// Inserts a run in `state`, its heartbeat `age` old, started by `job`.
+    async fn run_in(
+        &self,
+        state: ImportRunState,
+        age: Duration,
+        job: Option<JobId>,
+    ) -> ImportRunId {
         let age = i64::try_from(age.as_micros()).unwrap();
         let at = Timestamp::from_micros(Timestamp::now().as_micros() - age).unwrap();
         let id = ImportRunId::new();
@@ -219,11 +232,11 @@ impl Site {
                 id,
                 source: "http://elsewhere.test".into(),
                 token: [7; 16],
-                state: ImportRunState::Running,
+                state,
                 started_by: self.admin,
                 started_at: at,
                 heartbeat_at: at,
-                finished_at: None,
+                finished_at: (state != ImportRunState::Running).then_some(at),
                 stats: serde_json::json!({}),
                 dry_run: false,
                 job_id: job,
@@ -233,6 +246,46 @@ impl Site {
             .await
             .unwrap();
         id
+    }
+
+    /// A job of another kind, `running` with a fresh lease (`dead` when `dead`).
+    async fn other_job(&self, dead: bool) -> JobId {
+        let store = self.store();
+        let jobs = store.read().jobs();
+        let id = jobs
+            .enqueue(&NewJob::new("test.other", serde_json::json!({})))
+            .await
+            .unwrap()
+            .unwrap();
+        let claimed = jobs
+            .claim(
+                NodeId::new(),
+                &["test.other".to_owned()],
+                1,
+                Duration::from_secs(600),
+            )
+            .await
+            .unwrap();
+        if dead {
+            jobs.fail(&claimed[0].lease().unwrap(), "gone", true)
+                .await
+                .unwrap();
+        }
+        id
+    }
+
+    /// The job handler of a node on `folder`, called directly (no runner).
+    fn handler(&self, folder: &Folder, fail_after_batches: Option<u32>) -> ImportWordpressHandler {
+        ImportWordpressHandler {
+            store: self.store(),
+            import: Arc::new(self.import()),
+            media: self.media(),
+            data_dir: folder.dir.path().to_owned(),
+            site_url: SITE_URL.into(),
+            max_upload: 256 << 20,
+            version: "0.0.0-test".into(),
+            fail_after_batches,
+        }
     }
 
     async fn run(&self, id: ImportRunId) -> ImportRun {
@@ -350,8 +403,8 @@ async fn job_imports_site_a(db: Arc<TestDb>) {
     node.shutdown().await.unwrap();
 }
 
-/// A stale run of this job is taken over; a stale run of another job is not: the job is
-/// `Busy` (its attempt refunded) and that run stays.
+/// A stale run of this job is taken over; a stale run of another job that is still
+/// `running` is not: the job is `Busy` (its attempt refunded) and that run stays.
 async fn job_retry_takes_over_only_its_own_run(db: Arc<TestDb>) {
     let site = Site::new(db).await;
     let (wxr, uploads) = site.site_a().await;
@@ -366,14 +419,93 @@ async fn job_retry_takes_over_only_its_own_run(db: Arc<TestDb>) {
 
     let (wxr, uploads) = site.site_a().await;
     let id = site.enqueue(&wxr, Some(&uploads)).await;
-    let other = site
-        .running_run(Duration::from_secs(600), Some(JobId::new()))
-        .await;
+    let live = site.other_job(false).await;
+    let other = site.running_run(Duration::from_secs(600), Some(live)).await;
     let node = site.start(&folder, opts(None)).await;
     let job = site.wait_job(id, "released busy", busy_released).await;
     assert_eq!(job.attempts, 0, "{job:?}");
     assert_eq!(site.run(other).await.state, ImportRunState::Running);
     node.shutdown().await.unwrap();
+}
+
+/// A stale run of a crashed CLI import (no job), and one of a job that is `dead`, are
+/// taken over by the job (P27 as built).
+async fn job_takes_over_stale_runs_without_a_live_job(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let folder = site.folder();
+    let dead = site.other_job(true).await;
+    for owner in [None, Some(dead)] {
+        let (wxr, uploads) = site.site_a().await;
+        let id = site.enqueue(&wxr, Some(&uploads)).await;
+        let stale = site.running_run(Duration::from_secs(600), owner).await;
+        let node = site.start(&folder, opts(None)).await;
+        let job = site.wait_job(id, "ended", terminal).await;
+        assert_eq!(job.status, JobStatus::Done, "{owner:?}: {job:?}");
+        assert_eq!(site.run(stale).await.state, ImportRunState::Abandoned);
+        node.shutdown().await.unwrap();
+    }
+}
+
+/// A busy attempt fetches nothing: not even the import folder is made.
+async fn busy_attempt_fetches_nothing(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    site.running_run(Duration::ZERO, None).await;
+    let folder = site.folder();
+    let err = site
+        .handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Busy(_)), "{err:?}");
+    assert!(!folder.dir.path().join("import").exists());
+    assert_eq!(site.artifact_exists(&uploads).await, (true, true));
+}
+
+/// A `Retry` is final on the last attempt: the inputs go then too (P23), not before.
+/// Leftover job folders of jobs that are over are removed; a running job's stays.
+async fn last_attempt_retry_deletes_inputs(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    let folder = site.folder();
+    let import = folder.dir.path().join("import");
+    let gone = import.join(format!("job-{}", JobId::new()));
+    let kept = import.join(format!("job-{}", site.other_job(false).await));
+    for dir in [&gone, &kept] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let handler = site.handler(&folder, Some(3));
+    let mut job = site.job(id).await;
+    job.attempts = 1;
+    let err = handler.run(&job).await.unwrap_err();
+    assert!(matches!(err, JobError::Retry(_)), "{err:?}");
+    assert_eq!(site.artifact_exists(&wxr).await, (true, true));
+    assert!(!gone.exists());
+    assert!(kept.exists());
+    job.attempts = job.max_attempts;
+    let err = handler.run(&job).await.unwrap_err();
+    assert!(matches!(err, JobError::Retry(_)), "{err:?}");
+    for hash in [&wxr, &uploads] {
+        assert_eq!(site.artifact_exists(hash).await, (false, false), "{hash}");
+    }
+}
+
+/// An attempt that finds its input gone after its run was `done` (a drop between the
+/// run's end and the job's) ends `done`, not `dead`.
+async fn missing_input_of_a_done_run_is_done(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    site.run_in(ImportRunState::Done, Duration::ZERO, Some(id))
+        .await;
+    site.media().delete(&wxr).await.unwrap();
+    let folder = site.folder();
+    site.handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap();
 }
 
 /// Another run with a fresh heartbeat: `Busy`, the attempt refunded, nothing deleted.
@@ -499,6 +631,10 @@ backend_tests_spawning!(
     job_imports_site_a,
     job_retry_takes_over_only_its_own_run,
     job_busy_when_another_run_is_live,
+    job_takes_over_stale_runs_without_a_live_job,
+    busy_attempt_fetches_nothing,
+    last_attempt_retry_deletes_inputs,
+    missing_input_of_a_done_run_is_done,
     job_dead_when_user_demoted,
     job_dead_when_artifact_missing,
     job_retry_on_fresh_node_reparses,
