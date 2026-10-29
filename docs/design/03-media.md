@@ -124,7 +124,7 @@ until a multipart-copy path exists. Other S3-compatible providers have their own
   fails, staging objects or orphan S3 parts remain. Cancellation during the final
   `writer.finish()` call can also orphan S3 parts, since the writer has already been taken from
   the guard. The backstop is an S3 lifecycle rule (abort incomplete multipart uploads, expire
-  `tmp/`), which is an M4 ops recommendation.
+  `tmp/`); the rules are in [09 §4a](09-operations.md#4a-s3-media-buckets).
 
 ### Range semantics
 
@@ -221,15 +221,15 @@ Further types (a `media.extra_types` setting) are a later item (P29).
 ### S3 backend
 
 Config (`S3Config`): `bucket`, `region`, `endpoint`, `access_key_id`/`secret_access_key`
-(or env credentials), `allow_http` (MinIO dev), `virtual_hosted_style`; `prefix` and the
+(or env credentials), `allow_http` (local S3 servers), `virtual_hosted_style`; `prefix` and the
 public URL mode are on `MediaConfig`. Config-file wiring (including `*_file` secrets) belongs
 to the core config layer ([01](01-architecture.md#4-configuration)).
 
 Provider notes to document (each verified when writing the ops docs, not assumed):
 R2 path-style URLs, B2 region naming, Hetzner/Scaleway endpoints.
 
-Recommended bucket lifecycle rules (to be written up in M4 ops docs): abort incomplete multipart
-uploads after 1 day, expire `tmp/` after 1 day.
+Recommended bucket lifecycle rules, provider endpoints and the `copy_if_not_exists` values per
+provider: [09 §4a](09-operations.md#4a-s3-media-buckets).
 
 ## 4. Images and variants
 
@@ -350,6 +350,8 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   also emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
 
 ## 5. Serving
+
+For S3 buckets (lifecycle rules, endpoints, provider notes) see [09 §4a](09-operations.md#4a-s3-media-buckets).
 
 **App-served** (`/_media/<hash>/<name>`), as built in `crates/ferrite-http/src/app/media.rs`:
 

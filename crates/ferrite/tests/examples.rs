@@ -111,7 +111,7 @@ fn cluster_example_config_is_valid() {
         } => {
             assert_eq!(bucket, "ferrite");
             assert_eq!(region, "us-east-1");
-            assert_eq!(endpoint.as_deref(), Some("http://minio:9000"));
+            assert_eq!(endpoint.as_deref(), Some("http://rustfs:9000"));
             assert!(allow_http);
             assert!(access_key_id.is_some() && secret_access_key.is_some());
         }

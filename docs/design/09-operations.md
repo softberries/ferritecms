@@ -127,6 +127,106 @@ but stored TOTP secrets cannot be opened (those users need `ferrite user disable
 new enrollment). Until `ferrite backup` exists (M4), copying the data folder by hand
 includes `secret.key`.
 
+## 4a. S3 media buckets
+
+Applies to `[media] backend = "s3"` (see [03 §3](03-media.md#s3-backend)). Checked on
+2026-10-29; every provider statement below is backed by the table at the end of this
+section. What is not in that table as "yes" is not stated as fact here.
+
+### Lifecycle rules
+
+Ferrite stages large uploads under `<prefix>tmp/<uuid>` as S3 multipart uploads and cleans up
+after itself on errors and cancellation, best effort ([03 §3](03-media.md#staging-cleanup)).
+A crash can still leave an incomplete multipart upload or a `tmp/` object. Add two bucket
+lifecycle rules as the backstop:
+
+1. abort incomplete multipart uploads after 1 day (the whole bucket);
+2. expire objects under `<prefix>tmp/` after 1 day. With no `[media] prefix`, that is `tmp/`.
+
+AWS S3 JSON for `aws s3api put-bucket-lifecycle-configuration --bucket BUCKET
+--lifecycle-configuration file://lifecycle.json` (with `prefix = "site1/"` use `site1/tmp/`):
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "ferrite-abort-incomplete-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    },
+    {
+      "ID": "ferrite-expire-tmp",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "tmp/" },
+      "Expiration": { "Days": 1 }
+    }
+  ]
+}
+```
+
+Never put a lifecycle expiry on `artifacts/`: those are the site's media, plugins and themes.
+Other providers have their own lifecycle features and syntax; none is described here because
+none was checked (see the table).
+
+### `copy_if_not_exists` and `conditional_put` per provider
+
+Ferrite publishes an upload with a conditional put (`If-None-Match: *`) and a server-side
+copy. `copy_if_not_exists` tells the client how the store makes that copy fail when the
+destination exists; without it the client falls back to a `head` then `copy`, which is not
+atomic but is safe here because keys are content hashes
+([03 §3](03-media.md#write-paths-and-the-8-mib-threshold)). The value uses `object_store`'s
+encoding: `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or
+`multipart`. `ferrite config check` cannot tell whether a value is right for your store:
+after changing it, upload a file and look at the logs.
+
+| Provider | `copy_if_not_exists` | `conditional_put` |
+|---|---|---|
+| AWS S3 | `multipart` (the mode `object_store` documents for S3; it does not copy tags or attributes) | `etag` (default) |
+| Cloudflare R2 | `header:cf-copy-destination-if-none-match:*` (the example in `object_store`'s docs) | `etag`: R2 documents `If-None-Match` on PutObject |
+| RustFS (cluster example) | leave unset (fallback) | `etag`: tested, a second `If-None-Match: *` put gets `412 PreconditionFailed` |
+| Backblaze B2, Hetzner, Scaleway | leave unset (fallback) | not verified: if uploads fail with a precondition error, set `conditional_put = "disabled"` |
+
+AWS also documents `If-None-Match` on CopyObject; `header:If-None-Match:*` is therefore a
+candidate for AWS S3, but it has not been run against Ferrite, so the table above keeps
+`multipart`.
+
+### Endpoints and addressing
+
+- **Cloudflare R2:** endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, region
+  `auto` (an empty region or `us-east-1` is an alias for it). Cloudflare's docs do not say which
+  addressing styles work, so keep `virtual_hosted_style` off (the bucket goes in the path).
+- **Backblaze B2:** endpoint `https://s3.<region>.backblazeb2.com`, HTTPS only, no bucket in
+  the host. Region names look like `us-east-005`: use the segment of your bucket's own
+  endpoint as `region`. Both path and virtual-hosted style are supported.
+- **Hetzner Object Storage:** endpoint `https://<location>.your-objectstorage.com`, where
+  `<location>` is the bucket's location (`fsn1` and `nbg1` are shown in Hetzner's guides), and the same
+  location code is the `region`. Hetzner's guides use virtual-hosted style, so set
+  `virtual_hosted_style = true` and give the endpoint without the bucket.
+- **Scaleway:** not verified; see the table. Check the endpoint for your region in
+  Scaleway's console before use.
+
+### Claims and their sources
+
+| Claim | Source | Verified (yes/no, date) |
+|---|---|---|
+| `AbortIncompleteMultipartUpload` is a lifecycle action, set in days; `Expiration` applies per prefix `Filter` | AWS S3 user guide, lifecycle configuration elements | yes, 2026-10-29 |
+| The JSON field names `DaysAfterInitiation` and `Filter.Prefix` in the example above | AWS S3 API reference for lifecycle (not fetched; the user guide above names the actions only) | no |
+| Expiry of `tmp/` is the only safe expiry (`artifacts/` holds referenced media) | Ferrite's own key layout, 03 §3 | yes (code and design, 2026-10-29) |
+| AWS S3 supports `If-None-Match` on PutObject, CopyObject and CompleteMultipartUpload; losers get 412 | docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html | yes, 2026-10-29 |
+| `object_store` encodes S3 copy-if-not-exists as `header:`, `header-with-status:` or `multipart`; `multipart` is the native S3 mode and does not copy attributes | docs.rs/object_store/0.14.2 `S3CopyIfNotExists` | yes, 2026-10-29 |
+| R2 copy-if-not-exists works with header `cf-copy-destination-if-none-match: *` | docs.rs `S3CopyIfNotExists` (R2 example). Cloudflare's own S3 compatibility page does not list the header; its release notes only say CopyObject accepts Cloudflare headers conditional on the destination | no (header name not found in Cloudflare docs) |
+| R2 supports `If-None-Match` on PutObject, atomically (one of concurrent writers wins, others get 412) | developers.cloudflare.com/r2/api/s3/api/ | yes, 2026-10-29 |
+| R2 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; region `auto` (`us-east-1` and empty are aliases) | developers.cloudflare.com/r2/api/s3/api/ | yes, 2026-10-29 |
+| R2 needs path-style addressing | only third-party guides (Botble, RcloneView) found; not on Cloudflare's pages | no |
+| B2 endpoint is `https://s3.<region>.backblazeb2.com`, HTTPS only | backblaze.com/docs/cloud-storage-call-the-s3-compatible-api | yes, 2026-10-29 |
+| B2 supports path-style and virtual-hosted style; `us-east-005` is a region name | same page | yes, 2026-10-29 |
+| B2 region naming rule (the region is the segment in the bucket's endpoint) and B2 conditional put or copy behaviour | not found on the pages read | no |
+| Hetzner endpoint is `https://<location>.your-objectstorage.com`; region is the location code (`fsn1`, `nbg1` shown); guides use virtual-hosted style | docs.hetzner.com/storage/object-storage/getting-started/using-s3-api-tools | yes, 2026-10-29 |
+| Hetzner conditional put or copy support, and the `hel1` endpoint | Hetzner's list of supported actions was not read; `hel1` only from third-party pages | no |
+| Scaleway endpoints `s3.<region>.scw.cloud` for `fr-par`, `nl-ams`, `pl-waw` | seen in search results quoting Scaleway's docs; the pages returned 403 when fetched | no |
+| RustFS 1.0.4 accepts a first `If-None-Match: *` PutObject and rejects the second with `PreconditionFailed` | run against the cluster example, 2026-10-29 | yes, 2026-10-29 |
+
 ## 5. TLS
 
 - Default: run behind a reverse proxy (Caddy/nginx/Traefik/LB). As built (M1c-2, ruling
@@ -217,26 +317,29 @@ of truth for real monitoring.)
   ```
 
   Services: `postgres` (`postgres:18`, `pg_isready` health check, data volume at
-  `/var/lib/postgresql`), `minio` (`minio/minio`, `server /data`), `minio-init`
-  (`minio/mc`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
+  `/var/lib/postgresql`), `rustfs` (`rustfs/rustfs:1.0.4`, an Apache-2.0 S3-compatible
+  server, `/data`), `bucket-init` (`amazon/aws-cli`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
   repository, `serve --data /data`, `env_file: ferrite.env`, `ferrite.toml` mounted
   read-only at `/data/ferrite.toml`, `FERRITE_CLUSTER__NODE_NAME` per node, health check
   `/ferrite healthcheck --url http://127.0.0.1:8080/readyz`, start after Postgres is
-  healthy and `minio-init` completed, `stop_grace_period: 20s`) and `caddy` (`caddy:2`,
+  healthy and `bucket-init` completed, `stop_grace_period: 20s`) and `caddy` (`caddy:2`,
   port `8080:8080`, `reverse_proxy node1:8080 node2:8080` with `lb_policy round_robin`
   and `health_uri /readyz`). The shared `ferrite.toml` sets `site.url =
   "http://localhost:8080"`, `server.listen = "0.0.0.0:8080"`, `server.trusted_proxies =
   ["172.28.0.0/16"]` (the compose network's subnet, so Caddy's `X-Forwarded-For` is
-  honoured), `cluster.mode = "cluster"` and S3 media on MinIO (`bucket = "ferrite"`,
-  `region = "us-east-1"`, `endpoint = "http://minio:9000"`, `allow_http = true`).
+  honoured), `cluster.mode = "cluster"` and S3 media on RustFS (`bucket = "ferrite"`,
+  `region = "us-east-1"`, `endpoint = "http://rustfs:9000"`, `allow_http = true`).
   `ferrite.env` holds `FERRITE_DATABASE__URL` and the S3 key pair: **demo values**,
-  shared with the `postgres` and `minio` service definitions; replace them together.
+  shared with the `postgres` and `rustfs` service definitions; replace them together.
   **Verification status (P24):** `crates/ferrite/tests/examples.rs` loads the example's
   `ferrite.toml` + `ferrite.env` through `ferrite_config::load` and `ferrite config check`,
   and checks that every `FERRITE_*` name in the compose file is a known setting; CI runs
-  `docker compose … config --quiet`, `caddy validate` on the Caddyfile and `docker build`. `docker compose up` is not run
-  anywhere yet, so problems in the runtime wiring (Caddy health checks, the MinIO bucket
-  init) would only show when someone runs it.
+  `docker compose … config --quiet`, `caddy validate` on the Caddyfile and `docker build`. `docker compose up` is not run in CI. It was run by
+  hand on 2026-10-29 (M4-1): both nodes healthy, an upload through node1 read back
+  byte for byte through node2, the object in the `ferrite` bucket on RustFS. Every image is
+  pinned as `name:tag@sha256:<index digest>`; the digests stay valid until the registry
+  deletes them, and need a manual bump to follow new releases. MinIO's `minio/minio` and
+  `minio/mc` images could not be pulled any more, so RustFS (release 1.0.4 of 2026-10-25) replaced them.
 
 ## 8. CLI summary
 
