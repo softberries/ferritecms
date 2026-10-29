@@ -133,28 +133,32 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
         };
         match import(ctx, &args.file, opts).await {
             Ok(report) => finish(&args, &report),
-            Err(RunFailed {
-                error: ImportError::Core(CoreError::Unavailable(why)),
-                ..
-            }) => {
-                eprintln!("error: {why}");
-                Ok(ExitCode::from(BUSY))
-            }
-            Err(RunFailed { error, report }) => {
-                if let Some(report) = report {
-                    let dir = report_dir(&args, &report);
-                    match write_reports(&dir, &report) {
-                        Ok(()) => print_report_paths(&dir),
-                        Err(e) => eprintln!("error: {e:#}"),
-                    }
-                }
-                Err(anyhow::Error::new(error).context("the import failed"))
-            }
+            Err(e) => failed(&args, e),
         }
     }
     .await;
     store.close().await;
     done
+}
+
+/// A failed run: writes its report when it has one (P29), then exit 3 when another
+/// import holds the site, else the error (exit 1).
+fn failed(args: &WordpressArgs, failed: RunFailed) -> anyhow::Result<ExitCode> {
+    let RunFailed { error, report } = failed;
+    if let Some(report) = report {
+        let dir = report_dir(args, &report);
+        match write_reports(&dir, &report) {
+            Ok(()) => print_report_paths(&dir),
+            Err(e) => eprintln!("error: {e:#}"),
+        }
+    }
+    match error {
+        ImportError::Core(CoreError::Unavailable(why)) => {
+            eprintln!("error: {why}");
+            Ok(ExitCode::from(BUSY))
+        }
+        error => Err(anyhow::Error::new(error).context("the import failed")),
+    }
 }
 
 /// The admin `login` names, or the first active admin.
@@ -312,4 +316,75 @@ fn write_reports(dir: &Path, report: &Report) -> anyhow::Result<()> {
         std::fs::write(&path, body).with_context(|| format!("cannot write {}", path.display()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn args_for(data: &Path) -> WordpressArgs {
+        WordpressArgs {
+            file: data.join("x.xml"),
+            data: data.to_owned(),
+            uploads: None,
+            fetch_media: false,
+            dry_run: false,
+            report: None,
+            no_keep_permalinks: false,
+            no_site_options: false,
+            category_base: "category".into(),
+            tag_base: "tag".into(),
+            as_login: None,
+            takeover: false,
+            #[cfg(feature = "test-seams")]
+            allow_private_fetch: false,
+        }
+    }
+
+    /// A run that turns busy after it started still writes its partial report, and
+    /// exits 3; one with no report (busy before it started) writes nothing.
+    #[test]
+    fn busy_run_writes_its_partial_report() {
+        let data = tempfile::tempdir().unwrap();
+        let args = args_for(data.path());
+        let mut report = Report::default();
+        report.run_id = "run-1".into();
+        let busy = || ImportError::Core(CoreError::Unavailable("another import is running"));
+        let code = failed(
+            &args,
+            RunFailed {
+                error: busy(),
+                report: Some(Box::new(report)),
+            },
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::from(BUSY));
+        let dir = data.path().join("import/reports/run-1");
+        assert!(dir.join("report.json").is_file());
+        assert!(dir.join("report.html").is_file());
+
+        let other = tempfile::tempdir().unwrap();
+        let code = failed(
+            &args_for(other.path()),
+            RunFailed {
+                error: busy(),
+                report: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::from(BUSY));
+        assert!(!other.path().join("import").exists());
+
+        let err = failed(
+            &args,
+            RunFailed {
+                error: ImportError::Stopped,
+                report: None,
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("the import failed"), "{err:#}");
+    }
 }

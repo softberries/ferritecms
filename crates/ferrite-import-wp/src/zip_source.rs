@@ -1,11 +1,15 @@
 //! [`ZipSource`]: attachment files read from a zip of the uploads, in place (P24).
 //!
 //! The central directory is read once, at [`ZipSource::open`]; each entry is matched by
-//! its path below the first `uploads/` segment, or else by its full path. An entry is
-//! read on a blocking thread, streamed out in chunks, and never extracted to disk.
+//! its path below the first `uploads/` segment, or else by its full path. Both an entry's
+//! name and the path looked up are compared in Unicode NFC, so an archive made on macOS
+//! (NFD names) matches the paths WordPress stored. An entry is read on a blocking thread,
+//! streamed out in chunks, and never extracted to disk.
 //!
-//! Limits: an archive with more than [`MAX_ENTRIES`] entries or more than
-//! [`MAX_DECLARED`] bytes of declared uncompressed size is refused. Entries whose name is
+//! Limits: before the central directory is parsed, the archive's end records (zip64 ones
+//! too) are read, and an archive declaring more than [`MAX_ENTRIES`] entries or a central
+//! directory over [`MAX_DIRECTORY`] bytes is refused; one whose entries declare more than
+//! [`MAX_DECLARED`] uncompressed bytes in all is refused after it. Entries whose name is
 //! absolute or has a `..` segment, encrypted entries and entries packed with anything but
 //! stored or deflate are left out (an attachment naming one is missing). An entry that
 //! declares more than `max_upload` is refused for its size; one that inflates past its
@@ -13,22 +17,34 @@
 //! on.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use ferrite_media::MediaError;
+use unicode_normalization::UnicodeNormalization;
 use zip::{CompressionMethod, ZipArchive, ZipReadOptions};
 
 use crate::ImportError;
 use crate::run::{ByteStream, MediaSource};
 
 /// The most entries an archive may hold.
-pub const MAX_ENTRIES: usize = 500_000;
+pub const MAX_ENTRIES: u64 = 500_000;
 /// The most declared uncompressed bytes an archive may hold in all (64 GiB).
 pub const MAX_DECLARED: u64 = 64 << 30;
+/// The largest central directory an archive may declare (64 MiB).
+pub const MAX_DIRECTORY: u64 = 64 << 20;
+/// The classic end of central directory record: its signature and fixed size.
+const EOCD: &[u8; 4] = b"PK\x05\x06";
+const EOCD_LEN: usize = 22;
+/// The zip64 end record locator, just before the classic record.
+const LOCATOR: &[u8; 4] = b"PK\x06\x07";
+const LOCATOR_LEN: usize = 20;
+/// The zip64 end record, up to its directory size field.
+const EOCD64: &[u8; 4] = b"PK\x06\x06";
+const EOCD64_LEN: usize = 48;
 /// Bytes per chunk of an entry's stream.
 const CHUNK: usize = 64 * 1024;
 /// Chunks in flight between the reading thread and the stream.
@@ -54,8 +70,9 @@ pub struct ZipSource {
 /// The archive limits; tests use small ones.
 #[derive(Debug, Clone, Copy)]
 struct Limits {
-    entries: usize,
+    entries: u64,
     declared: u64,
+    directory: u64,
 }
 
 impl ZipSource {
@@ -68,6 +85,7 @@ impl ZipSource {
             Limits {
                 entries: MAX_ENTRIES,
                 declared: MAX_DECLARED,
+                directory: MAX_DIRECTORY,
             },
         )
     }
@@ -77,18 +95,27 @@ impl ZipSource {
             path: path.to_owned(),
             msg,
         };
-        let file = std::fs::File::open(path).map_err(|source| ImportError::File {
+        let file_err = |source| ImportError::File {
             path: path.to_owned(),
             source,
-        })?;
-        let archive = ZipArchive::new(file).map_err(|e| refused(e.to_string()))?;
-        if archive.len() > limits.entries {
+        };
+        let mut file = std::fs::File::open(path).map_err(file_err)?;
+        let end = end_records(&mut file)
+            .map_err(file_err)?
+            .ok_or_else(|| refused("it has no end of central directory record".into()))?;
+        if end.entries > limits.entries {
             return Err(refused(format!(
-                "it has {} entries, more than the {} accepted",
-                archive.len(),
-                limits.entries
+                "it declares {} entries, more than the {} accepted",
+                end.entries, limits.entries
             )));
         }
+        if end.directory > limits.directory {
+            return Err(refused(format!(
+                "its central directory declares {} bytes, more than the {} accepted",
+                end.directory, limits.directory
+            )));
+        }
+        let archive = ZipArchive::new(file).map_err(|e| refused(e.to_string()))?;
         let mut entries = HashMap::new();
         let mut declared: u64 = 0;
         for index in 0..archive.len() {
@@ -134,25 +161,94 @@ impl ZipSource {
     }
 }
 
-/// The key an entry is found by: its name below the first `uploads` segment, or the
-/// whole name; `None` for a name that is absolute or has a `..`, `.` or empty segment.
-fn entry_key(name: &str) -> Option<String> {
-    let name = name.replace('\\', "/");
+/// What an archive's end records declare.
+#[derive(Debug, PartialEq, Eq)]
+struct EndRecords {
+    entries: u64,
+    /// The central directory's size in bytes.
+    directory: u64,
+}
+
+/// Reads the end records from the tail of `file`: the classic one (searched back over a
+/// comment of up to 64 KiB), and the zip64 one its locator points to when there is one.
+/// `None` when there is no classic record.
+fn end_records(file: &mut std::fs::File) -> std::io::Result<Option<EndRecords>> {
+    let len = file.seek(SeekFrom::End(0))?;
+    let tail_len = len.min((LOCATOR_LEN + EOCD_LEN + usize::from(u16::MAX)) as u64);
+    file.seek(SeekFrom::Start(len - tail_len))?;
+    let mut tail = vec![0u8; usize::try_from(tail_len).unwrap_or(0)];
+    file.read_exact(&mut tail)?;
+    let u16_at = |b: &[u8], at: usize| u64::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let u32_at = |b: &[u8], at: usize| {
+        u64::from(u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]))
+    };
+    let u64_at = |b: &[u8], at: usize| {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&b[at..at + 8]);
+        u64::from_le_bytes(bytes)
+    };
+    // The last record whose comment ends the file.
+    let Some(at) = (0..=tail.len().saturating_sub(EOCD_LEN)).rev().find(|&i| {
+        tail.len() >= EOCD_LEN
+            && &tail[i..i + 4] == EOCD
+            && i as u64 + EOCD_LEN as u64 + u16_at(&tail, i + 20) == tail.len() as u64
+    }) else {
+        return Ok(None);
+    };
+    let mut end = EndRecords {
+        entries: u16_at(&tail, at + 10),
+        directory: u32_at(&tail, at + 12),
+    };
+    if at >= LOCATOR_LEN && &tail[at - LOCATOR_LEN..at - LOCATOR_LEN + 4] == LOCATOR {
+        let offset = u64_at(&tail, at - LOCATOR_LEN + 8);
+        if offset.saturating_add(EOCD64_LEN as u64) <= len {
+            let mut record = [0u8; EOCD64_LEN];
+            file.seek(SeekFrom::Start(offset))?;
+            file.read_exact(&mut record)?;
+            if &record[..4] == EOCD64 {
+                end = EndRecords {
+                    entries: u64_at(&record, 32),
+                    directory: u64_at(&record, 40),
+                };
+            }
+        }
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(Some(end))
+}
+
+/// The NFC segments of `name` (`\\` read as `/`); `None` for a name that is absolute or
+/// has a `..`, `.` or empty segment.
+fn segments(name: &str) -> Option<Vec<String>> {
+    let name: String = name.replace('\\', "/").nfc().collect();
     if name.starts_with('/') || name.contains(':') {
         return None;
     }
-    let segments: Vec<&str> = name.split('/').collect();
+    let segments: Vec<String> = name.split('/').map(str::to_owned).collect();
     if segments
         .iter()
-        .any(|s| s.is_empty() || *s == "." || *s == "..")
+        .any(|s| s.is_empty() || s == "." || s == "..")
     {
         return None;
     }
-    let below = match segments.iter().position(|s| *s == "uploads") {
+    Some(segments)
+}
+
+/// The key an entry is found by: its name below the first `uploads` segment, or the
+/// whole name (see [`segments`]).
+fn entry_key(name: &str) -> Option<String> {
+    let segments = segments(name)?;
+    let below = match segments.iter().position(|s| s == "uploads") {
         Some(i) if i + 1 < segments.len() => &segments[i + 1..],
         _ => &segments[..],
     };
     Some(below.join("/"))
+}
+
+/// The key a looked-up path (relative to the uploads) is found by: the path itself,
+/// normalised as [`segments`] does.
+fn lookup_key(rel_path: &str) -> Option<String> {
+    segments(rel_path).map(|s| s.join("/"))
 }
 
 #[async_trait]
@@ -166,7 +262,7 @@ impl MediaSource for ZipSource {
         _url: &str,
         max: u64,
     ) -> Result<Option<ByteStream>, ImportError> {
-        let Some(entry) = entry_key(rel_path).and_then(|key| self.entries.get(&key).copied())
+        let Some(entry) = lookup_key(rel_path).and_then(|key| self.entries.get(&key).copied())
         else {
             return Ok(None);
         };
@@ -402,7 +498,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("u.zip");
         write_zip(&archive, &[("a", b"1"), ("b", b"2"), ("c", b"3")]);
-        let limits = |entries, declared| Limits { entries, declared };
+        let limits = |entries, declared| Limits {
+            entries,
+            declared,
+            directory: MAX_DIRECTORY,
+        };
         assert!(ZipSource::open_with(&archive, limits(3, 3)).is_ok());
         let err = ZipSource::open_with(&archive, limits(2, 3)).unwrap_err();
         assert!(err.to_string().contains("3 entries"), "{err}");
@@ -411,7 +511,95 @@ mod tests {
             err.to_string().contains("declare more than 2 bytes"),
             "{err}"
         );
-        assert_eq!((MAX_ENTRIES, MAX_DECLARED), (500_000, 64 << 30));
+        assert_eq!(
+            (MAX_ENTRIES, MAX_DECLARED, MAX_DIRECTORY),
+            (500_000, 64 << 30, 64 << 20)
+        );
+    }
+
+    /// An end record that declares too many entries, or too large a central directory,
+    /// is refused before the directory is read (here the archive has no directory at
+    /// all, so a parse would fail differently).
+    #[test]
+    fn zip_source_refuses_too_many_entries_before_parsing() {
+        let dir = tempfile::tempdir().unwrap();
+        // A zip64 end record declaring 600 000 entries, its locator, then the classic
+        // end record with every field saturated.
+        let mut zip64 = Vec::new();
+        zip64.extend_from_slice(b"PK\x06\x06");
+        zip64.extend_from_slice(&44u64.to_le_bytes()); // size of the rest
+        zip64.extend_from_slice(&[45, 0, 45, 0]); // versions
+        zip64.extend_from_slice(&[0; 8]); // disk numbers
+        zip64.extend_from_slice(&600_000u64.to_le_bytes()); // entries on this disk
+        zip64.extend_from_slice(&600_000u64.to_le_bytes()); // entries in all
+        zip64.extend_from_slice(&1000u64.to_le_bytes()); // directory size
+        zip64.extend_from_slice(&0u64.to_le_bytes()); // directory offset
+        zip64.extend_from_slice(b"PK\x06\x07");
+        zip64.extend_from_slice(&0u32.to_le_bytes());
+        zip64.extend_from_slice(&0u64.to_le_bytes()); // the zip64 end record's offset
+        zip64.extend_from_slice(&1u32.to_le_bytes());
+        zip64.extend_from_slice(b"PK\x05\x06");
+        zip64.extend_from_slice(&[0; 4]);
+        zip64.extend_from_slice(&[0xff; 4]); // entries (see zip64)
+        zip64.extend_from_slice(&[0xff; 8]); // size, offset (see zip64)
+        zip64.extend_from_slice(&[0; 2]); // no comment
+        let many = dir.path().join("many.zip");
+        std::fs::write(&many, &zip64).unwrap();
+        let err = ZipSource::open(&many).unwrap_err();
+        assert!(matches!(err, ImportError::Archive { .. }), "{err:?}");
+        assert!(err.to_string().contains("600000 entries"), "{err}");
+
+        // A classic end record declaring a 70 MiB directory (with a comment).
+        let mut end = Vec::new();
+        end.extend_from_slice(b"PK\x05\x06");
+        end.extend_from_slice(&[0; 4]);
+        end.extend_from_slice(&3u16.to_le_bytes());
+        end.extend_from_slice(&3u16.to_le_bytes());
+        end.extend_from_slice(&(70u32 << 20).to_le_bytes());
+        end.extend_from_slice(&0u32.to_le_bytes());
+        end.extend_from_slice(&5u16.to_le_bytes());
+        end.extend_from_slice(b"hello");
+        let big = dir.path().join("big.zip");
+        std::fs::write(&big, &end).unwrap();
+        let err = ZipSource::open(&big).unwrap_err();
+        assert!(err.to_string().contains("central directory"), "{err}");
+        // No end record at all: not a zip.
+        let none = dir.path().join("none.zip");
+        std::fs::write(&none, vec![0u8; 100]).unwrap();
+        assert!(matches!(
+            ZipSource::open(&none).unwrap_err(),
+            ImportError::Archive { .. }
+        ));
+    }
+
+    /// The looked-up path is only normalised: an `uploads` segment below the uploads
+    /// root is part of it. Names match whatever their Unicode normal form.
+    #[tokio::test]
+    async fn lookups_keep_their_segments_and_match_any_normal_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("u.zip");
+        write_zip(
+            &archive,
+            &[
+                ("wp-content/uploads/2024/uploads/a.png", b"nested"),
+                ("uploads/cafe\u{301}.png", b"nfd"),
+                ("uploads/na\u{ef}ve.png", b"nfc"),
+            ],
+        );
+        let src = ZipSource::open(&archive).unwrap();
+        assert_eq!(
+            read(&src, "2024/uploads/a.png", 10).await.unwrap().unwrap(),
+            b"nested"
+        );
+        assert_eq!(read(&src, "a.png", 10).await.unwrap(), None);
+        assert_eq!(
+            read(&src, "caf\u{e9}.png", 10).await.unwrap().unwrap(),
+            b"nfd"
+        );
+        assert_eq!(
+            read(&src, "nai\u{308}ve.png", 10).await.unwrap().unwrap(),
+            b"nfc"
+        );
     }
 
     /// Only stored and deflate entries are read; another method leaves the entry out.

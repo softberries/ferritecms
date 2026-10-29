@@ -434,9 +434,15 @@ pub async fn run(ctx: ImportContext, wxr: &Path, opts: ImportOptions) -> Result<
             };
             match done {
                 Ok(()) => return Ok(report),
-                // The work is done but the run could not be closed (taken over).
+                // The work is done (its work file marked finished and removed) but the
+                // run could not be closed (taken over): a re-run starts over.
                 Err(error) => {
-                    crate::report::mark_failed(&mut report, REPORT, &error);
+                    crate::report::mark_failed(
+                        &mut report,
+                        REPORT,
+                        &error,
+                        crate::report::Rerun::StartsOver,
+                    );
                     return Err(RunFailed {
                         error,
                         report: Some(Box::new(report)),
@@ -600,19 +606,20 @@ fn stops_after(opts: &ImportOptions, name: &str) -> bool {
     }
 }
 
-/// Whether step `name` still has to run (it did not finish on this IR); one that does
-/// becomes `progress.current`, and `on_step` and the test hook hear of it.
+/// Whether step `name` still has to run (it did not finish on this IR); it becomes
+/// `progress.current`, and when it runs `on_step` and the test hook hear of it.
 async fn begin_step(
     progress: &mut Progress,
     opts: &ImportOptions,
     ir: &Ir,
     name: &'static str,
 ) -> Result<bool, ImportError> {
+    // Set first, so an error checking the step names it.
+    progress.current = name;
     if ir.pass_done(name).await? {
         tracing::debug!(step = name, "import step already done; skipped");
         return Ok(false);
     }
-    progress.current = name;
     on_step(opts, name);
     #[cfg(feature = "test-seams")]
     if let Some(hook) = &opts.step_hook {
