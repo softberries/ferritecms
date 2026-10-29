@@ -213,18 +213,18 @@ pub async fn pg_lock_wait_wakes_on_release(db: Arc<TestDb>) {
             (got, Instant::now())
         })
     };
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The default poll ticks at 0, 250 and 500 ms: releasing just after a tick (300 ms)
+    // means polling could not acquire before about 500 ms.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let released_at = Instant::now();
     held.release().await.unwrap();
     let (got, got_at) = waiter.await.unwrap();
     let lag = got_at.saturating_duration_since(released_at);
     let got = got.expect("acquired after release");
     assert!(
-        lag < Duration::from_millis(300),
+        lag < Duration::from_millis(100),
         "woke {lag:?} after release"
     );
-    // `lock_timeout` was reset: a statement-free hold must outlive the wait budget.
-    tokio::time::sleep(Duration::from_millis(50)).await;
     got.release().await.unwrap();
 }
 
@@ -255,32 +255,40 @@ pub async fn pg_lock_wait_opens_one_connection(db: Arc<TestDb>) {
     let held = store.try_lock("w.conns").await.unwrap().expect("free");
     let name = format!("{prefix}w.conns");
     assert_eq!(db.active_backends(&name).await, 1, "the holder's");
+    // The holder's pid is known now; the waiter's one backend must then be present, with
+    // the same pid, in every sample from 100 ms on. Polling has a connection open for
+    // only a few ms of each 250 ms period, so it fails this every run.
+    let (url, _) = db.pg_location().expect("postgres");
+    let mut probe = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let holder: Vec<i32> = sqlx::query_scalar(
+        "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid()",
+    )
+    .bind(&name)
+    .fetch_all(&mut probe)
+    .await
+    .expect("holder pid");
+    assert_eq!(holder.len(), 1, "only the holder before the wait");
     let waiter = {
         let store = store.clone();
         tokio::spawn(async move { store.lock_wait("w.conns", Duration::from_secs(1)).await })
     };
-    // Distinct backends seen with this lock's application name: the holder plus the
-    // waiter's one connection. Polling would show a new backend per attempt.
-    let (url, _) = db.pg_location().expect("postgres");
-    let mut probe = sqlx::PgConnection::connect(&url).await.expect("connect");
-    let mut seen = std::collections::BTreeSet::new();
-    let end = Instant::now() + Duration::from_millis(900);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut waiter_pid = None;
+    let end = Instant::now() + Duration::from_millis(800);
     while Instant::now() < end {
         let pids: Vec<i32> = sqlx::query_scalar(
-            "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid()",
+            "SELECT pid FROM pg_stat_activity \
+             WHERE application_name = $1 AND pid <> pg_backend_pid() AND pid <> $2",
         )
         .bind(&name)
+        .bind(holder[0])
         .fetch_all(&mut probe)
         .await
         .expect("sample backends");
-        seen.extend(pids);
+        assert_eq!(pids.len(), 1, "exactly the waiter's connection: {pids:?}");
+        assert_eq!(*waiter_pid.get_or_insert(pids[0]), pids[0], "same backend");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(
-        seen.len() <= 2,
-        "{} lock connections during one wait",
-        seen.len()
-    );
     assert!(waiter.await.unwrap().unwrap().is_none());
     held.release().await.unwrap();
 }

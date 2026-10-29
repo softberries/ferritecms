@@ -371,8 +371,10 @@ held lock (`application_name` `<app>:lock:<name>`, TCP keepalives on), so a cras
 releases it when its connection dies. `lock` waits on one connection: `SET lock_timeout`,
 then a blocking `pg_advisory_lock`, so the server wakes the waiter when the holder
 releases (SQLSTATE `55P03` = timed out = `Busy`; `lock_timeout` is reset to 0 on success;
-a cancelled wait drops the connection, which frees a lock granted late). `try_lock` opens
-one connection per attempt. SQLite polls `try_lock` every 250 ms. sqlx's own migration lock is taken as well.
+a cancelled wait drops the connection, which frees a lock granted late; the server
+notices the closed socket only when it next writes to it, so the abandoned backend can
+stay queued until `lock_timeout` fires or the lock is granted, never longer than `wait`).
+`try_lock` opens one connection per attempt. SQLite polls `try_lock` every 250 ms. sqlx's own migration lock is taken as well.
 SQLite: an in-process mutex per store (one process owns the data folder).
 
 **A lock is not a fence.** The holder is not told when a Postgres advisory lock is lost:
