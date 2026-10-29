@@ -512,6 +512,18 @@ impl MediaStore {
         }
     }
 
+    /// The object store under this media store, for tools that keep other objects next to
+    /// the artifacts (a backup repository's snapshots). Keys built from it must start with
+    /// [`MediaStore::prefix`].
+    pub fn object_store(&self) -> Arc<dyn ObjectStore> {
+        self.inner.clone()
+    }
+
+    /// The key prefix (empty, or ending with `/`).
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String {
         match &self.public {
             PublicUrlMode::ServeViaApp { path_prefix } => {

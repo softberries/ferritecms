@@ -113,7 +113,7 @@ fn confirm(to: i64) -> anyhow::Result<bool> {
     Ok(line.trim() == "yes")
 }
 
-fn render_status(status: &MigrationStatus, binary: &semver::Version) -> String {
+pub(crate) fn render_status(status: &MigrationStatus, binary: &semver::Version) -> String {
     let mut out = String::new();
     out.push_str(&format!("database version: {}\n", status.db_version));
     out.push_str(&format!(

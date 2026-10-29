@@ -793,6 +793,12 @@ through `age` or `gpg`). Entries, in this order, all regular files:
   `missing: [hash…]` (an additive field, absent when empty; `format` stays 1), and the
   export exits 2.
 
+A backup archive (`kind: "backup"`, [09 §4](09-operations.md#4-backup--restore)) has no
+`tables` but `files: [{path, bytes, sha256}]` for `ferrite.toml`, `secret.key` (optional)
+and `ferrite.db`, which follow the manifest in that order, then its `artifacts/<ab>/<hash>`;
+it uses `missing` the same way. A backup repository's `manifest.json` also has
+`artifact_hashes: [hash…]`, the repository blobs the snapshot needs.
+
 **Encoding** (the catalogue, `ferrite_store::catalogue`): ids as hyphenated lowercase
 UUID strings; timestamps as RFC 3339 UTC with exactly six fractional digits and `Z`
 (microseconds survive; years before 1970 are fine, years after 9999 are not supported);

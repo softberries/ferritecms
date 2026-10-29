@@ -1,6 +1,7 @@
 //! The `ferrite` binary's logic, split from `main.rs` so tests can call it directly.
 
 mod archive;
+pub mod backup;
 mod cli;
 mod config_cmd;
 mod export_cmd;

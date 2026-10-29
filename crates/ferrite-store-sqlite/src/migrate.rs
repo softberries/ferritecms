@@ -52,6 +52,11 @@ fn embedded_versions() -> Vec<i64> {
         .collect()
 }
 
+/// The newest schema version this binary's SQLite migrations reach.
+pub fn latest_schema_version() -> i64 {
+    embedded_versions().into_iter().max().unwrap_or(0)
+}
+
 fn mig_err(e: MigrateError) -> StoreError {
     StoreError::Migration(e.to_string())
 }

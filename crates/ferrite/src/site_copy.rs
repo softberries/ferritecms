@@ -562,6 +562,7 @@ pub async fn export_to<W: Write + Send + 'static>(
             bytes: blobs.iter().map(|(_, s)| s).sum(),
         }),
         missing,
+        artifact_hashes: Vec::new(),
     };
     let handle = Handle::current();
     let m = manifest.clone();
@@ -575,27 +576,7 @@ pub async fn export_to<W: Write + Send + 'static>(
         }
         if let Some(media) = media {
             for (hash, size) in blobs {
-                let read = handle
-                    .block_on(media.open_read(&hash, None))
-                    .with_context(|| format!("cannot read artifact {hash}"))?;
-                if read.size != size {
-                    bail!("artifact {hash} changed size during the export");
-                }
-                let stream = read.stream.map_err(|e: MediaError| io::Error::other(e));
-                let bridge =
-                    SyncIoBridge::new_with_handle(StreamReader::new(stream), handle.clone());
-                let mut hashing = HashingRead {
-                    inner: bridge,
-                    hasher: Sha256::new(),
-                };
-                writer.append_stream(&artifact_path(&hash), size, &mut hashing)?;
-                let got = ferrite_domain::to_hex(&hashing.hasher.finalize());
-                if got != hash.as_str() {
-                    bail!(
-                        "artifact {hash}: the media store holds content with hash {got} under \
-                         that name (a damaged file); the export is not usable"
-                    );
-                }
+                append_blob(&mut writer, &handle, &media, &hash, size)?;
             }
         }
         let out = writer.finish()?;
@@ -604,6 +585,39 @@ pub async fn export_to<W: Write + Send + 'static>(
     })
     .await??;
     Ok((manifest, out))
+}
+
+/// Appends blob `hash` (`size` bytes, as `head` gave it) from `media` to `writer`, checking
+/// that the content hashes to its name. Blocking: call it off the runtime; `handle` drives
+/// the reads.
+pub(crate) fn append_blob<W: Write>(
+    writer: &mut ArchiveWriter<W>,
+    handle: &Handle,
+    media: &MediaStore,
+    hash: &ArtifactHash,
+    size: u64,
+) -> anyhow::Result<()> {
+    let read = handle
+        .block_on(media.open_read(hash, None))
+        .with_context(|| format!("cannot read artifact {hash}"))?;
+    if read.size != size {
+        bail!("artifact {hash} changed size while it was being archived");
+    }
+    let stream = read.stream.map_err(|e: MediaError| io::Error::other(e));
+    let bridge = SyncIoBridge::new_with_handle(StreamReader::new(stream), handle.clone());
+    let mut hashing = HashingRead {
+        inner: bridge,
+        hasher: Sha256::new(),
+    };
+    writer.append_stream(&artifact_path(hash), size, &mut hashing)?;
+    let got = ferrite_domain::to_hex(&hashing.hasher.finalize());
+    if got != hash.as_str() {
+        bail!(
+            "artifact {hash}: the media store holds content with hash {got} under that name (a \
+             damaged file); the archive is not usable"
+        );
+    }
+    Ok(())
 }
 
 /// Loads an export archive read from `input` into the fresh database `store` (P5) in one
@@ -768,7 +782,7 @@ fn load_table<R: Read>(
 }
 
 /// Puts one blob into `media` (unless it is there with the same size), checking its hash.
-fn store_blob<R: Read>(
+pub(crate) fn store_blob<R: Read>(
     handle: &Handle,
     media: Option<&Arc<MediaStore>>,
     hash: &ArtifactHash,

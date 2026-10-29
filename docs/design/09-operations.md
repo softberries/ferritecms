@@ -116,16 +116,65 @@ rollback is always driven by the newer binary before swapping back.
 Content-level "undo" (point-in-time for a single item) is revisions (02). Site-wide
 point-in-time is backup restore (solo) or PITR (cluster).
 
-Backups are verified: after writing, the snapshot is opened read-only and
-`PRAGMA integrity_check` runs; S3 uploads compare sha256.
+Backups are verified: the snapshot is opened read-only and `PRAGMA integrity_check` must
+return `ok` before anything is written, and a repository's `ferrite.db` is read back after
+the upload and its sha256 compared.
+
+**As built (M4-1, `crates/ferrite/src/backup/`).** `ferrite backup` is SQLite only (a
+Postgres site exits 1 with a pointer to the provider's backups and `ferrite export`) and,
+like every SQLite CLI command, needs `serve` stopped; a running site is backed up by the
+`[backup]` schedule, a job inside `serve` (the CLI cannot open the database while `serve`
+holds `ferrite.lock`). The sequence:
+
+1. `VACUUM INTO <data>/backups/backup-<UTC yyyymmddThhmmssZ>.db` (never `pre-*.db`, which the
+   pre-migration snapshot pruning deletes);
+2. open it read-only, `PRAGMA integrity_check` must say `ok`, read its `artifacts` hashes,
+   schema version and site id;
+3. write the target (below), copying the blobs from the site's media store;
+4. delete the local snapshot (also when a step failed).
+
+`--to` decides the shape:
+
+- **a `.tar.zst` file, or `-` (stdout):** one archive in the [02 §10](02-storage.md#10-portable-export-d14)
+  format with `kind: "backup"`: `manifest.json`, then `ferrite.toml`, `secret.key` (unless
+  `--no-secret-key`) and `ferrite.db`, each listed in the manifest's `files` with its size
+  and sha256, then `artifacts/<ab>/<hash>` (unless `--no-media`);
+- **a folder or `s3://bucket[/prefix]`: a repository.** `<repo>/artifacts/<ab>/<hash>` is
+  shared by all snapshots and a blob is copied only when the repository lacks it
+  (incremental by hash); each run adds `<repo>/snapshots/<UTC yyyymmddThhmmssZ>/` with
+  `ferrite.db`, `ferrite.toml`, `secret.key` and, written last, `manifest.json`, which also
+  lists `artifact_hashes`. A snapshot without a manifest is incomplete and ignored. Two
+  runs in the same second get consecutive names. `--keep N` (1–1000; default keep all)
+  then deletes the snapshot folders older than the newest N complete ones, then every
+  repository blob no kept manifest lists, and staging leftovers under `tmp/`: one site per
+  repository. S3 credentials and endpoint come from the `AWS_*` environment, as for
+  `media sync`.
+
+An artifact whose blob is missing from the media store is left out and named in the
+manifest's `missing` list (exit 2); a blob whose content does not hash to its name fails the
+backup (exit 1). Nothing is encrypted: archives, repository files and restored files that
+hold secrets are written with mode `0600`, and `--to -` can be piped to `age` or `gpg`.
+
+`ferrite restore SOURCE --data DIR` takes a backup archive, `-` (stdin) or a repository
+(the newest complete snapshot, or `--snapshot <name>`). `DIR` must be absent or empty;
+`--force` moves a non-empty folder aside to `DIR.pre-restore-<ts>` (a sibling, never deleted),
+refused while another process holds its `ferrite.lock`. The manifest is checked first: an
+export archive, a non-SQLite backup or a schema newer than the binary (exit 3) are refused
+before anything is written. The files go to a staging folder next to `DIR`, the blobs through
+the media store the **restored** `ferrite.toml` names (local or S3; blobs already there are
+skipped, trusted by their content hash); the restored configuration must keep the database
+at `DIR/ferrite.db`. Only then is the old folder moved aside and the staging folder renamed
+to `DIR`, so a failed restore changes nothing. It then prints `migrate status`; it does not
+migrate (`serve` does, under `database.auto_migrate`). A backup without `secret.key` restores
+with a note on TOTP (below).
 
 **The site key is not in the database** (M2a-1, P4). A solo site keeps it in
 `<data>/secret.key` (mode `0600`); a cluster gets it from `auth.secret_key[_file]`. Back it
 up separately from database dumps and keep it with the same care as the database
 credentials: without it, a restored database still has its users, sessions and API tokens,
 but stored TOTP secrets cannot be opened (those users need `ferrite user disable-totp` and a
-new enrollment). Until `ferrite backup` exists (M4), copying the data folder by hand
-includes `secret.key`.
+new enrollment). A solo `ferrite backup` includes `secret.key` unless `--no-secret-key`; an
+`export` never does.
 
 ## 5. TLS
 
@@ -257,6 +306,8 @@ ferrite media regenerate --data DIR [--all] [--item ID]        # M4-1
 ferrite export         --data DIR --out FILE|- [--with-media]                      # M4-1
 ferrite import-site    ARCHIVE|- --data DIR [--with-media]                         # M4-1
 ferrite db copy        --from URL --to URL [--from-schema S] [--to-schema S]       # M4-1; URL = postgres://… | sqlite:PATH
+ferrite backup         --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]  # M4-1
+ferrite restore        SOURCE --data DIR [--snapshot NAME] [--force]               # M4-1; SOURCE = FILE.tar.zst | - | DIR | s3://…
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -346,6 +397,24 @@ copy fails). URLs only, no stdin. Same source and target rules and exit codes as
 `import-site` (no exit 2: no media); it copies no media (`media sync`) and writes no `ferrite.toml`,
 but prints the `[database]` block to put there (a password, in the user info or a `password` query
 parameter, is shown as `PASSWORD`, with a note after the block).
+
+**`ferrite backup`**, **`ferrite restore`** (`crates/ferrite/src/backup/`; rules in §4):
+`backup --data DIR --to TARGET` backs up a solo site to a `.tar.zst` file (a new file with mode
+0600, an existing one is refused, a failed backup removes it), `-` (stdout; the summary goes to
+stderr) or a repository (a folder, created if missing, or `s3://bucket[/prefix]`).
+`--no-media` leaves the artifacts out, `--no-secret-key` leaves `secret.key` out, `--keep N`
+(repositories only) prunes to the newest N snapshots and the blobs they list. Prints the files,
+the schema, the artifact counts (for a repository: copied and already present) and what was
+pruned. Exit 0 done; 2 done but artifacts were missing from the media store (one `missing
+artifact <hash>` line each on stderr, listed in the manifest); 1 on any other error: a Postgres
+site, `serve` running (the folder lock), a failed integrity check, a damaged blob, `--keep` with
+an archive; a failed backup leaves no archive, no repository snapshot and no local snapshot.
+`restore SOURCE --data DIR [--snapshot NAME] [--force]` prints what it restored, the artifact
+counts, notes on missing artifacts and a missing `secret.key`, the folder moved aside, then the
+`migrate status` report. Exit 0 done; 3 when the backup's schema is newer than the binary
+(nothing written); 1 on any other error: a non-empty folder without `--force`, a folder in use,
+an export archive, an unknown snapshot, a damaged archive or repository (sha256, size), a
+restored configuration whose database is not `DIR/ferrite.db`.
 
 **`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
 03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`
@@ -607,7 +676,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 ### Planned (later milestones)
 
 ```
-ferrite backup / restore                                        # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

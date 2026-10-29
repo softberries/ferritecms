@@ -34,6 +34,7 @@ ferrite-theme = { path = "../ferrite-theme" }
 chrono.workspace = true
 futures.workspace = true
 image.workspace = true
+object_store.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true

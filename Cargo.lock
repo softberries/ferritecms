@@ -1455,6 +1455,7 @@ dependencies = [
  "futures",
  "hyper-util",
  "image",
+ "object_store",
  "rustls",
  "s3s",
  "s3s-fs",
