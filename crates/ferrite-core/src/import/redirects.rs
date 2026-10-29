@@ -1,14 +1,12 @@
 //! Imported redirects (P17): rows are checked one by one; the refused ones are reported
 //! and the rest written with origin `import`.
 
-use ferrite_domain::{ContentItem, ContentStatus, MEDIA_KIND, RedirectOrigin};
-use ferrite_store::Repos;
+use ferrite_domain::RedirectOrigin;
 
 use super::ImportBatch;
 use crate::{
-    CoreError, MAX_IMPORT_ROWS, MAX_PARENT_DEPTH,
-    permalink::{Permalinks, load_input},
-    redirects::{all_targets_in, redirect_keys, toggled, validate_rows, write_rows},
+    CoreError, MAX_IMPORT_ROWS,
+    redirects::{all_targets_in, published_item_at, redirect_keys, validate_rows, write_rows},
 };
 
 /// Why a row whose source is a live item's path is refused.
@@ -108,68 +106,4 @@ impl ImportBatch<'_> {
         }
         Ok(out)
     }
-}
-
-/// Whether `source` (or its slash variant) is the permalink of a published item of a
-/// content type other than media. Candidates are found by walking the path's trailing
-/// segments from the root by slug (`get_by_slug`, the way the site resolves pages), and
-/// each is compared by its computed path; a path with a query, a fragment or more than
-/// `MAX_PARENT_DEPTH + 1` segments is no item's.
-async fn published_item_at(
-    repos: &dyn Repos,
-    rules: &dyn Permalinks,
-    source: &str,
-) -> Result<bool, CoreError> {
-    if source.contains(['?', '#']) {
-        return Ok(false);
-    }
-    let segments: Vec<String> = source
-        .trim_matches('/')
-        .split('/')
-        .map(|s| {
-            percent_encoding::percent_decode_str(s)
-                .decode_utf8_lossy()
-                .into_owned()
-        })
-        .collect();
-    if segments.iter().any(String::is_empty) || segments.len() > MAX_PARENT_DEPTH + 1 {
-        return Ok(false);
-    }
-    let alternative = toggled(source);
-    for ty in repos.types().list().await? {
-        if ty.name == MEDIA_KIND {
-            continue;
-        }
-        for skip in 0..segments.len() {
-            let Some(item) = walk(repos, &ty.name, &segments[skip..]).await? else {
-                continue;
-            };
-            if item.status != ContentStatus::Published {
-                continue;
-            }
-            let path = rules.path(&load_input(repos, item).await?);
-            if path == source || alternative.as_deref() == Some(path.as_str()) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-/// The item of `kind` at the end of the slug chain `segments` from the root.
-async fn walk(
-    repos: &dyn Repos,
-    kind: &str,
-    segments: &[String],
-) -> Result<Option<ContentItem>, CoreError> {
-    let mut parent = None;
-    let mut found = None;
-    for segment in segments {
-        found = repos.content().get_by_slug(kind, parent, segment).await?;
-        match &found {
-            Some(item) => parent = Some(item.id),
-            None => return Ok(None),
-        }
-    }
-    Ok(found)
 }

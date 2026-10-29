@@ -55,7 +55,10 @@ pub use menu::{
 };
 pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};
-pub use redirects::{ImportReport, MAX_IMPORT_ROWS, MAX_REDIRECT_QUERY, RedirectService};
+pub use redirects::{
+    ImportReport, MAX_IMPORT_ROWS, MAX_REDIRECT_QUERY, PermalinkRedirectReport, RedirectService,
+    STRUCTURE_PAGE,
+};
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
     PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic,
