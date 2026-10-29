@@ -49,6 +49,54 @@ pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<d
     }
 }
 
+/// Opens a database from a bare URL (`ferrite db copy`, M4-1 P8): `postgres://…` (or
+/// `postgresql://…`) with an optional `schema`, or `sqlite:<path to ferrite.db>`, whose
+/// folder lock is taken on the file's parent. With `CreateIfMissing` an absent SQLite file
+/// is created (its folder must exist). Does not migrate.
+pub async fn open_store_url(
+    url: &str,
+    schema: Option<&str>,
+    mode: OpenMode,
+) -> anyhow::Result<Arc<dyn Store>> {
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        let store = PgStore::open(PgOptions {
+            url: url.to_owned(),
+            max_connections: 4,
+            schema: schema.map(str::to_owned),
+            application_name: "ferrite".into(),
+        })
+        .await
+        .context("cannot open the Postgres database")?;
+        return Ok(Arc::new(store));
+    }
+    let Some(rest) = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+    else {
+        bail!("unsupported database URL (use postgres://… or sqlite:<path to ferrite.db>)");
+    };
+    if schema.is_some() {
+        bail!("a schema applies to Postgres only");
+    }
+    let path = std::path::PathBuf::from(rest);
+    if mode == OpenMode::MustExist && !path.is_file() {
+        bail!("database not found at {}", path.display());
+    }
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_owned(),
+        _ => std::path::PathBuf::from("."),
+    };
+    if !parent.is_dir() {
+        bail!("folder {} does not exist", parent.display());
+    }
+    let mut opts = SqliteOptions::new(&path);
+    opts.lock_dir = Some(parent);
+    let store = SqliteStore::open(opts)
+        .await
+        .context("cannot open the SQLite database")?;
+    Ok(Arc::new(store))
+}
+
 /// What the startup check wants done (02 §8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {

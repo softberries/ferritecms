@@ -1,7 +1,9 @@
 //! The `ferrite` binary's logic, split from `main.rs` so tests can call it directly.
 
+mod archive;
 mod cli;
 mod config_cmd;
+mod export_cmd;
 mod ext_cmd;
 pub mod extensions;
 mod healthcheck;
@@ -18,6 +20,7 @@ pub mod reload;
 mod seed;
 pub mod serve;
 mod site;
+mod site_copy;
 #[cfg(test)]
 #[path = "../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;

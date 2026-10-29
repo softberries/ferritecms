@@ -192,6 +192,14 @@ async fn ensure_pg_unmigrated(url: &str, schema: Option<&str>) -> anyhow::Result
 
 /// Creates `path` exclusively with mode 0600 (it can hold the database URL).
 fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
+    let mut file = create_private(path)?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("cannot write {}", path.display()))
+}
+
+/// Creates `path` exclusively (an existing file is refused) with mode 0600, for files that
+/// hold secrets: `ferrite.toml`, archives.
+pub(crate) fn create_private(path: &Path) -> anyhow::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -199,9 +207,6 @@ fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("cannot create {}", path.display()))?;
-    file.write_all(contents.as_bytes())
-        .with_context(|| format!("cannot write {}", path.display()))
+    opts.open(path)
+        .with_context(|| format!("cannot create {}", path.display()))
 }

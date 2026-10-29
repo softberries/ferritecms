@@ -766,21 +766,90 @@ backend_tests!(
 ## 10. Portable export (D14)
 
 ```
-ferrite export --out site-2026-10-22.ferrite.tar.zst [--with-media]
-ferrite import-site site-2026-10-22.ferrite.tar.zst --data ./site   # into an empty DB
+ferrite export --data ./site --out site-2026-10-22.ferrite.tar.zst [--with-media]
+ferrite import-site site-2026-10-22.ferrite.tar.zst --data ./new-site [--with-media]
+ferrite db copy --from sqlite:./site/ferrite.db --to postgres://… [--from-schema S] [--to-schema S]
 ```
 
-- Archive: `manifest.json` (format version, ferrite version, schema version, source
-  backend, site id, table list with row counts and sha256), one NDJSON file per table
-  in FK-dependency order, optional `artifacts/` with blobs.
-- Backend-neutral encoding: ids as UUID strings, timestamps RFC 3339 UTC, JSON as JSON,
-  bytes base64.
-- Import requires the target to be migrated to the **same schema version** as the
-  export (the tool runs `migrate up --to <v>` on an empty DB itself).
-- Uses: Postgres backup independent of the provider; SQLite → Postgres move (S7);
-  staging copies. `ferrite db copy --from <url> --to <url>` is export+import streamed
-  without a file.
-- Excluded by default: `sessions`, `rate_limits`, `events`, `nodes`, finished `jobs`.
+*Built in M4-1 (plan rulings P1–P8 in `docs/superpowers/rulings/m4.md`).* The CLI
+reference with flags and exit codes is 09 §8.
+
+**Archive** (`tar.zst`: a tar stream compressed with zstd level 3, written with mode
+0600; `--out -` writes it to stdout and `import-site -` reads stdin, so it can be piped
+through `age` or `gpg`). Entries, in this order, all regular files:
+
+- `manifest.json`, always first:
+  `format` (1), `kind` (`"export"`; backups share the format with `"backup"`),
+  `ferrite_version`, `schema_version` (the highest applied migration of the source),
+  `source_backend` (`"sqlite"` | `"postgres"`), `site_id`, `created_at` (RFC 3339 UTC),
+  `tables: [{name, rows, sha256}]` (sha256 of the uncompressed table file, hex), and
+  `artifacts: {count, bytes}`, or `null` without `--with-media`.
+- `tables/<name>.ndjson`, one per exported table, in catalogue (foreign-key) order; one
+  row per line, a JSON object keyed by column name.
+- With `--with-media`, `artifacts/<ab>/<hash>`: the blob of every `artifacts` row (media
+  originals and variants, theme bundles, plugin packages, import inputs and reports). A
+  blob missing from the store is left out with a warning.
+
+**Encoding** (the catalogue, `ferrite_store::catalogue`): ids as hyphenated lowercase
+UUID strings; timestamps as RFC 3339 UTC with exactly six fractional digits and `Z`
+(microseconds survive; years before 1970 are fine, years after 9999 are not supported);
+JSON as JSON; booleans as JSON booleans; bytes as standard base64 with padding; text as
+strings; integers as numbers; NULL as `null`. Secrets travel as stored: password and
+token hashes, sealed TOTP secrets and sealed plugin/theme settings. The keys of a row are
+sorted, so the same data gives the same bytes on both backends.
+
+**What is exported:** every table except the transient or derived ones: `sessions`,
+`rate_limits`, `events`, `nodes`, `idempotency_keys`, `plugin_failures`, `jobs` (all of
+them: queued plugin actions and variant jobs are lost; `ferrite media regenerate`
+remakes missing variants) and `search_docs` (SQLite's `search_fts*` and
+`_sqlx_migrations` are not catalogue tables). Of `schema_meta` only `site_id` travels;
+the loader writes it over the target's, so the copy keeps the site's identity.
+`secret.key` is never in an export (00 §5): after `import-site` the tool prints how many
+users have TOTP on and the fix (copy the source's `secret.key`, set `auth.secret_key`,
+or `ferrite user disable-totp`).
+
+**Consistency:** the dump reads one snapshot (Postgres: a `REPEATABLE READ READ ONLY`
+transaction, so a live Postgres site can be exported; SQLite: one read transaction, which
+holds one reader connection for the whole dump; `serve` holds the SQLite data-folder
+lock, so stop it first). Table files are spooled to the system temp folder (`TMPDIR`)
+because tar needs their sizes; blobs are streamed.
+
+**Schema rules:** the catalogue describes this binary's latest schema, so `export` and
+the source of `db copy` must be exactly at it (older: exit 1, run `ferrite migrate up`;
+newer: exit 3). `import-site` refuses an archive whose `format` or `schema_version` is
+newer than the binary (exit 3) before writing anything. The target (a data folder made by
+`ferrite init`, or for `db copy` any database URL; an absent SQLite file is created) must
+be **fresh**: every exported table empty but for the built-in content types and
+taxonomies the migrations seed (else exit 1, naming the first table with rows). Let M be
+the archive's schema and N the target's: N = 0 (unmigrated, e.g. an empty Postgres
+schema) is migrated up to M; N > M is migrated down to M (lossy downs allowed: there is
+no data); a target with pending migrations is refused (run `ferrite migrate up`). The
+loader writes exactly the columns each row holds (an unknown column is refused), so an
+archive of an older schema loads at that schema.
+
+**Loading:** one write transaction for the whole load (SQLite holds the writer for its
+length): the seeded built-in rows are cleared, rows are inserted in batches in table
+order (a self-referencing row waits in memory until its parent is in), and the commit
+comes last. The reader checks every entry before its rows are committed: paths must be
+ones the manifest names (absolute paths and `..` are refused), tables come in manifest
+order, each table's sha256 and row count are compared at the end of its file, each
+blob's content must hash to its name, and at the end of the stream every listed table
+and the blob count must have been seen. Any refusal, damage or truncation rolls the
+whole load back, so the target stays fresh and the import can be retried. A failure
+after a migrate-down leaves the fresh target at M. After the commit the database is
+migrated up to the binary's schema under the startup rules (`database.auto_migrate`; a
+Postgres contract migration without `allow_contract` is left pending with a note), then
+`search_docs` is rebuilt for every item that is not in the trash, through the same core
+function every content write uses. With `--with-media` the blobs go into the target's
+media store (blobs already there with the same size are skipped).
+
+**`db copy`** is export + import streamed from one read snapshot into one write
+transaction with no file in between. It copies no media (`ferrite media sync` does) and
+writes no `ferrite.toml`: it prints the `[database]` lines to use (a SQLite path made
+absolute, a Postgres password shown as `PASSWORD`).
+
+Uses: a Postgres backup independent of the provider; the SQLite → Postgres move (S7);
+staging copies.
 
 ## 11. Open points (for the builder)
 
