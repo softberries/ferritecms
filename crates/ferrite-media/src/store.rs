@@ -736,6 +736,63 @@ pub fn validate_copy_if_not_exists(value: &str) -> Result<(), String> {
         })
 }
 
+fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
+    let hex = ferrite_domain::to_hex(&hasher.finalize());
+    ArtifactHash::parse(&hex)
+        .map_err(|e| MediaError::Backend(format!("computed hash invalid: {e}")))
+}
+
+fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
+    let mut builder = match (&cfg.access_key_id, &cfg.secret_access_key) {
+        (None, None) => AmazonS3Builder::from_env(),
+        (Some(id), Some(secret)) => AmazonS3Builder::new()
+            .with_access_key_id(id)
+            .with_secret_access_key(secret.expose()),
+        _ => {
+            return Err(MediaError::Config(
+                "s3 access_key_id and secret_access_key must be set together".into(),
+            ));
+        }
+    };
+    builder = builder
+        .with_bucket_name(&cfg.bucket)
+        .with_region(&cfg.region)
+        // Must come before `with_allow_http`: it replaces the whole `ClientOptions`.
+        .with_client_options(
+            // No total-request timeout: large artifacts stream for as long as they need.
+            // Connects must succeed within 5 s; a body read that stalls for 30 s fails.
+            ClientOptions::new()
+                .with_timeout_disabled()
+                .with_connect_timeout(Duration::from_secs(5))
+                .with_read_timeout(Duration::from_secs(30)),
+        )
+        .with_allow_http(cfg.allow_http)
+        .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
+        .with_retry(RetryConfig {
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(20),
+            ..RetryConfig::default()
+        });
+    if let Some(endpoint) = &cfg.endpoint {
+        builder = builder.with_endpoint(endpoint);
+    }
+    // Only what is set overrides the environment path's `AWS_COPY_IF_NOT_EXISTS` /
+    // `AWS_CONDITIONAL_PUT`; unset, the builder's default (`etag`) stands.
+    if let Some(mode) = &cfg.copy_if_not_exists {
+        builder = builder.with_config(AmazonS3ConfigKey::CopyIfNotExists, mode);
+    }
+    if let Some(put) = cfg.conditional_put {
+        let value = match put {
+            ConditionalPut::Etag => "etag",
+            ConditionalPut::Disabled => "disabled",
+        };
+        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, value);
+    }
+    builder
+        .build()
+        .map_err(|e| MediaError::Config(format!("s3 backend: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,61 +914,4 @@ mod tests {
         assert_eq!(placed.hash, hash);
         assert!(!placed.created);
     }
-}
-
-fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
-    let hex = ferrite_domain::to_hex(&hasher.finalize());
-    ArtifactHash::parse(&hex)
-        .map_err(|e| MediaError::Backend(format!("computed hash invalid: {e}")))
-}
-
-fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
-    let mut builder = match (&cfg.access_key_id, &cfg.secret_access_key) {
-        (None, None) => AmazonS3Builder::from_env(),
-        (Some(id), Some(secret)) => AmazonS3Builder::new()
-            .with_access_key_id(id)
-            .with_secret_access_key(secret.expose()),
-        _ => {
-            return Err(MediaError::Config(
-                "s3 access_key_id and secret_access_key must be set together".into(),
-            ));
-        }
-    };
-    builder = builder
-        .with_bucket_name(&cfg.bucket)
-        .with_region(&cfg.region)
-        // Must come before `with_allow_http`: it replaces the whole `ClientOptions`.
-        .with_client_options(
-            // No total-request timeout: large artifacts stream for as long as they need.
-            // Connects must succeed within 5 s; a body read that stalls for 30 s fails.
-            ClientOptions::new()
-                .with_timeout_disabled()
-                .with_connect_timeout(Duration::from_secs(5))
-                .with_read_timeout(Duration::from_secs(30)),
-        )
-        .with_allow_http(cfg.allow_http)
-        .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
-        .with_retry(RetryConfig {
-            max_retries: 2,
-            retry_timeout: Duration::from_secs(20),
-            ..RetryConfig::default()
-        });
-    if let Some(endpoint) = &cfg.endpoint {
-        builder = builder.with_endpoint(endpoint);
-    }
-    // Only what is set overrides the environment path's `AWS_COPY_IF_NOT_EXISTS` /
-    // `AWS_CONDITIONAL_PUT`; unset, the builder's default (`etag`) stands.
-    if let Some(mode) = &cfg.copy_if_not_exists {
-        builder = builder.with_config(AmazonS3ConfigKey::CopyIfNotExists, mode);
-    }
-    if let Some(put) = cfg.conditional_put {
-        let value = match put {
-            ConditionalPut::Etag => "etag",
-            ConditionalPut::Disabled => "disabled",
-        };
-        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, value);
-    }
-    builder
-        .build()
-        .map_err(|e| MediaError::Config(format!("s3 backend: {e}")))
 }
