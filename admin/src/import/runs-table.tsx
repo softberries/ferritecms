@@ -69,7 +69,7 @@ export function RunsTable() {
             updated: "hidden py-3 text-right lg:table-cell",
             kept: "hidden py-3 text-right lg:table-cell",
             skipped: "hidden py-3 text-right lg:table-cell",
-            report: "py-2 whitespace-nowrap",
+            report: "hidden py-2 whitespace-nowrap sm:table-cell",
           }}
           empty={
             <EmptyState
@@ -177,6 +177,11 @@ function useColumns(): DataTableColumn<ImportRunDto>[] {
                   })}
                 </span>
               </span>
+              {r.report ? (
+                <span data-slot="run-report-links" className="-ml-2.5 sm:hidden">
+                  <ReportLinks run={r} />
+                </span>
+              ) : null}
               {r.error ? (
                 <span
                   className="line-clamp-2 text-xs wrap-anywhere text-destructive"
@@ -226,35 +231,40 @@ function useColumns(): DataTableColumn<ImportRunDto>[] {
         header: () => t("runs.report"),
         cell: (c) => {
           const r = c.row.original;
-          if (!r.report) return none;
-          const urls = reportUrls(r.id);
-          return (
-            <div className="flex items-center gap-1">
-              <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
-                <a
-                  href={urls.html}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={t("runs.htmlOn", { source: r.source })}
-                >
-                  {t("runs.html")}
-                  <ExternalLinkIcon data-icon="inline-end" />
-                </a>
-              </Button>
-              <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
-                <a
-                  href={urls.json}
-                  download={`import-${r.id}.json`}
-                  aria-label={t("runs.jsonOn", { source: r.source })}
-                >
-                  <DownloadIcon data-icon="inline-start" />
-                  {t("runs.json")}
-                </a>
-              </Button>
-            </div>
-          );
+          return r.report ? <ReportLinks run={r} /> : none;
         },
       }),
     ];
   }, [t]);
+}
+
+/** A run's report: the page in a new tab, the JSON as a download. */
+function ReportLinks({ run }: { run: ImportRunDto }) {
+  const { t } = useTranslation("import");
+  const urls = reportUrls(run.id);
+  return (
+    <span className="flex items-center gap-1">
+      <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
+        <a
+          href={urls.html}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t("runs.htmlOn", { source: run.source })}
+        >
+          {t("runs.html")}
+          <ExternalLinkIcon data-icon="inline-end" />
+        </a>
+      </Button>
+      <Button asChild variant="ghost" size="sm" className="pointer-coarse:h-11">
+        <a
+          href={urls.json}
+          download={`import-${run.id}.json`}
+          aria-label={t("runs.jsonOn", { source: run.source })}
+        >
+          <DownloadIcon data-icon="inline-start" />
+          {t("runs.json")}
+        </a>
+      </Button>
+    </span>
+  );
 }

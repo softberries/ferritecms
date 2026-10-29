@@ -33,6 +33,7 @@ async function open(page: Page): Promise<void> {
 
 test("import_export_a_through_the_screen", async ({
   as,
+  guard,
   site,
   siteKey,
   snap,
@@ -47,6 +48,7 @@ test("import_export_a_through_the_screen", async ({
     // The sidebar's Import item, between Plugins and Settings, and `g i`.
     await page.goto("/admin/");
     const nav = page.getByRole("navigation", { name: "Main" });
+    await expect(nav.getByRole("link", { name: "Import" })).toBeVisible();
     const names = await nav.getByRole("link").allTextContents();
     const at = names.findIndex((n) => n.includes("Import"));
     expect(at).toBeGreaterThan(names.findIndex((n) => n.includes("Plugins")));
@@ -105,6 +107,11 @@ test("import_export_a_through_the_screen", async ({
     await expect(report).toHaveAttribute("target", "_blank");
     const href = (await report.getAttribute("href")) ?? "";
     expect(href).toMatch(/^\/api\/v1\/import\/runs\/[0-9a-f-]{36}\/report\.html$/);
+    // The report is served under `sandbox` (no scripts): the browser refuses the guard's
+    // own init script there and logs it.
+    guard.allow(
+      /Blocked script execution in '[^']*\/report\.html' because the document's frame is sandboxed/,
+    );
     const [tab] = await Promise.all([page.context().waitForEvent("page"), report.click()]);
     await tab.waitForLoadState();
     expect(new URL(tab.url()).pathname).toBe(href);
@@ -118,7 +125,7 @@ test("import_export_a_through_the_screen", async ({
 
     // The runs table lists the run as done, with its report.
     const row = screen(page).locator("[data-slot=import-runs] tr[data-row-id]").first();
-    await expect(row).toContainText("http://localhost:8099/");
+    await expect(row).toContainText("http://localhost:8099");
     await expect(row.locator("[data-slot=run-state]").first()).toHaveText("Done");
 
     // The post at its old WordPress URL.

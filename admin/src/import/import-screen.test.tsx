@@ -97,16 +97,20 @@ test("runs table lists each run with its totals and report links", async () => {
   const [done, failed] = rows as [HTMLElement, HTMLElement];
   expect(within(done).getAllByText("Done").length).toBeGreaterThan(0);
   expect(done).toHaveTextContent("5 created · 1 updated · 2 kept · 3 skipped");
-  const html = within(done).getByRole("link", {
+  // The links show in their column, and in the source cell below 640 px (CSS picks one).
+  const links = within(done).getAllByRole("link", {
     name: "Open the report of the import from http://old.example/ (opens in a new tab)",
   });
-  expect(html).toHaveAttribute("target", "_blank");
-  expect(html).toHaveAttribute("href", `/api/v1/import/runs/${run().id}/report.html`);
-  expect(
-    within(done).getByRole("link", {
-      name: "Download the JSON report of the import from http://old.example/",
-    }),
-  ).toHaveAttribute("download");
+  expect(links).toHaveLength(2);
+  for (const html of links) {
+    expect(html).toHaveAttribute("target", "_blank");
+    expect(html).toHaveAttribute("href", `/api/v1/import/runs/${run().id}/report.html`);
+  }
+  for (const json of within(done).getAllByRole("link", {
+    name: "Download the JSON report of the import from http://old.example/",
+  })) {
+    expect(json).toHaveAttribute("download", `import-${run().id}.json`);
+  }
   expect(within(failed).getAllByText("Failed").length).toBeGreaterThan(0);
   expect(within(failed).getByText("Dry run")).toBeInTheDocument();
   expect(within(failed).getByText("pass3: disk full")).toBeInTheDocument();
