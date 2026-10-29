@@ -919,6 +919,7 @@ fn http_config(config: &Config) -> HttpConfig {
         &config.site.title,
         &config.site.locale,
     );
+    http.timezone = config.site.timezone.clone();
     http.trusted_proxies = config.server.trusted_proxies.clone();
     http.render_budget = Duration::from_millis(config.plugins.render_budget_ms);
     http.search_ttl = Duration::from_secs(config.cache.search_ttl_secs);

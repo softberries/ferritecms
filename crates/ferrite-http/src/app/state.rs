@@ -70,6 +70,9 @@ pub struct HttpConfig {
     pub site_title: String,
     pub site_description: String,
     pub locale: String,
+    /// IANA zone of `site.timezone` (validated by the config loader): the zone the
+    /// theme `date` filter formats in. Config only, so a change needs a restart.
+    pub timezone: String,
     /// Cache TTL of pages whose plugin calls were volatile or failed, or whose theme
     /// helper reads failed (`plugins.volatile_ttl`, 1 s..=1 h). Default [`SHORT_TTL`].
     pub volatile_ttl: Duration,
@@ -115,6 +118,7 @@ impl HttpConfig {
             site_title: site_title.to_owned(),
             site_description: String::new(),
             locale: locale.to_owned(),
+            timezone: "UTC".to_owned(),
             volatile_ttl: SHORT_TTL,
             search_ttl: SHORT_TTL,
             default_host,
@@ -331,6 +335,7 @@ impl AppState {
             url: self.config.site_url.clone(),
             description: texts.description,
             locale: bcp47(&texts.locale),
+            timezone: self.config.timezone.clone(),
             settings: theme.manifest().settings_values(&stored),
         })
     }
@@ -361,6 +366,7 @@ impl AppState {
             url: self.config.site_url.clone(),
             description: self.config.site_description.clone(),
             locale: bcp47(&self.config.locale),
+            timezone: self.config.timezone.clone(),
             settings: theme
                 .manifest()
                 .settings_values(&serde_json::Map::default()),

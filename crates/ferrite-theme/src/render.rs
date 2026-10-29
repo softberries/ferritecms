@@ -129,6 +129,9 @@ pub struct SiteInfo {
     pub url: String,
     pub description: String,
     pub locale: String,
+    /// IANA zone the `date` filter formats in (`site.timezone` of the config, validated
+    /// at load); empty means UTC.
+    pub timezone: String,
     /// Every declared setting with its value
     /// ([`ThemeManifest::settings_values`](crate::ThemeManifest::settings_values)).
     pub settings: BTreeMap<String, serde_json::Value>,

@@ -28,6 +28,7 @@ fn site(theme: &Theme, overrides: serde_json::Value) -> SiteInfo {
         url: "https://example.com".into(),
         description: "Writing about <rust>".into(),
         locale: "en-GB".into(),
+        timezone: "UTC".into(),
         settings: theme.manifest().settings_values(&stored),
     }
 }
