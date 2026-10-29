@@ -329,7 +329,9 @@ The Structure screens have no chord. M2b-3's Administration section (`SCREENS` i
 `shell/nav.ts`, Task 5) fixes `g u` Users, `g a` Appearance, `g l` Plugins, `g s`
 Settings and `g y` System; each binds once its screen registers its entry (all five do,
 Tasks 7–11). The M2b-3 plan named `g p` for Plugins, which is Posts here; Plugins takes
-`g l`. The `?` sheet lists whatever is registered at the moment it opens.
+`g l`. M3-2's Import screen (P32) takes `g i`, free until then; it registers with the
+screen, between Plugins and Settings. The `?` sheet lists whatever is registered at the
+moment it opens.
 
 As built in M2b-3: a pending sequence keeps the keys pressed so far and looks its candidates
 up in the registry at each step, so `g s` completes even when the nav registers its `g`
@@ -354,6 +356,7 @@ of the manual Safari pass.
 | Anywhere | `g u` | Users (M2b-3) |
 | Anywhere | `g a` | Appearance: themes (M2b-3) |
 | Anywhere | `g l` | Plugins (M2b-3; not `g p`, which is Posts) |
+| Anywhere | `g i` | Import (M3-2) |
 | Anywhere | `g s` | Settings (M2b-3) |
 | Anywhere | `g y` | System (M2b-3) |
 | Anywhere | `c p` / `c g` | New post / new page |
@@ -442,6 +445,15 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `SecretField` | `name, set, onChange(v: string \| null \| undefined), id?, describedBy?, invalid?, disabled?` | write-only: "Set" / "Not set", never a value. Untouched reports nothing (`undefined`: the key is left out of the `PATCH`, the server keeps it); Replace ("Set a value" when unset) opens an empty `type="password"` input (`autocomplete="new-password"`) whose text is the new value (empty = `undefined`); Remove reports `null` ("Removed when you save", Undo). The text is held only in its state |
   | `SettingsForm` | `schema: SettingDefDto[], values, secrets?, invalid?, reload, onSubmit(patch), staleKey, onDirtyChange?, disabled?` | renders `text`, `textarea`, `bool` (switch), `number`, `select` (the options; a stored value they lack is still shown), `color` (a native colour input plus the hex, `#rrggbb` checked), `media` (`MediaChoice`, `kit/media-choice.tsx`, the media picker of every kind; the editor's media field and featured image use it too) and `secret` (`SecretField`); another kind is named as not editable here. Each field: label, a "Default: …" hint, "Reset to default" when the value differs from what a reset reads as (the default, else core's `empty_setting_value`: `""`, `false`, `0`, the first option; colours compared case-insensitively with `#rgb` expanded) or is `invalid` (sends `null`, unchecked); a cleared number is "Enter a number.", not a reset; Save with a marked field focuses it and says so; `invalid` keys say "Stored value is not valid; the default is used". Save sends only the changed keys through `staleGuard` (`reload` re-reads the values; the copy compared is the values the form started from; `staleKey` names the resource in the question). `onSubmit` may resolve to the saved values, which the form then starts from; a `422` shows at its fields. New `values` from the caller replace the start copy while nothing is edited |
   | `CopyOnce` | `value, label` | read-only mono field with Copy and "Shown only now. Store it somewhere safe." (warning colour); for a new token's value, held only in the dialog's state |
+
+  The M3-2 Import screen (`/admin/import`, Task 9, P32; `src/import/`) adds no kit
+  component: it composes `DropZone`s for the WXR file and the uploads zip, `Switch`es for
+  the four options with the bases under an Advanced disclosure, a stepper of the seven run
+  steps with the heartbeat and counts in the active-run panel (`GET /import/jobs/{id}`
+  every 2 s while queued or running, `IMPORT_POLL_MS`), and a `DataTable` of runs with
+  report links. The upload is `uploadWordpressImport` in `src/api/upload.ts` (the XHR
+  `send` with progress; one `Idempotency-Key` per start, kept across a `5xx` Retry, R72).
+  Strings are in the `import` namespace.
 
   `useStaleAsk` now settles a pending question with `cancel` when a second one is asked
   or the component unmounts (an M2b-2 minor). Strings of these components are in the

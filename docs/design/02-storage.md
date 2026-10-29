@@ -403,7 +403,7 @@ Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
 `0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
-`0009_import` on both backends.
+`0009_import` / `0010_import_jobs` on both backends.
 
 ### Content
 
@@ -441,17 +441,17 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | Table | Columns | Notes |
 |---|---|---|
 | `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache: it was removed with no reader (M2a-1 R26), and M2a-2a's readers (theme and plugin settings) read the store directly (M2a-2 P14; a cache is M4) |
-| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>` |
+| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`/`import`; `import` since `0010`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>`. `import` rows are an API import's inputs (deleted when the run is done or the job fails for good, M3-2 P23) and its report files and manifest (P29) |
 | `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (the approved grant: since M2a-2a `{"v":1,"capabilities","limits","routes"}`, 05 §2; the M1c-2 bare `[capabilities]` table and `null` are still read), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
 | `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
 | `themes` | `name` PK, `version`, `artifact_hash`, `manifest` json, `active`, `installed_at` | Exactly one active (partial unique index / trigger) |
 
-### Import *(since `0009_import`)*
+### Import *(since `0009_import`; job columns since `0010_import_jobs`)*
 
 | Table | Columns | Notes |
 |---|---|---|
-| `import_runs` | `id` PK (`import_runs_pkey`), `source` (the normalised `<wp:base_blog_url>`), `token` (32 lowercase hex digits), `state` (`running`/`done`/`failed`/`abandoned`, CHECK), `started_by` → `users` `ON DELETE CASCADE` (`import_runs_started_by_fk`), `started_at`, `heartbeat_at`, `finished_at` null, `stats` json, `dry_run` boolean; partial unique index `import_runs_running_uq (state) WHERE state = 'running'`, `import_runs_started_idx (started_at, id)`, `import_runs_started_by_idx (started_by)` | One row per WordPress import run (M3-1 P5): every batch first updates `heartbeat_at` where `id`, `token` and `running` match (the fence); at most one run is `running`; a deleted user takes their runs with them (R5) |
+| `import_runs` | `id` PK (`import_runs_pkey`), `source` (the normalised `<wp:base_blog_url>`), `token` (32 lowercase hex digits), `state` (`running`/`done`/`failed`/`abandoned`, CHECK), `started_by` → `users` `ON DELETE CASCADE` (`import_runs_started_by_fk`), `started_at`, `heartbeat_at`, `finished_at` null, `stats` json, `dry_run` boolean; since `0010`: `job_id` null (the `import.wordpress` job that started the run; no FK, jobs are pruned; `import_runs_job_idx`), `step` null (`parse`, `pass1`…`pass4`, `fixup`, `report`; checked in core, free text in the store), `report_hash` null (the report manifest artifact); partial unique index `import_runs_running_uq (state) WHERE state = 'running'`, `import_runs_started_idx (started_at, id)`, `import_runs_started_by_idx (started_by)` | One row per WordPress import run (M3-1 P5): every batch first updates `heartbeat_at` where `id`, `token` and `running` match (the fence); at most one run is `running`; a deleted user takes their runs with them (R5) |
 | `import_map` | `source`, `kind` (`user`/`term`/`media`/`content`/`comment`/`menu`/`option`/`redirect`, CHECK), `wp_id`, `ferrite_id` (no FK), `hash` (SHA-256 hex of what the import wrote), `version` (the item's version after the write); PK (`source`, `kind`, `wp_id`) `import_map_pkey` | What each WordPress id became (P3): a re-run updates instead of duplicating; a row whose item is gone counts as not mapped. The `0009` down drops both tables (lossy) |
 
 ### Cluster
@@ -572,6 +572,9 @@ crates/ferrite-store-sqlite/migrations/
     0008_autosave_seo.down.sql
     0009_import.up.sql              # M3-1, phase expand, lossy-down: import_runs, import_map
     0009_import.down.sql
+    0010_import_jobs.up.sql         # M3-2, phase contract here (the `artifacts` CHECK needs a
+    0010_import_jobs.down.sql       #   table rebuild; widens only, no min-binary), lossy-down:
+                                    #   `import` artifacts, run job_id/step/report_hash
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -591,6 +594,8 @@ crates/ferrite-store-postgres/migrations/
     0008_autosave_seo.down.sql
     0009_import.up.sql
     0009_import.down.sql
+    0010_import_jobs.up.sql         # M3-2, phase expand (one ALTER TABLE swaps the CHECK)
+    0010_import_jobs.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -719,7 +724,10 @@ silently remove the guard.
 **CI enforcement**
 
 - *Expand check*: a migration without `phase contract` must not contain `DROP`,
-  `RENAME`, `ALTER … TYPE`, or `NOT NULL` without `DEFAULT` (lint over SQL text).
+  `RENAME`, `ALTER … TYPE`, or `NOT NULL` without `DEFAULT` (lint over SQL text,
+  `ferrite_store::migrate::expand_lint`). One `DROP` passes since M3-2: a `DROP CONSTRAINT`
+  that re-adds the same name as a `CHECK (col IN (<string literals>))` whose list is a
+  strict superset of the one the down restores (a widening; Postgres `0010`, ruling R56).
 - *Backward-compat test*: CI checks out the previous release tag, builds it, and runs
   its integration tests against a database migrated by the current branch.
   (Starts mattering from the first tagged release.)

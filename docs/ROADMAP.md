@@ -402,7 +402,7 @@ Linux WebKit is not Safari (P55).
 - [x] `sessions.prune` periodic job with the sessions table (from M1.5 P26; M2a-1).
 - Moved to **Later**: multi-host sites (the cache-key host is pinned to `site.url`, R25), because a second host needs per-host `site.url`, cookies and CSRF origins (M2a P27).
 
-## M3 — WordPress import (~2 weeks)
+## M3 — WordPress import (~2 weeks) (done)
 
 Design: [08](design/08-wp-import.md).
 
@@ -420,14 +420,18 @@ exit [`m3-1-exit.md`](superpowers/m3-1-exit.md)) is done:
 - [x] Batch events per transaction (one `invalidate` per batch, `[all]` past 1 000 keys; P6, R2 of M1.5).
 - [x] Carried from the M1.5 final review (rulings/m15.md R17), the second half: the import's writes are fenced in the data by a run token checked first in every batch transaction (P5); the `import` lock is best-effort only.
 
-### M3-2
+### M3-2 (done)
 
-- [ ] The `import.wordpress` job (override `JobHandler::timeout()`, default 300 s, M1.5 P9; take the `import` lock, P13) and `POST /api/v1/import/wordpress` with `Idempotency-Key` (M2a-2b P26); `GET` on runs and the report download.
-- [ ] The admin import screen (upload, progress, link to the report) and the admin fields for `seo.canonical` and `seo.robots`.
-- [ ] Deferred from M2a-2b (P26): redirects for `permalink.*` structure changes (today every published URL moves without a redirect; keep the previous structure and redirect by matching it, with the importer's redirect machinery).
-- [ ] Carried from the M1.5 final review (rulings/m15.md R17): run `EXPLAIN (ANALYZE, BUFFERS)` on the Postgres job claim (`crates/ferrite-store-postgres/src/repos/job.rs`, the `claim` query) with ~50k future-scheduled `content.publish_scheduled` rows before the import creates them in bulk. With fewer due jobs than `limit`, the `OR` branch for expired leases stops the index scan from ending at `run_at > now()`, so each idle claim may read every future row (review M5). If it does, split the claim into a `UNION ALL` of the due branch and the expired-lease branch.
-- [ ] A partial report for a failed run (M3-1 writes none: the CLI prints the error and exits 1).
-- [ ] The M3 exit (`m3-exit.md`): an import through the admin on both profiles, the Docker cluster example with an import.
+M3-2 (the import job, API and admin; plan
+`superpowers/plans/2026-10-29-m3-2-import-job-api-admin.md`, rulings P23–P34 and R52–R83 in
+`superpowers/rulings/m3.md`, exit [`m3-exit.md`](superpowers/m3-exit.md)) is done, and so is M3:
+
+- [x] The `import.wordpress` job (override `JobHandler::timeout()`, default 300 s, M1.5 P9; take the `import` lock, P13) and `POST /api/v1/import/wordpress` with `Idempotency-Key` (M2a-2b P26); `GET` on runs and the report download. Done in Tasks 1–5: migration `0010_import_jobs` (`import` artifacts; `import_runs.job_id`, `step`, `report_hash`), timeout 6 h and 3 attempts, inputs as `import` artifacts copied to the claiming node, step progress, the report stored as artifacts with a manifest; `/import/jobs/{id}`, `/import/runs`, `/import/runs/{id}` and its `report.json`/`report.html` (P23–P29; design 08 §1, 07 §1, 04 §6). The `import` lock stays best-effort; the run's fence is what counts (as built).
+- [x] The admin import screen (upload, progress, link to the report) and the admin fields for `seo.canonical` and `seo.robots`. Done in Tasks 8–9 (P32, P33): `/admin/import` (`g i`) and the SEO section's canonical and robots toggles.
+- [x] Deferred from M2a-2b (P26): redirects for `permalink.*` structure changes (today every published URL moves without a redirect; keep the previous structure and redirect by matching it, with the importer's redirect machinery). Done in Task 6 (P30): the `permalink.redirects` job (06 §3).
+- [x] Carried from the M1.5 final review (rulings/m15.md R17): run `EXPLAIN (ANALYZE, BUFFERS)` on the Postgres job claim (`crates/ferrite-store-postgres/src/repos/job.rs`, the `claim` query) with ~50k future-scheduled `content.publish_scheduled` rows before the import creates them in bulk. With fewer due jobs than `limit`, the `OR` branch for expired leases stops the index scan from ending at `run_at > now()`, so each idle claim may read every future row (review M5). If it does, split the claim into a `UNION ALL` of the due branch and the expired-lease branch. Done in Task 7 (P31): the old claim read 50 005 rows, so it is now the `UNION ALL` split (`claim_explain`, `FERRITE_PG_EXPLAIN=1`; 04 §6).
+- [x] A partial report for a failed run (M3-1 writes none: the CLI prints the error and exits 1). Done in Task 3 (P29): `RunFailed` carries it; the CLI writes it and exits 1; `--uploads` also takes a zip (P24).
+- [x] The M3 exit (`m3-exit.md`): an import through the admin on both profiles, the Docker cluster example with an import. Done in Task 10 (P34); what could not be verified is listed there.
 
 ## M4 — Ops & release (~2–3 weeks)
 
@@ -469,6 +473,16 @@ Design: [09](design/09-operations.md).
     - [ ] The cmdk workaround in `command.tsx` nests `useCallback` refs; simplify.
     - [ ] The Vitest test `renders_the_shell_with_translated_title` came near its 5 s timeout under load; watch it on CI.
   - [ ] Contact sheet, from M2b-3: `icon-sm`/`icon-xs` buttons under 44 px on touch (11 §8; AA's 24 px is met); a faint edge on dark dropdown menus; the palette's stale rows, dimmed to 60 % during a slow search, fall below 4.5:1.
+- [ ] Deferred from M3 ([`m3-exit.md`](superpowers/m3-exit.md) "Open follow-ups"):
+  - [ ] The orphan sweep (with `artifacts.gc`): `import` inputs left when a lease expires on the last attempt or the runner's timeout or a panic ends it (R70), blobs an upload stored but did not record when the 5 s lock wait failed or the request was dropped during it (R68), and report files an attempt replaced (P29).
+  - [ ] A `run_at`-leading index for the job claim's due branch if future jobs grow past about 500 000 (R54).
+  - [ ] `permalink.redirects`: an item whose `published_at` moves later during the job gets no redirect (R62); imported posts may get redirects from never-live paths (R63); `LOCK_TYPES` is held for a page of 500; the E2E sweep assumes at most 500 posts.
+  - [ ] Import job: a job whose lease expired still counts as live until it is reclaimed (R69); a truncated zip is retried, not refused; a corrupt work file is removed on the attempt that fails.
+  - [ ] Import API (Task 5 minors): a cleanup is lost when the request is dropped during its 5 s lock wait; a window where two uploads of the same bytes race; no idle timeout on the `options` part; the `202` fallback path untested; the per-part `413` seam skipped.
+  - [ ] Uploads zip (Task 3 minors): trailing bytes after the end record are refused; two entries that collide in NFC overwrite each other.
+  - [ ] Expand lint (Task 1 minors): the down's match ignores the table name; duplicate literals are not flagged.
+  - [ ] Admin (Tasks 8–9 minors): a BOM trim edge and `maxLength` counting UTF-16 units in the SEO fields; the SEO fields have no live region; the import screen's first live-region text lands in the same commit as its mount; the in-progress wait has no Retry button.
+  - [ ] `zip =9.1.3` is young (published 2026-10-27, R59): recheck on the next dependency update.
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
