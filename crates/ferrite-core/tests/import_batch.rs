@@ -99,7 +99,7 @@ pub async fn start_requires_import_capability(db: &TestDb) {
         Role::Editor,
     );
     let err = service(db)
-        .start(&editor, SOURCE, false, false)
+        .start(&editor, SOURCE, false, false, None)
         .await
         .err()
         .unwrap();
@@ -115,14 +115,14 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert_eq!(a.run().state, ImportRunState::Running);
     assert_eq!(a.run().source, SOURCE);
     assert_eq!(a.run().started_by, admin.user);
 
     for takeover in [false, true] {
         let err = svc
-            .start(&admin, SOURCE, false, takeover)
+            .start(&admin, SOURCE, false, takeover, None)
             .await
             .err()
             .unwrap();
@@ -138,10 +138,14 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
             .await
             .unwrap()
     );
-    let err = svc.start(&admin, SOURCE, false, false).await.err().unwrap();
+    let err = svc
+        .start(&admin, SOURCE, false, false, None)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 
-    let b = svc.start(&admin, SOURCE, true, true).await.unwrap();
+    let b = svc.start(&admin, SOURCE, true, true, None).await.unwrap();
     assert_ne!(a.run().token, b.run().token);
     assert!(b.run().dry_run);
     let old = store
@@ -178,7 +182,7 @@ pub async fn second_start_is_busy_and_takeover_fences_the_first(db: &TestDb) {
         .find(|r| r.state == ImportRunState::Done)
         .unwrap();
     assert_eq!(done.stats, stats);
-    let c = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let c = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let err = c
         .finish(&svc, ImportRunState::Running, json!({}))
         .await
@@ -191,7 +195,7 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
 
     let mut batch = run.batch(&svc).await.unwrap();
@@ -233,7 +237,7 @@ pub async fn user_matching_order(db: &TestDb) {
     let by_login = user(store, "wpuser", "other@e.test", Role::Editor).await;
     user(store, "john-doe", "john@e.test", Role::Editor).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
 
     let out = batch
@@ -333,7 +337,7 @@ pub async fn term_keeps_slug_and_parent(db: &TestDb) {
     tx.terms().insert(&existing).await.unwrap();
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let parent = batch.term(term(10, "world", None)).await.unwrap();
     assert_eq!(parent.how, TermMatched::Created);
@@ -370,7 +374,7 @@ pub async fn mapped_term_of_other_taxonomy_is_not_used(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let cat = batch.term(term(40, "shared", None)).await.unwrap().id;
     let tag = batch
@@ -398,7 +402,7 @@ pub async fn rolled_back_batch_writes_nothing(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let before = store.read().terms().list("category").await.unwrap().len();
 
@@ -444,7 +448,7 @@ pub async fn stale_map_row_is_not_mapped(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let id = batch.term(term(30, "gone", None)).await.unwrap().id;
     batch.commit().await.unwrap();
@@ -496,7 +500,7 @@ pub async fn schema_batch_registers_types_and_taxonomies(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let genre = Taxonomy {
         name: "genre".into(),
         label: "Genres".into(),
@@ -630,7 +634,7 @@ pub async fn meta_is_written_with_item_key(db: &TestDb) {
     let saved = tx.content().insert(&item).await.unwrap();
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     for bad in ["", "seo.title", "import.other"] {
@@ -670,7 +674,7 @@ pub async fn many_keys_collapse_to_all(db: &TestDb) {
     }
     tx.commit().await.unwrap();
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     for id in &items {
@@ -690,7 +694,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert!(store.try_lock(LOCK_IMPORT).await.unwrap().is_none(), "held");
     run.finish(&svc, ImportRunState::Done, json!({}))
         .await
@@ -699,7 +703,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
     guard.release().await.unwrap();
 
     // A finish that is refused (taken over) still releases the lock.
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     assert!(
         store
             .read()
@@ -708,7 +712,7 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
             .await
             .unwrap()
     );
-    let b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    let b = svc.start(&admin, SOURCE, false, true, None).await.unwrap();
     assert!(
         a.finish(&svc, ImportRunState::Done, json!({}))
             .await
@@ -728,7 +732,7 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = service(db);
-    let a = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let a = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let imports = store.read().imports();
     assert!(
         imports
@@ -745,7 +749,11 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
         .heartbeat_at;
     assert!(beat > ago(5), "heartbeat moved");
     // Fresh again: a takeover is refused.
-    let err = svc.start(&admin, SOURCE, false, true).await.err().unwrap();
+    let err = svc
+        .start(&admin, SOURCE, false, true, None)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 
     assert!(
@@ -754,7 +762,7 @@ pub async fn heartbeat_fails_after_takeover(db: &TestDb) {
             .await
             .unwrap()
     );
-    let _b = svc.start(&admin, SOURCE, false, true).await.unwrap();
+    let _b = svc.start(&admin, SOURCE, false, true, None).await.unwrap();
     let err = a.heartbeat(&svc).await.unwrap_err();
     assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
     assert_eq!(ImportBatch::BATCH_ITEMS, 500);

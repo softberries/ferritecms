@@ -171,7 +171,7 @@ async fn import_posts(
     items: Vec<ImportContent>,
 ) -> Vec<ContentOutcome> {
     let svc = importer(db);
-    let run = svc.start(actor, SOURCE, false, false).await.unwrap();
+    let run = svc.start(actor, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let mut out = Vec::new();
     for c in items {
@@ -191,7 +191,7 @@ async fn in_batch<T>(
     f: impl AsyncFnOnce(&mut ferrite_core::import::ImportBatch<'_>) -> T,
 ) -> T {
     let svc = importer(db);
-    let run = svc.start(actor, SOURCE, false, false).await.unwrap();
+    let run = svc.start(actor, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let out = f(&mut batch).await;
     batch.commit().await.unwrap();
@@ -208,7 +208,7 @@ pub async fn media_keeps_dates_author_and_queues_variants(db: &TestDb) {
     let seq = store.read().events().max_seq().await.unwrap();
 
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let mut raster = media(1, 0x11, author);
     raster.hash = "h1".into();
@@ -350,7 +350,7 @@ pub async fn media_rejects_what_an_upload_rejects(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut bad = media(1, 0x33, admin.user);
     bad.upload.sanitized = true; // a PNG cannot be marked sanitised
     let mut batch = run.batch(&svc).await.unwrap();
@@ -383,7 +383,7 @@ pub async fn comment_statuses_dates_threading_and_by_account(db: &TestDb) {
     let seq = store.read().events().max_seq().await.unwrap();
 
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let mut batch = run.batch(&svc).await.unwrap();
     let root = batch
         .comment(comment(1, item, CommentStatus::Approved))
@@ -597,7 +597,7 @@ pub async fn comment_on_draft_item_allowed(db: &TestDb) {
     .await[0]
         .id;
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let cases: Vec<(&str, ImportComment)> = vec![
         (
             "item",
@@ -705,7 +705,7 @@ pub async fn menu_put_in_batch(db: &TestDb) {
 
     // The rules of MenuService::put: a missing target, a long label, a bad name.
     let svc = importer(db);
-    let run = svc.start(&admin, SOURCE, false, false).await.unwrap();
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let bad = [
         Menu {
             items: vec![menu_item(

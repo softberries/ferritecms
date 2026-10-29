@@ -13,7 +13,6 @@ use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use ferrite_core::{Actor, CoreError, SwappablePermalinks, import::ImportService};
-use ferrite_domain::{Role, UserStatus};
 use ferrite_http::import_fetch::HttpSource;
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
@@ -103,9 +102,10 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
         let permalinks = Arc::new(SwappablePermalinks::new(
             permalink_rules(store.as_ref()).await?,
         ));
-        let actor = importer(store.as_ref(), args.as_login.as_deref()).await?;
+        let service = Arc::new(ImportService::new(store.clone(), permalinks.clone()));
+        let actor = importer(store.as_ref(), &service, args.as_login.as_deref()).await?;
         let ctx = ImportContext {
-            import: Arc::new(ImportService::new(store.clone(), permalinks.clone())),
+            import: service,
             permalinks,
             media_store: media,
             actor,
@@ -161,8 +161,13 @@ fn failed(args: &WordpressArgs, failed: RunFailed) -> anyhow::Result<ExitCode> {
     }
 }
 
-/// The admin `login` names, or the first active admin.
-async fn importer(store: &dyn Store, login: Option<&str>) -> anyhow::Result<Actor> {
+/// The admin `login` names, or the first active admin, checked by
+/// [`ImportService::importer`].
+async fn importer(
+    store: &dyn Store,
+    import: &ImportService,
+    login: Option<&str>,
+) -> anyhow::Result<Actor> {
     let user = match login {
         Some(login) => store
             .read()
@@ -179,13 +184,13 @@ async fn importer(store: &dyn Store, login: Option<&str>) -> anyhow::Result<Acto
             .next()
             .context("the site has no active admin (create one with `ferrite user create`)")?,
     };
-    if user.role != Role::Admin || user.status != UserStatus::Active {
-        bail!(
+    match import.importer(user.id).await {
+        Err(CoreError::Forbidden(_)) => bail!(
             "{:?} is not an active admin; only active admins may import",
             user.login
-        );
+        ),
+        actor => Ok(actor?),
     }
-    Ok(Actor::new(user.id, user.role))
 }
 
 /// The uploads folder or zip, then the old site when `--fetch-media` asks for it.

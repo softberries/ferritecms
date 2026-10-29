@@ -16,10 +16,15 @@
 //! statement); on Postgres that statement waits for a batch holding the row lock and
 //! then sees the heartbeat it committed. The named lock [`LOCK_IMPORT`] is also taken,
 //! best-effort, for the life of the handle; nothing relies on it (R17).
+//!
+//! **Jobs (M3-2).** [`ImportService::enqueue`] queues an `import.wordpress` job for an
+//! upload (P25, P27); the run reads, the importer check and the report artifacts are in
+//! `jobs.rs`.
 
 mod batch;
 mod comments;
 mod content;
+mod jobs;
 mod media;
 mod menus;
 mod redirects;
@@ -28,13 +33,16 @@ mod users;
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{ImportRun, ImportRunId, ImportRunState, Timestamp};
+use async_trait::async_trait;
+use bytes::Bytes;
+use ferrite_domain::{ArtifactHash, ImportRun, ImportRunId, ImportRunState, JobId, Timestamp};
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
 pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
+pub use jobs::{ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};
 pub use media::ImportMedia;
 pub use redirects::RedirectOutcome;
 pub use terms::{ImportTerm, TermMatched, TermOutcome};
@@ -58,10 +66,28 @@ const TAKEN_OVER: &str = "import run was taken over";
 /// The constraint that allows one `running` run.
 const RUNNING_UQ: &str = "import_runs_running_uq";
 
-/// Starts import runs and opens their batches.
+/// The steps of a run, in order (P28): what [`ImportHandle::set_step`] accepts.
+pub const IMPORT_STEPS: [&str; 7] = [
+    "parse", "pass1", "pass2", "pass3", "pass4", "fixup", "report",
+];
+
+/// Where artifact bytes live (the binary's `MediaStore`; `ferrite-core` does not depend
+/// on `ferrite-media`, 01 §1): content-addressed by SHA-256.
+#[async_trait]
+pub trait ArtifactBlobs: Send + Sync {
+    /// Stores `data` (idempotent) and returns its hash.
+    async fn put(&self, data: Bytes) -> Result<ArtifactHash, CoreError>;
+    /// The bytes of `hash`: [`CoreError::NotFound`] when there is no such artifact, and
+    /// an error without reading them when it has more than `max` bytes.
+    async fn get(&self, hash: &ArtifactHash, max: u64) -> Result<Bytes, CoreError>;
+}
+
+/// Starts import runs and opens their batches; enqueues import jobs and reads runs.
 pub struct ImportService {
     store: Arc<dyn Store>,
     permalinks: Arc<dyn Permalinks>,
+    /// Report storage; `None` makes the report methods `Unavailable`.
+    artifacts: Option<Arc<dyn ArtifactBlobs>>,
 }
 
 /// A started run, owned by one process. Pass it to every batch; end it with
@@ -78,7 +104,19 @@ pub struct ImportHandle {
 impl ImportService {
     /// `permalinks` are the site's live rules; each batch pins them when it opens.
     pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
-        Self { store, permalinks }
+        Self {
+            store,
+            permalinks,
+            artifacts: None,
+        }
+    }
+
+    /// The same service storing and reading run reports in `artifacts` (P29).
+    pub fn with_artifacts(self, artifacts: Arc<dyn ArtifactBlobs>) -> Self {
+        Self {
+            artifacts: Some(artifacts),
+            ..self
+        }
     }
 
     /// The permalink rules the stored `permalink.*` options give, with `overrides` on
@@ -95,7 +133,8 @@ impl ImportService {
     /// Starts a run of `source` (the normalised `<wp:base_blog_url>`). Needs
     /// [`Capability::Import`]. Another `running` run makes this
     /// [`CoreError::Unavailable`], unless `takeover` is set and that run's heartbeat is
-    /// older than [`STALE_AFTER`]: then it is marked `abandoned` first (P5).
+    /// older than [`STALE_AFTER`]: then it is marked `abandoned` first (P5). `job_id` is
+    /// the `import.wordpress` job running it, if any (P27).
     ///
     /// On SQLite (one writer) never call this while a batch of this process is open:
     /// it would wait for that batch's transaction and time out (`Store(Busy)`).
@@ -105,6 +144,7 @@ impl ImportService {
         source: &str,
         dry_run: bool,
         takeover: bool,
+        job_id: Option<JobId>,
     ) -> Result<ImportHandle, CoreError> {
         require(actor, Capability::Import)?;
         let mut token = [0u8; 16];
@@ -132,7 +172,7 @@ impl ImportService {
             finished_at: None,
             stats: json!({}),
             dry_run,
-            job_id: None,
+            job_id,
             step: None,
             report_hash: None,
         };
@@ -223,6 +263,27 @@ impl ImportHandle {
             .read()
             .imports()
             .fence(self.run.id, &self.run.token, Timestamp::now())
+            .await?;
+        if fenced {
+            Ok(())
+        } else {
+            Err(CoreError::Changed(TAKEN_OVER))
+        }
+    }
+
+    /// Records that the run begins `step`, one of [`IMPORT_STEPS`] (else `Invalid`),
+    /// under the fence (P28): a run that was taken over is [`CoreError::Changed`].
+    ///
+    /// On SQLite (one writer) never call this while a batch of this handle is open.
+    pub async fn set_step(&self, svc: &ImportService, step: &str) -> Result<(), CoreError> {
+        if !IMPORT_STEPS.contains(&step) {
+            return Err(CoreError::Invalid(format!("unknown import step {step:?}")));
+        }
+        let fenced = svc
+            .store
+            .read()
+            .imports()
+            .set_step(self.run.id, &self.run.token, step)
             .await?;
         if fenced {
             Ok(())

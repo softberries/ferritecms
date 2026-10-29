@@ -1,13 +1,13 @@
 //! Background jobs core enqueues and their payloads (design 04 §6, ruling P12; plugin
 //! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8; permalink redirects
-//! M3-2 P30).
+//! M3-2 P30; WordPress imports M3-2 P27).
 //!
 //! The handlers live with the job runner wiring (`ferrite`); this module fixes the kinds,
 //! keys and payload shapes both sides agree on. Payloads carry a version `v` (04 §9).
 
 use std::time::Duration;
 
-use ferrite_domain::{ContentId, NewJob, Timestamp};
+use ferrite_domain::{ContentId, NewJob, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -231,6 +231,103 @@ pub fn permalink_redirects_job(redirects: &PermalinkRedirects) -> NewJob {
     payload.insert("version".into(), Value::from(redirects.version));
     let mut job = NewJob::new(PERMALINK_REDIRECTS_KIND, Value::Object(payload));
     job.unique_key = Some(format!("{PERMALINK_REDIRECTS_KIND}:{}", redirects.version));
+    job
+}
+
+/// Runs one WordPress import from uploaded artifacts (M3-2 P27); payload
+/// [`ImportJobPayload`]. Enqueued by
+/// [`ImportService::enqueue`](crate::import::ImportService::enqueue).
+pub const IMPORT_WORDPRESS_KIND: &str = "import.wordpress";
+
+/// Current version of the [`ImportJobPayload`].
+pub const IMPORT_WORDPRESS_VERSION: u32 = 1;
+
+/// Attempts of an [`IMPORT_WORDPRESS_KIND`] job (P27).
+pub const IMPORT_WORDPRESS_ATTEMPTS: i32 = 3;
+
+/// The import's options, with the CLI's defaults for every missing field (P25).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImportJobOptions {
+    pub dry_run: bool,
+    pub keep_permalinks: bool,
+    pub site_options: bool,
+    pub fetch_media: bool,
+    pub category_base: String,
+    pub tag_base: String,
+}
+
+impl Default for ImportJobOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            keep_permalinks: true,
+            site_options: true,
+            fetch_media: false,
+            category_base: "category".into(),
+            tag_base: "tag".into(),
+        }
+    }
+}
+
+/// Payload of an [`IMPORT_WORDPRESS_KIND`] job:
+/// `{"v":1,"wxr":"<sha256>","uploads":"<sha256>"|null,"options":{…},"user":"<uuid>",
+/// "source_name":"<file name>"}`. `wxr` and `uploads` are `import` artifacts (P23);
+/// `user` is the admin who asked, who must still be an active admin when it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportJobPayload {
+    pub v: u32,
+    pub wxr: String,
+    #[serde(default)]
+    pub uploads: Option<String>,
+    #[serde(default)]
+    pub options: ImportJobOptions,
+    pub user: UserId,
+    /// The uploaded WXR's file name, for the admin's run list.
+    pub source_name: String,
+}
+
+/// What an admin asks to import ([`ImportService::enqueue`](crate::import::ImportService::enqueue)):
+/// the payload without `v` and `user`, which core sets (the job runs as the actor who
+/// asked).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportJobRequest {
+    pub wxr: String,
+    pub uploads: Option<String>,
+    pub options: ImportJobOptions,
+    pub source_name: String,
+}
+
+/// The job for `import`: due now, no unique key (P25's conflict rule stands in for it),
+/// [`IMPORT_WORDPRESS_ATTEMPTS`] attempts.
+pub fn import_wordpress_job(import: &ImportJobPayload) -> NewJob {
+    let o = &import.options;
+    let mut options = Map::new();
+    options.insert("dry_run".into(), Value::Bool(o.dry_run));
+    options.insert("keep_permalinks".into(), Value::Bool(o.keep_permalinks));
+    options.insert("site_options".into(), Value::Bool(o.site_options));
+    options.insert("fetch_media".into(), Value::Bool(o.fetch_media));
+    options.insert(
+        "category_base".into(),
+        Value::String(o.category_base.clone()),
+    );
+    options.insert("tag_base".into(), Value::String(o.tag_base.clone()));
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(import.v));
+    payload.insert("wxr".into(), Value::String(import.wxr.clone()));
+    payload.insert(
+        "uploads".into(),
+        import.uploads.clone().map_or(Value::Null, Value::String),
+    );
+    payload.insert("options".into(), Value::Object(options));
+    payload.insert("user".into(), Value::String(import.user.to_string()));
+    payload.insert(
+        "source_name".into(),
+        Value::String(import.source_name.clone()),
+    );
+    let mut job = NewJob::new(IMPORT_WORDPRESS_KIND, Value::Object(payload));
+    job.max_attempts = IMPORT_WORDPRESS_ATTEMPTS;
     job
 }
 
