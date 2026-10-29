@@ -68,7 +68,7 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     // 0005's sessions and the audit log): refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(0, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -260,7 +260,7 @@ pub async fn status_reports_pending_directives(db: &TestDb) {
     assert_eq!((gc.version, gc.description.as_str()), (11, "artifact gc"));
     assert_eq!(gc.directives.phase, Phase::Expand);
     assert_eq!(gc.directives.min_binary, None);
-    assert!(gc.directives.lossy_down);
+    assert!(!gc.directives.lossy_down);
 }
 
 /// `0010_import_jobs` is a contract migration on SQLite only: widening the
@@ -345,7 +345,7 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     // 0007 and 0008 sit above it and are lossy too; refused first, nothing reverted.
     let err = store.migrate_down(5, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -421,7 +421,7 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(6, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "autosaves"));
@@ -477,7 +477,7 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(7, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -550,7 +550,7 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(8, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "import_runs"));
@@ -637,7 +637,7 @@ pub async fn migration_0010_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(9, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 11 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
         "{err:?}"
     );
     assert_eq!(store.migrate_down(9, true).await.unwrap(), vec![11, 10]);

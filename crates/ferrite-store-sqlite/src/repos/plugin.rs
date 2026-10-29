@@ -7,9 +7,10 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MAX_ID_FILTER, MarkCounts, MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin,
-    StoreError, ThemeRepo, check_len, check_limit, check_prune_limit, retained_marker,
-    validate_json, validate_text,
+    ARTIFACT_UNREFERENCED_SQL, ArtifactRepo, MAX_EXISTING_HASHES, MAX_ID_FILTER, MarkCounts,
+    MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin, StoreError, ThemeRepo,
+    artifact_hash_array, check_len, check_limit, check_prune_limit, retained_marker, validate_json,
+    validate_text,
 };
 
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -17,7 +18,7 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use super::SqliteRepos;
 use crate::{
     codec::{self, ARTIFACT_COLUMNS, MEDIA_COLUMNS, PLUGIN_COLUMNS, THEME_COLUMNS},
-    exec::{atomic, run},
+    exec::{atomic, map_db_err, run},
 };
 
 #[async_trait]
@@ -37,15 +38,15 @@ impl ArtifactRepo for SqliteRepos {
             .bind(artifact.created_at.as_micros())
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?;
+            .map_err(map_db_err)?;
             if done.rows_affected() == 1 {
                 return Ok(true);
             }
-            sqlx::query("UPDATE artifacts SET orphaned_at = NULL WHERE hash = ?")
+            sqlx::query("UPDATE artifacts SET orphaned_at = NULL WHERE hash = ? AND orphaned_at IS NOT NULL")
                 .bind(artifact.hash.as_str())
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             Ok(false)
         })
     }
@@ -87,7 +88,7 @@ impl ArtifactRepo for SqliteRepos {
 
     async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError> {
         check_len("artifact hashes", hashes.len(), MAX_EXISTING_HASHES)?;
-        let list = hash_array(hashes)?;
+        let list = artifact_hash_array(hashes)?;
         let rows = run!(&self.reader, |e| sqlx::query(
             "SELECT hash FROM artifacts WHERE hash IN (SELECT value FROM json_each(?)) \
              ORDER BY hash"
@@ -96,7 +97,7 @@ impl ArtifactRepo for SqliteRepos {
         .fetch_all(e))?;
         rows.iter()
             .map(|r| {
-                let hash: String = r.try_get("hash").map_err(crate::exec::map_db_err)?;
+                let hash: String = r.try_get("hash").map_err(map_db_err)?;
                 ArtifactHash::parse(&hash).map_err(Into::into)
             })
             .collect()
@@ -107,26 +108,26 @@ impl ArtifactRepo for SqliteRepos {
         now: Timestamp,
         protected: &[ArtifactHash],
     ) -> Result<MarkCounts, StoreError> {
-        let list = hash_array(protected)?;
+        let list = artifact_hash_array(protected)?;
         atomic!(&self.writer, |conn| async {
             let unmarked = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE artifacts SET orphaned_at = NULL WHERE orphaned_at IS NOT NULL AND \
-                 (hash IN (SELECT value FROM json_each(?)) OR NOT ({UNREFERENCED}))"
+                 (hash IN (SELECT value FROM json_each(?)) OR NOT ({ARTIFACT_UNREFERENCED_SQL}))"
             )))
             .bind(list.as_str())
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?
+            .map_err(map_db_err)?
             .rows_affected();
             let marked = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE artifacts SET orphaned_at = ? WHERE orphaned_at IS NULL AND \
-                 hash NOT IN (SELECT value FROM json_each(?)) AND {UNREFERENCED}"
+                 hash NOT IN (SELECT value FROM json_each(?)) AND {ARTIFACT_UNREFERENCED_SQL}"
             )))
             .bind(now.as_micros())
             .bind(list.as_str())
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?
+            .map_err(map_db_err)?
             .rows_affected();
             Ok(MarkCounts { marked, unmarked })
         })
@@ -154,10 +155,10 @@ impl ArtifactRepo for SqliteRepos {
         before: Timestamp,
         protected: &[ArtifactHash],
     ) -> Result<bool, StoreError> {
-        let list = hash_array(protected)?;
+        let list = artifact_hash_array(protected)?;
         let done = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM artifacts WHERE hash = ? AND orphaned_at < ? AND \
-             hash NOT IN (SELECT value FROM json_each(?)) AND {UNREFERENCED}"
+             hash NOT IN (SELECT value FROM json_each(?)) AND {ARTIFACT_UNREFERENCED_SQL}"
         )))
         .bind(hash.as_str())
         .bind(before.as_micros())
@@ -165,22 +166,6 @@ impl ArtifactRepo for SqliteRepos {
         .execute(e))?;
         Ok(done.rows_affected() == 1)
     }
-}
-
-/// SQL (on `artifacts`): no row names the artifact; P10's SQL part of "referenced".
-const UNREFERENCED: &str = "NOT EXISTS (SELECT 1 FROM media WHERE artifact_hash = artifacts.hash) \
-     AND NOT EXISTS (SELECT 1 FROM media_variants WHERE hash = artifacts.hash) \
-     AND NOT EXISTS (SELECT 1 FROM plugins WHERE artifact_hash = artifacts.hash) \
-     AND NOT EXISTS (SELECT 1 FROM themes WHERE artifact_hash = artifacts.hash) \
-     AND NOT EXISTS (SELECT 1 FROM import_runs WHERE report_hash = artifacts.hash)";
-
-/// Most hashes [`ArtifactRepo::existing`] accepts.
-const MAX_EXISTING_HASHES: usize = 1000;
-
-/// The hashes as one JSON array text, the single parameter the statements unpack.
-fn hash_array(hashes: &[ArtifactHash]) -> Result<String, StoreError> {
-    serde_json::to_string(&hashes.iter().map(ArtifactHash::as_str).collect::<Vec<_>>())
-        .map_err(|e| StoreError::Invalid(e.to_string()))
 }
 
 #[async_trait]
@@ -209,7 +194,7 @@ impl MediaRepo for SqliteRepos {
             .bind(media.sanitized)
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?;
+            .map_err(map_db_err)?;
             sync_variants(&mut *conn, media.item_id).await
         })
     }
@@ -249,7 +234,7 @@ impl MediaRepo for SqliteRepos {
             .bind(media.item_id.as_uuid())
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?;
+            .map_err(map_db_err)?;
             if done.rows_affected() == 0 {
                 return Err(StoreError::NotFound);
             }
@@ -257,7 +242,7 @@ impl MediaRepo for SqliteRepos {
                 .bind(media.item_id.as_uuid())
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             sync_variants(&mut *conn, media.item_id).await
         })
     }
@@ -325,7 +310,7 @@ async fn sync_variants(
         .bind(item.as_uuid())
         .execute(conn)
         .await
-        .map_err(crate::exec::map_db_err)?;
+        .map_err(map_db_err)?;
     Ok(())
 }
 
@@ -378,7 +363,7 @@ impl PluginRepo for SqliteRepos {
         )
         .bind(id)
         .fetch_optional(e))?;
-        row.map(|r| r.try_get::<bool, _>("enabled").map_err(crate::map_db_err))
+        row.map(|r| r.try_get::<bool, _>("enabled").map_err(map_db_err))
             .transpose()
     }
 
@@ -408,7 +393,7 @@ impl PluginRepo for SqliteRepos {
         .bind(hook)
         .fetch_all(e))?;
         rows.iter()
-            .map(|r| r.try_get::<String, _>("name").map_err(crate::map_db_err))
+            .map(|r| r.try_get::<String, _>("name").map_err(map_db_err))
             .collect()
     }
 
@@ -457,8 +442,8 @@ impl PluginRepo for SqliteRepos {
         .fetch_all(e))?;
         let mut found = Vec::with_capacity(rows.len());
         for row in &rows {
-            let key: String = row.try_get("key").map_err(crate::map_db_err)?;
-            let value: String = row.try_get("value").map_err(crate::map_db_err)?;
+            let key: String = row.try_get("key").map_err(map_db_err)?;
+            let value: String = row.try_get("value").map_err(map_db_err)?;
             if let Some(r) = retained_marker(&key, &codec::json_from_db(&value)?) {
                 found.push(r);
             }
@@ -665,12 +650,12 @@ impl ThemeRepo for SqliteRepos {
             sqlx::query("UPDATE themes SET active = 0 WHERE active = 1")
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             let done = sqlx::query("UPDATE themes SET active = 1 WHERE name = ?")
                 .bind(id)
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             if done.rows_affected() == 0 {
                 return Err(StoreError::NotFound);
             }

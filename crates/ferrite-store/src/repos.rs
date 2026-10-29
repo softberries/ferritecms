@@ -427,6 +427,14 @@ pub trait UserRepo: Send + Sync {
 }
 
 #[async_trait]
+/// Artifact rows and the GC queries over them.
+///
+/// `media.artifact_hash`, `plugins.artifact_hash` and `themes.artifact_hash` are foreign
+/// keys; `media_variants.hash` and `import_runs.report_hash` are not, so a writer of
+/// those must call [`insert_if_absent`](Self::insert_if_absent) for the hash before it
+/// writes the reference. [`delete_if_orphaned`](Self::delete_if_orphaned) may return
+/// `StoreError::ForeignKey` when an FK-backed reference races in; callers treat that as
+/// "kept".
 pub trait ArtifactRepo: Send + Sync {
     /// Inserts an artifact unless its hash exists; returns true if inserted.
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError>;
@@ -440,7 +448,8 @@ pub trait ArtifactRepo: Send + Sync {
         after: Option<&ArtifactHash>,
         limit: u32,
     ) -> Result<Vec<Artifact>, StoreError>;
-    /// The given hashes that have a row (at most 1000 hashes, else `Invalid`).
+    /// The given hashes that have a row (at most [`MAX_EXISTING_HASHES`](crate::MAX_EXISTING_HASHES)
+    /// hashes, else `Invalid`).
     async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError>;
     /// One GC mark pass. Sets `orphaned_at = now` on unmarked rows that nothing
     /// references (`media.artifact_hash`, `media_variants.hash`, `plugins.artifact_hash`,

@@ -340,7 +340,106 @@ pub async fn delete_if_orphaned_respects_before_refs_and_protected(db: &TestDb) 
     );
 }
 
-/// `0011_artifact_gc`: the down drops the column (marks are lost, rows stay) and the up
+/// A marked, old artifact that gets referenced afterwards is kept by
+/// `delete_if_orphaned`, for each kind of reference besides themes: a media original,
+/// a media variant (`media_variants`, no FK), a plugin and an import report (no FK).
+pub async fn delete_if_orphaned_keeps_each_reference_kind(db: &TestDb) {
+    let store = db.store();
+    let artifacts = store.read().artifacts();
+    let author = fixture_user(store).await;
+    // a: the media item's original (referenced from the start), b: media original
+    // referenced later, c: variant, d: plugin, e: import report.
+    put(db, 'a', ArtifactKind::Media).await;
+    for (c, kind) in [
+        ('b', ArtifactKind::Media),
+        ('c', ArtifactKind::Variant),
+        ('d', ArtifactKind::Plugin),
+        ('e', ArtifactKind::Import),
+    ] {
+        put(db, c, kind).await;
+    }
+    let media_for = |item_id, original: char, variants: serde_json::Value| Media {
+        item_id,
+        artifact_hash: hash(original),
+        mime: "image/png".into(),
+        bytes: 10,
+        width: None,
+        height: None,
+        alt: String::new(),
+        original_name: "p.png".into(),
+        variants,
+        sanitized: false,
+    };
+    let mut first = new_post(&author, "first");
+    first.kind = "media".into();
+    let mut second = new_post(&author, "second");
+    second.kind = "media".into();
+    let tx = store.begin().await.unwrap();
+    tx.content().insert(&first).await.unwrap();
+    tx.content().insert(&second).await.unwrap();
+    tx.commit().await.unwrap();
+    let media = store.read().media();
+    media
+        .insert(&media_for(first.id, 'a', json!({})))
+        .await
+        .unwrap();
+
+    artifacts.mark_orphans(t(100), &[]).await.unwrap();
+    for c in ['b', 'c', 'd', 'e'] {
+        assert_eq!(orphaned_at(db, c).await, Some(t(100)), "{c}");
+    }
+    assert_eq!(orphaned_at(db, 'a').await, None);
+
+    // Reference them after the mark.
+    media
+        .insert(&media_for(second.id, 'b', json!({})))
+        .await
+        .unwrap();
+    media
+        .update(&media_for(
+            first.id,
+            'a',
+            json!({"thumb": {"hash": hash('c').as_str(), "w": 1, "h": 1}}),
+        ))
+        .await
+        .unwrap();
+    store
+        .read()
+        .plugins()
+        .upsert(&InstalledPlugin {
+            name: "p".into(),
+            version: "1.0.0".into(),
+            artifact_hash: hash('d'),
+            manifest: json!({"name": "p"}),
+            granted: json!({}),
+            enabled: true,
+            disabled_reason: None,
+            installed_at: t(0),
+            updated_at: t(0),
+        })
+        .await
+        .unwrap();
+    let run = new_run(author.id, "https://wp.example");
+    let imports = store.read().imports();
+    imports.create_run(&run).await.unwrap();
+    imports
+        .set_report(run.id, hash('e').as_str())
+        .await
+        .unwrap();
+
+    for c in ['b', 'c', 'd', 'e'] {
+        assert!(
+            !artifacts
+                .delete_if_orphaned(&hash(c), t(101), &[])
+                .await
+                .unwrap(),
+            "{c} is referenced"
+        );
+        assert!(artifacts.get(&hash(c)).await.unwrap().is_some(), "{c}");
+    }
+}
+
+/// `0011_artifact_gc`: the down (not lossy) drops the column (marks go, rows stay) and the up
 /// adds it back, unmarked.
 pub async fn migration_0011_roundtrip(db: &TestDb) {
     let store = db.store();
@@ -353,9 +452,7 @@ pub async fn migration_0011_roundtrip(db: &TestDb) {
         .unwrap();
     assert_eq!(orphaned_at(db, 'a').await, Some(t(10)));
 
-    let err = store.migrate_down(10, false).await.unwrap_err();
-    assert!(err.to_string().contains("lossy"), "{err:?}");
-    assert_eq!(store.migrate_down(10, true).await.unwrap(), vec![11]);
+    assert_eq!(store.migrate_down(10, false).await.unwrap(), vec![11]);
     let has_index = |objects: &[String]| {
         objects
             .iter()

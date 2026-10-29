@@ -161,6 +161,7 @@ backend_tests!(
     artifact_list_page_is_ordered_and_paged,
     existing_returns_present_subset,
     migration_0011_roundtrip,
+    delete_if_orphaned_keeps_each_reference_kind,
     mark_orphans_marks_unreferenced_and_clears_referenced,
     insert_if_absent_clears_orphan_mark,
     delete_if_orphaned_respects_before_refs_and_protected,
