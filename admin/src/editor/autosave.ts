@@ -16,7 +16,7 @@
 import { NetworkError } from "@/api/client";
 import { getAutosave } from "@/api/content";
 import { ApiError } from "@/api/problem";
-import type { SchemaAutosaveDto } from "@/api/schema";
+import type { SchemaAutosaveDto, SchemaSeoPatchDto } from "@/api/schema";
 
 /** How often a changed draft is written to the slot (07 §3). */
 export const AUTOSAVE_INTERVAL_MS = 10_000;
@@ -37,8 +37,11 @@ export interface Draft {
   parent_id: string | null;
   menu_order: number | null;
   terms: string[] | null;
-  /** The SEO members (`null` inside: not set); absent or `null`: unchanged. */
-  seo?: { title?: string | null; description?: string | null } | null;
+  /**
+   * The SEO members (`null` inside: not set; `robots` `null`: none); absent or `null`:
+   * unchanged. A slot from before M3-2 has no `canonical` or `robots` (unchanged too).
+   */
+  seo?: SchemaSeoPatchDto | null;
 }
 
 /** What the slot is doing (the editor folds it into its save indicator). */

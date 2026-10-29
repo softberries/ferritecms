@@ -1,22 +1,45 @@
-// SEO (07 §3 Editor; P28): the title and description search results and link previews
-// use. Soft counters at 60 and 160 characters say where results often cut them off; the
-// hard limits are the server's (200 and 500). Below, a search result preview, and "Reset
-// to defaults" clears both (the site then uses the item's title and excerpt). The values
-// are part of the one draft (`meta.seo`): they autosave, enter the 412 conflict list as
-// "SEO", and a change to them alone is a full save (a new version). Revisions do not keep
-// them (P13); the revisions drawer says so.
+// SEO (07 §3 Editor; P28, M3-2 P33): the title and description search results and link
+// previews use, the canonical URL and the robots directives. Soft counters at 60 and 160
+// characters say where results often cut the text off; the hard limits are the server's
+// (200, 500 and 2048). A search result preview follows the text (with the canonical
+// address once it is a full one, and a note while `noindex` is on); then the canonical
+// URL (the item's own address as its placeholder) and the five directives as a labelled
+// group of switches. "Reset to defaults" clears all four (the site then uses the item's
+// title, excerpt and address, and no robots tag). The values are part of the one draft
+// (`meta.seo`): they autosave, enter the 412 conflict list as "SEO", and a change to them
+// alone is a full save (a new version). Revisions do not keep them (P13); the revisions
+// drawer says so.
 
-import { RotateCcwIcon } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { EyeOffIcon, RotateCcwIcon } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
+import type { SchemaRobotsDto } from "@/api/schema";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { uiLocale } from "@/lib/locale";
-import type { EditorDocument } from "../editor-state";
+import {
+  EMPTY_SEO,
+  type EditorDocument,
+  MAX_CANONICAL,
+  type SeoDraft,
+  canonicalAccepted,
+} from "../editor-state";
+import { sortedRobots } from "../conflict";
 import { SearchPreview } from "./search-preview";
+
+/** The directives in the order the panel lists them (the most used first). */
+const ROBOTS: readonly SchemaRobotsDto[] = [
+  "noindex",
+  "nofollow",
+  "noarchive",
+  "nosnippet",
+  "noimageindex",
+];
 
 /** Hard limits (the server's) and soft ones (where results are often cut off). */
 const SEO_LIMITS = {
@@ -26,8 +49,15 @@ const SEO_LIMITS = {
 
 const chars = (s: string) => [...s].length;
 
-/** A server message as a sentence (core starts it in lower case). */
-const sentence = (s: string | undefined) => (s ? s[0]!.toUpperCase() + s.slice(1) : undefined);
+/**
+ * A server message about `path` as a sentence: core starts it with the path
+ * (`seo.canonical must be …`), which the field's label already says.
+ */
+function sentence(path: string, s: string | undefined): string | undefined {
+  if (!s) return undefined;
+  const text = s.startsWith(`${path} `) ? s.slice(path.length + 1) : s;
+  return text[0]!.toUpperCase() + text.slice(1);
+}
 
 export function SeoSection({
   doc,
@@ -42,16 +72,21 @@ export function SeoSection({
 }) {
   const { t } = useTranslation("editor");
   const { seo } = doc.meta;
-  const set = (patch: Partial<typeof seo>) => {
-    if (patch.title !== undefined) doc.clearFieldError("seo.title");
-    if (patch.description !== undefined) doc.clearFieldError("seo.description");
+  const set = (patch: Partial<SeoDraft>) => {
+    for (const key of ["title", "description", "canonical"] as const) {
+      if (patch[key] !== undefined) doc.clearFieldError(`seo.${key}`);
+    }
     doc.setMeta({ seo: { ...doc.meta.seo, ...patch } });
   };
   const permalink = doc.item?.permalink ?? null;
-  const url = siteUrl && permalink ? new URL(permalink, siteUrl).toString() : null;
+  const ownUrl = siteUrl && permalink ? new URL(permalink, siteUrl).toString() : null;
+  const canonical = seo.canonical.trim();
+  // Search engines show the canonical address; a half-typed one is not shown.
+  const url = canonical !== "" && canonicalAccepted(canonical) ? canonical : ownUrl;
   const previewTitle = seo.title.trim() || doc.title.trim() || t("title.untitled");
   const previewDescription = seo.description.trim() || doc.meta.excerpt.trim();
-  const empty = seo.title === "" && seo.description === "";
+  const empty =
+    seo.title === "" && seo.description === "" && seo.canonical === "" && seo.robots.length === 0;
   return (
     <section aria-labelledby="panel-seo" data-slot="panel-seo" className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
@@ -64,7 +99,7 @@ export function SeoSection({
             variant="ghost"
             size="xs"
             className="-mr-1.5 text-muted-foreground"
-            onClick={() => set({ title: "", description: "" })}
+            onClick={() => set(EMPTY_SEO)}
           >
             <RotateCcwIcon data-icon="inline-start" />
             {t("seo.reset")}
@@ -76,7 +111,7 @@ export function SeoSection({
         value={seo.title}
         disabled={disabled}
         placeholder={doc.title.trim() || t("seo.titlePlaceholder")}
-        error={sentence(doc.fieldErrors["seo.title"])}
+        error={sentence("seo.title", doc.fieldErrors["seo.title"])}
         onChange={(title) => set({ title })}
       />
       <SeoInput
@@ -84,7 +119,7 @@ export function SeoSection({
         value={seo.description}
         disabled={disabled}
         placeholder={doc.meta.excerpt.trim() || t("seo.descriptionPlaceholder")}
-        error={sentence(doc.fieldErrors["seo.description"])}
+        error={sentence("seo.description", doc.fieldErrors["seo.description"])}
         onChange={(description) => set({ description })}
       />
       <div className="flex flex-col gap-1.5">
@@ -95,8 +130,134 @@ export function SeoSection({
           description={previewDescription}
           siteName={siteName}
         />
+        {seo.robots.includes("noindex") ? (
+          <p
+            data-slot="seo-noindex-note"
+            className="flex items-start gap-1.5 text-xs text-muted-foreground"
+          >
+            <EyeOffIcon aria-hidden="true" className="mt-px size-3.5 shrink-0 text-warning" />
+            {t("seo.noindexNote")}
+          </p>
+        ) : null}
       </div>
+      <CanonicalField
+        value={seo.canonical}
+        disabled={disabled}
+        placeholder={ownUrl ?? t("seo.canonicalPlaceholder")}
+        serverError={sentence("seo.canonical", doc.fieldErrors["seo.canonical"])}
+        onChange={(value) => set({ canonical: value })}
+      />
+      <RobotsGroup value={seo.robots} disabled={disabled} onChange={(robots) => set({ robots })} />
     </section>
+  );
+}
+
+/**
+ * The canonical URL: the server's `422` message, else, once the field was left, this
+ * screen's own check (the server's rules), shown under it.
+ */
+function CanonicalField({
+  value,
+  disabled,
+  placeholder,
+  serverError,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  placeholder: string;
+  serverError: string | undefined;
+  onChange: (v: string) => void;
+}) {
+  const { t } = useTranslation("editor");
+  const [left, setLeft] = useState(false);
+  const error =
+    serverError ?? (left && !canonicalAccepted(value) ? t("seo.canonicalInvalid") : undefined);
+  return (
+    <FormField
+      slot="seo-canonical-field"
+      label={t("seo.canonical")}
+      hint={t("seo.canonicalHint")}
+      error={error}
+    >
+      {(control) => (
+        <Input
+          {...control}
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          data-slot="seo-canonical"
+          className="text-sm"
+          value={value}
+          disabled={disabled}
+          placeholder={placeholder}
+          maxLength={MAX_CANONICAL}
+          // A long address scrolls inside the field: the whole one on hover.
+          title={value || undefined}
+          onBlur={() => setLeft(true)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </FormField>
+  );
+}
+
+/** The robots directives: one switch each, a group named by its heading. */
+function RobotsGroup({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: readonly SchemaRobotsDto[];
+  disabled: boolean;
+  onChange: (robots: SchemaRobotsDto[]) => void;
+}) {
+  const { t } = useTranslation("editor");
+  const labelId = useId();
+  const hintId = useId();
+  const toggle = (directive: SchemaRobotsDto, on: boolean) =>
+    onChange(sortedRobots(on ? [...value, directive] : value.filter((d) => d !== directive)));
+  return (
+    <div
+      role="group"
+      aria-labelledby={labelId}
+      aria-describedby={hintId}
+      data-slot="seo-robots"
+      className="flex flex-col gap-1.5"
+    >
+      <span id={labelId} className="text-sm leading-none font-medium">
+        {t("seo.robots")}
+      </span>
+      <p id={hintId} className="text-xs text-muted-foreground">
+        {t("seo.robotsHint")}
+      </p>
+      <div className="mt-0.5 flex flex-col divide-y rounded-lg border">
+        {ROBOTS.map((directive) => (
+          <div
+            key={directive}
+            data-slot="seo-robot"
+            data-directive={directive}
+            className="px-3 py-2.5"
+          >
+            <SwitchRow
+              label={t(`seo.robotsOption.${directive}`)}
+              hint={<code className="font-mono">{directive}</code>}
+            >
+              {(control) => (
+                <Switch
+                  {...control}
+                  className="mt-0.5 pointer-coarse:after:-inset-y-3.5"
+                  checked={value.includes(directive)}
+                  disabled={disabled}
+                  onCheckedChange={(on) => toggle(directive, on)}
+                />
+              )}
+            </SwitchRow>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

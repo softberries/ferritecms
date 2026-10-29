@@ -363,7 +363,9 @@
       "revision": "This item was saved elsewhere, so the version was not restored. You are on its latest version now; restore again when ready."
     },
     "seoTitle": "Title",
-    "seoDescription": "Description"
+    "seoDescription": "Description",
+    "seoCanonical": "Canonical URL",
+    "seoRobots": "Robots"
   },
   "restore": {
     "restoredBefore": "Unsaved changes from",
@@ -545,6 +547,20 @@
     "soft": "Often cut off in search results after about {{n}} characters",
     "count": "{{n}} / {{soft}}",
     "reset": "Reset to defaults",
+    "canonical": "Canonical URL",
+    "canonicalPlaceholder": "https://example.com/original-post/",
+    "canonicalHint": "Leave empty to use this page's own address. Set it when the original lives at another address: search engines are asked to treat that one as the main copy.",
+    "canonicalInvalid": "Enter a full address that starts with https:// or http://, without spaces.",
+    "robots": "Search engine directives",
+    "robotsHint": "Sent as the page's robots meta tag. All off: no tag.",
+    "robotsOption": {
+      "noindex": "Hide from search results",
+      "nofollow": "Do not follow links",
+      "noarchive": "No cached copy",
+      "nosnippet": "No text snippet",
+      "noimageindex": "Do not index images"
+    },
+    "noindexNote": "Search engines are asked not to list this page.",
     "preview": "Search result preview",
     "previewNoUrl": "The address is known after the first save",
     "previewNoDescription": "No description: search engines pick text from the page.",

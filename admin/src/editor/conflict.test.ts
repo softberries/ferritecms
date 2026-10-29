@@ -196,6 +196,43 @@ describe("conflict", () => {
     ).toEqual(["seo"]);
   });
 
+  test("conflict lists SEO when only robots differ", () => {
+    const theirs = itemWith({
+      seo: {
+        title: null,
+        description: null,
+        canonical: "https://elsewhere.example/orig/",
+        robots: ["nofollow", "noindex"],
+      },
+    });
+    const same = {
+      title: null,
+      description: null,
+      canonical: " https://elsewhere.example/orig/ ",
+      // Order does not matter: the server sorts them.
+      robots: ["noindex", "nofollow"] as const,
+    };
+    expect(
+      differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: [...same.robots] } })),
+    ).toEqual([]);
+    expect(
+      differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: ["noindex"] } })),
+    ).toEqual(["seo"]);
+    // `null` deletes them, which differs from a stored list.
+    expect(differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: null } }))).toEqual([
+      "seo",
+    ]);
+    // Absent: unchanged.
+    expect(differingFields(theirs, draftOf(theirs, { seo: { title: null } }))).toEqual([]);
+    // A canonical that differs alone counts too.
+    expect(
+      differingFields(
+        theirs,
+        draftOf(theirs, { seo: { canonical: "https://elsewhere.example/other/" } }),
+      ),
+    ).toEqual(["seo"]);
+  });
+
   test("bodies_compare_without_editor_defaults", () => {
     // TipTap fills in null attribute defaults the stored copy may not have (F32).
     const stored = {
