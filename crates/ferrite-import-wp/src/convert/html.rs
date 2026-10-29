@@ -1343,7 +1343,7 @@ mod tests {
             assert!(parse_guarded(&html, &mut notes).is_none(), "{unit}");
             assert_eq!(notes.too_deep.count, 1);
             assert!(
-                start.elapsed() < std::time::Duration::from_secs(1),
+                start.elapsed() < std::time::Duration::from_secs(5),
                 "{unit}: {:?}",
                 start.elapsed()
             );

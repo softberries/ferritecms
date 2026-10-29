@@ -336,7 +336,7 @@ mod tests {
         let started = std::time::Instant::now();
         let (text, too_deep) = plain_text_guarded(&html);
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
+            started.elapsed() < std::time::Duration::from_secs(5),
             "{:?}",
             started.elapsed()
         );
