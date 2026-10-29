@@ -267,17 +267,34 @@ UPDATE jobs SET status = 'dead', last_error = 'lease expired after attempt …',
 WHERE status = 'running' AND locked_until < now() AND attempts >= max_attempts AND kind = ANY($kinds);
 ```
 
-then the claim, a `MATERIALIZED` CTE so the locking subquery runs exactly once (P5):
+then the claim, a `MATERIALIZED` CTE so the locking subquery runs exactly once (P5). Since
+M3-2 (P31) it is a `UNION ALL` of a due branch (`jobs_claim_idx`) and an expired-lease
+branch (`jobs_lease_idx`), each limited and locked on its own, as the SQLite claim is: the
+earlier single `OR` filter read every future-dated job (50 005 rows with 50 000 queued
+`content.publish_scheduled` jobs; now 12). `FOR UPDATE` is not allowed on a `UNION` or on
+its leaves, so each branch locks inside a derived table. Rows locked by a branch but cut by
+the outer `LIMIT` are released when the statement ends. With fewer due jobs than `LIMIT`
+the due branch still walks the `jobs_claim_idx` entries of the future jobs (index tuples
+only, no heap reads; about 0.5 ms at 50 000), which an index with `run_at` leading would
+avoid:
 
 ```sql
 WITH next AS MATERIALIZED (
-  SELECT id FROM jobs
-  WHERE kind = ANY($kinds)
-    AND ((status = 'queued' AND run_at <= now())
-      OR (status = 'running' AND locked_until < now() AND attempts < max_attempts))
+  SELECT id FROM (
+    SELECT id, priority, run_at FROM (
+      SELECT id, priority, run_at FROM jobs
+      WHERE kind = ANY($kinds) AND status = 'queued' AND run_at <= now()
+      ORDER BY priority DESC, run_at, id LIMIT $n
+      FOR UPDATE SKIP LOCKED) due
+    UNION ALL
+    SELECT id, priority, run_at FROM (
+      SELECT id, priority, run_at FROM jobs
+      WHERE kind = ANY($kinds) AND status = 'running' AND locked_until < now()
+        AND attempts < max_attempts
+      ORDER BY priority DESC, run_at, id LIMIT $n
+      FOR UPDATE SKIP LOCKED) expired) u
   ORDER BY priority DESC, run_at, id
-  LIMIT $n
-  FOR UPDATE SKIP LOCKED)
+  LIMIT $n)
 UPDATE jobs SET status = 'running', locked_by = $node,
   locked_until = now() + make_interval(secs => $lease), attempts = attempts + 1
 FROM next WHERE jobs.id = next.id
