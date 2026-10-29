@@ -18,7 +18,12 @@ import { uid } from "./support/uid";
 type Stored = Item & {
   fields: Record<string, unknown>;
   permalink: string;
-  seo: { title: string | null; description: string | null };
+  seo: {
+    title: string | null;
+    description: string | null;
+    canonical: string | null;
+    robots: string[];
+  };
 };
 
 const SCHEMA = [
@@ -305,7 +310,9 @@ test("seo_fields_reach_the_head", async ({ as, site, siteKey, snap, expectAccess
 
     await save(page);
     const stored = (await api.get("post", item.id)) as Stored;
-    expect(stored.seo).toEqual({ title: seoTitle, description });
+    // `canonical` and `robots` come from the WordPress import (M3-1 P10); the editor
+    // leaves them as they are (their fields are M3-2).
+    expect(stored.seo).toEqual({ title: seoTitle, description, canonical: null, robots: [] });
     const html = await (await page.request.get(stored.permalink)).text();
     expect(/<title>([^<]*)<\/title>/.exec(html)?.[1]).toBe(seoTitle);
     expect(html).toContain(`<meta name="description" content="${description}"`);
@@ -316,6 +323,8 @@ test("seo_fields_reach_the_head", async ({ as, site, siteKey, snap, expectAccess
     expect(((await api.get("post", item.id)) as Stored).seo).toEqual({
       title: null,
       description: null,
+      canonical: null,
+      robots: [],
     });
   } finally {
     await page.context().close();
