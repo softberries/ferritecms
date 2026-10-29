@@ -10,7 +10,7 @@
 
 mod gc;
 mod import;
-mod media;
+pub(crate) mod media;
 mod permalinks;
 
 use std::{sync::Arc, time::Duration};

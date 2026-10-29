@@ -447,7 +447,7 @@ Design: [09](design/09-operations.md).
   - [ ] `build_s3` replaces any client options read from the environment with its own timeouts (split from the item above).
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
   - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
-  - [ ] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
+  - [x] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
   - [ ] Optional location-metadata stripping on upload: the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11); only variants are re-encoded without EXIF/XMP (03 §4).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).

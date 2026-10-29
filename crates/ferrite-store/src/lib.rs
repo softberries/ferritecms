@@ -1,7 +1,10 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
+pub mod catalogue;
 mod error;
+mod export;
 mod import;
+mod import_writer;
 mod json;
 mod lock;
 mod menu;
@@ -14,7 +17,11 @@ mod session;
 mod text;
 
 pub use error::StoreError;
+pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
 pub use import::{check_import_map, check_import_run, token_from_db, token_to_db};
+pub use import_writer::{
+    ImportWriter, InsertBatch, LoadTarget, Loader, MAX_LOAD_BATCH, delete_sql, insert_sql,
+};
 pub use json::validate_json;
 pub use lock::{
     LOCK_EXTENSIONS, LOCK_GC, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES, LockGuard,
