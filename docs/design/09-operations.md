@@ -251,6 +251,7 @@ ferrite migrate verify --data DIR
 ferrite serve          --data DIR                      # M1c-2; cluster wiring M1.5
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
+ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -294,6 +295,23 @@ is the effective mode, `auto` resolved; `workers` the effective `cluster.workers
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.
+
+`config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
+work but cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
+attributes).
+
+**`ferrite media sync`** (`crates/ferrite/src/media_cmd.rs`): `--to STORE` and one of `--from STORE`
+or `--data DIR` (the site's configured store; only `ferrite.toml` is read, so it runs while `serve`
+runs). A STORE is `local:<path>` or `s3://bucket[/prefix]`; every `s3://` URL takes its
+credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`), a `--data` S3 store from `[media.s3]`. Copies
+every object under `artifacts/` (recorded in the database or not), skips keys already at the
+destination with the same size, checks the size after each copy, never deletes, never copies
+`tmp/`, 8 copies at once (memory peaks near 192 MiB, design 03 §8); the destination is probed first and an
+unusable one exits 1; keys that are not artifacts are ignored with a notice. Prints `copied N (B bytes), skipped M, failed F` on stdout
+and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
+(the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
+`--from` nor `--data`, or both) exits 2 as clap does.
 
 **`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
 `http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on
@@ -526,7 +544,7 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 ```
 ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
-ferrite media sync / media gc                                   # M4
+ferrite media gc                                                 # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

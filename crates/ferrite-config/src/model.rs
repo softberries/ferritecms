@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use ferrite_domain::Secret;
+use ferrite_media::ConditionalPut;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -64,6 +65,10 @@ pub enum MediaSection {
         secret_access_key: Option<Secret>,
         allow_http: bool,
         virtual_hosted_style: bool,
+        /// object_store's encoding (`header:…`, `header-with-status:…`, `multipart`),
+        /// already validated.
+        copy_if_not_exists: Option<String>,
+        conditional_put: Option<ConditionalPut>,
         prefix: String,
         public_base_url: Option<url::Url>,
     },

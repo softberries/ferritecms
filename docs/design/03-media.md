@@ -96,10 +96,15 @@ pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<
   return `NotImplemented`/`NotSupported` get the fallback: `head` the final key (exists ->
   `created = false`), else `copy`. This head-then-copy window is the race behind the advisory
   `created`. The final bytes are identical either way because the key is the content hash.
-  **Production S3 currently always uses the fallback**: no `copy_if_not_exists` mode is
-  configured on the S3 builder (M4 follow-up). The s3s-fs test server also takes the
-  fallback, because the test `S3Config` sets no `copy_if_not_exists`; only the local backend
-  exercises the conditional (hard-link) paths in tests.
+  **S3 takes the fallback unless `[media.s3] copy_if_not_exists` is set** (M4-1; it is unset
+  by default, because the right header depends on the provider). The s3s-fs test server takes
+  the fallback too, because the test `S3Config` sets none; only the local backend exercises
+  the conditional (hard-link) paths in tests, and the S3 option is covered with the
+  `multipart` mode.
+- **Conditional create** (`PutMode::Create`, `If-None-Match: *`) is on for S3 by default:
+  object_store's `conditional_put` defaults to `etag`. `conditional_put = "disabled"` is for a
+  store that rejects the header; creates then do a plain put after the existence check, and
+  `created` is advisory as in the fallback.
 
 ### Upload size cap and the 5 GB copy ceiling
 
@@ -224,6 +229,24 @@ Config (`S3Config`): `bucket`, `region`, `endpoint`, `access_key_id`/`secret_acc
 (or env credentials), `allow_http` (MinIO dev), `virtual_hosted_style`; `prefix` and the
 public URL mode are on `MediaConfig`. Config-file wiring (including `*_file` secrets) belongs
 to the core config layer ([01](01-architecture.md#4-configuration)).
+
+Placement options (`[media.s3]`, object_store's own encodings, parsed by object_store):
+
+- `copy_if_not_exists` (default unset): the header that makes a server-side copy fail when the
+  destination exists. `header:<name>:<value>` (for example
+  `header:x-amz-copy-source-if-none-match:*`), `header-with-status:<name>:<value>:<status>`
+  (for stores that answer a failed precondition with a status other than 412), or `multipart`
+  (the copy is a multipart upload that ends in a conditional complete; it **does not copy
+  object attributes** such as content type or tags, so `ferrite config check` warns about it).
+  A wrong header for a provider fails placements of uploads of 8 MiB and more, and
+  `ferrite config check` cannot detect that (it opens nothing): after setting it, test with an
+  upload larger than 8 MiB. An invalid value is a configuration error naming
+  `media.s3.copy_if_not_exists`.
+- `conditional_put` = `"etag"` or `"disabled"` (unset: object_store's default, `etag`).
+
+Both options apply to the explicit-keys path and the environment path alike. Without keys the
+builder also reads `AWS_COPY_IF_NOT_EXISTS` and `AWS_CONDITIONAL_PUT` from the environment; a
+key in `ferrite.toml` wins over them, and `conditional_put` counts as set when the key is present (even `"etag"`); unset, the builder's default or the environment applies.
 
 Provider notes to document (each verified when writing the ops docs, not assumed):
 R2 path-style URLs, B2 region naming, Hetzner/Scaleway endpoints.
@@ -505,3 +528,20 @@ copy.
 `ferrite media sync --from local:./site/media --to s3://bucket/prefix` copies all
 artifacts (skips existing keys). Because keys are content hashes, the DB needs no
 rewrite when switching backends; only `[media]` config changes.
+
+`ferrite media sync --to <dest> (--from <src> | --data DIR)` (M4-1; exit codes in
+[09](09-operations.md#8-cli-summary)) lists every object under the source's `artifacts/`,
+whether the database records it or not (it opens no database, so it runs while the site
+serves). A key already at the destination with the same size is skipped; the rest are
+streamed through `put_stream`, which hashes the bytes on the way: an object whose content does
+not hash to its key is reported as failed and not placed under that key. The size at the
+destination is checked after each copy (a same-size destination object is trusted: content is
+not compared). It never deletes and never reads `tmp/`, and copies 8 objects at once; each copy
+buffers up to the first 8 MiB plus two 8 MiB parts, so memory peaks near 8 x 24 MiB = 192 MiB.
+Keys under `artifacts/` that do not name an artifact are ignored with a notice on stderr. The
+destination is probed (`check`) first: if it is unreachable or not writable the command exits 1
+before copying. A corrupt source object leaves its bytes at the destination under their own
+valid hash, an unrecorded orphan for the destination site's GC. Source and destination are `local:<path>` or `s3://bucket[/prefix]`; every
+`s3://` URL takes its credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`,
+`AWS_COPY_IF_NOT_EXISTS`), while `--data` uses the site's `[media]` settings.

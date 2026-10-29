@@ -297,6 +297,8 @@ root         = "media"                 # default; relative to the data folder
 # access_key_id / secret_access_key (or *_file)        # both or neither; neither = environment credentials
 # allow_http = false
 # virtual_hosted_style = false
+# copy_if_not_exists = "header:x-amz-copy-source-if-none-match:*"   # M4-1: object_store encoding or "multipart"; unset = head + copy fallback (03 §3)
+# conditional_put = "etag"            # M4-1: "etag" (default) | "disabled" for stores that reject If-None-Match
 # prefix = ""
 # public_base_url = "https://cdn.example.com"          # optional, http(s) URL
 

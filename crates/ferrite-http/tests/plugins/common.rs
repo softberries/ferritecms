@@ -98,6 +98,8 @@ pub async fn s3_media() -> MediaBacking {
             secret_access_key: Some(Secret::new("test-secret")),
             allow_http: true,
             virtual_hosted_style: false,
+            copy_if_not_exists: None,
+            conditional_put: None,
         }),
         prefix: "site/".into(),
         public: public(),

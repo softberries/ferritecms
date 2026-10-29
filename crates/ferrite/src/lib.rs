@@ -9,6 +9,8 @@ mod import_cmd;
 mod init;
 pub mod jobs;
 pub mod keys;
+mod media_cmd;
+mod media_url;
 mod migrate;
 mod node;
 mod open;

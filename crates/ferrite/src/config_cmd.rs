@@ -22,6 +22,9 @@ pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
     match cmd {
         ConfigCommand::Check(args) => match ferrite_config::load(&args.data, utf8_env()?) {
             Ok(config) => {
+                for warning in warnings(&config) {
+                    eprintln!("warning: {warning}");
+                }
                 println!("{}", summary(&config));
                 Ok(ExitCode::SUCCESS)
             }
@@ -31,6 +34,23 @@ pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
             }
         },
     }
+}
+
+/// Settings that work but cost something; printed to stderr, the exit code stays 0.
+fn warnings(config: &Config) -> Vec<String> {
+    let mut out = Vec::new();
+    if let MediaSection::S3 {
+        copy_if_not_exists: Some(mode),
+        ..
+    } = &config.media
+        && mode.trim() == "multipart"
+    {
+        out.push(
+            "media.s3.copy_if_not_exists = \"multipart\" places uploads with a multipart copy, which does not copy object attributes (content type, tags); prefer a header mode if your provider has one (03 §2)"
+                .to_owned(),
+        );
+    }
+    out
 }
 
 fn summary(config: &Config) -> String {
