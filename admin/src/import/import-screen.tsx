@@ -11,7 +11,7 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { IMPORT_WORDPRESS_KIND, importRunsQuery } from "@/api/import";
+import { IMPORT_WORDPRESS_KIND, type ImportJobDto, importRunsQuery } from "@/api/import";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
@@ -21,6 +21,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RunPanel } from "./run-panel";
 import { RunsTable } from "./runs-table";
 import { StartCard } from "./start-card";
+
+/** The query roots a finished import leaves alone (`qk.import`, `qk.me`, `qk.meta`). */
+const KEPT_AFTER_IMPORT: ReadonlySet<string> = new Set([qk.import.runs[0], qk.me[0], qk.meta[0]]);
 
 export interface ImportScreenProps {
   /** The job the URL names (`?job=`). */
@@ -48,6 +51,20 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
   const refreshRuns = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: qk.import.runs });
   }, [queryClient]);
+  const onSettled = useCallback(
+    (settled: ImportJobDto) => {
+      refreshRuns();
+      // A real import that finished wrote types, terms, content, media, menus, users and
+      // settings: every screen's data is stale but the session's (`me`) and the site's
+      // facts (`meta`), and the import's own (just refreshed).
+      if (settled.status === "done" && settled.run?.state === "done" && !settled.run.dry_run) {
+        void queryClient.invalidateQueries({
+          predicate: (q) => !KEPT_AFTER_IMPORT.has(String(q.queryKey[0])),
+        });
+      }
+    },
+    [queryClient, refreshRuns],
+  );
 
   const header = <PageHeader title={t("title")} description={t("description")} />;
   if (runs.error instanceof ApiError && runs.error.status === 403) {
@@ -67,7 +84,7 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
           key={followed}
           jobId={followed}
           focusHeading={focus === "panel"}
-          onSettled={refreshRuns}
+          onSettled={onSettled}
           onDismiss={() => {
             setOpened(undefined);
             setFocus("start");
@@ -92,6 +109,9 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
             setFocus("panel");
             setJob(started.job_id);
             refreshRuns();
+            // The System screen's job list and counts gained a queued job.
+            void queryClient.invalidateQueries({ queryKey: qk.system.jobLists });
+            void queryClient.invalidateQueries({ queryKey: qk.system.status });
           }}
           onBusy={refreshRuns}
           busyAction={

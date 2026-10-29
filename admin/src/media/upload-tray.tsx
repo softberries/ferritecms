@@ -24,6 +24,7 @@ import { useLeaveGuard } from "@/editor/leave-guard";
 import { uiLocale } from "@/lib/locale";
 import type { UploadEntry, UploadQueue } from "./upload-queue";
 import { uploadFailure } from "./upload-errors";
+import { ProgressBar } from "@/components/kit/progress-bar";
 
 export interface UploadTrayProps {
   queue: UploadQueue;
@@ -125,7 +126,9 @@ export function UploadTray({ queue, entries, raised = false, onOpen }: UploadTra
               </Button>
             )}
           </header>
-          {active ? <Bar value={total > 0 ? loaded / total : 0} label={t("tray.overall")} /> : null}
+          {active ? (
+            <ProgressBar value={total > 0 ? loaded / total : 0} label={t("tray.overall")} />
+          ) : null}
           <ul
             id="upload-tray-list"
             hidden={collapsed}
@@ -266,7 +269,7 @@ export function UploadRow({
         ) : null}
       </div>
       {running ? (
-        <Bar
+        <ProgressBar
           value={entry.state === "uploading" ? fraction : 0}
           label={t("tray.progress", { name })}
         />
@@ -301,24 +304,6 @@ function StateIcon({ entry }: { entry: UploadEntry }) {
 }
 
 /** A thin progress bar; `value` 0..1. */
-function Bar({ value, label }: { value: number; label: string }) {
-  const percent = Math.round(value * 100);
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className="h-1 w-full overflow-hidden rounded-full bg-muted"
-    >
-      <div
-        className="h-full origin-left rounded-full bg-primary transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none"
-        style={{ transform: `scaleX(${value})` }}
-      />
-    </div>
-  );
-}
 
 /** The last completion or failure, for the polite live region. */
 function useAnnouncement(entries: readonly UploadEntry[]): string {
