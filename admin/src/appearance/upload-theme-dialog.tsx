@@ -14,6 +14,7 @@ import { ApiError } from "@/api/problem";
 import type { ThemeDto } from "@/api/themes";
 import { uploadTheme } from "@/api/upload";
 import { Alert } from "@/auth/auth-layout";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,7 +28,6 @@ import { formatBytes } from "@/media/format";
 import { problemText } from "@/structure/taxonomies/terms-model";
 import { type PickedFolder, pickFolder, readDrop } from "./pick-folder";
 import { PackError, type PackFile, packTheme, readTarFile, themeNameOf } from "./ustar";
-import { ProgressBar } from "@/components/kit/progress-bar";
 
 /** The largest `.tar` read for its `theme.toml` (the server's bundle limit). */
 const MAX_TAR_READ = 23_020_544;

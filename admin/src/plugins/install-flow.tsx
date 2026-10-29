@@ -25,6 +25,7 @@ import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { inspectPluginUpload, installPluginUpload } from "@/api/upload";
 import { Alert } from "@/auth/auth-layout";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,7 +38,6 @@ import {
 import { formatBytes } from "@/media/format";
 import { problemText } from "@/structure/taxonomies/terms-model";
 import { PermissionReport } from "./permission-report";
-import { ProgressBar } from "@/components/kit/progress-bar";
 
 export interface InstallPluginDialogProps {
   open: boolean;

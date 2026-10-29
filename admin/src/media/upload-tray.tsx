@@ -10,6 +10,7 @@ import { CheckIcon, ChevronDownIcon, CircleAlertIcon, RotateCwIcon, XIcon } from
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MediaDto } from "@/api/media";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -24,7 +25,6 @@ import { useLeaveGuard } from "@/editor/leave-guard";
 import { uiLocale } from "@/lib/locale";
 import type { UploadEntry, UploadQueue } from "./upload-queue";
 import { uploadFailure } from "./upload-errors";
-import { ProgressBar } from "@/components/kit/progress-bar";
 
 export interface UploadTrayProps {
   queue: UploadQueue;
@@ -302,8 +302,6 @@ function StateIcon({ entry }: { entry: UploadEntry }) {
   }
   return null;
 }
-
-/** A thin progress bar; `value` 0..1. */
 
 /** The last completion or failure, for the polite live region. */
 function useAnnouncement(entries: readonly UploadEntry[]): string {

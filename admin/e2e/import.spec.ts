@@ -14,13 +14,14 @@
 // same export counts its media as unchanged and leaves the permalink structure alone (the
 // old URL then redirects to the post). `--repeat-each 2` runs it twice on one site.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { ContentApi, type Redirect } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
-import { RESULTS_DIR } from "./support/server";
+import { E2E_STATE_DIR } from "./support/server";
 import { zipFolder } from "./support/zip";
 
 const CORPUS = join(
@@ -38,13 +39,15 @@ const panel = (page: Page) => page.locator("[data-slot=import-run]");
  * The settings the import changes, as the first attempt on this site found them: saved
  * once per site (its URL names the run's server), read back by a retry.
  */
-async function baseline(api: ContentApi, key: string, url: string): Promise<Settings> {
-  const dir = join(RESULTS_DIR, "e2e-state");
-  const file = join(dir, `import-${key}-${new URL(url).port}.json`);
+async function baseline(api: ContentApi, key: string, data: string): Promise<Settings> {
+  // Keyed by the site's own data folder (a fresh temp folder per site), never its port,
+  // which a later run may get again; global setup also empties the folder per run.
+  const site = createHash("sha256").update(data).digest("hex").slice(0, 16);
+  const file = join(E2E_STATE_DIR, `import-${key}-${site}.json`);
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as Settings;
   const now = await api.getSettings();
   const kept = Object.fromEntries(RESTORED.map((k) => [k, now[k] ?? null]));
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(E2E_STATE_DIR, { recursive: true });
   writeFileSync(file, JSON.stringify(kept));
   return kept;
 }
@@ -87,7 +90,7 @@ test("import_export_a_through_the_screen", async ({
 }) => {
   test.setTimeout(180_000);
   const api = await ContentApi.as(siteKey, site.url, "admin");
-  const before = await baseline(api, siteKey, site.url);
+  const before = await baseline(api, siteKey, site.data);
   let started = false;
   let thrown: { error: unknown } | null = null;
   const page = await as("admin");

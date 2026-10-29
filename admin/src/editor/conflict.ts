@@ -5,9 +5,9 @@
 
 import type { ApiError } from "@/api/problem";
 import type { SchemaContentDto } from "@/api/schema";
+import { sameList } from "@/lib/same-list";
 import type { Draft } from "./autosave";
 import { sameValue } from "./fields/fields-model";
-import { sameList } from "@/lib/same-list";
 
 export type ConflictField =
   "title" | "excerpt" | "body" | "slug" | "terms" | "parent" | "menu_order" | "fields" | "seo";

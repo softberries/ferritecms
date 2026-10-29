@@ -67,6 +67,7 @@ import type {
   SchemaSeoPatchDto,
 } from "@/api/schema";
 import type { SaveStateValue } from "@/components/kit/save-state";
+import { sameList } from "@/lib/same-list";
 import { pushRecent } from "@/palette/recent";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -90,7 +91,6 @@ import type { Handoff } from "./handoff";
 import { type Backup, type BackupKey, clearBackup, writeBackup } from "./local-backup";
 import { ImageUploads } from "./insert-image";
 import { displayBody, editorExtensions, validateBody } from "./schema";
-import { sameList } from "@/lib/same-list";
 
 export type ContentDto = SchemaContentDto;
 
