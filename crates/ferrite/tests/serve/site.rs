@@ -200,9 +200,7 @@ async fn seeded_rows(p: &Profile) -> (bool, usize, usize, bool, u64) {
 
 /// A seed that fails after the posts (test seam) leaves no row, and a plain run then
 /// succeeds (M4-1 P20).
-#[test]
-fn seed_failure_leaves_no_rows() {
-    let p = Profile::solo();
+fn failed_seed_leaves_no_rows(p: Profile) {
     p.init();
     let before = rt().block_on(seeded_rows(&p));
     assert_eq!(before, (false, 0, 0, false, 0));
@@ -222,6 +220,17 @@ fn seed_failure_leaves_no_rows() {
         (true, 4, 2, true, 12 + 3 + 1),
         "posts, pages, image"
     );
+}
+
+#[test]
+fn seed_failure_leaves_no_rows() {
+    failed_seed_leaves_no_rows(Profile::solo());
+}
+
+#[test]
+fn seed_failure_leaves_no_rows_cluster() {
+    let Some(p) = Profile::cluster() else { return };
+    failed_seed_leaves_no_rows(p);
 }
 
 /// `--force` still adds a whole new batch next to the first one.

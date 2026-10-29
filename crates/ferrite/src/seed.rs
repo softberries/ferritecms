@@ -93,11 +93,9 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
             store.clone(),
             &media,
             &specs,
-            Options {
-                force: args.force,
-                #[cfg(feature = "test-seams")]
-                fail_after_posts: args.fail_after_posts,
-            },
+            args.force,
+            #[cfg(feature = "test-seams")]
+            args.fail_after_posts,
         )
         .await
     }
@@ -118,26 +116,19 @@ struct Summary {
     terms: usize,
 }
 
-/// What one run does.
-struct Options {
-    force: bool,
-    /// Test seam: the batch fails after the posts.
-    #[cfg(feature = "test-seams")]
-    fail_after_posts: bool,
-}
-
 async fn seed_demo(
     store: Arc<dyn Store>,
     media: &MediaStore,
     specs: &[VariantSpec],
-    opts: Options,
+    force: bool,
+    #[cfg(feature = "test-seams")] fail_after_posts: bool,
 ) -> anyhow::Result<Summary> {
     let existing = store
         .read()
         .content()
         .count(&ContentQuery::default())
         .await?;
-    if existing > 0 && !opts.force {
+    if existing > 0 && !force {
         bail!(
             "the site already has {existing} content item(s); refusing to seed. \
              Run `ferrite seed demo --force` to add another demo batch"
@@ -149,7 +140,14 @@ async fn seed_demo(
     let image = store_image(media, specs).await?;
 
     let batch = DemoBatch::begin(store.clone(), Arc::new(rules)).await?;
-    match write_rows(&batch, image, &opts).await {
+    match write_rows(
+        &batch,
+        image,
+        #[cfg(feature = "test-seams")]
+        fail_after_posts,
+    )
+    .await
+    {
         Ok(summary) => {
             batch.commit().await?;
             Ok(summary)
@@ -167,7 +165,7 @@ async fn seed_demo(
 async fn write_rows(
     batch: &DemoBatch,
     image: StoredImage,
-    opts: &Options,
+    #[cfg(feature = "test-seams")] fail_after_posts: bool,
 ) -> anyhow::Result<Summary> {
     let admin = batch
         .user(&NewUser {
@@ -256,11 +254,9 @@ async fn write_rows(
         posts += 1;
     }
     #[cfg(feature = "test-seams")]
-    if opts.fail_after_posts {
+    if fail_after_posts {
         bail!("test seam: the demo batch fails after the posts");
     }
-    #[cfg(not(feature = "test-seams"))]
-    let _ = opts;
 
     let about = batch
         .publish(&actor, demo::page("About", "about", None, 0), None)
@@ -320,11 +316,11 @@ async fn write_rows(
     })
 }
 
-/// The sample image as stored: its artifact rows and `media` row, to be written with the
-/// media item.
+/// The sample image as stored: its artifact rows and a maker of its `media` row (it
+/// needs the media item's id), to be written with the media item.
 struct StoredImage {
     artifacts: Vec<Artifact>,
-    row: Media,
+    row: Box<dyn FnOnce(ContentId) -> Media + Send>,
 }
 
 /// Generates the sample PNG and stores its blobs (original and variants).
@@ -353,20 +349,27 @@ async fn store_image(media: &MediaStore, specs: &[VariantSpec]) -> anyhow::Resul
         );
         artifacts.push(artifact(&stored, ArtifactKind::Variant)?);
     }
-    let row = Media {
-        // Set by the batch once the item exists.
-        item_id: ContentId::new(),
-        artifact_hash: original.hash.clone(),
-        mime: original.mime.clone(),
-        bytes: i64::try_from(original.bytes)?,
-        width: Some(i32::try_from(processed.width)?),
-        height: Some(i32::try_from(processed.height)?),
+    let hash = original.hash.clone();
+    let mime = original.mime.clone();
+    let bytes = i64::try_from(original.bytes)?;
+    let width = Some(i32::try_from(processed.width)?);
+    let height = Some(i32::try_from(processed.height)?);
+    let row = move |item_id| Media {
+        item_id,
+        artifact_hash: hash,
+        mime,
+        bytes,
+        width,
+        height,
         alt: demo::IMAGE_ALT.into(),
         original_name: demo::IMAGE_NAME.into(),
         variants: Value::Object(variants),
         sanitized: false,
     };
-    Ok(StoredImage { artifacts, row })
+    Ok(StoredImage {
+        artifacts,
+        row: Box::new(row),
+    })
 }
 
 fn artifact(r: &ferrite_media::ArtifactRef, kind: ArtifactKind) -> anyhow::Result<Artifact> {

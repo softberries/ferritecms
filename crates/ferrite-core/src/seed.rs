@@ -1,15 +1,20 @@
 //! [`DemoBatch`]: everything `ferrite seed demo` writes, in one transaction.
 //!
-//! The batch wraps a single `Tx`. Each method does what the matching service call does
-//! (the same validation, rows, events and action jobs) minus the capability check (the
-//! caller is the seeding admin), so the seed has the same effects as before but commits
-//! all of them together or none. Dropping the batch, or [`rollback`](DemoBatch::rollback),
+//! **For the operator CLI only.** The batch wraps a single `Tx`. Each method does what
+//! the matching service call does (the same validation, rows, events and action jobs)
+//! minus the up-front capability check (`edit_own`, `manage_terms`, `manage_menus`,
+//! `manage_settings`): the caller is the seeding admin, and `user` inserts any account.
+//! Publishing still authorizes `actor`. Nothing but the `ferrite` binary's `seed demo`
+//! may use it; it is `pub` only because that crate is a different one. The seed has the
+//! same effects as before but commits all of them together or none. Dropping the batch, or [`rollback`](DemoBatch::rollback),
 //! discards everything. Nothing here opens another transaction: with SQLite's single
 //! writer that would wait for this one.
 
 use std::sync::Arc;
 
-use ferrite_domain::{Artifact, ContentItem, Media, Menu, NewUser, Term, Timestamp, User};
+use ferrite_domain::{
+    Artifact, ContentId, ContentItem, Media, Menu, NewUser, Term, Timestamp, User,
+};
 use ferrite_store::{Store, Tx};
 use serde_json::Value;
 
@@ -21,6 +26,8 @@ use crate::{
 /// One transaction of demo writes (see the module docs).
 pub struct DemoBatch {
     tx: Box<dyn Tx>,
+    /// Only for `create_in`, which must use the batch's `tx` and never `self.store`:
+    /// a second connection would wait for this transaction (SQLite's single writer).
     content: ContentService,
     /// The permalink rules pinned when the batch began (R10).
     rules: Arc<dyn Permalinks>,
@@ -81,20 +88,20 @@ impl DemoBatch {
     }
 
     /// A media item: creates `draft` (kind `media`), stores `artifacts` (unless their
-    /// hashes exist) and `row` (its `item_id` is set here), emits `post:<id>` (R11) and
+    /// hashes exist) and the `media` row `row` makes for the new item's id, emits `post:<id>` (R11) and
     /// publishes it.
     pub async fn media_item(
         &self,
         actor: &Actor,
         draft: ContentDraft,
         artifacts: &[Artifact],
-        mut row: Media,
+        row: impl FnOnce(ContentId) -> Media,
     ) -> Result<ContentItem, CoreError> {
         let item = self.create_draft(actor, draft, None).await?;
         for a in artifacts {
             self.tx.artifacts().insert_if_absent(a).await?;
         }
-        row.item_id = item.id;
+        let row = row(item.id);
         self.tx.media().insert(&row).await?;
         self.tx
             .events()
