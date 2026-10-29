@@ -122,6 +122,7 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
             takeover: args.takeover,
             max_upload: config.uploads.max_upload,
             on_step: None,
+            job_id: None,
             #[cfg(feature = "test-seams")]
             batch_items: None,
             #[cfg(feature = "test-seams")]
@@ -226,8 +227,9 @@ fn media_source(args: &WordpressArgs) -> anyhow::Result<Arc<dyn MediaSource>> {
     Ok(Arc::new(Sources(sources)))
 }
 
-/// Media sources tried in order; none at all means every attachment is missing.
-struct Sources(Vec<Arc<dyn MediaSource>>);
+/// Media sources tried in order; none at all means every attachment is missing (also
+/// the `import.wordpress` job's).
+pub(crate) struct Sources(pub(crate) Vec<Arc<dyn MediaSource>>);
 
 #[async_trait]
 impl MediaSource for Sources {
