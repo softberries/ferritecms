@@ -355,7 +355,7 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 ## 7. Distributed locks
 
 **As built (P13):** `Store::try_lock(name)` and `ferrite_store::lock(store, name, wait)`
-(retries every 250 ms until `wait`, then `Busy`). Names are `[a-z0-9._-]{1,64}`.
+(waits up to `wait`, then `Busy`; via `Store::lock_wait`, P19). Names are `[a-z0-9._-]{1,64}`.
 
 | Name | Held by | Wait |
 |---|---|---|
@@ -368,8 +368,11 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 Postgres: a session-level `PgAdvisoryLock` keyed by `"ferrite:<schema>:<name>"` (advisory
 locks are database-wide, so the key includes the schema) on a dedicated connection per
 held lock (`application_name` `<app>:lock:<name>`, TCP keepalives on), so a crashed holder
-releases it when its connection dies. Each attempt opens a new connection (a held
-connection with `lock_timeout` is M4, R3). sqlx's own migration lock is taken as well.
+releases it when its connection dies. `lock` waits on one connection: `SET lock_timeout`,
+then a blocking `pg_advisory_lock`, so the server wakes the waiter when the holder
+releases (SQLSTATE `55P03` = timed out = `Busy`; `lock_timeout` is reset to 0 on success;
+a cancelled wait drops the connection, which frees a lock granted late). `try_lock` opens
+one connection per attempt. SQLite polls `try_lock` every 250 ms. sqlx's own migration lock is taken as well.
 SQLite: an in-process mutex per store (one process owns the data folder).
 
 **A lock is not a fence.** The holder is not told when a Postgres advisory lock is lost:

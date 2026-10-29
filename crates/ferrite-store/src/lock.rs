@@ -16,7 +16,7 @@ pub const LOCK_TYPES: &str = "types";
 /// Reserved for the WordPress import (M3): one at a time per site.
 pub const LOCK_IMPORT: &str = "import";
 
-/// How often [`lock`] retries [`Store::try_lock`] while the lock is taken.
+/// How often the default [`Store::lock_wait`] retries [`Store::try_lock`] while the lock is taken.
 pub const LOCK_POLL: Duration = Duration::from_millis(250);
 
 /// A held lock. Dropping it also releases it (Postgres: the dedicated connection
@@ -57,25 +57,16 @@ pub fn check_lock_name(name: &str) -> Result<(), StoreError> {
     }
 }
 
-/// Takes the lock `name`, retrying [`Store::try_lock`] every [`LOCK_POLL`] until `wait`
-/// has elapsed; then [`StoreError::Busy`]. The first attempt is immediate, the last one
-/// is at `wait`.
+/// Takes the lock `name`, waiting up to `wait` ([`Store::lock_wait`]); then
+/// [`StoreError::Busy`]. Postgres waits on one connection with `lock_timeout`; the
+/// default (SQLite) retries [`Store::try_lock`] every [`LOCK_POLL`]. The first attempt
+/// is immediate. Cancel-safe: dropping the future gives up the wait and leaks no lock.
 pub async fn lock(
     store: &dyn Store,
     name: &str,
     wait: Duration,
 ) -> Result<Box<dyn LockGuard>, StoreError> {
-    let deadline = tokio::time::Instant::now() + wait;
-    loop {
-        if let Some(guard) = store.try_lock(name).await? {
-            return Ok(guard);
-        }
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return Err(StoreError::Busy);
-        }
-        tokio::time::sleep(LOCK_POLL.min(deadline - now)).await;
-    }
+    store.lock_wait(name, wait).await?.ok_or(StoreError::Busy)
 }
 
 #[cfg(test)]

@@ -100,6 +100,58 @@ impl Locks {
             }
         }
     }
+
+    /// Waits up to `wait` for lock `name` on one connection (P19): `SET lock_timeout`,
+    /// then a blocking `pg_advisory_lock`, so the server wakes the waiter the moment the
+    /// holder lets go, with no polling and no further connections. SQLSTATE `55P03`
+    /// (lock_not_available) means the wait ran out: `Ok(None)`. After the grant,
+    /// `lock_timeout` goes back to 0 so later statements on the connection are not cut
+    /// short. A cancelled wait drops the connection, so a lock the server grants late is
+    /// freed when the socket closes. The caller has validated the name; `wait` is
+    /// non-zero (0 would disable `lock_timeout`).
+    pub(crate) async fn lock_wait(
+        &self,
+        name: &str,
+        wait: Duration,
+    ) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        let opts = self.options(name);
+        let lock = PgAdvisoryLock::new(lock_key(self.schema.as_deref(), name));
+        let ms = wait.as_millis().clamp(1, i32::MAX as u128);
+        let attempt = async {
+            let mut conn = PgConnection::connect_with(&opts)
+                .await
+                .map_err(map_db_err)?;
+            sqlx::query("SELECT set_config('lock_timeout', $1, false)")
+                .bind(format!("{ms}ms"))
+                .execute(&mut conn)
+                .await
+                .map_err(map_db_err)?;
+            let mut guard = match lock.acquire(conn).await {
+                Ok(guard) => guard,
+                Err(e) if is_lock_not_available(&e) => return Ok(None),
+                Err(e) => return Err(map_db_err(e)),
+            };
+            sqlx::query("SET lock_timeout = 0")
+                .execute(AsMut::<PgConnection>::as_mut(&mut guard))
+                .await
+                .map_err(map_db_err)?;
+            Ok(Some(guard))
+        };
+        // Safety net only: `lock_timeout` ends the wait itself. Dropping the attempt
+        // closes its connection.
+        let Ok(result) = tokio::time::timeout(wait + LOCK_ATTEMPT_TIMEOUT, attempt).await else {
+            tracing::warn!(lock = name, ?wait, "lock wait timed out");
+            return Ok(None);
+        };
+        Ok(result?.map(|guard| Box::new(PgLockGuard { guard }) as Box<dyn LockGuard>))
+    }
+}
+
+/// SQLSTATE 55P03: `lock_timeout` expired.
+fn is_lock_not_available(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|c| c == "55P03")
 }
 
 /// Owns the lock's connection. Dropped: sqlx queues the unlock and the connection is

@@ -232,6 +232,8 @@ backend_tests!(
     lock_is_exclusive_and_released,
     lock_excludes_peer_store,
     lock_released_when_holder_dies,
+    pg_lock_wait_times_out,
+    pg_lock_wait_cancel_does_not_leak,
     lock_names_are_validated,
     nodes_register_heartbeat_list_prune,
     nodes_prune_in_batches,
@@ -267,6 +269,8 @@ backend_tests!(
 
 backend_tests_spawning!(
     lock_waits_then_busy,
+    pg_lock_wait_wakes_on_release,
+    pg_lock_wait_opens_one_connection,
     concurrent_writers,
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,
