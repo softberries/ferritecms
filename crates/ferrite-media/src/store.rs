@@ -281,11 +281,15 @@ impl MediaStore {
     }
 
     /// Moves the staged object to its final key. Returns `true` if this call created it.
+    ///
+    /// An `AlreadyExists` answer is checked with a `head` of the final key (R18): a wrong
+    /// `copy_if_not_exists` header can make a store answer 412 for a reason other than an
+    /// existing destination, and taking that as "already stored" would lose the upload.
     async fn place_staged(&self, tmp: &Path, hash: &ArtifactHash) -> Result<bool, MediaError> {
         let key = keys::artifact_key(&self.prefix, hash);
         match self.inner.copy_if_not_exists(tmp, &key).await {
             Ok(()) => Ok(true),
-            Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+            Err(object_store::Error::AlreadyExists { .. }) => self.placed_by_another(hash).await,
             Err(
                 object_store::Error::NotImplemented { .. }
                 | object_store::Error::NotSupported { .. },
@@ -296,11 +300,25 @@ impl MediaStore {
                 }
                 match self.inner.copy(tmp, &key).await {
                     Ok(()) => Ok(true),
-                    Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+                    Err(object_store::Error::AlreadyExists { .. }) => {
+                        self.placed_by_another(hash).await
+                    }
                     Err(e) => Err(e.into()),
                 }
             }
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// After the store answered that the final key exists: `Ok(false)` when it does, an
+    /// error when it does not (the answer was a precondition failure of something else).
+    async fn placed_by_another(&self, hash: &ArtifactHash) -> Result<bool, MediaError> {
+        match self.head(hash).await? {
+            Some(_) => Ok(false),
+            None => Err(MediaError::Backend(format!(
+                "the store refused to place {hash} as already stored, but there is no object \
+                 at its key; check media.s3.copy_if_not_exists (09 §4a)"
+            ))),
         }
     }
 
@@ -716,6 +734,129 @@ pub fn validate_copy_if_not_exists(value: &str) -> Result<(), String> {
         .map_err(|_| {
             "must be \"header:<name>:<value>\", \"header-with-status:<name>:<value>:<status>\" or \"multipart\"".to_owned()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+    use object_store::{
+        CopyMode, CopyOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        PutMultipartOptions, PutPayload, PutResult,
+    };
+
+    /// An in-memory store whose conditional copy always answers `AlreadyExists`, as a
+    /// store does that turns a wrong `copy_if_not_exists` header into a 412.
+    #[derive(Debug)]
+    struct RefusingCopy(InMemory);
+
+    impl std::fmt::Display for RefusingCopy {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RefusingCopy")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for RefusingCopy {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.0.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.0.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.0.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.0.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.0.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.0.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            if matches!(options.mode, CopyMode::Create) {
+                return Err(object_store::Error::AlreadyExists {
+                    path: to.to_string(),
+                    source: "412 Precondition Failed".into(),
+                });
+            }
+            self.0.copy_opts(from, to, options).await
+        }
+    }
+
+    fn refusing() -> MediaStore {
+        MediaStore {
+            inner: Arc::new(RefusingCopy(InMemory::new())),
+            prefix: String::new(),
+            public: PublicUrlMode::ServeViaApp {
+                path_prefix: "/_media".into(),
+            },
+        }
+    }
+
+    /// R18: a placement the store refuses although the final key is absent fails loudly
+    /// (and leaves no staging object); one whose final key exists is "already stored".
+    #[tokio::test]
+    async fn refused_placement_without_an_object_fails() {
+        let store = refusing();
+        let data = Bytes::from(vec![5u8; SMALL_LIMIT + 1]);
+        let err = store.put_artifact(data.clone()).await.unwrap_err();
+        assert!(
+            matches!(&err, MediaError::Backend(m) if m.contains("copy_if_not_exists")),
+            "{err:?}"
+        );
+        let tmp: Vec<StoredObject> = store.list_tmp().try_collect().await.unwrap();
+        assert!(tmp.is_empty(), "{tmp:?}");
+
+        // The same bytes already at the final key (stored by another writer): not created.
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let hash = finish_hash(hasher).unwrap();
+        store
+            .inner
+            .put(&keys::artifact_key("", &hash), data.clone().into())
+            .await
+            .unwrap();
+        let placed = store.put_artifact(data).await.unwrap();
+        assert_eq!(placed.hash, hash);
+        assert!(!placed.created);
+    }
 }
 
 fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {

@@ -26,6 +26,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 hyper-util.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true

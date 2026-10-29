@@ -474,7 +474,7 @@ fn config_check_warns_multipart() {
     assert!(err.contains("warning"), "{err}");
     assert!(err.contains("media.s3.copy_if_not_exists"), "{err}");
 
-    write("copy_if_not_exists = \"header:x-amz-copy-source-if-none-match:*\"\n");
+    write("copy_if_not_exists = \"header:x-example-if-none-match:*\"\n");
     let out = check();
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(text(&out.stderr), "");

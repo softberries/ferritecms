@@ -490,6 +490,8 @@ fn render_default_toml_s3_roundtrips() {
     ] {
         let media = InitMedia::parse_s3_url(url).unwrap();
         let rendered = render_default_toml("https://example.com", "t", None, None, &media);
+        // R18: no concrete copy_if_not_exists value is suggested (none is verified for S3).
+        assert!(!rendered.contains("copy-source"), "{rendered}");
         std::fs::write(dir.path().join("ferrite.toml"), rendered).unwrap();
         let c = load(dir.path(), env(&[])).unwrap();
         let MediaSection::S3 {
@@ -1116,7 +1118,7 @@ fn s3_copy_mode(r: Result<Config, ConfigError>) -> Option<String> {
 #[test]
 fn parse_s3_copy_if_not_exists_values() {
     for ok in [
-        "header:x-amz-copy-source-if-none-match:*",
+        "header:x-example-if-none-match:*",
         "header-with-status:cf-if-none-match:*:412",
         "multipart",
     ] {

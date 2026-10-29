@@ -812,7 +812,7 @@ fn copy_if_not_exists_values() {
     for ok in [
         "multipart",
         " multipart ",
-        "header:x-amz-copy-source-if-none-match:*",
+        "header:x-example-if-none-match:*",
         "header: x-goog-if-generation-match : 0",
         "header-with-status:x-ms-blah:*:409",
         "header-with-status:cf-if-none-match:*:412",

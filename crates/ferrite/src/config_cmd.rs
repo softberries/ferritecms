@@ -57,7 +57,7 @@ fn warnings(config: &Config) -> Vec<String> {
         && mode.trim() == "multipart"
     {
         out.push(
-            "media.s3.copy_if_not_exists = \"multipart\" places uploads with a multipart copy, which does not copy object attributes (content type, tags); prefer a header mode if your provider has one (03 §2)"
+            "media.s3.copy_if_not_exists = \"multipart\" places uploads of 8 MiB and more with a multipart copy, which does not copy object attributes (content type, tags); Ferrite sets none on stored artifacts today, so this matters only if that changes (09 §4a lists \"multipart\" for AWS S3)"
                 .to_owned(),
         );
     }
