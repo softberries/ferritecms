@@ -336,6 +336,13 @@ volatile_ttl = "60s"                   # M2a-2b: TTL of pages with volatile or f
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
 #   smtps:// implicit TLS; smtp://…?tls=required STARTTLS; plain smtp:// (credentials only to a loopback relay)
 # from = "Site <noreply@example.com>"  # required with smtp_url; "a@b" or "Name <a@b>"
+
+[backup]                               # M4-1 P15; optional
+schedule = "off"                       # "off" | "daily" | "weekly"
+# to = "../backups"                    # required unless off: a folder outside the data
+                                       #   folder (relative to it) or s3://bucket[/prefix]
+keep = 7                               # 1 ..= 1000 snapshots (SQLite) or archives (Postgres)
+with_media = true
 ```
 
 **Mail** (`[mail]`, M2a-2 P17). The SMTP password lives only in the URL, so only in the
@@ -409,6 +416,19 @@ is deleted once it has been marked unreferenced for longer than this, and a file
 --grace-days N` overrides it for one run. `config check` reports an out-of-range value as
 `media.gc_grace_days: must be between 1 and 365`.
 
+**Scheduled backups** (`[backup]`, M4-1 P15, `Config.backup: BackupConfig`). `schedule` is
+`"off"` (default), `"daily"` or `"weekly"`; when it is not off, `serve` runs the
+`site.backup` job (09 §4): on SQLite a repository snapshot, on Postgres an export archive
+to `<to>/exports/`. `to` is kept as written and required unless the schedule is off
+(`backup.to: required unless backup.schedule is "off"`); it is a folder or
+`s3://bucket[/prefix]` (credentials and endpoint from the `AWS_*` environment), and `-`, a
+`.tar.zst` path, another `scheme://` and a folder inside the data folder (compared
+lexically after resolving a relative path against the data folder; `serve` checks again
+with symlinks resolved, and also refuses one inside the local media root) are refused.
+`keep` (1..=1000, default 7) is how many snapshots or archives are kept; `with_media`
+(default `true`) includes the blobs. With Postgres in cluster mode a local `to` is on
+whichever node runs the job; use `s3://` or a shared folder.
+
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,
 or local with `local_shared = true`); otherwise `solo`, so single-node Postgres with local
@@ -444,7 +464,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes

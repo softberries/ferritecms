@@ -882,6 +882,7 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
         kind: "test.tick",
         every: Duration::from_secs(1),
         payload: json!({"v": 1}),
+        max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
     };
     let stop = CancellationToken::new();
     let start_now = first.read().nodes().db_now().await.unwrap();

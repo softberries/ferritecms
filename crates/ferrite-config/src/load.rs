@@ -60,6 +60,7 @@ pub fn load(
     let plugins = parse_plugins(&mut cx, &mut table);
     let (auth, key_given) = parse_auth(&mut cx, &mut table);
     let mail = parse_mail(&mut cx, &mut table);
+    let backup = parse_backup(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
@@ -86,6 +87,7 @@ pub fn load(
             plugins,
             auth,
             mail,
+            backup,
         }),
         _ => Err(ConfigError {
             problems: cx.problems,
@@ -747,6 +749,103 @@ fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
     (AuthConfig { secret_key }, given)
 }
 
+/// The `[backup]` section (M4-1 P15). `to` stays as written (the job resolves it against
+/// the data folder): a folder outside the data folder, or `s3://bucket[/prefix]`; an
+/// archive path or `-` is refused, since the schedule writes a repository.
+fn parse_backup(cx: &mut Cx, root: &mut Table) -> BackupConfig {
+    let mut t = section(cx, root, "backup");
+    let b = "backup";
+    let defaults = BackupConfig::default();
+    let schedule = match cx.string(&mut t, b, "schedule").as_deref() {
+        None | Some("off") => BackupSchedule::Off,
+        Some("daily") => BackupSchedule::Daily,
+        Some("weekly") => BackupSchedule::Weekly,
+        Some(_) => {
+            cx.push(
+                "backup.schedule",
+                "must be \"off\", \"daily\" or \"weekly\"",
+            );
+            BackupSchedule::Off
+        }
+    };
+    let to = cx.string(&mut t, b, "to");
+    const MAX_KEEP: u64 = MAX_BACKUP_KEEP as u64;
+    let keep = match cx.uint(&mut t, b, "keep") {
+        None => defaults.keep,
+        Some(n @ 1..=MAX_KEEP) => n as u32,
+        Some(_) => {
+            cx.push(
+                "backup.keep",
+                format!("must be between 1 and {MAX_BACKUP_KEEP}"),
+            );
+            defaults.keep
+        }
+    };
+    let with_media = cx
+        .boolean(&mut t, b, "with_media")
+        .unwrap_or(defaults.with_media);
+    cx.unknown(t, b);
+    match &to {
+        None if schedule != BackupSchedule::Off => {
+            cx.push("backup.to", "required unless backup.schedule is \"off\"");
+        }
+        None => {}
+        Some(to) => {
+            if let Err(e) = check_backup_to(&cx.data_dir, to) {
+                cx.push("backup.to", e);
+            }
+        }
+    }
+    BackupConfig {
+        schedule,
+        to,
+        keep,
+        with_media,
+    }
+}
+
+/// A `backup.to` the schedule can write to (see [`parse_backup`]). Paths are compared
+/// lexically here; the job also resolves symlinks before its first write.
+fn check_backup_to(data_dir: &Path, to: &str) -> Result<(), String> {
+    if to.starts_with("s3://") {
+        return InitMedia::parse_s3_url(to).map(|_| ());
+    }
+    if to.is_empty() || to == "-" {
+        return Err("expected a folder or s3://bucket[/prefix]".to_owned());
+    }
+    if to.contains("://") {
+        return Err("only folders and s3://bucket[/prefix] are supported".to_owned());
+    }
+    if to.ends_with(".tar.zst") {
+        return Err(
+            "the schedule writes a repository: use a folder or s3://bucket[/prefix], not an \
+             archive file"
+                .to_owned(),
+        );
+    }
+    let normal = |p: &Path| {
+        let mut out = std::path::PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    };
+    if normal(&resolve(data_dir, to)).starts_with(normal(data_dir)) {
+        return Err(
+            "must be outside the data folder (a relative path is relative to it, e.g. \
+             \"../backups\")"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// The `[mail]` section (P17); `None` without `smtp_url`. Messages never echo the URL.
 fn parse_mail(cx: &mut Cx, root: &mut Table) -> Option<MailConfig> {
     let mut t = section(cx, root, "mail");
@@ -1028,6 +1127,10 @@ pub fn render_default_toml(
     out.push_str(
         "# smtp_url_file = \"/run/secrets/smtp_url\"  # or smtp_url = \"smtps://user:pass@host\"\n",
     );
-    out.push_str("# from = \"Site <noreply@example.com>\"\n");
+    out.push_str("# from = \"Site <noreply@example.com>\"\n\n");
+    out.push_str(BACKUP_TEMPLATE);
     out
 }
+
+/// The `[backup]` section of the `ferrite init` template (commented out: off).
+const BACKUP_TEMPLATE: &str = "# [backup]\n# Scheduled backups while `serve` runs: \"off\", \"daily\" or \"weekly\". SQLite: a\n# snapshot into a backup repository (`ferrite restore` reads it); Postgres: an export\n# archive in <to>/exports/ (`ferrite import-site` reads it).\n# schedule = \"daily\"\n# A folder outside the data folder (relative paths are relative to it) or\n# s3://bucket[/prefix] (credentials from the AWS_* environment).\n# to = \"../backups\"\n# Snapshots or archives kept (1..=1000).\n# keep = 7\n# with_media = true\n";

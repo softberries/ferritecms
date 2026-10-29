@@ -781,11 +781,59 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off backup=off"
     );
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
+}
+
+#[test]
+fn config_check_prints_backup() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[cluster]\nworkers = 2\n\
+         [backup]\nschedule = \"weekly\"\nto = \"../repo\"\n",
+    )
+    .unwrap();
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"]).arg(&data);
+        c
+    });
+    assert_eq!(
+        out.trim(),
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off backup=weekly"
+    );
+    // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(&data)
+            .env("FERRITE_BACKUP__SCHEDULE", "daily");
+        c
+    });
+    assert!(out.trim().ends_with(" backup=daily"), "{out}");
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\n",
+    )
+    .unwrap();
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).unwrap();
+    assert!(err.contains("backup.to: required"), "{err}");
+    // Nothing is created by the check.
+    assert!(!tmp.path().join("repo").exists());
 }
 
 #[test]
@@ -811,7 +859,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off backup=off"
     );
 }
 

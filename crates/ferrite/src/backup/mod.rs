@@ -154,11 +154,18 @@ const LOCAL_SUFFIXES: [&str; 7] = [
     "artifacts.txt",
 ];
 
-/// Whether `name` is exactly a file a backup run writes: `backup-<yyyymmddThhmmssZ>.<suffix>`.
+/// Whether `name` is exactly a file a backup run writes: `backup-<yyyymmddThhmmssZ>.<suffix>`,
+/// or the temporary archive of a scheduled export, `export-<yyyymmddThhmmssZ>.tmp`.
 fn is_local_file(name: &str) -> bool {
-    name.strip_prefix("backup-")
+    let backup = name
+        .strip_prefix("backup-")
         .and_then(|rest| rest.split_once('.'))
-        .is_some_and(|(ts, suffix)| repo::is_snapshot_name(ts) && LOCAL_SUFFIXES.contains(&suffix))
+        .is_some_and(|(ts, suffix)| repo::is_snapshot_name(ts) && LOCAL_SUFFIXES.contains(&suffix));
+    backup
+        || name
+            .strip_prefix("export-")
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+            .is_some_and(repo::is_snapshot_name)
 }
 
 /// Removes the files killed runs left in the backups folder: exactly the names a run writes
@@ -336,7 +343,7 @@ fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
 
 /// Refuses a repository inside the data folder or the media store (R11): pruning it, or the
 /// media GC, would delete the other's files.
-fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {
+pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {
     match loc {
         RepoLocation::Dir(dir) => {
             let repo = resolve(dir)?;
@@ -541,6 +548,72 @@ pub async fn run_backup(
     Ok(report)
 }
 
+/// What a scheduled export of a Postgres site did ([`run_export_backup`]).
+#[derive(Debug, Clone)]
+pub struct ExportReport {
+    /// The archive in the repository.
+    pub location: String,
+    pub schema_version: i64,
+    /// The archive's size.
+    pub bytes: u64,
+    pub tables: usize,
+    pub rows: u64,
+    /// `None` without media.
+    pub artifacts: Option<ArtifactsInfo>,
+    /// Artifacts whose blob was missing from the media store (R10): the archive lacks them.
+    pub missing: Vec<String>,
+    /// The older archives `keep` deleted.
+    pub pruned: Vec<String>,
+}
+
+/// The scheduled backup of a Postgres site (P15): a P7 export archive of `store` (with the
+/// blobs from `media` when given) written to `<data>/backups/export-<ts>.tmp` (mode 0600),
+/// uploaded to `<repo>/exports/<ts>.ferrite.tar.zst` and checked by reading it back, then
+/// the newest `keep` archives are kept. The repository follows R11 (marker on first use,
+/// never inside the data or media folder). The local file is deleted on every path;
+/// leftovers of killed runs older than a day are removed first.
+pub async fn run_export_backup(
+    config: &Config,
+    store: &dyn Store,
+    media: Option<Arc<MediaStore>>,
+    loc: &RepoLocation,
+    keep: usize,
+) -> anyhow::Result<ExportReport> {
+    check_repo_location(config, loc)?;
+    let repo = repo::Repo::open(loc, true).await?;
+    let dir = config.data_dir.join("backups");
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    sweep_stale(&dir);
+    let ts = chrono::Utc::now().format(repo::SNAPSHOT_FORMAT).to_string();
+    let tmp = dir.join(format!("export-{ts}.tmp"));
+    // A leftover of an interrupted run in the same second: ours by its name.
+    drop(LocalFiles(vec![tmp.clone()]));
+    let _local = LocalFiles(vec![tmp.clone()]);
+    let file = crate::init::create_private(&tmp)?;
+    let binary = binary_version()?;
+    let (manifest, out) =
+        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary).await?;
+    let file = out.into_inner().map_err(|e| e.into_error())?;
+    file.sync_all()?;
+    drop(file);
+    let entry = file_entry("export", &tmp)?;
+    let name = repo.put_export(&tmp, &entry.sha256).await?;
+    let pruned = repo
+        .prune_exports(keep)
+        .await
+        .with_context(|| format!("{name} was uploaded, but pruning the older exports failed"))?;
+    Ok(ExportReport {
+        location: format!("{}/{}/{name}", repo.display(), repo::EXPORTS),
+        schema_version: manifest.schema_version,
+        bytes: entry.bytes,
+        tables: manifest.tables.as_ref().map_or(0, Vec::len),
+        rows: manifest.tables.iter().flatten().map(|t| t.rows).sum(),
+        artifacts: manifest.artifacts,
+        missing: manifest.missing,
+        pruned,
+    })
+}
+
 /// The size of each blob of `hashes` in `media`; missing ones go to `report.missing`.
 async fn archive_blobs(
     media: Option<&MediaStore>,
@@ -731,6 +804,7 @@ mod tests {
         for suffix in LOCAL_SUFFIXES {
             assert!(is_local_file(&format!("backup-20261029T101500Z.{suffix}")));
         }
+        assert!(is_local_file("export-20261029T101500Z.tmp"));
         for name in [
             "backup-2026-10-28.tar.zst",
             "backup-20261029T101500Z.tar.zst",
@@ -738,6 +812,8 @@ mod tests {
             "backup-latest.db",
             "pre-10-to-11-20261029T101500Z.db",
             "mybackup-20261029T101500Z.db",
+            "export-20261029T101500Z.tar.zst",
+            "export-latest.tmp",
         ] {
             assert!(!is_local_file(name), "{name}");
         }

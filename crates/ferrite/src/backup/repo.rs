@@ -572,6 +572,139 @@ impl Repo {
     }
 }
 
+/// The folder of a repository holding export archives (the scheduled backup of a Postgres
+/// site, M4-1 P15).
+pub const EXPORTS: &str = "exports";
+/// The suffix of an export archive's name, after its `yyyymmddThhmmssZ` timestamp.
+pub const EXPORT_SUFFIX: &str = ".ferrite.tar.zst";
+/// The suffix of an export archive being written into a local repository.
+const PART_SUFFIX: &str = ".part";
+
+/// `<yyyymmddThhmmssZ>.ferrite.tar.zst`: exactly an export archive's name.
+pub(crate) fn is_export_name(name: &str) -> bool {
+    name.strip_suffix(EXPORT_SUFFIX)
+        .is_some_and(is_snapshot_name)
+}
+
+impl Repo {
+    fn export_key(name: &str) -> String {
+        format!("{EXPORTS}/{name}")
+    }
+
+    /// The export archives (`<yyyymmddThhmmssZ>.ferrite.tar.zst` names), oldest first.
+    pub async fn exports(&self) -> anyhow::Result<Vec<String>> {
+        let listed = match self
+            .store
+            .list_with_delimiter(Some(&self.key(EXPORTS)))
+            .await
+        {
+            Ok(listed) => listed,
+            Err(object_store::Error::NotFound { .. }) => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("cannot list {}", self.display)),
+        };
+        let mut names: Vec<String> = listed
+            .objects
+            .iter()
+            .filter_map(|o| o.location.filename().map(str::to_owned))
+            .filter(|n| is_export_name(n))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// Uploads the export archive `src` (whose sha256 is `sha256`) as
+    /// `exports/<now>.ferrite.tar.zst` (one second after the newest archive when that is not
+    /// older, so names stay unique and ordered), checks it by reading it back and returns
+    /// its name. A local repository gets it under a `.part` name first, then renamed; on S3
+    /// the multipart upload appears only once complete. A failed upload is deleted.
+    pub async fn put_export(&self, src: &Path, sha256: &str) -> anyhow::Result<String> {
+        let now = chrono::Utc::now().naive_utc();
+        let mut ts = now.format(SNAPSHOT_FORMAT).to_string();
+        if let Some(newest) = self.exports().await?.pop()
+            && let Some(newest) = newest.strip_suffix(EXPORT_SUFFIX)
+            && newest >= ts.as_str()
+        {
+            let t = chrono::NaiveDateTime::parse_from_str(newest, SNAPSHOT_FORMAT)?;
+            ts = (t + chrono::TimeDelta::seconds(1))
+                .format(SNAPSHOT_FORMAT)
+                .to_string();
+        }
+        let name = format!("{ts}{EXPORT_SUFFIX}");
+        let rel = Self::export_key(&name);
+        let result = async {
+            if let Some(root) = &self.local {
+                let part = format!("{rel}{PART_SUFFIX}");
+                let _ = std::fs::remove_file(root.join(&part));
+                self.put_file(&part, src).await?;
+                std::fs::rename(root.join(&part), root.join(&rel))
+                    .with_context(|| format!("cannot move {part} into place"))?;
+            } else {
+                self.put_file(&rel, src).await?;
+            }
+            let got = self.sha256_of(&rel).await?;
+            if got != sha256 {
+                bail!("the stored {name} reads back with sha256 {got}, written {sha256}");
+            }
+            anyhow::Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            if let Some(root) = &self.local {
+                let _ = std::fs::remove_file(root.join(format!("{rel}{PART_SUFFIX}")));
+            }
+            match self.store.delete(&self.key(&rel)).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(cleanup) => {
+                    tracing::warn!(export = %name, error = %cleanup, "cannot remove a failed export upload");
+                }
+            }
+            return Err(e.context(format!("cannot upload {name} to {}", self.display)));
+        }
+        Ok(name)
+    }
+
+    /// Keeps the newest `keep` export archives and deletes the older ones; returns the names
+    /// deleted, oldest first. Only names of that exact form are deleted, plus (in a
+    /// local repository) their `.part` leftovers older than 24 hours. `keep` must be at
+    /// least 1.
+    pub async fn prune_exports(&self, keep: usize) -> anyhow::Result<Vec<String>> {
+        if keep == 0 {
+            bail!("keep must be at least 1");
+        }
+        let all = self.exports().await?;
+        let old = &all[..all.len().saturating_sub(keep)];
+        for name in old {
+            match self.store.delete(&self.key(&Self::export_key(name))).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(e) => return Err(e).with_context(|| format!("cannot delete {name}")),
+            }
+        }
+        if let Some(root) = &self.local
+            && let Ok(entries) = std::fs::read_dir(root.join(EXPORTS))
+        {
+            let grace = TMP_GRACE.to_std().unwrap_or_default();
+            let now = std::time::SystemTime::now();
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let ours = name
+                    .to_str()
+                    .and_then(|n| n.strip_suffix(PART_SUFFIX))
+                    .is_some_and(is_export_name);
+                let stale = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| now.duration_since(t).ok())
+                    .is_some_and(|age| age > grace);
+                if ours && stale && entry.path().is_file() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        Ok(old.to_vec())
+    }
+}
+
 /// `yyyymmddThhmmssZ`.
 pub(crate) fn is_snapshot_name(name: &str) -> bool {
     name.len() == 16 && chrono::NaiveDateTime::parse_from_str(name, SNAPSHOT_FORMAT).is_ok()
@@ -642,6 +775,20 @@ mod tests {
         assert!(!is_snapshot_name("20261029T101500"));
         assert!(!is_snapshot_name("latest"));
         assert!(!is_snapshot_name("20261329T101500Z"));
+    }
+
+    #[test]
+    fn export_names() {
+        assert!(is_export_name("20261029T101500Z.ferrite.tar.zst"));
+        for name in [
+            "20261029T101500Z.ferrite.tar.zst.part",
+            "20261029T101500Z.tar.zst",
+            "site.ferrite.tar.zst",
+            "notes.txt",
+            "20261329T101500Z.ferrite.tar.zst",
+        ] {
+            assert!(!is_export_name(name), "{name}");
+        }
     }
 
     #[test]
