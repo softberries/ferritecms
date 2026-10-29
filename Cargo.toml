@@ -80,6 +80,9 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # Fallback roots for plugin `http` on hosts without a CA bundle (ruling R19); already
 # linked through lettre.
 webpki-roots = "=1.0.10"
+# The WordPress importer reads an uploads zip in place (M3-2 P24): stored and deflate
+# entries only.
+zip = { version = "=9.1.3", default-features = false, features = ["deflate"] }
 # Wipes keys and passwords from memory on drop (M2a-2b P24); already in the tree.
 zeroize = { version = "=1.9.1", features = ["derive"] }
 wasmtime = "50"

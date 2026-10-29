@@ -81,6 +81,10 @@ pub struct Report {
     pub scheduled_in_past: Vec<ItemRef>,
     /// The post permalink structure inferred from the old site and in effect (P17).
     pub permalink_structure: Option<String>,
+    /// Set when the run failed after it started (P29): the report then covers what was
+    /// done until that step, and its first note says so.
+    #[serde(default)]
+    pub failed: Option<Failure>,
     /// Everything else worth a line, one per kind of note (see the module docs).
     pub notes: Vec<String>,
     /// Per capped list (`missing_media`, `users_must_reset`, `redirects.refused`,
@@ -175,6 +179,14 @@ fn note_kind(text: &str) -> String {
         }
     }
     out
+}
+
+/// Where and why a run failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Failure {
+    /// The step that was running: `parse`, `pass1`…`pass4`, `fixup` or `report`.
+    pub step: String,
+    pub error: String,
 }
 
 /// The outcomes of one kind.
@@ -422,6 +434,12 @@ impl Report {
         h.pair("Site", &self.site_url);
         h.pair("Run", &self.run_id);
         h.pair("Dry run", if self.dry_run { "yes" } else { "no" });
+        if let Some(failed) = &self.failed {
+            h.pair(
+                "Failed",
+                &format!("in step {}: {}", failed.step, failed.error),
+            );
+        }
         h.pair("Started", &time(self.started_at));
         h.pair("Finished", &time(self.finished_at));
         h.pair(
@@ -813,6 +831,12 @@ pub(crate) async fn finish(report: &mut Report, ir: &Ir) -> Result<(), ImportErr
     }
     report.note("no plugin actions (post.saved, post.published) fired for imported items");
     // The collectors are spent: the report is now what it serialises.
+    render_notes(report);
+    Ok(())
+}
+
+/// Renders the collected notes into `notes`, after the resumed note when there is one.
+fn render_notes(report: &mut Report) {
     report.notes = std::mem::take(&mut report.note_log).render();
     report.folded.clear();
     if let Some(steps) = report.resumed.take() {
@@ -826,7 +850,55 @@ pub(crate) async fn finish(report: &mut Report, ir: &Ir) -> Result<(), ImportErr
             ),
         );
     }
-    Ok(())
+}
+
+/// Finishes the report of a run that failed in `step` with `error` (P29): what `ir`
+/// holds is mapped as [`finish`] does (without `ir`, or when that fails, only the notes
+/// are rendered), then `failed` is set and the first note says so.
+pub(crate) async fn finish_failed(
+    report: &mut Report,
+    ir: Option<&Ir>,
+    step: &str,
+    error: &ImportError,
+) {
+    let mapped = match ir {
+        Some(ir) => match finish(report, ir).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "building the failed import's report from its work file failed");
+                false
+            }
+        },
+        None => false,
+    };
+    if !mapped {
+        // `finish` maps the conversion tallies first; when it failed later, keep those.
+        if report.dropped_formatting.is_empty() {
+            report.dropped_formatting = report.dropped_formatting_now();
+        }
+        render_notes(report);
+    }
+    mark_failed(report, step, error);
+}
+
+/// Sets `failed` and puts the note saying so first.
+pub(crate) fn mark_failed(report: &mut Report, step: &str, error: &ImportError) {
+    let after = if report.dry_run {
+        "a dry run keeps nothing"
+    } else {
+        "running the import again resumes it"
+    };
+    report.notes.insert(
+        0,
+        format!(
+            "failed: the import stopped in step {step} ({error}); the report covers only \
+             what was done until then, and {after}"
+        ),
+    );
+    report.failed = Some(Failure {
+        step: step.to_owned(),
+        error: error.to_string(),
+    });
 }
 
 /// The top [`MAX_UNMAPPED_META`] keys of `counts`, most first, then by key.

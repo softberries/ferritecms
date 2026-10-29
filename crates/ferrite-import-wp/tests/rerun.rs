@@ -14,7 +14,9 @@ use ferrite_domain::{
     CommentQuery, ContentItem, ContentQuery, Menu, NewUser, RedirectQuery, Role, UserId, UserStatus,
 };
 use ferrite_import_wp::ImportError;
-use ferrite_import_wp::run::{DirSource, ImportContext, ImportOptions, Report, StepHook, run};
+use ferrite_import_wp::run::{
+    DirSource, Failure, ImportContext, ImportOptions, Report, StepHook, run,
+};
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -533,7 +535,7 @@ async fn resume_at(db: &TestDb, n: u32, step: &'static str) {
         })),
         ..ImportOptions::default()
     };
-    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     assert_eq!(
         steps.lock().unwrap().last().map(String::as_str),
@@ -595,6 +597,77 @@ pub async fn resume_after_failure_in_pass3(db: &TestDb) {
 
 pub async fn resume_after_failure_in_pass4(db: &TestDb) {
     resume_at(db, 43, "pass4").await;
+}
+
+/// A run that fails in pass 3 still has a report (P29): what passes 1 and 2 did, the
+/// failed step and a leading note saying so.
+pub async fn failed_run_has_a_partial_report(db: &TestDb) {
+    let site = site(db).await;
+    let steps = Arc::new(Mutex::new(Vec::new()));
+    let seen = steps.clone();
+    let opts = ImportOptions {
+        batch_items: Some(1),
+        fail_after_batches: Some(30),
+        step_hook: Some(StepHook::new(move |s| {
+            seen.lock().unwrap().push(s.to_owned());
+            Ok(())
+        })),
+        ..ImportOptions::default()
+    };
+    let failed = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
+        .await
+        .unwrap_err();
+    assert!(matches!(failed.error, ImportError::Stopped), "{failed:?}");
+    assert_eq!(failed.to_string(), failed.error.to_string());
+    assert_eq!(
+        steps.lock().unwrap().last().map(String::as_str),
+        Some("pass3")
+    );
+    let report = failed.report.expect("a started run has a report");
+    assert_eq!(
+        report.failed,
+        Some(Failure {
+            step: "pass3".into(),
+            error: ImportError::Stopped.to_string(),
+        })
+    );
+    assert!(!report.run_id.is_empty());
+    assert_eq!(report.source, "http://localhost:8099");
+    assert!(report.started_at.is_some() && report.finished_at.is_some());
+    // Passes 1 and 2 whole (the WXR `admin` is the importing admin), and the items
+    // pass 3 wrote before it stopped.
+    for (kind, created) in [("users", 3), ("terms", 9), ("media", 4), ("post", 3)] {
+        assert_eq!(report.counts[kind].created, created, "{kind}");
+    }
+    assert_eq!(report.counts["users"].unchanged, 1);
+    let first = report.notes.first().map(String::as_str).unwrap_or_default();
+    assert!(first.starts_with("failed:"), "{:?}", report.notes);
+    assert!(first.contains("pass3"), "{first}");
+    // It serialises with the failure.
+    let json: Value = serde_json::from_str(&report.to_json()).unwrap();
+    assert_eq!(json["failed"]["step"], "pass3");
+    assert!(report.to_html().contains("pass3"));
+}
+
+/// `on_step` hears every step as it begins, in order.
+pub async fn steps_are_reported_in_order(db: &TestDb) {
+    let site = site(db).await;
+    let steps = Arc::new(Mutex::new(Vec::new()));
+    let seen = steps.clone();
+    let opts = ImportOptions {
+        on_step: Some(Arc::new(move |s: &str| {
+            seen.lock().unwrap().push(s.to_owned())
+        })),
+        ..ImportOptions::default()
+    };
+    let report = import(&site, &corpus("site-a.xml"), opts).await;
+    assert_eq!(report.failed, None);
+    assert_eq!(
+        *steps.lock().unwrap(),
+        [
+            "parse", "pass1", "pass2", "pass3", "pass4", "fixup", "report"
+        ]
+    );
 }
 
 /// A nav menu with a long slug beside a site menu of the same name gets a free name
@@ -729,7 +802,7 @@ pub async fn dry_run_keeps_a_failed_runs_work_file(db: &TestDb) {
         })),
         ..ImportOptions::default()
     };
-    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     let dry = ImportOptions {
         dry_run: true,
@@ -762,7 +835,7 @@ pub async fn failed_dry_run_leaves_no_work_file(db: &TestDb) {
         step_hook: Some(stop_at("pass4")),
         ..ImportOptions::default()
     };
-    let err = run(site.ctx.clone(), &wxr, real).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, real).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     let failed_real = work_dirs(&site);
     assert_eq!(failed_real.len(), 1);
@@ -771,7 +844,7 @@ pub async fn failed_dry_run_leaves_no_work_file(db: &TestDb) {
         step_hook: Some(stop_at("fixup")),
         ..ImportOptions::default()
     };
-    let err = run(site.ctx.clone(), &wxr, dry).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, dry).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     assert_eq!(
         work_dirs(&site),
@@ -922,6 +995,8 @@ backend_tests!(
     resume_after_failure_in_pass1,
     resume_after_failure_in_pass3,
     resume_after_failure_in_pass4,
+    failed_run_has_a_partial_report,
+    steps_are_reported_in_order,
     long_menu_name_beside_a_site_menu,
     csv_redirects_are_kept,
     links_keep_their_query,
