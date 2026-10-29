@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
-pub use jobs::{ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};
+pub use jobs::{ENQUEUE_LOCK_WAIT, ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};
 pub use media::ImportMedia;
 pub use redirects::RedirectOutcome;
 pub use terms::{ImportTerm, TermMatched, TermOutcome};

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ferrite_core::{
     Actor, CoreError, PermalinkRules, Scopes,
-    import::{ArtifactBlobs, ImportJobView, ImportService, ReportFormat},
+    import::{ArtifactBlobs, ENQUEUE_LOCK_WAIT, ImportJobView, ImportService, ReportFormat},
     jobs::{
         IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobOptions, ImportJobPayload,
         ImportJobRequest,
@@ -333,21 +333,38 @@ pub async fn enqueue_takes_over_a_stale_run(db: &TestDb) {
     assert!(run.finished_at.is_some());
 }
 
-/// The import lock held elsewhere (a CLI import starting) refuses the enqueue.
+/// The import lock held elsewhere (a CLI import starting) refuses the enqueue once
+/// [`ENQUEUE_LOCK_WAIT`] passed; held only briefly (a failed upload's cleanup), the
+/// enqueue waits for it.
 pub async fn enqueue_refuses_while_the_import_lock_is_held(db: &TestDb) {
     let f = service(db);
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let guard = db
-        .shared_store()
-        .try_lock(LOCK_IMPORT)
-        .await
-        .unwrap()
-        .unwrap();
+    let take = || async {
+        db.shared_store()
+            .try_lock(LOCK_IMPORT)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let guard = take().await;
+    let started = std::time::Instant::now();
     let err = f.svc.enqueue(&admin, request()).await.unwrap_err();
     assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
+    assert!(
+        started.elapsed() >= ENQUEUE_LOCK_WAIT,
+        "{:?}",
+        started.elapsed()
+    );
     guard.release().await.unwrap();
+
+    let guard = take().await;
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        guard.release().await.unwrap();
+    });
     f.svc.enqueue(&admin, request()).await.unwrap();
+    release.await.unwrap();
 }
 
 /// Without an artifact store the report methods are `Unavailable`.
