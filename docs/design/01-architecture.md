@@ -288,6 +288,7 @@ root         = "media"                 # default; relative to the data folder
 # max_upload = "256MB"                 # M2a-2b: largest uploaded file, 1 byte..=1GiB; default 256MB
 # image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
 # upload_idle_timeout = "30s"          # M2a-2b: an upload receiving nothing this long is aborted
+# strip_metadata = false               # M4-1: strip EXIF/XMP (GPS) from JPEG/PNG/WebP originals on ingest
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -384,7 +385,19 @@ before the store switches to a staging object (2 MiB for an SVG, which is read w
 be sanitised), so uploads use at most about 64 MiB per node (8 slots × 8 MiB) besides
 the 8 KiB head each; size small VMs for it. The file name is checked (1..=255 bytes, no
 control or format characters) before the file is read. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
-variants are made only for raster originals of at most 64 MiB.
+variants are made only for raster originals of at most 64 MiB. `strip_metadata` (boolean,
+default `false`, M4-1 P17) removes EXIF and XMP losslessly from JPEG, PNG and WebP originals
+before they are hashed and stored, for browser uploads and the WordPress importer alike
+(03 §4). **Refusal rule:** with the option on, a JPEG, PNG or WebP whose metadata cannot
+be removed is refused, never stored with it: one over 64 MiB (`STRIP_MAX_BYTES`) or one
+the walker cannot parse (a truncated PNG, a WebP whose RIFF size runs past the file) gets
+`422 validation` on `POST /media` (`errors[0].field` = `file`, "metadata could not be
+removed: ...") and is recorded as refused media in an import report. **Memory with the
+option on:** the image is buffered whole, so a slot holds up to the buffer (at most 64 MiB
+of data in a `BytesMut` that grows by doubling, so up to 128 MiB reserved) plus the
+stripped copy (at most the input's size, 64 MiB): about 192 MiB per upload at the peak, so
+up to about 1.5 GiB for 8 slots, plus up to 192 MiB for a running import. The 64 MiB
+figure above holds only with the option off.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,

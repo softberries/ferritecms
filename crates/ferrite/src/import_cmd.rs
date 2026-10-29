@@ -121,6 +121,7 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
             tag_base: args.tag_base.clone(),
             takeover: args.takeover,
             max_upload: config.uploads.max_upload,
+            strip_metadata: config.uploads.strip_metadata,
             on_step: None,
             job_id: None,
             #[cfg(feature = "test-seams")]

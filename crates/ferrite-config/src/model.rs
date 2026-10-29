@@ -90,6 +90,9 @@ pub struct UploadConfig {
     /// An upload that receives no bytes for this long is aborted and its slot freed
     /// (`media.upload_idle_timeout`, seconds > 0, default [`DEFAULT_UPLOAD_IDLE_SECS`]).
     pub idle_timeout_secs: u64,
+    /// Strip EXIF and XMP from JPEG, PNG and WebP originals on ingest, losslessly
+    /// (`media.strip_metadata`, default false: the original is kept byte for byte).
+    pub strip_metadata: bool,
 }
 
 impl Default for UploadConfig {
@@ -98,6 +101,7 @@ impl Default for UploadConfig {
             max_upload: DEFAULT_MAX_UPLOAD,
             image_workers: 1,
             idle_timeout_secs: DEFAULT_UPLOAD_IDLE_SECS,
+            strip_metadata: false,
         }
     }
 }

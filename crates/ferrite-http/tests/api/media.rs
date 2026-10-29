@@ -29,6 +29,8 @@ api_tests!(
     upload_parts_are_checked,
     aborted_uploads_leave_nothing_staged,
     idle_upload_is_aborted_and_frees_its_slot,
+    strip_metadata_option_strips_uploads,
+    unstrippable_image_is_refused_when_stripping,
 );
 
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -978,5 +980,81 @@ async fn idle_upload_is_aborted_and_frees_its_slot(api: Api) -> Api {
         .body(axum::body::Body::from(body))
         .unwrap();
     created(&send(&router, req).await);
+    api
+}
+
+/// `media.strip_metadata`: with the option on an upload's XMP is gone from what is stored
+/// (M4-1 P17); with it off the file is kept byte for byte.
+async fn strip_metadata_option_strips_uploads(api: Api) -> Api {
+    let admin = admin(&api).await;
+    let xmp = b"<x:xmpmeta>my street address</x:xmpmeta>";
+    let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+    payload.extend_from_slice(xmp);
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    jpeg.extend_from_slice(&payload);
+    // Start of scan with its two-byte header, some entropy-coded bytes and the end.
+    jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x04, 0x01, 0x02, 0x12, 0x34, 0xFF, 0xD9]);
+
+    for (strip, tag) in [(false, "off"), (true, "on")] {
+        let (router, _) = api.router_with_uploader(
+            Uploader::new(api.api.media.clone(), 1 << 20).with_strip_metadata(strip),
+        );
+        let mut file = jpeg.clone();
+        file.extend_from_slice(tag.as_bytes());
+        let (_, body) = upload_body(&[Part::file("me.jpg", "image/jpeg", &file)]);
+        let req = admin
+            .builder(Method::POST, "/api/v1/media")
+            .header(header::CONTENT_TYPE, upload_content_type())
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let item = created(&send(&router, req).await);
+        assert_eq!(item["mime"], "image/jpeg", "{tag}");
+        let stored = api.get(item["url"].as_str().unwrap()).await;
+        assert_eq!(stored.status.as_u16(), 200, "{tag}");
+        let has_xmp = stored.body.contains("my street address");
+        assert_eq!(
+            has_xmp, !strip,
+            "{tag}: XMP is stored only with stripping off"
+        );
+        let expected = if strip {
+            file.len() - payload.len() - 4
+        } else {
+            file.len()
+        };
+        assert_eq!(item["bytes"], expected, "{tag}");
+    }
+    api
+}
+
+/// With `media.strip_metadata` on, an image whose metadata cannot be removed is refused
+/// (`422 validation`), never stored; with it off the same bytes are stored.
+async fn unstrippable_image_is_refused_when_stripping(api: Api) -> Api {
+    let admin = admin(&api).await;
+    // A JPEG whose Exif segment claims more bytes than the file has.
+    let bad = [
+        0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xF0, b'E', b'x', b'i', b'f', 0, 0, 1, 2,
+    ];
+    for (strip, status) in [(true, 422u16), (false, 201)] {
+        let (router, _) = api.router_with_uploader(
+            Uploader::new(api.api.media.clone(), 1 << 20).with_strip_metadata(strip),
+        );
+        let (_, body) = upload_body(&[Part::file("bad.jpg", "image/jpeg", &bad)]);
+        let req = admin
+            .builder(Method::POST, "/api/v1/media")
+            .header(header::CONTENT_TYPE, upload_content_type())
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let r = send(&router, req).await;
+        assert_eq!(r.status.as_u16(), status, "strip={strip}: {r:?}");
+        if strip {
+            let p = r.assert_problem(422, "validation");
+            assert_eq!(field(&p), "file", "{p}");
+            assert!(
+                p.to_string().contains("metadata could not be removed"),
+                "{p}"
+            );
+        }
+    }
     api
 }

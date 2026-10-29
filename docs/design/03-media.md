@@ -251,8 +251,27 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Orientation**: EXIF orientation is applied; `Processed.width/height` are post-orientation.
 - **Metadata**: output is re-encoded, so variants carry no EXIF, XMP or GPS (no keep option
   yet). The **stored original is kept byte for byte, EXIF (GPS included) and all**, as WordPress
-  does (M2a-2b R11): a photo's location stays readable from its original URL. Optional
-  location-metadata stripping on upload is an M4 item (ROADMAP).
+  does (M2a-2b R11): a photo's location stays readable from its original URL, unless
+  `[media] strip_metadata = true` (default `false`, M4-1 P17). Then `stage_stream` removes
+  EXIF and XMP from JPEG, PNG and WebP originals **before hashing**, so the stored artifact
+  (and its content hash) is the stripped file; it applies to browser uploads and to the
+  WordPress importer alike. The strip is lossless: no pixel is re-encoded. JPEG loses its
+  APP1 Exif and XMP segments; PNG its `eXIf` chunk and XMP `iTXt` chunk; WebP its `EXIF` and
+  `XMP ` chunks (the VP8X flags are fixed). ICC data is kept. An EXIF Orientation other than 1
+  is written back as a minimal EXIF block that holds only that tag, so the picture still
+  displays upright. GIF and SVG are untouched. **With the option on, a JPEG, PNG or WebP whose
+  metadata cannot be removed is refused, never stored with it:** a file over 64 MiB (it is
+  buffered whole), or one the walker cannot parse (a PNG without `IEND`, a WebP whose RIFF
+  size runs past the file, a truncated JPEG). A browser upload gets `422 validation`
+  (`file`: "metadata could not be removed: ..."); the importer records the attachment as
+  refused media in its report; both log a warning with the sanitised name. With the option
+  off such files are stored unchanged, as before. Bytes after a JPEG's EOI, a PNG's `IEND`
+  or a WebP's RIFF end are copied as they are. **Not inspected:** anything after the first
+  JPEG start-of-scan (APP1 segments between progressive scans), images appended after the
+  primary one in a multi-picture JPEG (MPF: gain maps, depth maps, which may carry their own
+  Exif or XMP), and Photoshop APP13 resources (which can embed Exif or XMP); they are kept.
+  Cost: the hash differs from the byte-identical WordPress original, so deduplication
+  against it stops.
   The **ICC profile** is kept only if its colour-space signature (header bytes 16..20) matches
   the output pixels: `RGB ` for JPEG and colour PNG, `GRAY` for grayscale PNG. A mismatching
   profile (for example CMYK) is dropped, as is one the encoder rejects or one larger than 1 MiB

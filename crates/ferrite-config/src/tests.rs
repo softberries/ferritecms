@@ -923,6 +923,7 @@ fn media_upload_rules() {
     assert_eq!(c.uploads.max_upload, 256 << 20);
     assert_eq!(c.uploads.image_workers, 1);
     assert_eq!(c.uploads.idle_timeout_secs, 30);
+    assert!(!c.uploads.strip_metadata);
     assert_eq!(DEFAULT_MAX_UPLOAD, 256 << 20);
     assert_eq!(MAX_UPLOAD_CEILING, 1 << 30);
 
@@ -946,6 +947,10 @@ fn media_upload_rules() {
     assert_eq!(r.unwrap().uploads.max_upload, 1);
     let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__MAX_UPLOAD", "8MB")]);
     assert_eq!(r.unwrap().uploads.max_upload, 8 << 20);
+    let (_d, r) = run(Some(&format!("{MIN}[media]\nstrip_metadata = true\n")), &[]);
+    assert!(r.unwrap().uploads.strip_metadata);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__STRIP_METADATA", "true")]);
+    assert!(r.unwrap().uploads.strip_metadata);
 
     let problem = |toml: &str| {
         let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);

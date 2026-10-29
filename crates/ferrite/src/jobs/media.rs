@@ -220,6 +220,7 @@ fn process_error(e: MediaError) -> JobError {
         | MediaError::Io(_)
         | MediaError::Unsupported { .. }
         | MediaError::Svg(_)
+        | MediaError::Metadata(_)
         | MediaError::Task(_) => JobError::Permanent(format!("image could not be processed: {e}")),
         MediaError::Backend(_)
         | MediaError::NotFound
