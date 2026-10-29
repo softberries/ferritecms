@@ -315,7 +315,9 @@ fn expand_lint_passes() {
         {
             let sql = std::fs::read_to_string(dir.join(name)).unwrap();
             if parse_directives(&sql).unwrap().phase == Phase::Expand {
-                let problems = expand_lint(&sql);
+                let down = name.replace(".up.sql", ".down.sql");
+                let down = std::fs::read_to_string(dir.join(down)).unwrap();
+                let problems = expand_lint(&sql, &down);
                 assert!(
                     problems.is_empty(),
                     "{}: {problems:?}",

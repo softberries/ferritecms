@@ -77,22 +77,21 @@ fn directive_err(msg: String) -> StoreError {
     StoreError::Migration(format!("bad ferrite directive: {msg}"))
 }
 
-/// Returns problems found in an expand migration (02 §8 lint over SQL text).
-pub fn expand_lint(up_sql: &str) -> Vec<String> {
-    let stripped: String = up_sql
-        .lines()
-        .map(|l| l.split("--").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_uppercase();
+/// Returns problems found in an expand migration (02 §8 lint over SQL text). `down_sql`
+/// is the migration's `.down.sql`: a CHECK swapped in place passes only when it widens
+/// the one the down restores.
+pub fn expand_lint(up_sql: &str, down_sql: &str) -> Vec<String> {
+    let down = strip_comments(down_sql);
     let mut problems = Vec::new();
-    for stmt in stripped.split(';') {
+    for original in strip_comments(up_sql).split(';') {
+        let stmt = original.to_uppercase();
+        let stmt = stmt.as_str();
         let words = words(stmt);
         if words.is_empty() {
             continue;
         }
         let label = words.iter().take(3).copied().collect::<Vec<_>>().join(" ");
-        if words.contains(&"DROP") && !replaces_constraints(stmt) {
+        if words.contains(&"DROP") && !widens_checks(original, &down) {
             problems.push(format!("DROP in expand migration: `{label} ...`"));
         }
         if words.contains(&"RENAME") {
@@ -117,30 +116,187 @@ pub fn expand_lint(up_sql: &str) -> Vec<String> {
     problems
 }
 
-/// `ALTER TABLE t DROP CONSTRAINT c, ADD CONSTRAINT c ...`: every dropped constraint is
-/// added back under the same name in the same statement, so the table is never without
-/// it (how a Postgres CHECK is widened, `0010`). Whether the new one is wider is left to
-/// review.
-fn replaces_constraints(stmt: &str) -> bool {
-    let words = words(stmt);
-    if words.first() != Some(&"ALTER") {
+fn strip_comments(sql: &str) -> String {
+    sql.lines()
+        .map(|l| l.split("--").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `ALTER TABLE t DROP CONSTRAINT c, ADD CONSTRAINT c CHECK (col IN ('a', 'b', …))`
+/// (how a Postgres CHECK is widened, `0010`): every clause is either the table prefix, a
+/// `DROP CONSTRAINT` or an `ADD CONSTRAINT`, and each dropped constraint comes back under
+/// its name as a `col IN (<string literals>)` CHECK whose list is a strict superset of
+/// the one the down's `ADD CONSTRAINT` of that name restores, on the same column.
+/// Anything else (narrowing, an equal list, another constraint type or column, a down
+/// that does not restore such a CHECK) is not a widening.
+fn widens_checks(stmt: &str, down: &str) -> bool {
+    let Some(swap) = constraint_clauses(stmt) else {
         return false;
-    }
-    let mut dropped = Vec::new();
-    let mut added = Vec::new();
-    for clause in split_clauses(stmt) {
-        let w = self::words(&clause);
-        let at = |kw: &str| w.windows(3).find(|p| p[0] == kw && p[1] == "CONSTRAINT");
-        match (at("DROP"), at("ADD")) {
-            (Some(p), None) if w.iter().filter(|x| **x == "DROP").count() == 1 => {
-                dropped.push(p[2].to_owned());
+    };
+    let dropped: Vec<&String> = swap
+        .iter()
+        .filter_map(|c| match c {
+            ConstraintClause::Drop(name) => Some(name),
+            ConstraintClause::Add(..) => None,
+        })
+        .collect();
+    let added = |clauses: &[ConstraintClause], name: &str| {
+        clauses.iter().rev().find_map(|c| match c {
+            ConstraintClause::Add(n, check) if n == name => Some(check.clone()),
+            _ => None,
+        })
+    };
+    let restored = |name: &str| {
+        down.rsplit(';')
+            .filter_map(constraint_clauses)
+            .find_map(|clauses| added(&clauses, name))
+            .flatten()
+    };
+    !dropped.is_empty()
+        && dropped.iter().all(|name| {
+            let (Some(Some(new)), Some(old)) = (added(&swap, name), restored(name)) else {
+                return false;
+            };
+            new.column == old.column
+                && new.values.len() > old.values.len()
+                && old.values.iter().all(|v| new.values.contains(v))
+        })
+}
+
+/// A `CHECK (column IN ('…', …))`; `column` upper-cased (an unquoted identifier).
+#[derive(Debug, Clone)]
+struct CheckIn {
+    column: String,
+    values: Vec<String>,
+}
+
+enum ConstraintClause {
+    Drop(String),
+    /// The constraint's name and, when it is one, its `CHECK (col IN (…))`.
+    Add(String, Option<CheckIn>),
+}
+
+#[derive(Debug, PartialEq)]
+enum Token {
+    /// An identifier or keyword, upper-cased.
+    Word(String),
+    /// A string literal's value (`''` unescaped).
+    Str(String),
+    Punct(char),
+}
+
+fn tokens(sql: &str) -> Option<Vec<Token>> {
+    let mut out = Vec::new();
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c.is_alphanumeric() || c == '_' {
+            let mut word = c.to_uppercase().to_string();
+            while let Some(&n) = chars.peek().filter(|n| n.is_alphanumeric() || **n == '_') {
+                word.extend(n.to_uppercase());
+                chars.next();
             }
-            (None, Some(p)) if !w.contains(&"DROP") => added.push(p[2].to_owned()),
-            (None, None) if !w.contains(&"DROP") => {}
-            _ => return false,
+            out.push(Token::Word(word));
+        } else if c == '\'' {
+            let mut text = String::new();
+            loop {
+                match chars.next()? {
+                    '\'' if chars.peek() == Some(&'\'') => {
+                        chars.next();
+                        text.push('\'');
+                    }
+                    '\'' => break,
+                    other => text.push(other),
+                }
+            }
+            out.push(Token::Str(text));
+        } else {
+            out.push(Token::Punct(c));
         }
     }
-    !dropped.is_empty() && dropped.iter().all(|d| added.contains(d))
+    Some(out)
+}
+
+/// The clauses of an `ALTER TABLE` made only of `DROP CONSTRAINT name` and
+/// `ADD CONSTRAINT name …` clauses; `None` for any other statement.
+fn constraint_clauses(stmt: &str) -> Option<Vec<ConstraintClause>> {
+    let tokens = tokens(stmt)?;
+    let word = |t: &Token, w: &str| matches!(t, Token::Word(x) if x == w);
+    if !(tokens.len() > 2 && word(&tokens[0], "ALTER") && word(&tokens[1], "TABLE")) {
+        return None;
+    }
+    let mut clauses = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, t) in tokens.iter().enumerate() {
+        match t {
+            Token::Punct('(') => depth += 1,
+            Token::Punct(')') => depth -= 1,
+            Token::Punct(',') if depth == 0 => {
+                clauses.push(&tokens[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    clauses.push(&tokens[start..]);
+    let mut out = Vec::new();
+    for (n, clause) in clauses.into_iter().enumerate() {
+        let at = clause
+            .iter()
+            .position(|t| word(t, "ADD") || word(t, "DROP"))?;
+        // Only the first clause carries the `ALTER TABLE <name>` prefix.
+        if (n == 0) != (at > 0) {
+            return None;
+        }
+        match &clause[at..] {
+            [Token::Word(op), c, Token::Word(name)] if op == "DROP" && word(c, "CONSTRAINT") => {
+                out.push(ConstraintClause::Drop(name.clone()));
+            }
+            [Token::Word(op), c, Token::Word(name), rest @ ..]
+                if op == "ADD" && word(c, "CONSTRAINT") =>
+            {
+                out.push(ConstraintClause::Add(name.clone(), check_in(rest)));
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// `CHECK ( col IN ( 'a' [, 'b' …] ) )`, exactly.
+fn check_in(tokens: &[Token]) -> Option<CheckIn> {
+    let [
+        Token::Word(check),
+        Token::Punct('('),
+        Token::Word(column),
+        Token::Word(op),
+        Token::Punct('('),
+        list @ ..,
+        Token::Punct(')'),
+        Token::Punct(')'),
+    ] = tokens
+    else {
+        return None;
+    };
+    if check != "CHECK" || op != "IN" {
+        return None;
+    }
+    let mut values = Vec::new();
+    for (i, t) in list.iter().enumerate() {
+        match (i % 2, t) {
+            (0, Token::Str(v)) => values.push(v.clone()),
+            (1, Token::Punct(',')) => {}
+            _ => return None,
+        }
+    }
+    (list.len() % 2 == 1).then_some(CheckIn {
+        column: column.clone(),
+        values,
+    })
 }
 
 fn words(s: &str) -> Vec<&str> {
@@ -496,41 +652,108 @@ mod tests {
 
     #[test]
     fn expand_lint_flags() {
-        assert!(!expand_lint("DROP TABLE x;").is_empty());
-        assert!(!expand_lint("drop index i;").is_empty());
-        assert!(!expand_lint("ALTER TABLE t ADD COLUMN c TEXT NOT NULL;").is_empty());
-        assert!(expand_lint("ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT '';").is_empty());
-        assert!(expand_lint("ALTER TABLE t ADD COLUMN c TEXT;").is_empty());
-        assert!(expand_lint("CREATE TABLE t (a TEXT NOT NULL);").is_empty());
-        assert!(expand_lint("-- DROP in a comment\nCREATE TABLE t (a INT);").is_empty());
-        assert!(!expand_lint("ALTER TABLE t RENAME COLUMN a TO b;").is_empty());
-        assert!(!expand_lint("ALTER TABLE t ALTER COLUMN c TYPE int;").is_empty());
-        assert!(!expand_lint("ALTER TABLE t ALTER COLUMN c SET DATA TYPE int;").is_empty());
+        let lint = |up: &str| expand_lint(up, "");
+        assert!(!lint("DROP TABLE x;").is_empty());
+        assert!(!lint("drop index i;").is_empty());
+        assert!(!lint("ALTER TABLE t ADD COLUMN c TEXT NOT NULL;").is_empty());
+        assert!(lint("ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT '';").is_empty());
+        assert!(lint("ALTER TABLE t ADD COLUMN c TEXT;").is_empty());
+        assert!(lint("CREATE TABLE t (a TEXT NOT NULL);").is_empty());
+        assert!(lint("-- DROP in a comment\nCREATE TABLE t (a INT);").is_empty());
+        assert!(!lint("ALTER TABLE t RENAME COLUMN a TO b;").is_empty());
+        assert!(!lint("ALTER TABLE t ALTER COLUMN c TYPE int;").is_empty());
+        assert!(!lint("ALTER TABLE t ALTER COLUMN c SET DATA TYPE int;").is_empty());
         assert!(
-            !expand_lint("ALTER TABLE t ADD COLUMN a INT DEFAULT 0, ADD COLUMN b INT NOT NULL;")
+            !lint("ALTER TABLE t ADD COLUMN a INT DEFAULT 0, ADD COLUMN b INT NOT NULL;")
                 .is_empty()
         );
-        assert!(expand_lint("ALTER TABLE t ADD COLUMN type TEXT;").is_empty());
-        // A constraint dropped and re-added under its name in one statement is a swap.
+        assert!(lint("ALTER TABLE t ADD COLUMN type TEXT;").is_empty());
+    }
+
+    /// A CHECK swapped under its name in one statement passes only when it widens a
+    /// `col IN ('…')` list: the up's list is a strict superset of the one the down
+    /// restores, on the same column.
+    #[test]
+    fn expand_lint_constraint_swaps() {
+        const SWAP: &str = "ALTER TABLE t DROP CONSTRAINT t_k_check, ";
+        let down = "ALTER TABLE t DROP CONSTRAINT t_k_check, \
+                    ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b'));";
+        let up = |add: &str| format!("{SWAP}{add};");
+
+        // Widening passes, case-insensitive keywords included.
+        assert_eq!(
+            expand_lint(
+                &up("ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b', 'c'))"),
+                down
+            ),
+            Vec::<String>::new()
+        );
         assert!(
             expand_lint(
-                "ALTER TABLE t DROP CONSTRAINT t_k_check, \
-                 ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b'));"
+                "alter table t drop constraint t_k_check, \
+                 add constraint t_k_check check (k in ('b', 'a', 'it''s'));",
+                down
             )
             .is_empty()
         );
-        assert!(!expand_lint("ALTER TABLE t DROP CONSTRAINT t_k_check;").is_empty());
+        // Narrowing, an equal list, another constraint type, another column.
+        for add in [
+            "ADD CONSTRAINT t_k_check CHECK (k IN ('a'))",
+            "ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'c'))",
+            "ADD CONSTRAINT t_k_check CHECK (k IN ('b', 'a'))",
+            "ADD CONSTRAINT t_k_check UNIQUE (k)",
+            "ADD CONSTRAINT t_k_check CHECK (k <> 'x')",
+            "ADD CONSTRAINT t_k_check CHECK (j IN ('a', 'b', 'c'))",
+            "ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b', 'c') OR true)",
+            "ADD CONSTRAINT other CHECK (k IN ('a', 'b', 'c'))",
+        ] {
+            assert!(!expand_lint(&up(add), down).is_empty(), "{add}");
+        }
+        // The down must restore an IN list on the same column.
+        let wide = up("ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b', 'c'))");
+        assert!(!expand_lint(&wide, "").is_empty());
         assert!(
-            !expand_lint("ALTER TABLE t DROP CONSTRAINT a, ADD CONSTRAINT b CHECK (k IN ('a'));")
-                .is_empty()
+            !expand_lint(
+                &wide,
+                "ALTER TABLE t DROP CONSTRAINT t_k_check, ADD CONSTRAINT t_k_check UNIQUE (k);"
+            )
+            .is_empty()
         );
         assert!(
             !expand_lint(
-                "ALTER TABLE t DROP CONSTRAINT c, DROP COLUMN x, \
-                 ADD CONSTRAINT c CHECK (k IN ('a'));"
+                &wide,
+                "ALTER TABLE t DROP CONSTRAINT t_k_check, \
+                 ADD CONSTRAINT t_k_check CHECK (j IN ('a'));"
             )
             .is_empty()
         );
-        assert!(!expand_lint("DROP TABLE t, ADD CONSTRAINT t CHECK (true);").is_empty());
+        // A lone drop, or one beside another drop, is still a DROP.
+        assert!(!expand_lint("ALTER TABLE t DROP CONSTRAINT t_k_check;", down).is_empty());
+        assert!(
+            !expand_lint(
+                "ALTER TABLE t DROP CONSTRAINT t_k_check, DROP COLUMN x, \
+                 ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b', 'c'));",
+                down
+            )
+            .is_empty()
+        );
+        assert!(!expand_lint("DROP TABLE t, ADD CONSTRAINT t CHECK (true);", down).is_empty());
+    }
+
+    /// The real Postgres `0010_import_jobs` widens `artifacts_kind_check` and passes.
+    #[test]
+    fn expand_lint_passes_postgres_0010() {
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ferrite-store-postgres/migrations"
+        );
+        let read = |f: &str| std::fs::read_to_string(format!("{dir}/{f}")).unwrap();
+        let up = read("0010_import_jobs.up.sql");
+        assert_eq!(
+            expand_lint(&up, &read("0010_import_jobs.down.sql")),
+            Vec::<String>::new()
+        );
+        // Without the down's restored list the swap cannot be proven wider.
+        assert!(!expand_lint(&up, "").is_empty());
     }
 }

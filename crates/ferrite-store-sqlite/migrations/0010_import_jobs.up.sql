@@ -10,9 +10,12 @@
 -- an older binary keeps working against it and no min-binary is set. `media`, `plugins`
 -- and `themes` reference `artifacts (hash)` without ON DELETE actions; the foreign keys
 -- cannot be switched off inside the migration's transaction, so they are deferred: the
--- DROP's implicit delete counts the orphaned child rows and the copy back clears them
--- before the commit. Renaming a new table into place is avoided because it would
--- rewrite the children's REFERENCES clauses to the old name.
+-- DROP's implicit delete counts the orphaned child rows, and only inserting the matching
+-- parent rows into `artifacts` clears that count before the commit. So the rows are
+-- copied out and back into a table created under the final name. SQLite's usual
+-- sequence (create `artifacts_new`, copy, drop `artifacts`, rename `artifacts_new`)
+-- fails here: the rename inserts nothing, so the commit still sees the violations
+-- (FOREIGN KEY constraint failed, tried).
 PRAGMA defer_foreign_keys = ON;
 CREATE TABLE artifacts_0010 AS SELECT hash, kind, bytes, mime, created_at FROM artifacts;
 DROP TABLE artifacts;

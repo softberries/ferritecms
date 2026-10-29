@@ -5,9 +5,9 @@
 -- `import.wordpress` job that started the run, no foreign key since jobs are pruned),
 -- `step` (the step the run is in) and `report_hash` (the report artifact).
 -- The CHECK is replaced in one ALTER TABLE: it only widens, so an older binary keeps
--- working against it (the expand lint accepts a constraint dropped and re-added under
--- the same name in one statement). SQLite needs a table rebuild for the same change,
--- which makes its 0010 a contract migration.
+-- working against it (the expand lint accepts a same-name swap only when its IN list is
+-- a strict superset of the one the down restores). SQLite needs a table rebuild for the
+-- same change, which makes its 0010 a contract migration.
 ALTER TABLE artifacts
     DROP CONSTRAINT artifacts_kind_check,
     ADD CONSTRAINT artifacts_kind_check
