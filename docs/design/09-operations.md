@@ -252,6 +252,7 @@ ferrite serve          --data DIR                      # M1c-2; cluster wiring M
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
+ferrite media regenerate --data DIR [--all] [--item ID]        # M4-1
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -312,6 +313,21 @@ unusable one exits 1; keys that are not artifacts are ignored with a notice. Pri
 and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
 (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
 `--from` nor `--data`, or both) exits 2 as clap does.
+
+**`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again in
+process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus the
+`[images]` of the theme active in the database (`variant_specs`). By default an item is processed when
+it is raster and its recorded `variants` lack a size that applies to its width: a width-bounded size
+wider than the original is never made, so it never counts as lacking and a second run changes
+nothing. `--all` redoes every raster item; `--item ID` (a content id; unknown is exit 1) limits the
+run to one item. Non-raster items and originals over 64 MiB are skipped (the latter with a line on
+stderr). Per item it decodes with the job's code (one image at a time), stores each variant and records
+them only while the row still holds that original; the replaced variant files stay for `media gc`.
+With SQLite it opens the database like `seed`, so `serve` must be stopped; with Postgres it may run
+beside the nodes (each item appends its `post:<id>` invalidation event; not tested with Postgres). Progress goes to
+stderr every 50 items; stdout is `regenerated N, skipped S, failed F` and each failure is a
+`failed <id>: <reason>` line on stderr. Exit 0 done, 2 when some items failed (the rest were done), 1
+on an error.
 
 **`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
 `http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on

@@ -3,17 +3,18 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use ferrite_cluster::{JobError, JobHandler};
 use ferrite_core::{
     CoreError, MediaService,
     jobs::{MEDIA_VARIANTS_KIND, MEDIA_VARIANTS_VERSION, MediaVariants},
 };
-use ferrite_domain::{Artifact, ArtifactHash, ArtifactKind, Job, Timestamp};
+use ferrite_domain::{Artifact, ArtifactHash, ArtifactKind, ContentId, Job, Timestamp};
 use ferrite_http::media::MAX_PROCESS_BYTES;
 use ferrite_media::{MediaError, MediaStore, Processed, VariantSpec, process_image};
 use ferrite_store::Store;
 use serde_json::{Map, Value, json};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// What decodes an original into its variants: [`process_image`] in production; a
 /// test seam (`NodeOptions::image_processor`, behind `test-seams`) replaces it.
@@ -155,9 +156,41 @@ impl JobHandler for MediaVariantsHandler {
             .await
             .map_err(|e| JobError::Retry(e.to_string()))?;
         let specs = (self.specs)();
+        VariantMaker {
+            media: &self.media,
+            service: &self.service,
+            processor: &self.processor,
+        }
+        .make(item, &hash, data, specs, slot)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Steps 5 and 6 of [`MediaVariantsHandler`], shared with `ferrite media regenerate`:
+/// decodes `data` (the original `hash` of media item `item`) on the blocking pool with
+/// `specs`, the `slot` held until the decode ends, stores every variant and records them
+/// while the row still holds `hash`. `Ok(true)` when recorded, `Ok(false)` when the row
+/// was replaced meanwhile (the variants are dropped).
+pub(crate) struct VariantMaker<'a> {
+    pub media: &'a MediaStore,
+    pub service: &'a MediaService,
+    pub processor: &'a ImageProcessor,
+}
+
+impl VariantMaker<'_> {
+    pub(crate) async fn make(
+        &self,
+        item: ContentId,
+        hash: &ArtifactHash,
+        data: Bytes,
+        specs: Vec<VariantSpec>,
+        slot: OwnedSemaphorePermit,
+    ) -> Result<bool, JobError> {
+        let (media, service) = (self.media, self.service);
         let processor = self.processor.clone();
         let processed = tokio::task::spawn_blocking(move || {
-            // Released when the decode ends, not when `run` is dropped (F17).
+            // Released when the decode ends, not when the caller is dropped (F17).
             let _slot = slot;
             processor(&data, &specs)
         })
@@ -174,22 +207,20 @@ impl JobHandler for MediaVariantsHandler {
         let mut variants = Map::new();
         let mut artifacts = Vec::with_capacity(processed.variants.len());
         for v in processed.variants {
-            let stored = self
-                .media
+            let stored = media
                 .put_artifact(v.data)
                 .await
                 .map_err(|e| JobError::Retry(e.to_string()))?;
             variants.insert(
-                v.name,
-                json!({ "hash": stored.hash.as_str(), "w": v.width, "h": v.height, "mime": v.mime }),
-            );
+            v.name,
+            json!({ "hash": stored.hash.as_str(), "w": v.width, "h": v.height, "mime": v.mime }),
+        );
             artifacts.push(variant_artifact(&stored)?);
         }
-        let recorded = self
-            .service
+        let recorded = service
             .record_variants(
                 item,
-                &hash,
+                hash,
                 processed.width,
                 processed.height,
                 Value::Object(variants),
@@ -207,7 +238,7 @@ impl JobHandler for MediaVariantsHandler {
         } else {
             tracing::info!(%item, %hash, "media row replaced while processing; variants dropped");
         }
-        Ok(())
+        Ok(recorded)
     }
 }
 

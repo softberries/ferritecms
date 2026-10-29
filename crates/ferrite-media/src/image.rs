@@ -32,6 +32,15 @@ pub struct VariantSpec {
     pub crop: bool,
 }
 
+impl VariantSpec {
+    /// Whether [`process_image`] makes this size for an image `source_width` pixels wide
+    /// (after EXIF rotation): a `crop` size always, a width-bounded size only when the
+    /// source is wider than it (nothing is upscaled).
+    pub fn is_made_for(&self, source_width: u32) -> bool {
+        self.crop || source_width > self.width
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Variant {
     pub name: String,
@@ -240,7 +249,7 @@ fn make_variant(img: &DynamicImage, spec: &VariantSpec) -> Option<DynamicImage> 
         }
         return Some(img.resize_to_fill(tw, th, FilterType::Lanczos3));
     }
-    if w <= spec.width {
+    if !spec.is_made_for(w) {
         return None;
     }
     let nh = ((u64::from(h) * u64::from(spec.width) + u64::from(w) / 2) / u64::from(w)).max(1);
