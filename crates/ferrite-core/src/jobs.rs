@@ -288,6 +288,17 @@ pub struct ImportJobPayload {
     pub source_name: String,
 }
 
+/// What an admin asks to import ([`ImportService::enqueue`](crate::import::ImportService::enqueue)):
+/// the payload without `v` and `user`, which core sets (the job runs as the actor who
+/// asked).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportJobRequest {
+    pub wxr: String,
+    pub uploads: Option<String>,
+    pub options: ImportJobOptions,
+    pub source_name: String,
+}
+
 /// The job for `import`: due now, no unique key (P25's conflict rule stands in for it),
 /// [`IMPORT_WORDPRESS_ATTEMPTS`] attempts.
 pub fn import_wordpress_job(import: &ImportJobPayload) -> NewJob {

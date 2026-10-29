@@ -10,14 +10,17 @@ use bytes::Bytes;
 use ferrite_core::{
     Actor, CoreError, PermalinkRules, Scopes,
     import::{ArtifactBlobs, ImportJobView, ImportService, ReportFormat},
-    jobs::{IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobOptions, ImportJobPayload},
+    jobs::{
+        IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobOptions, ImportJobPayload,
+        ImportJobRequest,
+    },
 };
 use ferrite_domain::{
-    ArtifactHash, ArtifactKind, ImportRunState, JobId, JobStatus, NewUser, NodeId, Role, UserId,
-    UserStatus,
+    ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobStatus, NewUser,
+    NodeId, Role, Timestamp, UserId, UserStatus, to_hex,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
-use ferrite_store::Store;
+use ferrite_store::{LOCK_IMPORT, Store};
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
 
@@ -59,14 +62,22 @@ impl ArtifactBlobs for Media {
             .map_err(|_| CoreError::Internal("media store"))
     }
 
-    async fn get(&self, hash: &ArtifactHash) -> Result<Bytes, CoreError> {
-        let read = self.0.get(hash).await;
-        read.map_err(|_| CoreError::Internal("media store"))
+    async fn get(&self, hash: &ArtifactHash, max: u64) -> Result<Bytes, CoreError> {
+        let size = self.0.head(hash).await;
+        match size.map_err(|_| CoreError::Internal("media store"))? {
+            None => Err(CoreError::NotFound),
+            Some(size) if size > max => Err(CoreError::Internal("artifact too large")),
+            Some(_) => {
+                let read = self.0.get(hash).await;
+                read.map_err(|_| CoreError::Internal("media store"))
+            }
+        }
     }
 }
 
 struct Fixture {
     svc: ImportService,
+    blobs: Arc<Media>,
     _media: tempfile::TempDir,
 }
 
@@ -82,9 +93,47 @@ fn service(db: &TestDb) -> Fixture {
         },
     })
     .unwrap();
+    let blobs = Arc::new(Media(media));
     let svc = ImportService::new(db.shared_store(), Arc::new(PermalinkRules::default()))
-        .with_artifacts(Arc::new(Media(media)));
-    Fixture { svc, _media: dir }
+        .with_artifacts(blobs.clone());
+    Fixture {
+        svc,
+        blobs,
+        _media: dir,
+    }
+}
+
+/// What the API hands `enqueue`: no user, core binds the actor's.
+fn request() -> ImportJobRequest {
+    ImportJobRequest {
+        wxr: "a".repeat(64),
+        uploads: Some("b".repeat(64)),
+        options: ImportJobOptions::default(),
+        source_name: "export.xml".into(),
+    }
+}
+
+/// A `running` run written straight to the store (no lock held, as after a crash) with
+/// its heartbeat `secs` ago.
+async fn running_run(store: &dyn Store, by: UserId, secs: i64) -> ImportRunId {
+    let at = Timestamp::from(Timestamp::now().as_datetime() - chrono::Duration::seconds(secs));
+    let run = ImportRun {
+        id: ImportRunId::new(),
+        source: SOURCE.into(),
+        token: [7; 16],
+        state: ImportRunState::Running,
+        started_by: by,
+        started_at: at,
+        heartbeat_at: at,
+        finished_at: None,
+        stats: json!({}),
+        dry_run: false,
+        job_id: None,
+        step: None,
+        report_hash: None,
+    };
+    store.read().imports().create_run(&run).await.unwrap();
+    run.id
 }
 
 fn payload(user: UserId) -> ImportJobPayload {
@@ -111,6 +160,9 @@ backend_tests!(
     job_status_links_the_run,
     runs_list_and_get_need_import_read,
     report_round_trips_and_needs_import_read,
+    enqueue_takes_over_a_stale_run,
+    enqueue_refuses_while_the_import_lock_is_held,
+    reports_need_an_artifact_store,
 );
 
 /// The payload keeps the CLI's defaults and refuses unknown fields.
@@ -149,12 +201,12 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     let admin = actor(store, Role::Admin).await;
 
     for who in [editor, scoped(admin, &["import:read"])] {
-        let err = f.svc.enqueue(&who, payload(who.user)).await.unwrap_err();
+        let err = f.svc.enqueue(&who, request()).await.unwrap_err();
         assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
     }
     let id = f
         .svc
-        .enqueue(&scoped(admin, &["import:write"]), payload(admin.user))
+        .enqueue(&scoped(admin, &["import:write"]), request())
         .await
         .unwrap();
     let job = store.read().jobs().get(id).await.unwrap().unwrap();
@@ -164,6 +216,108 @@ pub async fn enqueue_requires_import_capability(db: &TestDb) {
     assert_eq!(job.unique_key, None);
     let back: ImportJobPayload = serde_json::from_value(job.payload).unwrap();
     assert_eq!(back, payload(admin.user));
+
+    // The job runs as whoever asked: another admin's request carries their id.
+    let other = actor(store, Role::Admin).await;
+    let job = store.read().jobs().get(id).await.unwrap().unwrap();
+    let lease = store
+        .read()
+        .jobs()
+        .claim(
+            NodeId::new(),
+            &[IMPORT_WORDPRESS_KIND.to_owned()],
+            1,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lease[0].id, job.id);
+    assert!(
+        store
+            .read()
+            .jobs()
+            .complete(&lease[0].lease().unwrap())
+            .await
+            .unwrap()
+    );
+    let second = f.svc.enqueue(&other, request()).await.unwrap();
+    let job = store.read().jobs().get(second).await.unwrap().unwrap();
+    let back: ImportJobPayload = serde_json::from_value(job.payload).unwrap();
+    assert_eq!(back.user, other.user);
+}
+
+/// A run whose heartbeat is older than 120 s no longer blocks an enqueue: the admin's
+/// request takes it over (it ends `abandoned`). A fresh one still refuses.
+pub async fn enqueue_takes_over_a_stale_run(db: &TestDb) {
+    let f = service(db);
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+
+    let fresh = running_run(store, admin.user, 5).await;
+    let err = f.svc.enqueue(&admin, request()).await.unwrap_err();
+    assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
+    let run = store
+        .read()
+        .imports()
+        .get_run(fresh)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.state, ImportRunState::Running);
+    store
+        .read()
+        .imports()
+        .set_state(fresh, ImportRunState::Failed, &json!({}), Timestamp::now())
+        .await
+        .unwrap();
+
+    let stale = running_run(store, admin.user, 300).await;
+    f.svc.enqueue(&admin, request()).await.unwrap();
+    let run = store
+        .read()
+        .imports()
+        .get_run(stale)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.state, ImportRunState::Abandoned);
+    assert!(run.finished_at.is_some());
+}
+
+/// The import lock held elsewhere (a CLI import starting) refuses the enqueue.
+pub async fn enqueue_refuses_while_the_import_lock_is_held(db: &TestDb) {
+    let f = service(db);
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let guard = db
+        .shared_store()
+        .try_lock(LOCK_IMPORT)
+        .await
+        .unwrap()
+        .unwrap();
+    let err = f.svc.enqueue(&admin, request()).await.unwrap_err();
+    assert!(matches!(err, CoreError::Changed(_)), "{err:?}");
+    guard.release().await.unwrap();
+    f.svc.enqueue(&admin, request()).await.unwrap();
+}
+
+/// Without an artifact store the report methods are `Unavailable`.
+pub async fn reports_need_an_artifact_store(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let svc = ImportService::new(db.shared_store(), Arc::new(PermalinkRules::default()));
+    let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
+    let id = run.run().id;
+    let err = svc
+        .store_report(id, Bytes::from_static(b"{}"), Bytes::from_static(b"<p>"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
+    let err = svc
+        .report(&admin, id, ReportFormat::Json)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Unavailable(_)), "{err:?}");
 }
 
 /// P25: a queued or running `import.wordpress` job, or a `running` run, refuses the
@@ -176,8 +330,8 @@ pub async fn enqueue_conflicts_while_an_import_job_is_queued(db: &TestDb) {
         assert!(matches!(r, Err(CoreError::Changed(_))), "{r:?}");
     };
 
-    let first = f.svc.enqueue(&admin, payload(admin.user)).await.unwrap();
-    conflict(f.svc.enqueue(&admin, payload(admin.user)).await);
+    let first = f.svc.enqueue(&admin, request()).await.unwrap();
+    conflict(f.svc.enqueue(&admin, request()).await);
 
     // Claimed: running.
     let kinds = vec![IMPORT_WORDPRESS_KIND.to_owned()];
@@ -189,7 +343,7 @@ pub async fn enqueue_conflicts_while_an_import_job_is_queued(db: &TestDb) {
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, first);
-    conflict(f.svc.enqueue(&admin, payload(admin.user)).await);
+    conflict(f.svc.enqueue(&admin, request()).await);
     let lease = claimed[0].lease().unwrap();
     assert!(store.read().jobs().complete(&lease).await.unwrap());
 
@@ -199,7 +353,7 @@ pub async fn enqueue_conflicts_while_an_import_job_is_queued(db: &TestDb) {
         .start(&admin, SOURCE, false, false, None)
         .await
         .unwrap();
-    conflict(f.svc.enqueue(&admin, payload(admin.user)).await);
+    conflict(f.svc.enqueue(&admin, request()).await);
     run.finish(&f.svc, ImportRunState::Done, json!({}))
         .await
         .unwrap();
@@ -208,7 +362,7 @@ pub async fn enqueue_conflicts_while_an_import_job_is_queued(db: &TestDb) {
     let mut other = ferrite_domain::NewJob::new("media.variants", json!({"v": 1}));
     other.unique_key = Some("other".into());
     store.read().jobs().enqueue(&other).await.unwrap();
-    f.svc.enqueue(&admin, payload(admin.user)).await.unwrap();
+    f.svc.enqueue(&admin, request()).await.unwrap();
 }
 
 /// The job's importer must still be an active admin (P27): a demoted, disabled or
@@ -282,7 +436,7 @@ pub async fn job_status_links_the_run(db: &TestDb) {
     let f = service(db);
     let store = db.store();
     let admin = actor(store, Role::Admin).await;
-    let job = f.svc.enqueue(&admin, payload(admin.user)).await.unwrap();
+    let job = f.svc.enqueue(&admin, request()).await.unwrap();
 
     let ImportJobView { job: row, run } = f.svc.job_status(&admin, job).await.unwrap();
     assert_eq!((row.id, row.kind.as_str()), (job, IMPORT_WORDPRESS_KIND));
@@ -300,6 +454,13 @@ pub async fn job_status_links_the_run(db: &TestDb) {
         .unwrap();
     let run = view.run.unwrap();
     assert_eq!((run.id, run.job_id), (handle.run().id, Some(job)));
+    // Readers never see the run's fencing token.
+    let token = to_hex(&handle.run().token);
+    assert!(!format!("{run:?}").contains(&token), "{run:?}");
+    let listed = f.svc.list_runs(&admin, 10, None).await.unwrap();
+    assert!(!format!("{listed:?}").contains(&token));
+    let got = f.svc.get_run(&admin, run.id).await.unwrap();
+    assert!(!format!("{got:?}").contains(&token));
 
     let editor = actor(store, Role::Editor).await;
     for who in [editor, scoped(admin, &["content:read"])] {
@@ -436,6 +597,29 @@ pub async fn report_round_trips_and_needs_import_read(db: &TestDb) {
             f.svc.report(&who, id, ReportFormat::Html).await,
             Err(CoreError::Forbidden(_))
         ));
+    }
+
+    // A manifest of another version, or over 1 KiB, is refused.
+    let json_hash = hex_sha256(&json_v2);
+    let other_version = format!(r#"{{"v":2,"json":"{json_hash}","html":"{json_hash}"}}"#);
+    let padded = format!(
+        r#"{{"v":1,"json":"{json_hash}","html":"{json_hash}"{}}}"#,
+        " ".repeat(1100)
+    );
+    for manifest in [other_version, padded] {
+        let hash = f.blobs.put(Bytes::from(manifest)).await.unwrap();
+        store
+            .read()
+            .imports()
+            .set_report(id, hash.as_str())
+            .await
+            .unwrap();
+        let err = f
+            .svc
+            .report(&admin, id, ReportFormat::Json)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Internal(_)), "{err:?}");
     }
     assert!(matches!(
         f.svc

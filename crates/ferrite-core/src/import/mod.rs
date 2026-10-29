@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
-pub use jobs::{ImportJobView, ReportFormat};
+pub use jobs::{ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};
 pub use media::ImportMedia;
 pub use redirects::RedirectOutcome;
 pub use terms::{ImportTerm, TermMatched, TermOutcome};
@@ -77,8 +77,9 @@ pub const IMPORT_STEPS: [&str; 7] = [
 pub trait ArtifactBlobs: Send + Sync {
     /// Stores `data` (idempotent) and returns its hash.
     async fn put(&self, data: Bytes) -> Result<ArtifactHash, CoreError>;
-    /// The bytes of `hash`.
-    async fn get(&self, hash: &ArtifactHash) -> Result<Bytes, CoreError>;
+    /// The bytes of `hash`: [`CoreError::NotFound`] when there is no such artifact, and
+    /// an error without reading them when it has more than `max` bytes.
+    async fn get(&self, hash: &ArtifactHash, max: u64) -> Result<Bytes, CoreError>;
 }
 
 /// Starts import runs and opens their batches; enqueues import jobs and reads runs.
