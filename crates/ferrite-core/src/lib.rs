@@ -57,7 +57,7 @@ pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};
 pub use redirects::{
     ImportReport, MAX_IMPORT_ROWS, MAX_REDIRECT_QUERY, PermalinkRedirectReport, RedirectService,
-    STRUCTURE_PAGE,
+    STRUCTURE_JOB_PAGES, STRUCTURE_PAGE,
 };
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,

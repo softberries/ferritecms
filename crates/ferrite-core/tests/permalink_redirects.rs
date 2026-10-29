@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use ferrite_core::{
     Actor, ContentDraft, ContentService, OptionService, PermalinkRedirectReport, PermalinkRules,
-    RedirectService,
+    RedirectService, STRUCTURE_JOB_PAGES,
     events::INVALIDATE,
     import::ImportService,
     jobs::{PERMALINK_REDIRECTS_KIND, PermalinkRedirects, PermalinkStructures},
@@ -110,9 +110,14 @@ async fn queued(store: &dyn Store) -> Vec<Job> {
         .items
 }
 
-/// Claims every due `permalink.redirects` job and runs it the way the handler does,
-/// oldest first; the reports in run order.
+/// Claims every due `permalink.redirects` job and runs it the way the handler does
+/// ([`STRUCTURE_JOB_PAGES`] pages per job), oldest first; the reports in run order.
 async fn run_jobs(db: &TestDb) -> Vec<PermalinkRedirectReport> {
+    run_jobs_paged(db, STRUCTURE_JOB_PAGES).await
+}
+
+/// [`run_jobs`] with at most `pages` pages per job (continuations enqueued for the rest).
+async fn run_jobs_paged(db: &TestDb, pages: u32) -> Vec<PermalinkRedirectReport> {
     let store = db.store();
     let svc = RedirectService::new(db.shared_store());
     let mut reports = Vec::new();
@@ -132,7 +137,7 @@ async fn run_jobs(db: &TestDb) -> Vec<PermalinkRedirectReport> {
             return reports;
         };
         let payload: PermalinkRedirects = serde_json::from_value(job.payload.clone()).unwrap();
-        reports.push(svc.structure_change(&payload).await.unwrap());
+        reports.push(svc.structure_change(&payload, pages).await.unwrap());
         assert!(
             store
                 .read()
@@ -622,6 +627,57 @@ backend_tests!(
     source_that_is_a_live_path_is_refused,
     import_permalink_write_enqueues_too,
     job_pages_through_1200_items,
+    continuations_page_through_1200_items,
     concurrent_jobs_leave_single_hops_to_latest,
     broken_parent_chain_does_not_stop_the_job,
 );
+
+/// With a budget of one page per job, 1 200 posts take three jobs: each does one page and
+/// enqueues a continuation from its cursor (same structures and version, its own unique
+/// key), and together they redirect every post once.
+pub async fn continuations_page_through_1200_items(db: &TestDb) {
+    let store = db.store();
+    let admin = actor(store).await;
+    insert_published(store, &admin, 1200, "post", false).await;
+    OptionService::new(db.shared_store())
+        .set_many(&admin, &[set("permalink.post", "/blog/%slug%/")])
+        .await
+        .unwrap();
+    let reports = run_jobs_paged(db, 1).await;
+    assert_eq!(
+        reports
+            .iter()
+            .map(|r| (r.pages, r.continued))
+            .collect::<Vec<_>>(),
+        [(1, true), (1, true), (1, false)]
+    );
+    assert_eq!(reports.iter().map(|r| r.moved).sum::<u32>(), 1200);
+    let jobs = queued(store).await;
+    assert_eq!(jobs.len(), 3);
+    let keys: Vec<String> = jobs.iter().filter_map(|j| j.unique_key.clone()).collect();
+    assert_eq!(keys.len(), 3);
+    let first = keys
+        .iter()
+        .find(|k| k.matches(':').count() == 1)
+        .expect("the first job's key");
+    assert!(
+        keys.iter()
+            .filter(|k| *k != first)
+            .all(|k| k.starts_with(&format!("{first}:"))),
+        "{keys:?}"
+    );
+    let payloads: Vec<PermalinkRedirects> = jobs
+        .iter()
+        .map(|j| serde_json::from_value(j.payload.clone()).unwrap())
+        .collect();
+    assert_eq!(payloads.iter().filter(|p| p.cursor.is_some()).count(), 2);
+    assert!(payloads.windows(2).all(|w| {
+        (&w[0].prev, &w[0].next, w[0].version) == (&w[1].prev, &w[1].next, w[1].version)
+    }));
+    let all = all_redirects(store).await;
+    assert_eq!(all.len(), 1200);
+    assert!(
+        all.iter()
+            .all(|r| r.target == format!("/blog{}", r.source_path))
+    );
+}
