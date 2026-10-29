@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{Taxonomy, Term, TermId, Timestamp};
+use ferrite_domain::{Taxonomy, Term, TermId, Timestamp, UserId};
 use ferrite_store::{MAX_CONTENT_KINDS, Repos, Store, StoreError, Tx};
 use serde_json::json;
 
@@ -20,12 +20,12 @@ use crate::{
     actor::{Area, Capability, require, require_read},
     events,
     permalink::term_path,
-    redirects::{clear_redirects_from, record_move},
+    redirects::{clear_redirects_from, delete_redirects_from, record_move, redirect_keys},
     site, slug,
     tx::finish,
     types::{
-        Change, announce, begin_locked, check_label, check_name_free, check_permalinks,
-        check_type_name, finish_locked,
+        Change, announce, announce_in, begin_locked, check_label, check_name_free,
+        check_permalinks, check_type_name, finish_locked, invalidate_all,
     },
 };
 
@@ -70,38 +70,11 @@ impl TaxonomyService {
         taxonomy: Taxonomy,
     ) -> Result<Taxonomy, CoreError> {
         require(actor, Capability::ManageSettings)?;
-        check_type_name(&taxonomy.name)?;
-        if taxonomy.built_in {
-            return Err(CoreError::invalid_field(
-                "built_in",
-                "only the site's own taxonomies are built in",
-            ));
-        }
-        let tax = Taxonomy {
-            label: check_label(&taxonomy.label)?,
-            content_types: check_content_types(&taxonomy.content_types)?,
-            ..taxonomy
-        };
+        let tax = check_new_taxonomy(taxonomy)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
-            check_name_free(tx.as_ref(), &tax.name, Change::Taxonomy).await?;
-            check_types_exist(tx.as_ref(), &tax.content_types).await?;
-            tx.taxonomies().insert(&tax).await?;
-            check_permalinks(tx.as_ref(), true).await?;
-            let details = json!({
-                "label": tax.label,
-                "hierarchical": tax.hierarchical,
-                "content_types": tax.content_types,
-            });
-            announce(
-                tx.as_ref(),
-                actor.user,
-                Change::Taxonomy,
-                "create",
-                &tax.name,
-                details,
-            )
-            .await?;
+            create_taxonomy_in(tx.as_ref(), actor.user, &tax).await?;
+            invalidate_all(tx.as_ref()).await?;
             Ok(tax)
         }
         .await;
@@ -241,30 +214,11 @@ impl TaxonomyService {
         description: &str,
     ) -> Result<Term, CoreError> {
         require(actor, Capability::ManageTerms)?;
-        let name = check_name(name)?;
-        let base = match &slug {
-            Some(s) => slug::validate(s)?,
-            None => slug::slugify(&name),
-        };
         let tx = self.store.begin().await?;
         let done = async {
-            let tax = get_taxonomy(tx.as_ref(), taxonomy).await?;
-            check_flat(&tax, parent)?;
-            if let Some(parent) = parent {
-                check_parent_taxonomy(tx.as_ref(), taxonomy, parent).await?;
-            }
-            let term = Term {
-                id: TermId::new(),
-                taxonomy: taxonomy.to_owned(),
-                slug: String::new(),
-                name,
-                description: description.to_owned(),
-                parent_id: parent,
-            };
-            let saved = save_with_free_slug(tx.as_ref(), term, &base, false).await?;
-            // The archive path is the term's now; a redirect there would outrank it.
-            clear_redirects_from(tx.as_ref(), &term_path(&tax.name, &saved.slug)).await?;
-            emit(tx.as_ref(), &tax, &saved).await?;
+            let (saved, keys) =
+                create_term_in(tx.as_ref(), taxonomy, name, slug, parent, description).await?;
+            tx.events().append(&events::invalidate(keys)).await?;
             Ok(saved)
         }
         .await;
@@ -352,6 +306,84 @@ impl TaxonomyService {
         .await;
         finish(tx, done).await
     }
+}
+
+/// The pure checks of [`TaxonomyService::create_taxonomy`]: the name rules, no
+/// `built_in`, the label and the content types (deduplicated). Returns the taxonomy to
+/// insert.
+pub(crate) fn check_new_taxonomy(taxonomy: Taxonomy) -> Result<Taxonomy, CoreError> {
+    check_type_name(&taxonomy.name)?;
+    if taxonomy.built_in {
+        return Err(CoreError::invalid_field(
+            "built_in",
+            "only the site's own taxonomies are built in",
+        ));
+    }
+    Ok(Taxonomy {
+        label: check_label(&taxonomy.label)?,
+        content_types: check_content_types(&taxonomy.content_types)?,
+        ..taxonomy
+    })
+}
+
+/// Registers `tax` (already through [`check_new_taxonomy`]) inside the caller's `Tx`,
+/// which must hold [`LOCK_TYPES`](ferrite_store::LOCK_TYPES): the name is free, its
+/// types exist, the permalink rules still hold; `types.changed` and the audit row
+/// `taxonomy.create`. The caller emits `invalidate [all]`.
+pub(crate) async fn create_taxonomy_in(
+    repos: &dyn Repos,
+    actor: UserId,
+    tax: &Taxonomy,
+) -> Result<(), CoreError> {
+    check_name_free(repos, &tax.name, Change::Taxonomy).await?;
+    check_types_exist(repos, &tax.content_types).await?;
+    repos.taxonomies().insert(tax).await?;
+    check_permalinks(repos, true).await?;
+    let details = json!({
+        "label": tax.label,
+        "hierarchical": tax.hierarchical,
+        "content_types": tax.content_types,
+    });
+    announce_in(repos, actor, Change::Taxonomy, "create", &tax.name, details).await
+}
+
+/// The body of [`TaxonomyService::create_term`] inside the caller's `Tx`: checks the
+/// name, the slug (`None`: derived from the name; taken: `-2`, `-3`, …) and the parent,
+/// writes the term and clears redirects from its archive path. Returns the term and the
+/// invalidation keys [`emit`] would send plus the `redirect:` keys of the redirects
+/// cleared; the caller emits them.
+pub(crate) async fn create_term_in(
+    tx: &dyn Tx,
+    taxonomy: &str,
+    name: &str,
+    slug: Option<String>,
+    parent: Option<TermId>,
+    description: &str,
+) -> Result<(Term, Vec<String>), CoreError> {
+    let name = check_name(name)?;
+    let base = match &slug {
+        Some(s) => slug::validate(s)?,
+        None => slug::slugify(&name),
+    };
+    let tax = get_taxonomy(tx, taxonomy).await?;
+    check_flat(&tax, parent)?;
+    if let Some(parent) = parent {
+        check_parent_taxonomy(tx, taxonomy, parent).await?;
+    }
+    let term = Term {
+        id: TermId::new(),
+        taxonomy: taxonomy.to_owned(),
+        slug: String::new(),
+        name,
+        description: description.to_owned(),
+        parent_id: parent,
+    };
+    let saved = save_with_free_slug(tx, term, &base, false).await?;
+    // The archive path is the term's now; a redirect there would outrank it.
+    let cleared = delete_redirects_from(tx, &term_path(&tax.name, &saved.slug)).await?;
+    let mut keys = term_keys(&tax, &saved);
+    keys.extend(redirect_keys(cleared));
+    Ok((saved, keys))
 }
 
 /// Whether term `id` of `tax` has a public archive: a public type in the taxonomy and
@@ -531,8 +563,16 @@ async fn save_with_free_slug(
 /// `term:<id>` plus `archive:<type>` for every content type of the taxonomy. Pages that
 /// show the term depend on `term:<id>`, so the items need no keys of their own.
 async fn emit(repos: &dyn Repos, tax: &Taxonomy, term: &Term) -> Result<(), CoreError> {
-    let keys = std::iter::once(events::term_key(term.id))
-        .chain(tax.content_types.iter().map(|t| events::archive_key(t)));
-    repos.events().append(&events::invalidate(keys)).await?;
+    repos
+        .events()
+        .append(&events::invalidate(term_keys(tax, term)))
+        .await?;
     Ok(())
+}
+
+/// The keys [`emit`] sends for `term`.
+fn term_keys(tax: &Taxonomy, term: &Term) -> Vec<String> {
+    std::iter::once(events::term_key(term.id))
+        .chain(tax.content_types.iter().map(|t| events::archive_key(t)))
+        .collect()
 }

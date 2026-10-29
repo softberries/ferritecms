@@ -24,7 +24,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentItem, ContentOrder, ContentQuery,
     ContentStatus, MEDIA_KIND, Media, MediaKind, Page, ReadableBy, SearchQuery, Timestamp, UserId,
 };
-use ferrite_store::Store;
+use ferrite_store::{Repos, Store};
 use serde_json::Value;
 
 use crate::{
@@ -156,42 +156,11 @@ impl MediaService {
         upload: NewUpload,
     ) -> Result<MediaItem, CoreError> {
         self.authorize_upload(actor)?;
-        let original_name = check_file_name(&upload.original_name)?;
-        let title = match upload.title.as_deref().map(str::trim) {
-            Some(t) if !t.is_empty() => check_title(t)?,
-            _ => title_from(&original_name),
-        };
-        let alt = check_alt(&upload.alt)?;
-        if upload.artifact.kind != ArtifactKind::Media {
-            return Err(CoreError::Invalid(
-                "an upload's artifact must be of kind media".into(),
-            ));
-        }
-        // Backstops for the uploader's decisions (P4/P7): only sanitiser output is
-        // stored as SVG, variants only for raster types, and the row describes the
-        // artifact it points to.
-        if upload.sanitized != (upload.mime == SVG_MIME) {
-            return Err(CoreError::Invalid(
-                "an SVG must be sanitised, and only an SVG can be marked sanitised".into(),
-            ));
-        }
-        if upload.raster && !RASTER_MIMES.contains(&upload.mime.as_str()) {
-            return Err(CoreError::Invalid(format!(
-                "{} is not a raster image type",
-                upload.mime
-            )));
-        }
-        let bytes = i64::try_from(upload.bytes)
-            .map_err(|_| CoreError::Invalid("upload size out of range".into()))?;
-        if upload.mime != upload.artifact.mime || bytes != upload.artifact.bytes {
-            return Err(CoreError::Invalid(
-                "the upload's type and size must match its artifact".into(),
-            ));
-        }
+        let checked = check_upload(&upload)?;
         let writer = content_writer(actor);
         let draft = ContentDraft {
             kind: MEDIA_KIND.into(),
-            title,
+            title: checked.title.clone(),
             slug: None,
             parent_id: None,
             excerpt: Some(String::new()),
@@ -205,7 +174,6 @@ impl MediaService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
-            tx.artifacts().insert_if_absent(&upload.artifact).await?;
             let item = self
                 .content
                 .create_in(tx.as_ref(), rules.as_ref(), &writer, draft)
@@ -214,28 +182,7 @@ impl MediaService {
             // `post:<id>`, which covers the media row written next (R11).
             let item =
                 ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?;
-            let media = Media {
-                item_id: item.id,
-                artifact_hash: upload.artifact.hash.clone(),
-                mime: upload.mime,
-                bytes,
-                width: None,
-                height: None,
-                alt,
-                original_name,
-                variants: Value::Object(serde_json::Map::new()),
-                sanitized: upload.sanitized,
-            };
-            tx.media().insert(&media).await?;
-            if upload.raster {
-                tx.jobs()
-                    .enqueue(&media_variants_job(&MediaVariants {
-                        v: MEDIA_VARIANTS_VERSION,
-                        item: item.id,
-                        artifact: upload.artifact.hash.to_string(),
-                    }))
-                    .await?;
-            }
+            let media = record_upload_in(tx.as_ref(), item.id, &checked, &upload).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -642,6 +589,95 @@ impl MediaService {
 /// checks apply the role rules only.
 fn content_writer(actor: &Actor) -> Actor {
     actor.with_scopes(Scopes::only(Scope::write(Area::Content)))
+}
+
+/// An upload's fields after the checks of [`check_upload`].
+#[derive(Debug, Clone)]
+pub(crate) struct CheckedUpload {
+    pub(crate) original_name: String,
+    /// The title the item gets.
+    pub(crate) title: String,
+    pub(crate) alt: String,
+    pub(crate) bytes: i64,
+}
+
+/// The checks of [`MediaService::record_upload`] that need no store, before anything is
+/// written (see there for the rules). Shared with the WordPress import.
+pub(crate) fn check_upload(upload: &NewUpload) -> Result<CheckedUpload, CoreError> {
+    let original_name = check_file_name(&upload.original_name)?;
+    let title = match upload.title.as_deref().map(str::trim) {
+        Some(t) if !t.is_empty() => check_title(t)?,
+        _ => title_from(&original_name),
+    };
+    let alt = check_alt(&upload.alt)?;
+    if upload.artifact.kind != ArtifactKind::Media {
+        return Err(CoreError::Invalid(
+            "an upload's artifact must be of kind media".into(),
+        ));
+    }
+    // Backstops for the uploader's decisions (P4/P7): only sanitiser output is
+    // stored as SVG, variants only for raster types, and the row describes the
+    // artifact it points to.
+    if upload.sanitized != (upload.mime == SVG_MIME) {
+        return Err(CoreError::Invalid(
+            "an SVG must be sanitised, and only an SVG can be marked sanitised".into(),
+        ));
+    }
+    if upload.raster && !RASTER_MIMES.contains(&upload.mime.as_str()) {
+        return Err(CoreError::Invalid(format!(
+            "{} is not a raster image type",
+            upload.mime
+        )));
+    }
+    let bytes = i64::try_from(upload.bytes)
+        .map_err(|_| CoreError::Invalid("upload size out of range".into()))?;
+    if upload.mime != upload.artifact.mime || bytes != upload.artifact.bytes {
+        return Err(CoreError::Invalid(
+            "the upload's type and size must match its artifact".into(),
+        ));
+    }
+    Ok(CheckedUpload {
+        original_name,
+        title,
+        alt,
+        bytes,
+    })
+}
+
+/// Inserts the artifact row (unless its hash exists) and the `media` row of `item`, and
+/// enqueues the `media.variants` job for a raster image. The item itself is made by the
+/// caller; `checked` comes from [`check_upload`] on the same `upload`.
+pub(crate) async fn record_upload_in(
+    repos: &dyn Repos,
+    item: ContentId,
+    checked: &CheckedUpload,
+    upload: &NewUpload,
+) -> Result<Media, CoreError> {
+    repos.artifacts().insert_if_absent(&upload.artifact).await?;
+    let media = Media {
+        item_id: item,
+        artifact_hash: upload.artifact.hash.clone(),
+        mime: upload.mime.clone(),
+        bytes: checked.bytes,
+        width: None,
+        height: None,
+        alt: checked.alt.clone(),
+        original_name: checked.original_name.clone(),
+        variants: Value::Object(serde_json::Map::new()),
+        sanitized: upload.sanitized,
+    };
+    repos.media().insert(&media).await?;
+    if upload.raster {
+        repos
+            .jobs()
+            .enqueue(&media_variants_job(&MediaVariants {
+                v: MEDIA_VARIANTS_VERSION,
+                item,
+                artifact: upload.artifact.hash.to_string(),
+            }))
+            .await?;
+    }
+    Ok(media)
 }
 
 /// The last `/` or `\` segment of `raw`: 1..=[`MAX_ORIGINAL_NAME`] bytes, not `.` or

@@ -119,6 +119,8 @@ async fn upload_row(
             menu_order: 0,
             published_at: Some(Timestamp::from_micros(now + offset).unwrap()),
             scheduled_at: None,
+            created_at: None,
+            updated_at: None,
         })
         .await
         .unwrap();

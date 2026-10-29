@@ -2,9 +2,9 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
     comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
-    job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
-    notify::*, plugin::*, plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
-    user::*, user_filters::*,
+    import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files,
+    migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*, semantics::*,
+    site::*, taxonomy::*, tx::*, user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -17,7 +17,19 @@ backend_tests!(
     migration_0006_roundtrip,
     migration_0007_roundtrip,
     migration_0008_roundtrip,
+    migration_0009_roundtrip,
 );
+
+backend_tests!(
+    import_run_roundtrip_and_running,
+    fence_true_only_for_matching_running_token,
+    abandon_stale_only_when_still_stale,
+    import_map_upsert_and_get,
+    content_insert_keeps_explicit_timestamps,
+);
+
+backend_tests_spawning!(fence_serialises_with_takeover);
+backend_tests_spawning!(abandon_stale_rechecks_after_fence);
 
 backend_tests!(
     autosave_upsert_get_delete,
@@ -73,6 +85,7 @@ backend_tests!(
     get_by_slug_root_and_child,
     optimistic_lock_race,
     update_missing_is_not_found,
+    set_updated_at_keeps_version,
     list_filters_and_orders,
     list_pagination_covers_every_order,
     list_pagination_with_null_published,

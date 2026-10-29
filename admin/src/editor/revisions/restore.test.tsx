@@ -36,7 +36,7 @@ function itemWith(extra: Partial<SchemaContentDto> = {}): SchemaContentDto {
     body: para("The newer paragraph."),
     excerpt: "An excerpt",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/spring-notes/",

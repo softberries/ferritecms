@@ -392,7 +392,7 @@ Notes:
     (no `ON DELETE` clause): deleting a parent that still has children fails with
     `StoreError::ForeignKey`; reparenting or deleting children is the core's decision (R9).
   - `content_items.author_id` is non-optional, so an importer must supply a fallback
-    author (M3).
+    author (M3-1: the importing admin).
 - Event emission (cache invalidation, [04](04-cluster.md)) happens **inside the same
   transaction** as the write (transactional outbox), so a committed write always has
   its event.
@@ -402,8 +402,8 @@ Notes:
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
-`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo`
-on both backends.
+`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
+`0009_import` on both backends.
 
 ### Content
 
@@ -446,6 +446,13 @@ on both backends.
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
 | `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
 | `themes` | `name` PK, `version`, `artifact_hash`, `manifest` json, `active`, `installed_at` | Exactly one active (partial unique index / trigger) |
+
+### Import *(since `0009_import`)*
+
+| Table | Columns | Notes |
+|---|---|---|
+| `import_runs` | `id` PK (`import_runs_pkey`), `source` (the normalised `<wp:base_blog_url>`), `token` (32 lowercase hex digits), `state` (`running`/`done`/`failed`/`abandoned`, CHECK), `started_by` → `users` `ON DELETE CASCADE` (`import_runs_started_by_fk`), `started_at`, `heartbeat_at`, `finished_at` null, `stats` json, `dry_run` boolean; partial unique index `import_runs_running_uq (state) WHERE state = 'running'`, `import_runs_started_idx (started_at, id)`, `import_runs_started_by_idx (started_by)` | One row per WordPress import run (M3-1 P5): every batch first updates `heartbeat_at` where `id`, `token` and `running` match (the fence); at most one run is `running`; a deleted user takes their runs with them (R5) |
+| `import_map` | `source`, `kind` (`user`/`term`/`media`/`content`/`comment`/`menu`/`option`/`redirect`, CHECK), `wp_id`, `ferrite_id` (no FK), `hash` (SHA-256 hex of what the import wrote), `version` (the item's version after the write); PK (`source`, `kind`, `wp_id`) `import_map_pkey` | What each WordPress id became (P3): a re-run updates instead of duplicating; a row whose item is gone counts as not mapped. The `0009` down drops both tables (lossy) |
 
 ### Cluster
 
@@ -563,6 +570,8 @@ crates/ferrite-store-sqlite/migrations/
     0007_autosaves.down.sql
     0008_autosave_seo.up.sql        # M2b-2, phase expand, lossy-down: autosaves.seo (P28)
     0008_autosave_seo.down.sql
+    0009_import.up.sql              # M3-1, phase expand, lossy-down: import_runs, import_map
+    0009_import.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -580,6 +589,8 @@ crates/ferrite-store-postgres/migrations/
     0007_autosaves.down.sql
     0008_autosave_seo.up.sql
     0008_autosave_seo.down.sql
+    0009_import.up.sql
+    0009_import.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's

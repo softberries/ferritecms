@@ -38,7 +38,7 @@ Controller rulings: [m1a](superpowers/rulings/m1a.md), [m1b](superpowers/rulings
 - [x] Contract test suite (`ferrite-store-tests`) + migration roundtrip tests on both backends; CI with Postgres service.
 - [ ] Store follow-ups from the M1a review (deferred minors):
   - [ ] Full Unicode case folding for search (`İstanbul` currently indexes as `i̇stanbul`, so `istanbul` misses it; same on both backends).
-  - [ ] Importer (M3) needs a fallback author: `content_items.author_id` is non-optional.
+  - [x] Importer (M3) needs a fallback author: `content_items.author_id` is non-optional. Done in M3-1: content whose author is not in the WXR goes to the importing admin (P9).
   - [x] Core/HTTP input validation should reject NUL in text before it reaches the store (reads with NUL keys return `Invalid`). The public router rejects control characters in paths, `%00` included; the API refuses a NUL in any string of a JSON body with `422 validation` before the handler runs (M2a-1). The store keeps its own check.
   - [ ] Revisit locale-aware ordering for admin lists (byte-wise `COLLATE "C"` today).
   - [x] Non-ASCII e-mail case variants are distinct accounts (ASCII-only `email_key`): decided and kept (M2a P14; consistent with RFC 5321's case-sensitive local parts).
@@ -406,18 +406,28 @@ Linux WebKit is not Safari (P55).
 
 Design: [08](design/08-wp-import.md).
 
-- [ ] Streaming WXR parser → IR (temp SQLite), resumable, idempotent.
-- [ ] Media import via `MediaStore`, URL rewrite.
-- [ ] Gutenberg + classic → TipTap JSON; shortcode handling.
-- [ ] 301 redirects for old permalinks.
-- [ ] Deferred from M2a-2b (P26): redirects for `permalink.*` structure changes (today every published URL moves without a redirect; keep the previous structure and redirect by matching it, with the importer's redirect machinery), and `Idempotency-Key` on the import upload.
-- [ ] Yoast / Rank Math → SEO fields; ACF → custom fields (verify key names on real exports).
-- [ ] `import-report.html`; CLI + admin job.
-- [ ] Tests against 2–3 real WP exports.
-- [ ] Deferred from M1.5: the import job must override `JobHandler::timeout()` (default 300 s, P9), take the `import` lock (P13), and batch its events per transaction (R2: Postgres serialises commits of transactions that ran `NOTIFY`).
-- [ ] Carried from the M1.5 final review (rulings/m15.md R17):
-  - [ ] Run `EXPLAIN (ANALYZE, BUFFERS)` on the Postgres job claim (`crates/ferrite-store-postgres/src/repos/job.rs`, the `claim` query) with ~50k future-scheduled `content.publish_scheduled` rows before the import creates them in bulk. With fewer due jobs than `limit`, the `OR` branch for expired leases stops the index scan from ending at `run_at > now()`, so each idle claim may read every future row (review M5). If it does, split the claim into a `UNION ALL` of the due branch and the expired-lease branch.
-  - [ ] The `import` lock must not be relied on for exclusion: a Postgres advisory lock is not a fence (the holder is not told when its connection is terminated; `LockGuard` docs, 04 §7). Fence the import's writes in the data, for example with a run token checked on every write (review M3).
+M3-1 (the import core, the conversion and the CLI; plan
+`superpowers/plans/2026-10-28-m3-1-wordpress-import-core.md`, rulings `superpowers/rulings/m3.md`,
+exit [`m3-1-exit.md`](superpowers/m3-1-exit.md)) is done:
+
+- [x] Streaming WXR parser → IR (temp SQLite), resumable, idempotent (`import_map` re-runs, P3–P4; resume by the WXR's SHA-256, R27).
+- [x] Media import via `MediaStore`, URL rewrite (`--uploads`, `--fetch-media` through the SSRF-checked client; every size and `-scaled` form; links fixed after all content exists).
+- [x] Gutenberg + classic → TipTap JSON; shortcode handling (`embed` node and image `caption`, P11; depth guards R31–R34, R48).
+- [x] 301 redirects for old permalinks (items, attachment pages, tag and category bases; P17).
+- [x] Yoast / Rank Math → SEO fields (`seo.canonical`, `seo.robots`); ACF → custom fields (keys verified in the plugin source and exports A and B, P10, P16).
+- [x] `import-report.html` (as built: `report.json` + `report.html`); CLI (`ferrite import wordpress`).
+- [x] Tests against real WP exports (as built: exports A and B from a scratch WordPress 7.1.3, checked in, and WordPress's two theme-test files via `FERRITE_WP_CORPUS`; no anonymised production export).
+- [x] Batch events per transaction (one `invalidate` per batch, `[all]` past 1 000 keys; P6, R2 of M1.5).
+- [x] Carried from the M1.5 final review (rulings/m15.md R17), the second half: the import's writes are fenced in the data by a run token checked first in every batch transaction (P5); the `import` lock is best-effort only.
+
+### M3-2
+
+- [ ] The `import.wordpress` job (override `JobHandler::timeout()`, default 300 s, M1.5 P9; take the `import` lock, P13) and `POST /api/v1/import/wordpress` with `Idempotency-Key` (M2a-2b P26); `GET` on runs and the report download.
+- [ ] The admin import screen (upload, progress, link to the report) and the admin fields for `seo.canonical` and `seo.robots`.
+- [ ] Deferred from M2a-2b (P26): redirects for `permalink.*` structure changes (today every published URL moves without a redirect; keep the previous structure and redirect by matching it, with the importer's redirect machinery).
+- [ ] Carried from the M1.5 final review (rulings/m15.md R17): run `EXPLAIN (ANALYZE, BUFFERS)` on the Postgres job claim (`crates/ferrite-store-postgres/src/repos/job.rs`, the `claim` query) with ~50k future-scheduled `content.publish_scheduled` rows before the import creates them in bulk. With fewer due jobs than `limit`, the `OR` branch for expired leases stops the index scan from ending at `run_at > now()`, so each idle claim may read every future row (review M5). If it does, split the claim into a `UNION ALL` of the due branch and the expired-lease branch.
+- [ ] A partial report for a failed run (M3-1 writes none: the CLI prints the error and exits 1).
+- [ ] The M3 exit (`m3-exit.md`): an import through the admin on both profiles, the Docker cluster example with an import.
 
 ## M4 — Ops & release (~2–3 weeks)
 

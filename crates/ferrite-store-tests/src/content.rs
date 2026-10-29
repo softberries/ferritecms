@@ -319,6 +319,26 @@ pub async fn update_missing_is_not_found(db: &TestDb) {
     ));
 }
 
+/// `set_updated_at` sets the time alone: no version bump, other columns kept; a
+/// missing item is `NotFound`.
+pub async fn set_updated_at_keeps_version(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    let item = insert(store, &new_post(&author, "dated")).await;
+    let content = store.read().content();
+    let at = micros(1_400_000_000_000_007);
+    content.set_updated_at(item.id, at).await.unwrap();
+    let got = content.get(item.id).await.unwrap().unwrap();
+    assert_eq!(got.updated_at, at);
+    assert_eq!(got.version, item.version);
+    assert_eq!(got.created_at, item.created_at);
+    assert_eq!(got.title, item.title);
+    assert!(matches!(
+        content.set_updated_at(ContentId::new(), at).await,
+        Err(StoreError::NotFound)
+    ));
+}
+
 pub async fn list_filters_and_orders(db: &TestDb) {
     let store = db.store();
     let a1 = fixture_user(store).await;

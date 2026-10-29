@@ -471,7 +471,7 @@ impl HostServices for StoreHostServices {
 }
 
 /// `"[<title>] "` for plugin-mail subjects: nothing for an empty or header-unsafe
-/// title, at most [`MAIL_TITLE_PREFIX_CHARS`] characters of it otherwise.
+/// title, at most `MAIL_TITLE_PREFIX_CHARS` characters of it otherwise.
 fn mail_prefix(site_title: &str) -> String {
     let title = site_title.trim();
     if title.is_empty() {

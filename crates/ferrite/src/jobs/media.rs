@@ -217,7 +217,10 @@ fn process_error(e: MediaError) -> JobError {
         MediaError::ImageTooLarge { .. }
         | MediaError::UnsupportedImage(_)
         | MediaError::Config(_)
-        | MediaError::Io(_) => JobError::Permanent(format!("image could not be processed: {e}")),
+        | MediaError::Io(_)
+        | MediaError::Unsupported { .. }
+        | MediaError::Svg(_)
+        | MediaError::Task(_) => JobError::Permanent(format!("image could not be processed: {e}")),
         MediaError::Backend(_)
         | MediaError::NotFound
         | MediaError::Range(_)

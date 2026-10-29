@@ -25,6 +25,13 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "idempotency_keys.user_id, idempotency_keys.key_hash",
         "idempotency_keys_pkey",
     ),
+    (
+        "import_map.source, import_map.kind, import_map.wp_id",
+        "import_map_pkey",
+    ),
+    ("import_runs.id", "import_runs_pkey"),
+    // The partial unique index "at most one running run" (its column is `state`).
+    ("import_runs.state", "import_runs_running_uq"),
     ("jobs.id", "jobs_pkey"),
     ("jobs.unique_key", "jobs_unique_key_uq"),
     ("media.item_id", "media_pkey"),

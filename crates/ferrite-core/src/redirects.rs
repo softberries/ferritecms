@@ -233,15 +233,14 @@ impl RedirectService {
     /// existing one. At most [`MAX_IMPORT_ROWS`] rows (else `Invalid`).
     ///
     /// Every row is checked first with the rules of the type docs, against the existing
-    /// redirects (read before the transaction) with all of the file's rows applied on
+    /// redirects (read in the write's transaction) with all of the file's rows applied on
     /// top, so loops and long chains among the file's own rows count too; a source
     /// given twice, exactly or with its trailing slash toggled (as
     /// [`update`](Self::update) counts it), is an error on its second row, and so is a
     /// new source whose toggled variant is already stored (R26). If any row fails nothing
-    /// is written and the result is `InvalidRows` listing each failing row. Otherwise one
+    /// is written and the result is `InvalidRows` listing each failing row. Otherwise the same
     /// transaction upserts every row and emits one `invalidate` with the keys of every
-    /// source. A redirect changed between the read and the write can still close a loop
-    /// (P2).
+    /// source. A concurrent write can still close a loop (P2).
     pub async fn import(
         &self,
         actor: &Actor,
@@ -253,57 +252,6 @@ impl RedirectService {
                 "an import takes at most {MAX_IMPORT_ROWS} rows"
             )));
         }
-        let mut errors = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut valid = vec![false; rows.len()];
-        for (i, (source, target, code)) in rows.iter().enumerate() {
-            let checked = check_row(source, target, *code).and_then(|()| {
-                let toggled = toggled(source);
-                let taken = seen.contains(source.as_str())
-                    || toggled.as_deref().is_some_and(|t| seen.contains(t));
-                if !taken {
-                    seen.insert(source.as_str());
-                    Ok(())
-                } else {
-                    Err(CoreError::invalid_field(
-                        "source",
-                        format!("duplicate source {source:?} (given on an earlier row)"),
-                    ))
-                }
-            });
-            match checked {
-                Ok(()) => valid[i] = true,
-                Err(e) => errors.push(row_error(i, e)),
-            }
-        }
-        // Existing redirects with the file on top.
-        let mut map = self.all_targets().await?;
-        // A source whose slash variant is stored is taken, as in `upsert` (R26).
-        for (i, (source, _, _)) in rows.iter().enumerate() {
-            if valid[i]
-                && !map.contains_key(source)
-                && toggled(source).is_some_and(|t| map.contains_key(&t))
-            {
-                valid[i] = false;
-                errors.push(row_error(i, source_taken()));
-            }
-        }
-        for (i, (source, target, _)) in rows.iter().enumerate() {
-            if valid[i] {
-                map.insert(source.clone(), target.clone());
-            }
-        }
-        for (i, (source, target, _)) in rows.iter().enumerate() {
-            if valid[i]
-                && let Err(e) = check_chain_in(&map, source, target)
-            {
-                errors.push(row_error(i, e));
-            }
-        }
-        if !errors.is_empty() {
-            errors.sort_by_key(|e| e.row);
-            return Err(CoreError::InvalidRows(errors));
-        }
         if rows.is_empty() {
             return Ok(ImportReport {
                 created: 0,
@@ -312,32 +260,7 @@ impl RedirectService {
         }
         let tx = self.store.begin().await?;
         let done = async {
-            let mut report = ImportReport {
-                created: 0,
-                updated: 0,
-            };
-            let now = Timestamp::now();
-            for (source, target, code) in rows {
-                let id = RedirectId::new();
-                let saved = tx
-                    .redirects()
-                    .upsert(&Redirect {
-                        id,
-                        source_path: source.clone(),
-                        target: target.clone(),
-                        code: *code,
-                        hits: 0,
-                        origin: RedirectOrigin::Import,
-                        created_at: now,
-                        last_hit_at: None,
-                    })
-                    .await?;
-                if saved.id == id {
-                    report.created += 1;
-                } else {
-                    report.updated += 1;
-                }
-            }
+            let report = import_in(tx.as_ref(), rows).await?;
             emit_redirects_changed(tx.as_ref(), rows.iter().map(|(s, _, _)| s.clone())).await?;
             Ok(report)
         }
@@ -359,25 +282,136 @@ impl RedirectService {
         .await;
         finish(tx, done).await
     }
+}
 
-    /// Every stored redirect as source → target (read pool, page by page).
-    async fn all_targets(&self) -> Result<HashMap<String, String>, CoreError> {
-        let repo = self.store.read().redirects();
-        let mut map = HashMap::new();
-        let mut query = RedirectQuery {
-            q: None,
-            limit: MAX_PAGE,
-            cursor: None,
-        };
-        loop {
-            let page = repo.list(&query).await?;
-            map.extend(page.items.into_iter().map(|r| (r.source_path, r.target)));
-            match page.next_cursor {
-                Some(c) => query.cursor = Some(c),
-                None => return Ok(map),
-            }
+/// Every stored redirect as source → target, page by page.
+pub(crate) async fn all_targets_in(
+    repos: &dyn Repos,
+) -> Result<HashMap<String, String>, CoreError> {
+    let repo = repos.redirects();
+    let mut map = HashMap::new();
+    let mut query = RedirectQuery {
+        q: None,
+        limit: MAX_PAGE,
+        cursor: None,
+    };
+    loop {
+        let page = repo.list(&query).await?;
+        map.extend(page.items.into_iter().map(|r| (r.source_path, r.target)));
+        match page.next_cursor {
+            Some(c) => query.cursor = Some(c),
+            None => return Ok(map),
         }
     }
+}
+
+/// The row checks of [`RedirectService::import`] against `existing` (source → target of
+/// the stored redirects) with all valid rows applied on top; the failing rows, by row.
+pub(crate) fn validate_rows(
+    rows: &[(String, String, u16)],
+    mut map: HashMap<String, String>,
+) -> Vec<RowError> {
+    let mut errors = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut valid = vec![false; rows.len()];
+    for (i, (source, target, code)) in rows.iter().enumerate() {
+        let checked = check_row(source, target, *code).and_then(|()| {
+            let toggled = toggled(source);
+            let taken = seen.contains(source.as_str())
+                || toggled.as_deref().is_some_and(|t| seen.contains(t));
+            if !taken {
+                seen.insert(source.as_str());
+                Ok(())
+            } else {
+                Err(CoreError::invalid_field(
+                    "source",
+                    format!("duplicate source {source:?} (given on an earlier row)"),
+                ))
+            }
+        });
+        match checked {
+            Ok(()) => valid[i] = true,
+            Err(e) => errors.push(row_error(i, e)),
+        }
+    }
+    // A source whose slash variant is stored is taken, as in `upsert` (R26).
+    for (i, (source, _, _)) in rows.iter().enumerate() {
+        if valid[i]
+            && !map.contains_key(source)
+            && toggled(source).is_some_and(|t| map.contains_key(&t))
+        {
+            valid[i] = false;
+            errors.push(row_error(i, source_taken()));
+        }
+    }
+    for (i, (source, target, _)) in rows.iter().enumerate() {
+        if valid[i] {
+            map.insert(source.clone(), target.clone());
+        }
+    }
+    for (i, (source, target, _)) in rows.iter().enumerate() {
+        if valid[i]
+            && let Err(e) = check_chain_in(&map, source, target)
+        {
+            errors.push(row_error(i, e));
+        }
+    }
+    errors.sort_by_key(|e| e.row);
+    errors
+}
+
+/// Upserts `rows` with origin `import`; no checks, no event. Counts created and updated.
+pub(crate) async fn write_rows(
+    repos: &dyn Repos,
+    rows: &[(String, String, u16)],
+) -> Result<ImportReport, CoreError> {
+    let mut report = ImportReport {
+        created: 0,
+        updated: 0,
+    };
+    let now = Timestamp::now();
+    for (source, target, code) in rows {
+        let id = RedirectId::new();
+        let saved = repos
+            .redirects()
+            .upsert(&Redirect {
+                id,
+                source_path: source.clone(),
+                target: target.clone(),
+                code: *code,
+                hits: 0,
+                origin: RedirectOrigin::Import,
+                created_at: now,
+                last_hit_at: None,
+            })
+            .await?;
+        if saved.id == id {
+            report.created += 1;
+        } else {
+            report.updated += 1;
+        }
+    }
+    Ok(report)
+}
+
+/// [`RedirectService::import`] without the capability check, the transaction and the
+/// event: all rows are validated against the stored redirects of `repos` (`InvalidRows`
+/// lists the failing ones, nothing is written), then written. The caller emits the
+/// `redirect:` keys of the sources.
+pub(crate) async fn import_in(
+    repos: &dyn Repos,
+    rows: &[(String, String, u16)],
+) -> Result<ImportReport, CoreError> {
+    if rows.len() > MAX_IMPORT_ROWS {
+        return Err(CoreError::Invalid(format!(
+            "an import takes at most {MAX_IMPORT_ROWS} rows"
+        )));
+    }
+    let errors = validate_rows(rows, all_targets_in(repos).await?);
+    if !errors.is_empty() {
+        return Err(CoreError::InvalidRows(errors));
+    }
+    write_rows(repos, rows).await
 }
 
 /// The read check of [`RedirectService::list`] and [`RedirectService::get`]: the role
@@ -484,18 +518,24 @@ pub(crate) async fn emit_redirects_changed(
     repos: &dyn Repos,
     sources: impl IntoIterator<Item = String>,
 ) -> Result<(), CoreError> {
-    let keys: Vec<String> = sources
+    let keys = redirect_keys(sources);
+    if !keys.is_empty() {
+        repos.events().append(&events::invalidate(keys)).await?;
+    }
+    Ok(())
+}
+
+/// `redirect:<source>` for each source and its toggled variant: the keys
+/// [`emit_redirects_changed`] sends, for a caller that collects keys into its own event.
+pub(crate) fn redirect_keys(sources: impl IntoIterator<Item = String>) -> Vec<String> {
+    sources
         .into_iter()
         .flat_map(|s| {
             let variant = toggled(&s);
             std::iter::once(s).chain(variant)
         })
         .map(|s| events::redirect_key(&s))
-        .collect();
-    if !keys.is_empty() {
-        repos.events().append(&events::invalidate(keys)).await?;
-    }
-    Ok(())
+        .collect()
 }
 
 /// Deletes the redirects that start at `path` or its slash-toggled variant: `path` is
@@ -507,7 +547,10 @@ pub(crate) async fn clear_redirects_from(repos: &dyn Repos, path: &str) -> Resul
 }
 
 /// Deletes the redirects from `path` and its toggled variant; returns their sources.
-async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<String>, CoreError> {
+pub(crate) async fn delete_redirects_from(
+    repos: &dyn Repos,
+    path: &str,
+) -> Result<Vec<String>, CoreError> {
     let redirects = repos.redirects();
     let mut cleared = Vec::new();
     for source in std::iter::once(path.to_owned()).chain(toggled(path)) {
@@ -525,6 +568,16 @@ async fn delete_redirects_from(repos: &dyn Repos, path: &str) -> Result<Vec<Stri
 /// a self-loop), and `old` redirects to `new` with a `301`.
 /// Emits one `invalidate` event with the `redirect:` keys of every source touched.
 pub(crate) async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Result<(), CoreError> {
+    let changed = move_redirects(repos, old, new).await?;
+    emit_redirects_changed(repos, changed).await
+}
+
+/// [`record_move`] without the event: returns the sources of every redirect touched.
+pub(crate) async fn move_redirects(
+    repos: &dyn Repos,
+    old: &str,
+    new: &str,
+) -> Result<Vec<String>, CoreError> {
     let mut changed = delete_redirects_from(repos, new).await?;
     changed.push(old.to_owned());
     let ours: Vec<String> = std::iter::once(new.to_owned())
@@ -560,7 +613,7 @@ pub(crate) async fn record_move(repos: &dyn Repos, old: &str, new: &str) -> Resu
             last_hit_at: None,
         })
         .await?;
-    emit_redirects_changed(repos, changed).await
+    Ok(changed)
 }
 
 /// The redirect for `path`: exact match first, then the slash-toggled path.

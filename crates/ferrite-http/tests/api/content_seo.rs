@@ -13,7 +13,8 @@ use crate::{
 api_tests!(
     content_dto_has_seo,
     patch_seo_with_if_match,
-    head_after_seo_only_patch
+    head_after_seo_only_patch,
+    canonical_and_robots
 );
 
 const POSTS: &str = "/api/v1/content/post";
@@ -29,6 +30,10 @@ async fn create(api: &Api, b: &Bearer, body: Value) -> Value {
     r.json()
 }
 
+fn empty_seo() -> Value {
+    json!({"title": null, "description": null, "canonical": null, "robots": []})
+}
+
 fn path(item: &Value) -> String {
     format!("{POSTS}/{}", item["id"].as_str().unwrap())
 }
@@ -39,9 +44,9 @@ fn path(item: &Value) -> String {
 async fn content_dto_has_seo(api: Api) -> Api {
     let b = admin(&api).await;
     let plain = create(&api, &b, json!({"title": "Plain"})).await;
-    assert_eq!(plain["seo"], json!({"title": null, "description": null}));
+    assert_eq!(plain["seo"], empty_seo());
     let got = b.get(&api, &path(&plain)).await.json();
-    assert_eq!(got["seo"], json!({"title": null, "description": null}));
+    assert_eq!(got["seo"], empty_seo());
 
     let item = create(
         &api,
@@ -51,7 +56,7 @@ async fn content_dto_has_seo(api: Api) -> Api {
     .await;
     assert_eq!(
         item["seo"],
-        json!({"title": "Search title", "description": "About"})
+        json!({"title": "Search title", "description": "About", "canonical": null, "robots": []})
     );
     assert_eq!(b.get(&api, &path(&item)).await.json()["seo"], item["seo"]);
     let list = b.get(&api, POSTS).await.json();
@@ -166,7 +171,7 @@ async fn patch_seo_with_if_match(api: Api) -> Api {
     assert_eq!(saved["version"], 2);
     assert_eq!(
         saved["seo"],
-        json!({"title": "New search title", "description": null})
+        json!({"title": "New search title", "description": null, "canonical": null, "robots": []})
     );
     assert_eq!(saved["title"], "Guarded");
     let revs = b.get(&api, &format!("{p}/revisions")).await.json();
@@ -269,5 +274,98 @@ async fn head_after_seo_only_patch(api: Api) -> Api {
         "{}",
         page.body
     );
+    api
+}
+
+/// `canonical` and `robots`: round trip (robots sorted and deduplicated), `null`
+/// clears, a bad URL or an unknown directive is `422`, and the public head shows them.
+async fn canonical_and_robots(api: Api) -> Api {
+    let b = admin(&api).await;
+    let item = create(
+        &api,
+        &b,
+        json!({"title": "Moved", "seo": {
+            "canonical": " https://origin.example/moved/ ",
+            "robots": ["noindex", "nofollow", "noindex"],
+        }}),
+    )
+    .await;
+    assert_eq!(item["seo"]["canonical"], "https://origin.example/moved/");
+    assert_eq!(item["seo"]["robots"], json!(["nofollow", "noindex"]));
+    let p = path(&item);
+    assert_eq!(b.get(&api, &p).await.json()["seo"], item["seo"]);
+
+    for (seo, status, field) in [
+        (
+            json!({"canonical": "/relative"}),
+            422,
+            Some("seo.canonical"),
+        ),
+        (
+            json!({"canonical": "ftp://x.example/"}),
+            422,
+            Some("seo.canonical"),
+        ),
+        (
+            json!({"canonical": format!("https://x.example/{}", "a".repeat(2048))}),
+            422,
+            Some("seo.canonical"),
+        ),
+        // An unknown directive is a type error of the body: 400, like any enum.
+        (
+            json!({"robots": ["noindex", "bogus"]}),
+            400,
+            Some("seo.robots[1]"),
+        ),
+        (json!({"robots": "noindex"}), 400, Some("seo.robots")),
+    ] {
+        let r = b
+            .send(
+                &api,
+                Method::POST,
+                POSTS,
+                Some(&json!({"title": "x", "seo": seo})),
+                None,
+            )
+            .await;
+        assert_eq!(r.status.as_u16(), status, "{seo}: {r:?}");
+        if let Some(field) = field {
+            assert_eq!(r.json()["errors"][0]["field"], field, "{seo}");
+        }
+    }
+
+    let r = b
+        .send(&api, Method::POST, &format!("{p}/publish"), None, Some(1))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let live = r.json();
+    let public = live["permalink"].as_str().unwrap().to_owned();
+    let page = api.get(&public).await;
+    assert_eq!(page.status, StatusCode::OK, "{page:?}");
+    assert!(
+        page.body
+            .contains("<link rel=\"canonical\" href=\"https://origin.example/moved/\">"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("<meta name=\"robots\" content=\"nofollow, noindex\">"),
+        "{}",
+        page.body
+    );
+
+    // `null` clears canonical, `[]` clears robots.
+    let r = b
+        .send(
+            &api,
+            Method::PATCH,
+            &p,
+            Some(&json!({"seo": {"canonical": null, "robots": []}})),
+            Some(live["version"].as_i64().unwrap()),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(r.json()["seo"], empty_seo());
     api
 }

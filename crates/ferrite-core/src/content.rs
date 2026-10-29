@@ -8,7 +8,7 @@ use std::{
 
 use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
-    Revision, RevisionId, TermId, Timestamp,
+    Revision, RevisionId, Term, TermId, Timestamp,
 };
 use ferrite_store::{MAX_ID_FILTER, Repos, Store, StoreError, Tx};
 
@@ -17,7 +17,7 @@ use crate::{
     actor::{Capability, can_edit, require},
     blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
-    redirects::record_move,
+    redirects::{move_redirects, redirect_keys},
     slug,
     tx::finish,
 };
@@ -31,7 +31,8 @@ pub use admin::{
     AdminQuery, AuthorRef, AutosaveDraft, ContentRef, MAX_REFS, MAX_REVISIONS_LISTED, StatusCounts,
 };
 pub use allowed::{AllowedActions, allowed_actions};
-pub use seo::{Seo, SeoPatch};
+pub(crate) use lifecycle::reclaim_path;
+pub use seo::{Robots, Seo, SeoPatch};
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -163,12 +164,14 @@ impl ContentService {
         })?;
         let terms = dedup(&draft.terms);
         let types = tx.types().list().await?;
-        let ty = content_type(&types, &draft.kind)?;
-        fields::validate_item(&ty.fields, &draft.fields)?;
-        check_relations(tx, &ty.fields, &draft.fields).await?;
-        if let Some(parent) = draft.parent_id {
-            check_parent(tx, ty, None, parent).await?;
-        }
+        check_item(
+            tx,
+            &types,
+            &draft.kind,
+            &draft.fields,
+            draft.parent_id.map(|p| (p, None)),
+        )
+        .await?;
         let root = root_namespace(
             tx,
             rules,
@@ -196,6 +199,8 @@ impl ContentService {
             menu_order: draft.menu_order,
             published_at: None,
             scheduled_at: None,
+            created_at: None,
+            updated_at: None,
         });
         let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
         set_terms(tx, saved.id, &terms).await?;
@@ -298,15 +303,12 @@ impl ContentService {
         })?;
         let terms = dedup(&draft.terms);
         let types = tx.types().list().await?;
-        let ty = content_type(&types, &current.kind)?;
-        fields::validate_item(&ty.fields, &draft.fields)?;
-        check_relations(tx, &ty.fields, &draft.fields).await?;
         // Parent rules and the cycle walk only apply when the parent actually changes.
-        if let Some(parent) = draft.parent_id
-            && draft.parent_id != current.parent_id
-        {
-            check_parent(tx, ty, Some(id), parent).await?;
-        }
+        let new_parent = draft
+            .parent_id
+            .filter(|_| draft.parent_id != current.parent_id)
+            .map(|p| (p, Some(id)));
+        check_item(tx, &types, &current.kind, &draft.fields, new_parent).await?;
         let old_term_rows = tx.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
 
@@ -341,52 +343,86 @@ impl ContentService {
         if let Some(seo) = &seo {
             seo.apply(tx, id).await?;
         }
-        let mut moved_descendants = Vec::new();
-        let published = current.status == ContentStatus::Published;
-        let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
-        if published || moved {
-            // The write touched only this item, so its ancestors read now are the old ones.
-            let old_ancestors = ancestors(tx, current.parent_id).await?;
-            let new_ancestors = if saved.parent_id == current.parent_id {
-                old_ancestors.clone()
-            } else {
-                ancestors(tx, saved.parent_id).await?
-            };
-            let old_primary = primary_term(old_term_rows);
-            let new_primary = if terms == old_terms {
-                old_primary.clone()
-            } else {
-                primary_term(tx.terms().for_item(id).await?)
-            };
-            let old = PermalinkInput {
-                item: current.clone(),
-                ancestors: old_ancestors,
-                primary_term: old_primary,
-            };
-            let new = PermalinkInput {
-                item: saved.clone(),
-                ancestors: new_ancestors,
-                primary_term: new_primary,
-            };
-            if published {
-                record_item_move(tx, permalinks, &old, &new).await?;
-            }
-            if moved {
-                moved_descendants = move_descendants(tx, permalinks, &old, &new).await?;
-            }
-        }
-        let keys = invalidation_keys(
+        let mut redirected = Vec::new();
+        let moved_descendants = record_moves(
+            tx,
+            permalinks,
+            &current,
+            old_term_rows,
+            &saved,
+            terms != old_terms,
+            &mut redirected,
+        )
+        .await?;
+        let mut keys = invalidation_keys(
             &saved,
             &old_terms,
             &terms,
             current.parent_id,
             &moved_descendants,
         );
+        keys.extend(redirect_keys(redirected));
         after_save(tx, actor, &saved, keys, note).await?;
         // A real save supersedes the actor's own autosave; other users' slots stay.
         tx.autosaves().delete(id, actor.user).await?;
         Ok(saved)
     }
+}
+
+/// The redirects of an update of `current` (its terms then were `old_term_rows`) to
+/// `saved` (`terms_changed`: its terms were replaced by others), as
+/// [`update`](ContentService::update) describes: an item published before and after
+/// the write whose path changed gets a move (a move to a path that is not live, such
+/// as an import that also unpublishes it, gets none), and when its slug or parent
+/// changed its published descendants do too.
+/// Returns the descendants whose path changed and adds the sources of every redirect
+/// touched to `redirected` (the caller emits their keys). Call it after the item's row
+/// and terms are written.
+pub(crate) async fn record_moves(
+    tx: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    current: &ContentItem,
+    old_term_rows: Vec<Term>,
+    saved: &ContentItem,
+    terms_changed: bool,
+    redirected: &mut Vec<String>,
+) -> Result<Vec<ContentId>, CoreError> {
+    let published =
+        current.status == ContentStatus::Published && saved.status == ContentStatus::Published;
+    let moved = current.slug != saved.slug || current.parent_id != saved.parent_id;
+    if !(published || moved) {
+        return Ok(Vec::new());
+    }
+    // The write touched only this item, so its ancestors read now are the old ones.
+    let old_ancestors = ancestors(tx, current.parent_id).await?;
+    let new_ancestors = if saved.parent_id == current.parent_id {
+        old_ancestors.clone()
+    } else {
+        ancestors(tx, saved.parent_id).await?
+    };
+    let old_primary = primary_term(old_term_rows);
+    let new_primary = if terms_changed {
+        primary_term(tx.terms().for_item(saved.id).await?)
+    } else {
+        old_primary.clone()
+    };
+    let old = PermalinkInput {
+        item: current.clone(),
+        ancestors: old_ancestors,
+        primary_term: old_primary,
+    };
+    let new = PermalinkInput {
+        item: saved.clone(),
+        ancestors: new_ancestors,
+        primary_term: new_primary,
+    };
+    if published {
+        record_item_move(tx, permalinks, &old, &new, redirected).await?;
+    }
+    if moved {
+        return move_descendants(tx, permalinks, &old, &new, redirected).await;
+    }
+    Ok(Vec::new())
 }
 
 /// One [`ContentService::update_in`] call: item `id`, expected at `expected_version`,
@@ -428,7 +464,7 @@ fn base_slug(
 
 /// Extra slugs a top-level item may not take, beyond [`slug::RESERVED`].
 #[derive(Debug, Default)]
-struct RootNamespace {
+pub(crate) struct RootNamespace {
     /// Router prefixes: content type names (`/{type}/`), taxonomy names
     /// (`/{taxonomy}/{slug}/`) and [`slug::ROUTE_WORDS`].
     names: Vec<String>,
@@ -442,7 +478,7 @@ struct RootNamespace {
 /// top level). `types` is every registered type, read once by the caller for its
 /// kind check too. A caller slug (`explicit`) that is a router prefix or four digits
 /// is `InvalidField { field: "slug", .. }` ("reserved slug").
-async fn root_namespace(
+pub(crate) async fn root_namespace(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     types: &[ContentType],
@@ -469,7 +505,7 @@ async fn root_namespace(
 }
 
 /// The row being written: a new item or a new version of an existing one.
-enum Row {
+pub(crate) enum Row {
     New(NewContent),
     Existing(ContentItem),
 }
@@ -511,7 +547,7 @@ impl Row {
 /// conflicting slug. `own` is the item's current slug, which does not count as taken;
 /// at the top level the [`slug::RESERVED`] words always do, as do `root`'s router
 /// prefixes, a four-digit base and its peer types' top-level slugs.
-async fn save_with_free_slug(
+pub(crate) async fn save_with_free_slug(
     tx: &dyn Tx,
     mut row: Row,
     base: &str,
@@ -616,6 +652,37 @@ async fn after_save(
     keys: Vec<String>,
     note: Option<String>,
 ) -> Result<(), CoreError> {
+    write_revision(repos, actor, item, note).await?;
+    index_search(repos, item).await?;
+    repos.events().append(&events::invalidate(keys)).await?;
+    let id = item.id.to_string();
+    actions::enqueue(
+        repos,
+        actions::POST_SAVED,
+        Some(id.clone()),
+        serde_json::json!({ "post": id }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The search entry of a saved `item` (title and body text).
+pub(crate) async fn index_search(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+    repos
+        .search()
+        .index(item.id, &item.title, &blocks::extract_text(&item.body))
+        .await?;
+    Ok(())
+}
+
+/// A revision of a saved `item` by `actor` (with its meta as it is now, and `note`),
+/// then the prune to the newest 50.
+pub(crate) async fn write_revision(
+    repos: &dyn Repos,
+    actor: &Actor,
+    item: &ContentItem,
+    note: Option<String>,
+) -> Result<(), CoreError> {
     let meta: serde_json::Map<String, serde_json::Value> =
         repos.meta().list(item.id).await?.into_iter().collect();
     repos
@@ -634,26 +701,13 @@ async fn after_save(
         })
         .await?;
     repos.revisions().prune(item.id, KEEP_REVISIONS).await?;
-    repos
-        .search()
-        .index(item.id, &item.title, &blocks::extract_text(&item.body))
-        .await?;
-    repos.events().append(&events::invalidate(keys)).await?;
-    let id = item.id.to_string();
-    actions::enqueue(
-        repos,
-        actions::POST_SAVED,
-        Some(id.clone()),
-        serde_json::json!({ "post": id }),
-    )
-    .await?;
     Ok(())
 }
 
 /// `post:<id>`, `archive:<kind>`, `term:<id>` for the union of the old and the new
 /// terms, `post:<parent>` for the old and the new parent (whichever are set), and
 /// `post:<id>` for each descendant whose URL moved. `old_parent` is `None` on create.
-fn invalidation_keys(
+pub(crate) fn invalidation_keys(
     item: &ContentItem,
     old_terms: &[TermId],
     new_terms: &[TermId],
@@ -670,19 +724,20 @@ fn invalidation_keys(
         .collect()
 }
 
-/// Records a move when the paths of `old` and `new` (the same item) differ; returns
-/// whether they did.
+/// Records a move when the paths of `old` and `new` (the same item) differ, adding the
+/// sources of the redirects touched to `redirected`; returns whether they did.
 async fn record_item_move(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     old: &PermalinkInput,
     new: &PermalinkInput,
+    redirected: &mut Vec<String>,
 ) -> Result<bool, CoreError> {
     let (old_path, new_path) = (permalinks.path(old), permalinks.path(new));
     if old_path == new_path {
         return Ok(false);
     }
-    record_move(repos, &old_path, &new_path).await?;
+    redirected.extend(move_redirects(repos, &old_path, &new_path).await?);
     Ok(true)
 }
 
@@ -691,12 +746,14 @@ async fn record_item_move(
 /// Breadth-first through children in every non-trash status (a draft page can have
 /// published children whose URLs contain its slug); only published descendants get a
 /// move. At most [`MAX_DESCENDANTS`] nodes are walked, whatever their status.
-/// Returns the ids of the descendants whose path changed.
+/// Returns the ids of the descendants whose path changed; the sources of the redirects
+/// touched are added to `redirected`.
 async fn move_descendants(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     old: &PermalinkInput,
     new: &PermalinkInput,
+    redirected: &mut Vec<String>,
 ) -> Result<Vec<ContentId>, CoreError> {
     let chain = |input: &PermalinkInput| {
         let mut c = input.ancestors.clone();
@@ -746,7 +803,8 @@ async fn move_descendants(
                     ..child_old.clone()
                 };
                 if child_old.item.status == ContentStatus::Published
-                    && record_item_move(repos, permalinks, &child_old, &child_new).await?
+                    && record_item_move(repos, permalinks, &child_old, &child_new, redirected)
+                        .await?
                 {
                     moved.push(child_old.item.id);
                 }
@@ -759,6 +817,26 @@ async fn move_descendants(
         }
     }
     Ok(moved)
+}
+
+/// The checks every content write runs on an item of `kind`: its type is registered
+/// (`types` is every registered type), `fields` satisfies the type's schema and its
+/// relation targets, and `new_parent`, when given as (parent, the item itself for an
+/// existing one), passes [`check_parent`].
+pub(crate) async fn check_item(
+    repos: &dyn Repos,
+    types: &[ContentType],
+    kind: &str,
+    fields: &serde_json::Value,
+    new_parent: Option<(ContentId, Option<ContentId>)>,
+) -> Result<(), CoreError> {
+    let ty = content_type(types, kind)?;
+    fields::validate_item(&ty.fields, fields)?;
+    check_relations(repos, &ty.fields, fields).await?;
+    if let Some((parent, child)) = new_parent {
+        check_parent(repos, ty, child, parent).await?;
+    }
+    Ok(())
 }
 
 /// Type `kind` from `types` (every registered type).
@@ -824,7 +902,11 @@ async fn check_parent(
     ))
 }
 
-async fn set_terms(repos: &dyn Repos, item: ContentId, terms: &[TermId]) -> Result<(), CoreError> {
+pub(crate) async fn set_terms(
+    repos: &dyn Repos,
+    item: ContentId,
+    terms: &[TermId],
+) -> Result<(), CoreError> {
     match repos.terms().set_for_item(item, terms).await {
         Err(StoreError::ForeignKey { .. }) => {
             Err(CoreError::invalid_field("terms", "unknown term"))
@@ -858,7 +940,7 @@ fn excerpt_of(draft: &ContentDraft) -> String {
         .unwrap_or_else(|| blocks::excerpt(&draft.body, EXCERPT_CHARS))
 }
 
-fn dedup(terms: &[TermId]) -> Vec<TermId> {
+pub(crate) fn dedup(terms: &[TermId]) -> Vec<TermId> {
     let mut out = Vec::with_capacity(terms.len());
     for t in terms {
         if !out.contains(t) {

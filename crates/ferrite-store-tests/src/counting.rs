@@ -22,10 +22,11 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
-    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, LockGuard, MediaRepo,
-    MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
-    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
-    SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
+    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
+    Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -197,6 +198,9 @@ impl Repos for CountingRepos {
     fn autosaves(&self) -> &dyn AutosaveRepo {
         self.inner.read().autosaves()
     }
+    fn imports(&self) -> &dyn ImportRepo {
+        self.inner.read().imports()
+    }
 }
 
 #[async_trait]
@@ -269,6 +273,9 @@ impl ContentRepo for Counted {
     }
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
         self.0.read().content().update(item).await
+    }
+    async fn set_updated_at(&self, id: ContentId, at: Timestamp) -> Result<(), StoreError> {
+        self.0.read().content().set_updated_at(id, at).await
     }
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
         self.0.read().content().list(query).await
@@ -600,6 +607,9 @@ impl Repos for CountingTx {
     }
     fn autosaves(&self) -> &dyn AutosaveRepo {
         self.tx.autosaves()
+    }
+    fn imports(&self) -> &dyn ImportRepo {
+        self.tx.imports()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

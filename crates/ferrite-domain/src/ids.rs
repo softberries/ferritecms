@@ -52,8 +52,18 @@ macro_rules! uuid_id {
 }
 
 uuid_id!(
-    ContentId, RevisionId, TermId, UserId, MenuItemId, RedirectId, JobId, NodeId, ApiTokenId,
-    AuditId, CommentId
+    ContentId,
+    RevisionId,
+    TermId,
+    UserId,
+    MenuItemId,
+    RedirectId,
+    JobId,
+    NodeId,
+    ApiTokenId,
+    AuditId,
+    CommentId,
+    ImportRunId
 );
 
 /// SHA-256 content hash: exactly 64 lowercase hex characters.

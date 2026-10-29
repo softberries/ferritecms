@@ -12209,6 +12209,17 @@
           }
         }
       },
+      "RobotsDto": {
+        "type": "string",
+        "description": "A robots directive of an item's page.",
+        "enum": [
+          "noarchive",
+          "nofollow",
+          "noimageindex",
+          "noindex",
+          "nosnippet"
+        ]
+      },
       "RoleDto": {
         "type": "string",
         "description": "A user's role (07 §1).",
@@ -12278,17 +12289,31 @@
       },
       "SeoDto": {
         "type": "object",
-        "description": "An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the\nitem's page (no site suffix); `description` comes before the excerpt as the meta\ndescription. `null`: not set.",
+        "description": "An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the\nitem's page (no site suffix); `description` comes before the excerpt as the meta\ndescription; `canonical` (an absolute `http(s)` URL) replaces the page's own URL in\nthe canonical link and `og:url`; `robots` (sorted, deduplicated; empty: none) is the\npage's `<meta name=\"robots\">`. `null`: not set.",
         "required": [
           "title",
-          "description"
+          "description",
+          "canonical",
+          "robots"
         ],
         "properties": {
+          "canonical": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "robots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RobotsDto"
+            }
           },
           "title": {
             "type": [
@@ -12300,13 +12325,28 @@
       },
       "SeoPatchDto": {
         "type": "object",
-        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No NUL,\nand no control characters once trimmed (an edge newline is trimmed, an inner one\nrefused); `title` at most 200 characters and `description` at most 500 (`422`,\n`errors[0].field` = `seo.title` / `seo.description`).",
+        "description": "A change to an item's SEO meta. Per member: absent keeps it, `null` or a string\nthat is blank after trimming deletes it, any other string sets it (trimmed). No NUL,\nand no control characters once trimmed (an edge newline is trimmed, an inner one\nrefused); `title` at most 200 characters and `description` at most 500 (`422`,\n`errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be\nan absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`\nreplaces the directives (`null` or `[]` deletes them; an unknown one is `400`, a malformed body).",
         "properties": {
+          "canonical": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "robots": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RobotsDto"
+            }
           },
           "title": {
             "type": [

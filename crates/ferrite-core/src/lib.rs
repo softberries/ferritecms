@@ -13,6 +13,7 @@ pub mod events;
 pub mod ext_settings;
 mod extensions;
 pub mod fields;
+pub mod import;
 pub mod jobs;
 pub mod mail;
 mod media;
@@ -48,7 +49,10 @@ pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
     MediaService, NewUpload, TRASHED_FROM_META, check_file_name,
 };
-pub use menu::{MAX_MENU_ITEMS, MenuLocation, MenuService, menu_locations};
+pub use menu::{
+    MAX_MENU_ITEMS, MAX_MENU_LABEL, MAX_MENU_URL, MenuLocation, MenuService, is_allowed_menu_url,
+    menu_locations,
+};
 pub use options::OptionService;
 pub use permalink::{PermalinkInput, PermalinkRules, Permalinks, SwappablePermalinks};
 pub use redirects::{ImportReport, MAX_IMPORT_ROWS, MAX_REDIRECT_QUERY, RedirectService};

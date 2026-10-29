@@ -5,6 +5,7 @@ mod config_cmd;
 mod ext_cmd;
 pub mod extensions;
 mod healthcheck;
+mod import_cmd;
 mod init;
 pub mod jobs;
 pub mod keys;

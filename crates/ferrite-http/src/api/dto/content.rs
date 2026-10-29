@@ -8,7 +8,9 @@
 use chrono::{DateTime, Utc};
 use ferrite_core::{
     ContentDraft,
-    content::{AllowedActions, AuthorRef, AutosaveDraft, ContentRef, Seo, SeoPatch, StatusCounts},
+    content::{
+        AllowedActions, AuthorRef, AutosaveDraft, ContentRef, Robots, Seo, SeoPatch, StatusCounts,
+    },
 };
 use ferrite_domain::{Autosave, ContentId, ContentItem, Revision, TermId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -87,15 +89,55 @@ impl ContentDto {
     }
 }
 
+/// A robots directive of an item's page.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RobotsDto {
+    NoArchive,
+    NoFollow,
+    NoImageIndex,
+    NoIndex,
+    NoSnippet,
+}
+
+impl From<Robots> for RobotsDto {
+    fn from(r: Robots) -> Self {
+        match r {
+            Robots::NoArchive => Self::NoArchive,
+            Robots::NoFollow => Self::NoFollow,
+            Robots::NoImageIndex => Self::NoImageIndex,
+            Robots::NoIndex => Self::NoIndex,
+            Robots::NoSnippet => Self::NoSnippet,
+        }
+    }
+}
+
+impl From<RobotsDto> for Robots {
+    fn from(r: RobotsDto) -> Self {
+        match r {
+            RobotsDto::NoArchive => Self::NoArchive,
+            RobotsDto::NoFollow => Self::NoFollow,
+            RobotsDto::NoImageIndex => Self::NoImageIndex,
+            RobotsDto::NoIndex => Self::NoIndex,
+            RobotsDto::NoSnippet => Self::NoSnippet,
+        }
+    }
+}
+
 /// An item's SEO meta. `title`, when set, is the whole `<title>` and `og:title` of the
 /// item's page (no site suffix); `description` comes before the excerpt as the meta
-/// description. `null`: not set.
+/// description; `canonical` (an absolute `http(s)` URL) replaces the page's own URL in
+/// the canonical link and `og:url`; `robots` (sorted, deduplicated; empty: none) is the
+/// page's `<meta name="robots">`. `null`: not set.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SeoDto {
     #[schema(required = true)]
     pub title: Option<String>,
     #[schema(required = true)]
     pub description: Option<String>,
+    #[schema(required = true)]
+    pub canonical: Option<String>,
+    pub robots: Vec<RobotsDto>,
 }
 
 impl From<Seo> for SeoDto {
@@ -103,6 +145,8 @@ impl From<Seo> for SeoDto {
         Self {
             title: s.title,
             description: s.description,
+            canonical: s.canonical,
+            robots: s.robots.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -111,7 +155,9 @@ impl From<Seo> for SeoDto {
 /// that is blank after trimming deletes it, any other string sets it (trimmed). No NUL,
 /// and no control characters once trimmed (an edge newline is trimmed, an inner one
 /// refused); `title` at most 200 characters and `description` at most 500 (`422`,
-/// `errors[0].field` = `seo.title` / `seo.description`).
+/// `errors[0].field` = `seo.title` / `seo.description`). `canonical`, trimmed, must be
+/// an absolute `http(s)` URL of at most 2048 characters (`seo.canonical`); `robots`
+/// replaces the directives (`null` or `[]` deletes them; an unknown one is `400`, a malformed body).
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SeoPatchDto {
     #[serde(default, deserialize_with = "nullable")]
@@ -120,6 +166,12 @@ pub struct SeoPatchDto {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<String>, required = false)]
     pub description: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<String>, required = false)]
+    pub canonical: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<Vec<RobotsDto>>, required = false)]
+    pub robots: Option<Option<Vec<RobotsDto>>>,
 }
 
 impl From<SeoPatchDto> for SeoPatch {
@@ -127,6 +179,10 @@ impl From<SeoPatchDto> for SeoPatch {
         Self {
             title: p.title,
             description: p.description,
+            canonical: p.canonical,
+            robots: p
+                .robots
+                .map(|r| r.map(|v| v.into_iter().map(Into::into).collect())),
         }
     }
 }

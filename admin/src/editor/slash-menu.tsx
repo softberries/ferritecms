@@ -1,6 +1,6 @@
 // The `/` insert menu (11 §1, after Notion and Ghost): typing `/` at the start of a line
 // or after a space opens a list of blocks, filtered by what follows; ↑/↓ move, Enter or
-// Tab inserts, Esc closes. "Image" opens the media picker (M2b-2). Built on `@tiptap/suggestion` with managed positioning
+// Tab inserts, Esc closes. "Image" opens the media picker (M2b-2); "Embed" a YouTube or Vimeo URL form (M3). Built on `@tiptap/suggestion` with managed positioning
 // (`props.mount`). Focus stays in the editor, which points at the highlighted option
 // through `aria-activedescendant`.
 
@@ -23,6 +23,7 @@ import {
   ListOrderedIcon,
   SeparatorHorizontalIcon,
   SquareCodeIcon,
+  SquarePlayIcon,
   TableIcon,
   TextQuoteIcon,
   type LucideIcon,
@@ -45,6 +46,7 @@ type SlashId =
   | "codeBlock"
   | "table"
   | "image"
+  | "embed"
   | "divider"
   | "html";
 
@@ -94,6 +96,7 @@ const ITEMS: SlashItem[] = [
       void pickAndInsertImage(e);
     },
   },
+  { id: "embed", icon: SquarePlayIcon, run: (e, r) => chain(e, r).insertEmbed().run() },
   {
     id: "divider",
     icon: SeparatorHorizontalIcon,

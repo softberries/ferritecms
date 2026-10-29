@@ -14,7 +14,7 @@ use crate::{
     settings,
     site::FRONT_PAGE_OPTION,
     tx::finish,
-    types::{begin_locked, finish_locked},
+    types::{begin_locked, finish_locked, invalidate_all},
 };
 
 const MAX_KEY_LEN: usize = 200;
@@ -111,25 +111,7 @@ impl OptionService {
         changes: &[(String, Option<Value>)],
     ) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
-        let mut pending: Vec<Change<'_>> = Vec::with_capacity(changes.len());
-        for (key, value) in changes {
-            let value = value.as_ref().filter(|v| !v.is_null());
-            match value {
-                Some(v) => settings::validate(key, v)?,
-                None if settings::def(key).is_none() => {
-                    return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
-                }
-                None => {}
-            }
-            if pending.iter().any(|c| c.key == key) {
-                return Err(CoreError::Invalid(format!("setting {key:?} given twice")));
-            }
-            pending.push(Change {
-                key,
-                value,
-                autoload: true,
-            });
-        }
+        let pending = check_settings(changes)?;
         if pending.is_empty() {
             return Ok(());
         }
@@ -146,26 +128,86 @@ impl OptionService {
     ) -> Result<(), CoreError> {
         if changes.iter().any(|c| is_permalink(c.key)) {
             let (guard, tx) = begin_locked(self.store.as_ref()).await?;
-            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            let done = write_with_invalidation(tx.as_ref(), actor, changes, settings_write).await;
             finish_locked(guard, tx, done).await
         } else {
             let tx = self.store.begin().await?;
-            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            let done = write_with_invalidation(tx.as_ref(), actor, changes, settings_write).await;
             finish(tx, done).await
         }
     }
 }
 
-/// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
-/// for a `settings_write`, the front page), each set or delete with its
-/// `options.changed`, `invalidate [all]` for `permalink.*`, and for a `settings_write`
-/// the audit row `settings.update`.
-async fn write_changes(
+/// [`OptionService::set_many`] inside the caller's `Tx` (M3-1 P1), without the
+/// capability check: the same validation, front-page and `permalink.*` checks, events
+/// and audit row, except the `invalidate [all]`. Returns whether a `permalink.*` key
+/// changed, so the caller emits that invalidation. A `permalink.*` change needs a `Tx`
+/// that holds [`LOCK_TYPES`](ferrite_store::LOCK_TYPES) ([`touches_permalinks`]).
+pub(crate) async fn set_many_in(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[(String, Option<Value>)],
+) -> Result<bool, CoreError> {
+    let pending = check_settings(changes)?;
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    write_changes(repos, actor, &pending, true).await
+}
+
+/// Whether `changes` sets or deletes a `permalink.*` option.
+pub(crate) fn touches_permalinks(changes: &[(String, Option<Value>)]) -> bool {
+    changes.iter().any(|(key, _)| is_permalink(key))
+}
+
+/// The validation of [`OptionService::set_many`]: every key allowlisted and given once,
+/// every value valid; `None` or JSON `null` deletes.
+fn check_settings(changes: &[(String, Option<Value>)]) -> Result<Vec<Change<'_>>, CoreError> {
+    let mut pending: Vec<Change<'_>> = Vec::with_capacity(changes.len());
+    for (key, value) in changes {
+        let value = value.as_ref().filter(|v| !v.is_null());
+        match value {
+            Some(v) => settings::validate(key, v)?,
+            None if settings::def(key).is_none() => {
+                return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
+            }
+            None => {}
+        }
+        if pending.iter().any(|c| c.key == key) {
+            return Err(CoreError::Invalid(format!("setting {key:?} given twice")));
+        }
+        pending.push(Change {
+            key,
+            value,
+            autoload: true,
+        });
+    }
+    Ok(pending)
+}
+
+/// [`write_changes`], then `invalidate [all]` when a `permalink.*` key changed.
+async fn write_with_invalidation(
     repos: &dyn Repos,
     actor: &Actor,
     changes: &[Change<'_>],
     settings_write: bool,
 ) -> Result<(), CoreError> {
+    if write_changes(repos, actor, changes, settings_write).await? {
+        invalidate_all(repos).await?;
+    }
+    Ok(())
+}
+
+/// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
+/// for a `settings_write`, the front page), each set or delete with its
+/// `options.changed`, and for a `settings_write` the audit row `settings.update`.
+/// Returns whether a `permalink.*` key changed: the caller then owes `invalidate [all]`.
+async fn write_changes(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[Change<'_>],
+    settings_write: bool,
+) -> Result<bool, CoreError> {
     let permalinks: Vec<&Change<'_>> = changes.iter().filter(|c| is_permalink(c.key)).collect();
     if !permalinks.is_empty() {
         check_permalinks(repos, &permalinks).await?;
@@ -189,12 +231,6 @@ async fn write_changes(
             .append(&events::options_changed(c.key))
             .await?;
     }
-    if !permalinks.is_empty() {
-        repos
-            .events()
-            .append(&events::invalidate([events::ALL_KEY.to_owned()]))
-            .await?;
-    }
     if settings_write {
         let keys: Vec<&str> = changes.iter().map(|c| c.key).collect();
         repos
@@ -208,10 +244,10 @@ async fn write_changes(
             })
             .await?;
     }
-    Ok(())
+    Ok(!permalinks.is_empty())
 }
 
-fn is_permalink(key: &str) -> bool {
+pub(crate) fn is_permalink(key: &str) -> bool {
     key == POST_OPTION || key == PAGE_OPTION
 }
 

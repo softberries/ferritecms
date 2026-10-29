@@ -26,7 +26,7 @@ function item(fields: Record<string, unknown>, version = 3): SchemaContentDto {
     body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "x" }] }] },
     excerpt: "",
     fields,
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/book/a-book/",

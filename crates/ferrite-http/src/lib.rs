@@ -9,6 +9,7 @@ pub mod api;
 pub mod app;
 pub mod extensions;
 pub mod head;
+pub mod import_fetch;
 pub mod mail;
 pub mod media;
 pub mod plugins;

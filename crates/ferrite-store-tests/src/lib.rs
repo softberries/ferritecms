@@ -20,6 +20,7 @@ pub mod event;
 pub mod fixtures;
 pub mod harness;
 pub mod idempotency;
+pub mod import;
 pub mod job;
 pub mod job_list;
 pub mod lock;
