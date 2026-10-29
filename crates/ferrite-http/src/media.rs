@@ -136,6 +136,12 @@ impl Uploader {
         self.max_upload
     }
 
+    /// How long an upload may receive nothing (`media.upload_idle_timeout`); import
+    /// uploads use it too.
+    pub fn idle_timeout(&self) -> Duration {
+        self.idle
+    }
+
     fn idle_error(&self) -> UploadError {
         UploadError::Idle {
             secs: self.idle.as_secs().max(1),

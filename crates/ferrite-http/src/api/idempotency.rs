@@ -1,4 +1,5 @@
-//! `Idempotency-Key` for `POST /media` (07 §1; M2a-2b P10, F5–F7).
+//! `Idempotency-Key` for the upload routes `POST /media` (07 §1; M2a-2b P10, F5–F7)
+//! and `POST /import/wordpress` (M3-2 P25), which share these rules.
 //!
 //! A client that may retry an upload sends `Idempotency-Key: <key>` (1..=255 bytes of
 //! `0x21..=0x7E`; anything else, or the header twice, is `400 malformed-header`). The

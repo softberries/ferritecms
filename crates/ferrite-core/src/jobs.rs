@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use ferrite_domain::{ContentId, NewJob, Timestamp, UserId};
+use ferrite_domain::{Artifact, ContentId, NewJob, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -290,13 +290,47 @@ pub struct ImportJobPayload {
 
 /// What an admin asks to import ([`ImportService::enqueue`](crate::import::ImportService::enqueue)):
 /// the payload without `v` and `user`, which core sets (the job runs as the actor who
-/// asked).
+/// asked). `wxr` and `uploads` are the stored inputs, of kind `import` (P23); their rows
+/// are recorded with the job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportJobRequest {
-    pub wxr: String,
-    pub uploads: Option<String>,
+    pub wxr: Artifact,
+    pub uploads: Option<Artifact>,
     pub options: ImportJobOptions,
     pub source_name: String,
+}
+
+/// The longest category or tag base.
+pub const MAX_IMPORT_BASE: usize = 100;
+
+/// Checks the options a request may set: the category and tag bases are paths of
+/// segments of `A-Z a-z 0-9 - _ . ~` (surrounding slashes are ignored), at most
+/// [`MAX_IMPORT_BASE`] characters, no empty, `.` or `..` segment; else
+/// [`CoreError::InvalidField`](crate::CoreError::InvalidField) naming the field.
+pub fn check_import_options(options: &ImportJobOptions) -> Result<(), crate::CoreError> {
+    for (field, base) in [
+        ("category_base", &options.category_base),
+        ("tag_base", &options.tag_base),
+    ] {
+        let path = base.trim_matches('/');
+        let segment_ok = |s: &str| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+        };
+        if base.len() > MAX_IMPORT_BASE || !path.split('/').all(segment_ok) {
+            return Err(crate::CoreError::InvalidField {
+                field,
+                message: format!(
+                    "a path of segments of letters, digits, '-', '_', '.' and '~', at most \
+                     {MAX_IMPORT_BASE} characters"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The job for `import`: due now, no unique key (P25's conflict rule stands in for it),

@@ -3257,6 +3257,482 @@
         ]
       }
     },
+    "/api/v1/import/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "get_import_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import job and, once it started one, its run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such import job (jobs of other kinds included) or a malformed id",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import/runs": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "list_import_runs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of runs, newest first (CLI runs included)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRunPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`limit`, `cursor`) or `malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import/runs/{id}": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "get_import_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportRunDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found` (also a malformed id)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import/runs/{id}/report.html": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "get_import_report_html",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's report as a page, sandboxed (`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`)",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such run (or a malformed id), or it has no report yet",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import/runs/{id}/report.json": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "get_import_report_json",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's report (`Cache-Control: private, no-store`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such run (or a malformed id), or it has no report yet",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/import/wordpress": {
+      "post": {
+        "tags": [
+          "import"
+        ],
+        "operationId": "start_wordpress_import",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional; 1 to 255 visible ASCII characters (`0x21`-`0x7E`), scoped to the caller and kept 24 h. A retry with a finished key replays the first `202` (`Idempotent-Replayed: true`) without reading the body; the key must be reused with the same method and path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Parts `wxr` (required, at most 512 MiB), `uploads` (a zip, at most 4 GiB) and `options` (JSON, at most 4 KiB), in any order",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStartUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued (`Location`: the job); with a finished `Idempotency-Key`, the first response replayed (`Idempotent-Replayed: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-body`: an unknown, unnamed or repeated part, a malformed body or `options` part, or a part that received no bytes for `media.upload_idle_timeout` (`errors[0].field` names it; the upload is aborted); `malformed-header`: a malformed `Idempotency-Key`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`import`, `import:write`), `csrf` or `password-reset-required`; checked before the body is read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: another import is queued or running (checked before the body is read, and again when the job is queued), or a request with this `Idempotency-Key` is in progress (`Retry-After: 5`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`too-large`: the declared body, a file (`errors[0].field` = `wxr` or `uploads`) or `options` over its limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported-media-type`: not `multipart/form-data`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: no `wxr` part; an `options` `category_base` or `tag_base` that is not a path of URL-safe segments (`errors[0].field` names it); the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/media": {
       "get": {
         "tags": [
@@ -10376,6 +10852,128 @@
           }
         }
       },
+      "ImportCountsDto": {
+        "type": "object",
+        "description": "What happened to the items of one kind.",
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
+          "kept": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Edited here since the last import: kept.",
+            "default": 0,
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          }
+        }
+      },
+      "ImportJobDto": {
+        "type": "object",
+        "description": "An import job (`GET /import/jobs/{job_id}`): poll it until `status` is `done` or\n`dead`.",
+        "required": [
+          "job_id",
+          "status",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Claims so far (at most 3)."
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt failed, scrubbed (the node's log has the full text)."
+          },
+          "run": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportRunDto",
+                "description": "The run the job started; `null` until it starts one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running`, `done` or `dead`."
+          }
+        }
+      },
+      "ImportOptionsDto": {
+        "type": "object",
+        "description": "The import's options; a missing field takes the CLI's default.",
+        "properties": {
+          "category_base": {
+            "type": "string",
+            "description": "The old site's category base, for redirects. Default `category`.",
+            "default": "category"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Run everything, then roll every write back. Default `false`.",
+            "default": false
+          },
+          "fetch_media": {
+            "type": "boolean",
+            "description": "Fetch attachments missing from `uploads` from the old site. Default `false`.",
+            "default": false
+          },
+          "keep_permalinks": {
+            "type": "boolean",
+            "description": "Take the old site's post permalink structure. Default `true`.",
+            "default": true
+          },
+          "site_options": {
+            "type": "boolean",
+            "description": "Import the site title and description. Default `true`.",
+            "default": true
+          },
+          "tag_base": {
+            "type": "string",
+            "description": "The old site's tag base, for redirects. Default `tag`.",
+            "default": "tag"
+          }
+        },
+        "additionalProperties": false
+      },
       "ImportReportDto": {
         "type": "object",
         "description": "`POST /redirects/import`: what the import did.",
@@ -10395,6 +10993,148 @@
             "format": "int32",
             "description": "Rows that replaced the target and code of an existing redirect.",
             "minimum": 0
+          }
+        }
+      },
+      "ImportRunDto": {
+        "type": "object",
+        "description": "An import run.",
+        "required": [
+          "id",
+          "source",
+          "state",
+          "dry_run",
+          "started_by",
+          "started_at",
+          "heartbeat_at",
+          "counts",
+          "report"
+        ],
+        "properties": {
+          "counts": {
+            "type": "object",
+            "description": "Outcomes per kind (`posts`, `pages`, `media`, …), as far as the run got.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ImportCountsDto"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a failed run failed."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "heartbeat_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Moves while it runs; a `running` run without one for 120 s has stopped."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "job_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The import job that ran it; `null` for a CLI run."
+          },
+          "report": {
+            "type": "boolean",
+            "description": "`report.json` and `report.html` can be read."
+          },
+          "source": {
+            "type": "string",
+            "description": "The old site's address (the WXR's `base_blog_url`)."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "description": "`running`, `done`, `failed` or `abandoned`."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step it is in or ended in: `parse`, `pass1` … `pass4`, `fixup` or `report`."
+          }
+        }
+      },
+      "ImportRunPageDto": {
+        "type": "object",
+        "description": "`GET /import/runs`: one page, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportRunDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ImportStartUpload": {
+        "type": "object",
+        "description": "The multipart body of `POST /import/wordpress`.",
+        "required": [
+          "wxr"
+        ],
+        "properties": {
+          "options": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportOptionsDto",
+                "description": "At most 4 KiB of JSON; every field is optional."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uploads": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "binary",
+            "description": "A `.zip` of the old site's `wp-content/uploads`, at most 4 GiB."
+          },
+          "wxr": {
+            "type": "string",
+            "format": "binary",
+            "description": "The WordPress export (Tools → Export), at most 512 MiB; stored as sent (not\nsniffed). Its part's file name names the run in the admin."
           }
         }
       },
@@ -13498,6 +14238,10 @@
     {
       "name": "system",
       "description": "System status, nodes and the audit log (admins)"
+    },
+    {
+      "name": "import",
+      "description": "WordPress imports: start from an upload, poll the job, read runs and reports"
     }
   ]
 }

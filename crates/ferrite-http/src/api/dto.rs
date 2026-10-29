@@ -13,6 +13,7 @@ pub mod auth;
 pub mod comments;
 pub mod content;
 pub mod extensions;
+pub mod import;
 pub mod media;
 pub mod site;
 pub mod system;
