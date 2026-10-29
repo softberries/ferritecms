@@ -744,6 +744,85 @@ pub async fn dry_run_keeps_a_failed_runs_work_file(db: &TestDb) {
     assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
 }
 
+/// A failed real run, then a dry run that fails too, then a real run: the dry run's work
+/// file is deleted on failure and never taken for the real run's, so the last run
+/// resumes the failed real run's file and fixes the forward link.
+pub async fn failed_dry_run_leaves_no_work_file(db: &TestDb) {
+    let site = site(db).await;
+    let wxr = corpus("site-a.xml");
+    let stop_at = |at: &'static str| {
+        StepHook::new(move |step| {
+            if step == at {
+                return Err(ImportError::Stopped);
+            }
+            Ok(())
+        })
+    };
+    let real = ImportOptions {
+        step_hook: Some(stop_at("pass4")),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, real).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    let failed_real = work_dirs(&site);
+    assert_eq!(failed_real.len(), 1);
+    let dry = ImportOptions {
+        dry_run: true,
+        step_hook: Some(stop_at("fixup")),
+        ..ImportOptions::default()
+    };
+    let err = run(site.ctx.clone(), &wxr, dry).await.unwrap_err();
+    assert!(matches!(err, ImportError::Stopped), "{err:?}");
+    assert_eq!(
+        work_dirs(&site),
+        failed_real,
+        "the dry run's folder is gone"
+    );
+    import(&site, &wxr, ImportOptions::default()).await;
+    let post = by_title(db.store(), "Every core block").await;
+    let mut links = Vec::new();
+    hrefs(&post.body, &mut links);
+    assert!(links.contains(&"/about/".to_owned()), "{links:?}");
+    assert!(links.contains(&"/about/team/".to_owned()), "{links:?}");
+    assert!(work_dirs(&site).is_empty());
+}
+
+/// The run folders under the work dir.
+fn work_dirs(site: &Site) -> Vec<PathBuf> {
+    match std::fs::read_dir(&site.ctx.work_dir) {
+        Ok(dir) => dir
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.is_dir())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// An item whose WP dates are all zero gets "now" as its creation time; that must not
+/// enter its P4 hash, or every re-run would update it.
+pub async fn zero_dates_rerun_unchanged(db: &TestDb) {
+    let site = site(db).await;
+    let zero = "<wp:post_date>2026-10-28 10:49:55</wp:post_date>\n  \
+                <wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>\n  \
+                <wp:post_modified>2026-10-28 10:49:55</wp:post_modified>";
+    let xml = std::fs::read_to_string(corpus("site-a.xml")).unwrap();
+    assert!(xml.contains(zero));
+    let xml = xml.replacen(
+        zero,
+        "<wp:post_date>0000-00-00 00:00:00</wp:post_date>\n  \
+         <wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>\n  \
+         <wp:post_modified>0000-00-00 00:00:00</wp:post_modified>",
+        1,
+    );
+    let wxr = site.work.path().join("zero-dates.xml");
+    std::fs::write(&wxr, xml).unwrap();
+    import(&site, &wxr, ImportOptions::default()).await;
+    let again = import(&site, &wxr, ImportOptions::default()).await;
+    for (kind, c) in &again.counts {
+        assert_eq!(c.updated, 0, "{kind}: {:?}", again.counts);
+    }
+}
+
 /// C2: a first run without the uploads leaves bodies and featured images on the old
 /// URLs; a re-run of the same file with the uploads points them at the new media.
 pub async fn rerun_with_uploads_rewrites_media(db: &TestDb) {
@@ -847,6 +926,8 @@ backend_tests!(
     csv_redirects_are_kept,
     links_keep_their_query,
     dry_run_keeps_a_failed_runs_work_file,
+    failed_dry_run_leaves_no_work_file,
+    zero_dates_rerun_unchanged,
     rerun_with_uploads_rewrites_media,
     rerun_finds_mapped_users,
 );

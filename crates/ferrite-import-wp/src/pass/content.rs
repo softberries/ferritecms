@@ -883,8 +883,11 @@ fn content_hash(c: &ImportContent) -> Result<String, ImportError> {
         "author": c.author.to_string(),
         "status": c.status.as_str(),
         "published_at": c.published_at,
-        "created_at": c.created_at,
-        "updated_at": c.updated_at,
+        // Without WP dates `created_at` (and `updated_at` with it) is "now" (see
+        // `dates`): left out, or every re-run would update the item.
+        "created_at": c.published_at.map(|_| c.created_at),
+        "updated_at": (c.published_at.is_some() || c.updated_at != c.created_at)
+            .then_some(c.updated_at),
         "excerpt": c.excerpt,
         "body": c.body,
         "fields": c.fields,
