@@ -587,6 +587,11 @@ async fn boot(
         #[cfg(feature = "test-seams")]
         fail_after_batches: opts.import_fail_after_batches,
     }));
+    handlers.push(Arc::new(jobs::ArtifactsGcHandler::new(
+        store.clone(),
+        media.clone(),
+        crate::gc::grace_days(config.uploads.gc_grace_days),
+    )));
     #[cfg(feature = "test-seams")]
     handlers.extend(opts.extra_handlers);
     // What the job list's `handled` reads (P19).
@@ -603,8 +608,7 @@ async fn boot(
     let runner = JobRunner::new(store.clone(), runner_config, handlers)
         .context("cannot set up the job runner")?;
     let mut periodics = builtin::periodics();
-    periodics.push(jobs::publish_due_periodic());
-    periodics.push(jobs::plugin_purge_sweep_periodic());
+    periodics.extend(jobs::core_periodics());
     let tick = SCHEDULER_TICK;
     #[cfg(feature = "test-seams")]
     let (periodics, tick) = (

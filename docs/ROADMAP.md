@@ -446,7 +446,7 @@ Design: [09](design/09-operations.md).
   - [x] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (today neither is set on the builder, so production S3 uses the head + copy fallback). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`.
   - [ ] `build_s3` replaces any client options read from the environment with its own timeouts (split from the item above).
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
-  - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
+  - [x] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
   - [x] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
   - [ ] Optional location-metadata stripping on upload: the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11); only variants are re-encoded without EXIF/XMP (03 §4).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
@@ -496,7 +496,7 @@ Design: [09](design/09-operations.md).
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
 - [ ] Deferred from M2a-2a:
   - [ ] Per-node option cache, reintroduced only with a measured need (M2a-2 P14; theme settings and `site.*` are read per cache miss, plugin settings per call, each one primary-key read). It needs R13's refresh on `options.changed` on every node ([rulings/m2a.md](superpowers/rulings/m2a.md)).
-  - [ ] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1).
+  - [x] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1). Done in M4-1: `discard_staged` is gone, failed installs leave their bytes to the GC (03 §6).
   - [ ] A compile-size or function-count guard (or a compile deadline) for uploaded components: inspecting a component of up to 32 MiB has no time bound today; two compile slots per node bound only the count (05 §6).
   - [ ] Fairness inside the per-render plugin budget (per-plugin shares, or a reservation for renders in the call semaphore; 05 §6 "Known limit").
   - [ ] Signed plugins / publisher identity: plugin data and sealed secrets follow the plugin name only, and the manifest's `publisher` is unverified, so a component from another publisher installed under the same name reads the earlier plugin's data (05 §2; M2a-2a final review M3, ruling R22). Verify a publisher signature on install and update, and show a publisher change in the permission report.

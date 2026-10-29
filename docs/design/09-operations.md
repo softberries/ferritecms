@@ -252,6 +252,7 @@ ferrite serve          --data DIR                      # M1c-2; cluster wiring M
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
+ferrite media gc       --data DIR [--dry-run] [--grace-days N]  # M4-1
 ferrite media regenerate --data DIR [--all] [--item ID]        # M4-1
 ferrite export         --data DIR --out FILE|- [--with-media]                      # M4-1
 ferrite import-site    ARCHIVE|- --data DIR [--with-media]                         # M4-1
@@ -337,6 +338,21 @@ file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to
 folder lock is taken in its folder; an absent target file is created). Same source and target rules
 and exit codes as `export` and `import-site`; it copies no media (`media sync`) and writes no
 `ferrite.toml`, but prints the `[database]` lines to put there.
+
+**`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
+03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`
+job runs. It opens the database (with SQLite, stop `serve` first: it holds the data folder's
+lock) and the configured media store, then marks unreferenced artifact rows, deletes rows
+marked longer than the grace period and then their files, files under `artifacts/` with no
+row that are older than the grace period, and `tmp/` objects older than 24 h. Files named
+by a queued or running job or by an import report are kept. `--grace-days N` (1..=365)
+overrides `media.gc_grace_days` (default 7) for this run; `--dry-run` marks and deletes
+nothing and reports what a run would do. Prints `marked N, unmarked M, deleted rows R (B
+bytes), deleted unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: `
+for a dry run; `, failed F` is appended when some blob or `tmp/` deletes failed, which are
+logged and retried by the next pass, the exit code staying 0). Exit 0 done, 3 another GC is running (the `artifacts.gc` lock, a cluster
+node's job or another `media gc`), 1 on an error; a bad flag (`--grace-days 0`) exits 2 as
+clap does.
 
 **`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again in
 process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus the
@@ -584,7 +600,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite backup / restore                                        # M4
-ferrite media gc                                                 # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

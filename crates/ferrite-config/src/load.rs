@@ -373,8 +373,9 @@ fn parse_media(cx: &mut Cx, root: &mut Table) -> (MediaSection, UploadConfig) {
 }
 
 /// `media.max_upload` (1 B..=1 GiB), `media.image_workers` (1..=16) and
-/// `media.upload_idle_timeout` (a positive duration) and `media.strip_metadata` (a
-/// boolean, default false), for either backend.
+/// `media.upload_idle_timeout` (a positive duration), `media.strip_metadata` (a
+/// boolean, default false) and `media.gc_grace_days` (1..=365, default 7), for either
+/// backend.
 fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let defaults = UploadConfig::default();
     let max_upload = match cx.size(t, "media", "max_upload", false) {
@@ -400,11 +401,21 @@ fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let strip_metadata = cx
         .boolean(t, "media", "strip_metadata")
         .unwrap_or(defaults.strip_metadata);
+    const MAX_GRACE: u64 = MAX_GC_GRACE_DAYS as u64;
+    let gc_grace_days = match cx.uint(t, "media", "gc_grace_days") {
+        None => defaults.gc_grace_days,
+        Some(n @ 1..=MAX_GRACE) => n as u32,
+        Some(_) => {
+            cx.push("media.gc_grace_days", "must be between 1 and 365");
+            defaults.gc_grace_days
+        }
+    };
     UploadConfig {
         max_upload,
         image_workers,
         idle_timeout_secs,
         strip_metadata,
+        gc_grace_days,
     }
 }
 
@@ -923,7 +934,7 @@ impl InitMedia {
 }
 
 /// The upload keys of `[media]` in the `ferrite init` template (commented defaults).
-const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n# Strip EXIF and XMP (GPS included) from uploaded JPEG, PNG and WebP originals.\n# strip_metadata = false\n";
+const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n# Strip EXIF and XMP (GPS included) from uploaded JPEG, PNG and WebP originals.\n# strip_metadata = false\n# Days the artifacts GC keeps unreferenced files before deleting them (1..=365).\n# gc_grace_days = 7\n";
 
 /// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
 /// defaults to `us-east-1`; the operator must still set credentials/endpoint.

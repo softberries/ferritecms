@@ -289,6 +289,7 @@ root         = "media"                 # default; relative to the data folder
 # image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
 # upload_idle_timeout = "30s"          # M2a-2b: an upload receiving nothing this long is aborted
 # strip_metadata = false               # M4-1: strip EXIF/XMP (GPS) from JPEG/PNG/WebP originals on ingest
+# gc_grace_days = 7                    # M4-1: days the artifacts GC keeps unreferenced files, 1..=365; default 7
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -400,6 +401,13 @@ of data in a `BytesMut` that grows by doubling, so up to 128 MiB reserved) plus 
 stripped copy (at most the input's size, 64 MiB): about 192 MiB per upload at the peak, so
 up to about 1.5 GiB for 8 slots, plus up to 192 MiB for a running import. The 64 MiB
 figure above holds only with the option off.
+
+**Artifacts GC grace** (`[media] gc_grace_days`, M4-1 P11, `Config.uploads.gc_grace_days`):
+an integer number of days, 1..=365, default 7, valid with either backend. An artifact row
+is deleted once it has been marked unreferenced for longer than this, and a file under
+`artifacts/` with no row once it is older than this (03 §6); `ferrite media gc
+--grace-days N` overrides it for one run. `config check` reports an out-of-range value as
+`media.gc_grace_days: must be between 1 and 365`.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,

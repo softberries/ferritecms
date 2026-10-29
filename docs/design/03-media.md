@@ -512,10 +512,80 @@ Cost: `<style>` sheets, animation, links, external fonts and images are stripped
 
 ## 6. Garbage collection
 
-Artifacts are referenced by `media`, `media.variants`, `plugins`, `themes`, revisions
-(featured images in fields). A periodic job `artifacts.gc` (daily, single-runner via
-unique job key) deletes artifacts unreferenced for > 7 days (grace period protects
-in-flight uploads and rollbacks). Dry-run: `ferrite media gc --dry-run`.
+Built in M4-1 (P10–P12): `crates/ferrite/src/gc.rs` (`gc::run`), run by the daily
+`artifacts.gc` job (`crates/ferrite/src/jobs/gc.rs`, 04 §6) and by `ferrite media gc`
+(09 §8).
+
+**What references an artifact** (P10). A row is referenced when its hash is named by
+`media.artifact_hash`, `media_variants.hash` (the derived table of `media.variants`),
+`plugins.artifact_hash`, `themes.artifact_hash` or `import_runs.report_hash`; the store
+checks these in SQL. On top, the GC computes **protected** hashes in Rust and passes them
+to the store: every 64-lowercase-hex string anywhere in the payload of a `queued` or
+`running` job (object keys included, so it covers `media.variants`, `import.wordpress` and
+any later kind), and the `json` and `html` hashes inside every import report manifest
+(`{"v":1,"json":…,"html":…}`). A manifest that cannot be read (missing, over 1 KiB, not
+that shape) protects every `import`-kind row for that pass. Revisions and
+`content_items.fields` are **not** referrers: they hold media content ids, not hashes (a
+featured image keeps its file through its `media` row).
+
+**Grace and marking** (P11). `artifacts.orphaned_at` (migration `0011_artifact_gc`) records
+since when nothing references a row. One pass, under the `artifacts.gc` lock (`try_lock`: a
+second run at the same time is refused, the job as `Busy`, the CLI with exit 3):
+
+1. **Mark:** unmarked rows that nothing references and that are not protected get
+   `orphaned_at = now`; marked rows that are referenced or protected again lose the mark.
+   `ArtifactRepo::insert_if_absent` on an existing row also clears it: recording the same
+   bytes again counts as a fresh reference.
+2. **Delete rows** marked before `now − grace`, one at a time with `delete_if_orphaned`,
+   which re-checks the references in its own statement (a foreign-key refusal, a reference
+   that raced in, keeps the row). Only when the row is gone is the blob deleted (R74's
+   order).
+3. **Delete row-less blobs:** objects under `artifacts/` whose `last_modified` is older than
+   `now − grace`, that are not protected and have no row (`existing`, asked for each batch
+   of 1 000 right before deleting it). These are uploads whose row never came (R68),
+   refused uploads and staged extension bytes whose install failed.
+4. **Clean `tmp/`:** staging objects, probes included, older than 24 h, whatever the grace.
+
+The grace period is `[media] gc_grace_days` (default 7 days, 1..=365, 01 §4); it covers
+in-flight uploads (every writer stores the blob before its row), rollbacks to an old plugin
+artifact, and the staged bytes of a failed extension install, which the request no longer
+deletes (`Installer::discard_staged` is gone, P12): a concurrent install of the same bytes
+can no longer lose its blob, and refused install bytes stay up to the grace period. With
+the default, nothing is deleted on the first pass after an artifact becomes unreferenced:
+it needs a pass to mark it and one more after the grace period. A pass cut short (the job's
+3 600 s timeout) continues the next day; a blob that cannot be deleted is logged and found
+again as a row-less blob.
+
+**Residual race (accepted).** Every writer stores the blob before its row, and the store's
+put of bytes that already exist is a no-op. Two windows remain, both milliseconds wide:
+
+- step 2: a writer that inserts its row between the GC's row delete and its blob delete;
+- step 3: a writer that inserts its row between the GC's last `existing` check for that
+  hash (asked again for the single hash right before each delete; the batch check of 1 000
+  is only a pre-filter) and the blob delete.
+
+Either writer ends up with a row and no blob. Both need bytes that were unreferenced (step
+2) or row-less (step 3) for longer than the grace period to be uploaded again at that
+instant; uploading the file again fixes it.
+
+Job payloads are read before the mark, so a job enqueued during a pass is seen by the next
+one: its artifact row was inserted (or unmarked) before the job, and is at most marked, never
+deleted, within the grace period. The scan reads `queued`, then `running` jobs; a running job
+released back to `queued` between the two reads is missed for that pass. For a row that only
+means a mark (cleared next pass); a **row-less** blob such a job names and that is older than
+the grace period would be deleted. No kind does that today (`import.wordpress` inputs and
+`media.variants` originals have rows). `dead` jobs are not scanned (P10: queued and running
+only), although `retry_dead` can revive one within its 30 days: `import.wordpress` deletes
+its inputs when it fails for good, and a `media.variants` original is held by its `media`
+row. A future kind whose dead jobs may be retried must keep rows for the hashes it names.
+
+Blob and `tmp/` deletes that fail are logged, counted (`, failed F` is appended to the
+output line) and retried by later passes; a pass that fails part-way logs what it had done.
+
+**Dry run** (`ferrite media gc --dry-run`) marks nothing and deletes nothing: steps 1 and 2
+run in a transaction that is rolled back, so their counts are exact (each tentative delete
+in its own savepoint, so a foreign-key refusal on Postgres does not abort the dry run);
+steps 3 and 4 only count. It prints the same line as a real run after `dry run: `.
 
 ## 7. WordPress media import
 
