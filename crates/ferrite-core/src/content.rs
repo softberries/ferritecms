@@ -666,8 +666,9 @@ async fn after_save(
     Ok(())
 }
 
-/// The search entry of a saved `item` (title and body text).
-pub(crate) async fn index_search(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+/// The search entry of a saved `item` (title and body text). Every content write indexes
+/// through this; `ferrite import-site` and `db copy` rebuild the index with it (M4-1 P2).
+pub async fn index_search(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
     repos
         .search()
         .index(item.id, &item.title, &blocks::extract_text(&item.body))

@@ -214,7 +214,9 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 
 ### 5.8 Operations
 
-- `ferrite backup --to <path|s3://...>` — SQLite `VACUUM INTO` snapshot + media sync; safe live. Postgres: provider backups/PITR + `ferrite export`.
+- `ferrite backup --to <path|s3://...>` — SQLite `VACUUM INTO` snapshot + media sync, run
+  with `serve` stopped (the CLI needs the data-folder lock); a live site is backed up by the
+  scheduled `[backup]` job inside `serve`. Postgres: provider backups/PITR + `ferrite export`.
 - `ferrite self-update` — replace binary, keep previous as `ferrite.prev`; migrations run
   on start; `ferrite rollback`.
 - TLS: built-in ACME (Let's Encrypt) via rustls, or run behind a reverse proxy.

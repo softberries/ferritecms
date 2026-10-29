@@ -78,7 +78,7 @@ pub(crate) async fn up_locked(
 }
 
 /// `migrate_down` under the migrate lock, waiting up to `wait` for it.
-async fn down_locked(
+pub(crate) async fn down_locked(
     store: &dyn Store,
     to: i64,
     allow_lossy: bool,
@@ -113,7 +113,7 @@ fn confirm(to: i64) -> anyhow::Result<bool> {
     Ok(line.trim() == "yes")
 }
 
-fn render_status(status: &MigrationStatus, binary: &semver::Version) -> String {
+pub(crate) fn render_status(status: &MigrationStatus, binary: &semver::Version) -> String {
     let mut out = String::new();
     out.push_str(&format!("database version: {}\n", status.db_version));
     out.push_str(&format!(

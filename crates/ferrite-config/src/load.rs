@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use ferrite_media::ConditionalPut;
 use ipnet::IpNet;
 use toml::{Table, Value};
 
@@ -59,6 +60,7 @@ pub fn load(
     let plugins = parse_plugins(&mut cx, &mut table);
     let (auth, key_given) = parse_auth(&mut cx, &mut table);
     let mail = parse_mail(&mut cx, &mut table);
+    let backup = parse_backup(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
@@ -85,6 +87,7 @@ pub fn load(
             plugins,
             auth,
             mail,
+            backup,
         }),
         _ => Err(ConfigError {
             problems: cx.problems,
@@ -372,7 +375,9 @@ fn parse_media(cx: &mut Cx, root: &mut Table) -> (MediaSection, UploadConfig) {
 }
 
 /// `media.max_upload` (1 B..=1 GiB), `media.image_workers` (1..=16) and
-/// `media.upload_idle_timeout` (a positive duration), for either backend.
+/// `media.upload_idle_timeout` (a positive duration), `media.strip_metadata` (a
+/// boolean, default false) and `media.gc_grace_days` (1..=365, default 7), for either
+/// backend.
 fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let defaults = UploadConfig::default();
     let max_upload = match cx.size(t, "media", "max_upload", false) {
@@ -395,10 +400,24 @@ fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let idle_timeout_secs = cx
         .duration_secs(t, "media", "upload_idle_timeout", false)
         .unwrap_or(defaults.idle_timeout_secs);
+    let strip_metadata = cx
+        .boolean(t, "media", "strip_metadata")
+        .unwrap_or(defaults.strip_metadata);
+    const MAX_GRACE: u64 = MAX_GC_GRACE_DAYS as u64;
+    let gc_grace_days = match cx.uint(t, "media", "gc_grace_days") {
+        None => defaults.gc_grace_days,
+        Some(n @ 1..=MAX_GRACE) => n as u32,
+        Some(_) => {
+            cx.push("media.gc_grace_days", "must be between 1 and 365");
+            defaults.gc_grace_days
+        }
+    };
     UploadConfig {
         max_upload,
         image_workers,
         idle_timeout_secs,
+        strip_metadata,
+        gc_grace_days,
     }
 }
 
@@ -477,6 +496,24 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
     let virtual_hosted_style = cx
         .boolean(&mut t, b, "virtual_hosted_style")
         .unwrap_or(false);
+    let copy_if_not_exists = cx.string(&mut t, b, "copy_if_not_exists");
+    if let Some(mode) = &copy_if_not_exists
+        && let Err(message) = ferrite_media::validate_copy_if_not_exists(mode)
+    {
+        cx.push("media.s3.copy_if_not_exists", message);
+    }
+    let conditional_put = match cx.string(&mut t, b, "conditional_put").as_deref() {
+        None => None,
+        Some("etag") => Some(ConditionalPut::Etag),
+        Some("disabled") => Some(ConditionalPut::Disabled),
+        Some(_) => {
+            cx.push(
+                "media.s3.conditional_put",
+                "must be \"etag\" or \"disabled\"",
+            );
+            None
+        }
+    };
     let prefix = cx.string(&mut t, b, "prefix").unwrap_or_default();
     let public_base_url =
         cx.string(&mut t, b, "public_base_url")
@@ -499,6 +536,8 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
         secret_access_key,
         allow_http,
         virtual_hosted_style,
+        copy_if_not_exists,
+        conditional_put,
         prefix,
         public_base_url,
     }
@@ -710,6 +749,107 @@ fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
     (AuthConfig { secret_key }, given)
 }
 
+/// The `[backup]` section (M4-1 P15). `to` stays as written (the job resolves it against
+/// the data folder): a folder outside the data folder, or `s3://bucket[/prefix]`; an
+/// archive path or `-` is refused, since the schedule writes a repository.
+fn parse_backup(cx: &mut Cx, root: &mut Table) -> BackupConfig {
+    let mut t = section(cx, root, "backup");
+    let b = "backup";
+    let defaults = BackupConfig::default();
+    let schedule = match cx.string(&mut t, b, "schedule").as_deref() {
+        None | Some("off") => BackupSchedule::Off,
+        Some("daily") => BackupSchedule::Daily,
+        Some("weekly") => BackupSchedule::Weekly,
+        Some(_) => {
+            cx.push(
+                "backup.schedule",
+                "must be \"off\", \"daily\" or \"weekly\"",
+            );
+            BackupSchedule::Off
+        }
+    };
+    let to = cx.string(&mut t, b, "to");
+    const MAX_KEEP: u64 = MAX_BACKUP_KEEP as u64;
+    let keep = match cx.uint(&mut t, b, "keep") {
+        None => defaults.keep,
+        Some(n @ 1..=MAX_KEEP) => n as u32,
+        Some(_) => {
+            cx.push(
+                "backup.keep",
+                format!("must be between 1 and {MAX_BACKUP_KEEP}"),
+            );
+            defaults.keep
+        }
+    };
+    let with_media = cx
+        .boolean(&mut t, b, "with_media")
+        .unwrap_or(defaults.with_media);
+    cx.unknown(t, b);
+    match &to {
+        None if schedule != BackupSchedule::Off => {
+            cx.push("backup.to", "required unless backup.schedule is \"off\"");
+        }
+        None => {}
+        Some(to) => {
+            if let Err(e) = check_backup_to(&cx.data_dir, to) {
+                cx.push("backup.to", e);
+            }
+        }
+    }
+    BackupConfig {
+        schedule,
+        to,
+        keep,
+        with_media,
+    }
+}
+
+/// A `backup.to` the schedule can write to (see [`parse_backup`]). Paths are compared
+/// lexically here; the job also resolves symlinks before its first write.
+fn check_backup_to(data_dir: &Path, to: &str) -> Result<(), String> {
+    if to.starts_with("s3://") {
+        return InitMedia::parse_s3_url(to).map(|_| ());
+    }
+    if to.is_empty() || to == "-" {
+        return Err("expected a folder or s3://bucket[/prefix]".to_owned());
+    }
+    if to.contains("://") {
+        return Err("only folders and s3://bucket[/prefix] are supported".to_owned());
+    }
+    if to.ends_with(".tar.zst") {
+        return Err(
+            "the schedule writes a repository: use a folder or s3://bucket[/prefix], not an \
+             archive file"
+                .to_owned(),
+        );
+    }
+    let normal = |p: &Path| {
+        let mut out = std::path::PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    };
+    // Absolute first (no filesystem access): a relative `--data` such as `.` must not
+    // normalise to an empty path, and a leading `..` must climb out of the real folder.
+    let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let data = absolute(data_dir);
+    if normal(&absolute(&resolve(&data, to))).starts_with(normal(&data)) {
+        return Err(
+            "must be outside the data folder (a relative path is relative to it, e.g. \
+             \"../backups\")"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// The `[mail]` section (P17); `None` without `smtp_url`. Messages never echo the URL.
 fn parse_mail(cx: &mut Cx, root: &mut Table) -> Option<MailConfig> {
     let mut t = section(cx, root, "mail");
@@ -897,7 +1037,7 @@ impl InitMedia {
 }
 
 /// The upload keys of `[media]` in the `ferrite init` template (commented defaults).
-const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n";
+const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n# Strip EXIF and XMP (GPS included) from uploaded JPEG, PNG and WebP originals.\n# strip_metadata = false\n# Days the artifacts GC keeps unreferenced files before deleting them (1..=365).\n# gc_grace_days = 7\n";
 
 /// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
 /// defaults to `us-east-1`; the operator must still set credentials/endpoint.
@@ -938,7 +1078,16 @@ pub fn render_default_toml(
             out.push_str("# endpoint = \"https://s3.eu-central-1.amazonaws.com\"\n");
             out.push_str("# access_key_id_file = \"/run/secrets/s3_key\"\n");
             out.push_str("# secret_access_key_file = \"/run/secrets/s3_secret\"\n");
-            out.push_str("# public_base_url = \"https://cdn.example.com\"\n\n");
+            out.push_str("# public_base_url = \"https://cdn.example.com\"\n");
+            out.push_str(
+                "# How a server-side copy fails when the object exists (uploads of 8 MiB and more);\n",
+            );
+            out.push_str(
+                "# unset = check then copy. Values per provider, with what is verified: 09 §4a.\n",
+            );
+            out.push_str("# copy_if_not_exists = \"...\"\n");
+            out.push_str("# For a store that rejects If-None-Match on create:\n");
+            out.push_str("# conditional_put = \"disabled\"\n\n");
         }
         InitMedia::Local => {
             out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n");
@@ -985,6 +1134,37 @@ pub fn render_default_toml(
     out.push_str(
         "# smtp_url_file = \"/run/secrets/smtp_url\"  # or smtp_url = \"smtps://user:pass@host\"\n",
     );
-    out.push_str("# from = \"Site <noreply@example.com>\"\n");
+    out.push_str("# from = \"Site <noreply@example.com>\"\n\n");
+    out.push_str(BACKUP_TEMPLATE);
     out
+}
+
+/// The `[backup]` section of the `ferrite init` template (commented out: off).
+const BACKUP_TEMPLATE: &str = "# [backup]\n# Scheduled backups while `serve` runs: \"off\", \"daily\" or \"weekly\". SQLite: a\n# snapshot into a backup repository (`ferrite restore` reads it); Postgres: an export\n# archive in <to>/exports/ (`ferrite import-site` reads it).\n# schedule = \"daily\"\n# A folder outside the data folder (relative paths are relative to it) or\n# s3://bucket[/prefix] (credentials from the AWS_* environment).\n# to = \"../backups\"\n# Snapshots or archives kept (1..=1000).\n# keep = 7\n# with_media = true\n";
+
+#[cfg(test)]
+mod backup_to_tests {
+    use std::path::Path;
+
+    use super::check_backup_to;
+
+    #[test]
+    fn relative_data_folders_are_made_absolute() {
+        // `--data .`: an absolute or sibling `to` is outside, `.`-relative ones inside.
+        let dot = Path::new(".");
+        assert_eq!(check_backup_to(dot, "/srv/backups"), Ok(()));
+        assert_eq!(check_backup_to(Path::new("./"), "/srv/b"), Ok(()));
+        assert_eq!(check_backup_to(dot, "../backups"), Ok(()));
+        assert!(check_backup_to(dot, "repo").is_err());
+        assert!(check_backup_to(dot, "./x/../y").is_err());
+        // `--data site`: `..` climbs out of the real folder.
+        let site = Path::new("site");
+        assert_eq!(check_backup_to(site, "../backups"), Ok(()));
+        assert_eq!(check_backup_to(site, "../../site/x"), Ok(()));
+        assert!(check_backup_to(site, "../site/x").is_err());
+        assert!(check_backup_to(site, "x").is_err());
+        // An absolute `to` inside a relative data folder.
+        let inside = std::path::absolute("site").unwrap().join("repo");
+        assert!(check_backup_to(site, inside.to_str().unwrap()).is_err());
+    }
 }

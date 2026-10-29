@@ -5,9 +5,10 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use ferrite_domain::ArtifactHash;
+use ferrite_domain::Timestamp;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
-use object_store::aws::AmazonS3Builder;
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
@@ -17,7 +18,7 @@ use object_store::{
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
-use crate::config::{Backend, MediaConfig, PublicUrlMode, S3Config};
+use crate::config::{Backend, ConditionalPut, MediaConfig, PublicUrlMode, S3Config};
 use crate::error::MediaError;
 use crate::keys;
 use crate::sniff::sniff_mime;
@@ -80,6 +81,40 @@ pub struct ReadStream {
     /// The byte range this stream serves (the whole object when none was requested).
     pub range: Range<u64>,
     pub stream: BoxStream<'static, Result<Bytes, MediaError>>,
+}
+
+/// One listed object: under `artifacts/` ([`MediaStore::list_artifacts`]) or `tmp/`
+/// ([`MediaStore::list_tmp`], always with `hash: None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredObject {
+    /// The artifact hash named by the key; `None` when the key is not
+    /// `<prefix>artifacts/<first two hex chars>/<64 hex chars>`.
+    pub hash: Option<ArtifactHash>,
+    /// The full object key, including the store's prefix.
+    pub key: String,
+    pub size: u64,
+    /// When the backend last modified the object (a blob's age, for a grace period).
+    pub last_modified: Timestamp,
+}
+
+/// The name of the owner marker under the store's prefix (M4-1 R16).
+pub const OWNER_MARKER: &str = "ferrite-owner.json";
+/// The largest owner marker read (it holds two ids and a time).
+const MAX_OWNER_BYTES: u64 = 4096;
+
+/// Which site installation owns a media store (M4-1 R16), kept at
+/// `<prefix>ferrite-owner.json`. The artifacts GC deletes from a store only on a pass that
+/// reads this naming its own install (`schema_meta.install_id`), so a site that does not
+/// own the store never deletes from it. The owner still deletes whatever its own database
+/// does not reference, a copy's uploads included: a second site needs its own store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OwnerMarker {
+    /// The owning database's `schema_meta.install_id`.
+    pub install_id: String,
+    /// Its `schema_meta.site_id` (informative: copies of one site share it).
+    pub site_id: String,
+    /// When the marker was written, RFC 3339.
+    pub claimed_at: String,
 }
 
 pub struct MediaStore {
@@ -247,11 +282,15 @@ impl MediaStore {
     }
 
     /// Moves the staged object to its final key. Returns `true` if this call created it.
+    ///
+    /// An `AlreadyExists` answer is checked with a `head` of the final key (R18): a wrong
+    /// `copy_if_not_exists` header can make a store answer 412 for a reason other than an
+    /// existing destination, and taking that as "already stored" would lose the upload.
     async fn place_staged(&self, tmp: &Path, hash: &ArtifactHash) -> Result<bool, MediaError> {
         let key = keys::artifact_key(&self.prefix, hash);
         match self.inner.copy_if_not_exists(tmp, &key).await {
             Ok(()) => Ok(true),
-            Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+            Err(object_store::Error::AlreadyExists { .. }) => self.placed_by_another(hash).await,
             Err(
                 object_store::Error::NotImplemented { .. }
                 | object_store::Error::NotSupported { .. },
@@ -262,11 +301,25 @@ impl MediaStore {
                 }
                 match self.inner.copy(tmp, &key).await {
                     Ok(()) => Ok(true),
-                    Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+                    Err(object_store::Error::AlreadyExists { .. }) => {
+                        self.placed_by_another(hash).await
+                    }
                     Err(e) => Err(e.into()),
                 }
             }
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// After the store answered that the final key exists: `Ok(false)` when it does, an
+    /// error when it does not (the answer was a precondition failure of something else).
+    async fn placed_by_another(&self, hash: &ArtifactHash) -> Result<bool, MediaError> {
+        match self.head(hash).await? {
+            Some(_) => Ok(false),
+            None => Err(MediaError::Backend(format!(
+                "the store refused to place {hash} as already stored, but there is no object \
+                 at its key; check media.s3.copy_if_not_exists (09 §4a)"
+            ))),
         }
     }
 
@@ -407,6 +460,163 @@ impl MediaStore {
         }
     }
 
+    /// Lists every object under `<prefix>artifacts/`, recorded in a database or not.
+    ///
+    /// Staging objects under `tmp/` are not listed. Keys that do not name an artifact (a stray
+    /// file in the folder) come back with `hash: None` so callers can report or ignore them.
+    /// The stream is lazy and pages through the backend; the order is the backend's.
+    pub fn list_artifacts(&self) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        self.list_dir("artifacts", hash_of_key)
+    }
+
+    /// Lists every staging object under `<prefix>tmp/` (streaming uploads and `check`
+    /// probes left behind), each with `hash: None`. Lazy, in the backend's order. The
+    /// artifacts GC deletes the old ones with [`MediaStore::delete_key`].
+    pub fn list_tmp(&self) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        self.list_dir("tmp", |_| None)
+    }
+
+    fn list_dir(
+        &self,
+        dir: &str,
+        hash: fn(&str) -> Option<ArtifactHash>,
+    ) -> BoxStream<'static, Result<StoredObject, MediaError>> {
+        let dir = Path::from(format!("{}{dir}", self.prefix));
+        self.inner
+            .list(Some(&dir))
+            .map_err(MediaError::from)
+            .map_ok(move |meta| {
+                let key = meta.location.to_string();
+                StoredObject {
+                    hash: hash(&key),
+                    key,
+                    size: meta.size,
+                    last_modified: Timestamp::from(meta.last_modified),
+                }
+            })
+            .boxed()
+    }
+
+    /// Deletes one staging object by its full key (as [`MediaStore::list_tmp`] gives it).
+    /// Idempotent: a missing object succeeds. Only keys `<prefix>tmp/<…>` (a valid object
+    /// path, no `.`/`..` segments) are accepted; any other key is [`MediaError::Config`],
+    /// so artifacts are only ever deleted by hash ([`MediaStore::delete`]).
+    pub async fn delete_key(&self, key: &str) -> Result<(), MediaError> {
+        let tmp = format!("{}tmp/", self.prefix);
+        let path = match key.strip_prefix(tmp.as_str()) {
+            Some(rest) if !rest.is_empty() => Path::parse(key).ok(),
+            _ => None,
+        };
+        let Some(path) = path.filter(|p| p.as_ref() == key) else {
+            return Err(MediaError::Config(format!(
+                "{key:?} is not a staging key under {tmp:?}"
+            )));
+        };
+        match self.inner.delete(&path).await {
+            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Copies one artifact to `dest` under the same key (the same hash): streams the object
+    /// out of this store into [`MediaStore::put_stream`] of `dest`, which hashes it on the way,
+    /// then checks the size at `dest`. Returns the size in bytes.
+    ///
+    /// Fails with [`MediaError::NotFound`] when the artifact is missing here, and with
+    /// [`MediaError::Backend`] when the bytes do not hash to `hash` (a corrupt source) or the
+    /// copy has a different size. In the corrupt case `dest` holds the bytes under their own
+    /// (valid) hash, never under `hash`. An object already at `dest` is not rewritten.
+    pub async fn copy_to(&self, dest: &MediaStore, hash: &ArtifactHash) -> Result<u64, MediaError> {
+        let read = self.open_read(hash, None).await?;
+        let size = read.size;
+        let stream = read
+            .stream
+            .map_err(|e| std::io::Error::other(e.to_string()));
+        let placed = dest.put_stream(Box::pin(stream), u64::MAX).await?;
+        if placed.hash != *hash {
+            return Err(MediaError::Backend(format!(
+                "source object {hash} holds content with hash {}",
+                placed.hash
+            )));
+        }
+        match dest.head(hash).await? {
+            Some(copied) if copied == size => Ok(size),
+            Some(copied) => Err(MediaError::Backend(format!(
+                "copy of {hash} has {copied} bytes, the source {size}"
+            ))),
+            None => Err(MediaError::Backend(format!(
+                "copy of {hash} is missing at the destination"
+            ))),
+        }
+    }
+
+    /// Reads the owner marker ([`OwnerMarker`]); `Ok(None)` when there is none. A marker
+    /// that is not a marker (bad JSON, over 4 KiB) is [`MediaError::Backend`].
+    pub async fn read_owner(&self) -> Result<Option<OwnerMarker>, MediaError> {
+        let key = keys::owner_key(&self.prefix);
+        let res = match self.inner.get(&key).await {
+            Ok(res) => res,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if res.meta.size > MAX_OWNER_BYTES {
+            return Err(MediaError::Backend(format!(
+                "{key} is {} bytes, not an owner marker",
+                res.meta.size
+            )));
+        }
+        let bytes = res.bytes().await?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| MediaError::Backend(format!("{key} is not an owner marker: {e}")))
+    }
+
+    /// Writes the owner marker. With `replace` it overwrites any marker and returns `true`;
+    /// without, it writes only when there is none (a conditional create; a backend without
+    /// conditional put falls back to a check followed by a plain put) and returns `false`
+    /// when a marker is already there.
+    pub async fn write_owner(
+        &self,
+        marker: &OwnerMarker,
+        replace: bool,
+    ) -> Result<bool, MediaError> {
+        let key = keys::owner_key(&self.prefix);
+        let body = Bytes::from(
+            serde_json::to_vec(marker).map_err(|e| MediaError::Backend(e.to_string()))?,
+        );
+        if replace {
+            self.inner.put(&key, body.into()).await?;
+            return Ok(true);
+        }
+        let opts = PutOptions::from(PutMode::Create);
+        match self.inner.put_opts(&key, body.clone().into(), opts).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+            Err(object_store::Error::NotImplemented { .. }) => {
+                match self.inner.head(&key).await {
+                    Ok(_) => return Ok(false),
+                    Err(object_store::Error::NotFound { .. }) => {}
+                    Err(e) => return Err(e.into()),
+                }
+                self.inner.put(&key, body.into()).await?;
+                Ok(true)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The object store under this media store, for tools that keep other objects next to
+    /// the artifacts (a backup repository's snapshots). Keys built from it must start with
+    /// [`MediaStore::prefix`].
+    pub fn object_store(&self) -> Arc<dyn ObjectStore> {
+        self.inner.clone()
+    }
+
+    /// The key prefix (empty, or ending with `/`).
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     pub fn public_url(&self, hash: &ArtifactHash, filename: &str) -> String {
         match &self.public {
             PublicUrlMode::ServeViaApp { path_prefix } => {
@@ -498,6 +708,35 @@ fn check_range(range: &Range<u64>, size: u64) -> Result<(), MediaError> {
     Ok(())
 }
 
+/// The hash a key names, when it is `…artifacts/<xx>/<64 hex>` with `xx` the hash's first
+/// two characters.
+fn hash_of_key(key: &str) -> Option<ArtifactHash> {
+    let mut parts = key.rsplit('/');
+    let name = parts.next()?;
+    let dir = parts.next()?;
+    if parts.next()? != "artifacts" {
+        return None;
+    }
+    let hash = ArtifactHash::parse(name).ok()?;
+    (name.get(..2) == Some(dir)).then_some(hash)
+}
+
+/// Checks a `copy_if_not_exists` value with object_store's own parser:
+/// `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or `multipart`.
+/// The `Err` text is fit for a configuration message.
+pub fn validate_copy_if_not_exists(value: &str) -> Result<(), String> {
+    // The parser is private to object_store and runs when the builder is built.
+    AmazonS3Builder::new()
+        .with_bucket_name("check")
+        .with_region("us-east-1")
+        .with_config(AmazonS3ConfigKey::CopyIfNotExists, value)
+        .build()
+        .map(drop)
+        .map_err(|_| {
+            "must be \"header:<name>:<value>\", \"header-with-status:<name>:<value>:<status>\" or \"multipart\"".to_owned()
+        })
+}
+
 fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
     let hex = ferrite_domain::to_hex(&hasher.finalize());
     ArtifactHash::parse(&hex)
@@ -538,7 +777,142 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
+    // Only what is set overrides the environment path's `AWS_COPY_IF_NOT_EXISTS` /
+    // `AWS_CONDITIONAL_PUT`; unset, the builder's default (`etag`) stands.
+    if let Some(mode) = &cfg.copy_if_not_exists {
+        builder = builder.with_config(AmazonS3ConfigKey::CopyIfNotExists, mode);
+    }
+    if let Some(put) = cfg.conditional_put {
+        let value = match put {
+            ConditionalPut::Etag => "etag",
+            ConditionalPut::Disabled => "disabled",
+        };
+        builder = builder.with_config(AmazonS3ConfigKey::ConditionalPut, value);
+    }
     builder
         .build()
         .map_err(|e| MediaError::Config(format!("s3 backend: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+    use object_store::{
+        CopyMode, CopyOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        PutMultipartOptions, PutPayload, PutResult,
+    };
+
+    /// An in-memory store whose conditional copy always answers `AlreadyExists`, as a
+    /// store does that turns a wrong `copy_if_not_exists` header into a 412.
+    #[derive(Debug)]
+    struct RefusingCopy(InMemory);
+
+    impl std::fmt::Display for RefusingCopy {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RefusingCopy")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for RefusingCopy {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.0.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.0.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.0.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.0.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.0.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.0.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            if matches!(options.mode, CopyMode::Create) {
+                return Err(object_store::Error::AlreadyExists {
+                    path: to.to_string(),
+                    source: "412 Precondition Failed".into(),
+                });
+            }
+            self.0.copy_opts(from, to, options).await
+        }
+    }
+
+    fn refusing() -> MediaStore {
+        MediaStore {
+            inner: Arc::new(RefusingCopy(InMemory::new())),
+            prefix: String::new(),
+            public: PublicUrlMode::ServeViaApp {
+                path_prefix: "/_media".into(),
+            },
+        }
+    }
+
+    /// R18: a placement the store refuses although the final key is absent fails loudly
+    /// (and leaves no staging object); one whose final key exists is "already stored".
+    #[tokio::test]
+    async fn refused_placement_without_an_object_fails() {
+        let store = refusing();
+        let data = Bytes::from(vec![5u8; SMALL_LIMIT + 1]);
+        let err = store.put_artifact(data.clone()).await.unwrap_err();
+        assert!(
+            matches!(&err, MediaError::Backend(m) if m.contains("copy_if_not_exists")),
+            "{err:?}"
+        );
+        let tmp: Vec<StoredObject> = store.list_tmp().try_collect().await.unwrap();
+        assert!(tmp.is_empty(), "{tmp:?}");
+
+        // The same bytes already at the final key (stored by another writer): not created.
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let hash = finish_hash(hasher).unwrap();
+        store
+            .inner
+            .put(&keys::artifact_key("", &hash), data.clone().into())
+            .await
+            .unwrap();
+        let placed = store.put_artifact(data).await.unwrap();
+        assert_eq!(placed.hash, hash);
+        assert!(!placed.created);
+    }
 }

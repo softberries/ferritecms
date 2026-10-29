@@ -462,7 +462,12 @@ async fn job_kinds_are_in_meta(db: Arc<TestDb>) {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(kinds, sorted, "{m}");
-    for kind in ["jobs.prune", "media.variants", "content.publish_scheduled"] {
+    for kind in [
+        "jobs.prune",
+        "media.variants",
+        "content.publish_scheduled",
+        "artifacts.gc",
+    ] {
         assert!(kinds.contains(&kind), "{kind}: {m}");
     }
     node.shutdown().await.unwrap();
@@ -549,6 +554,7 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
         bytes: stored.bytes as i64,
         mime: PLUGIN_MIME.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let update = ferrite_domain::InstalledPlugin {
         artifact_hash: stored.hash.clone(),
@@ -1125,6 +1131,7 @@ async fn purge_job_runs_through_the_runner(db: Arc<TestDb>) {
         bytes: 1,
         mime: PLUGIN_MIME.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let now = Timestamp::now();
     extensions

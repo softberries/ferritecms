@@ -437,21 +437,25 @@ M3-2 (the import job, API and admin; plan
 
 Design: [09](design/09-operations.md).
 
-- [ ] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc`.
-- [ ] Cluster follow-up (M1.5 ruling R3): waiting for a Postgres named lock holds one connection with `lock_timeout` instead of opening a connection per 250 ms poll (P13), which removes the connect churn while waiting.
+M4-1 (data safety) is done: [`m4-1-exit.md`](superpowers/m4-1-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md).
+
+- [x] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc` (M4-1; 09 §4 and §8, 02 §10, 03 §6 and §8), plus the scheduled `[backup]` (`site.backup` job; 09 §4).
+- [x] Cluster follow-up (M1.5 ruling R3): waiting for a Postgres named lock holds one connection with `lock_timeout` instead of opening a connection per 250 ms poll (P13), which removes the connect churn while waiting (M4-1 P19, `Store::lock_wait`; 04 §7).
 - [ ] Media follow-ups (from M1b):
-  - [ ] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup).
-  - [ ] S3 `copy_if_not_exists` config option (production S3 currently uses the racy head + copy fallback; `ArtifactRef.created` is advisory meanwhile).
+  - [x] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup). 09 §4a (M4-1 P22); its JSON example's field names are marked not verified.
+  - [x] S3 `copy_if_not_exists` config option (M4-1 P16: `[media.s3] copy_if_not_exists`; unset, S3 still takes the head + copy fallback and `ArtifactRef.created` stays advisory; values per provider in 09 §4a).
   - [ ] Decide `aws-lc-sys` vs `ring` for the static build. object_store's `aws` feature enables `aws-lc-rs` directly (which builds the C library `aws-lc-sys`); object_store also has a `ring` feature. `cargo tree` shows both `ring` and `aws-lc-rs` linked today (rustls pulls both).
-  - [ ] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (today neither is set on the builder, so production S3 uses the head + copy fallback). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`. Also: `build_s3` replaces any client options read from the environment with its own timeouts.
+  - [x] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (M4-1 P16: both are set on the builder when configured, on the explicit-keys and the `from_env` path alike; `conditional_put` defaults to object_store's `etag`). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`.
+  - [ ] `build_s3` replaces any client options read from the environment with its own timeouts (split from the item above).
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
-  - [ ] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
-  - [ ] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
-  - [ ] Optional location-metadata stripping on upload: the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11); only variants are re-encoded without EXIF/XMP (03 §4).
+  - [x] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
+  - [x] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
+  - [x] Optional location-metadata stripping on upload: `[media] strip_metadata = true` removes EXIF and XMP losslessly from JPEG, PNG and WebP originals on upload and import (M4-1 P17; an image whose metadata cannot be removed is refused, R1; 03 §4). Off by default, so the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11).
 - [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
 - [ ] ACME TLS (solo).
 - [ ] `/metrics`, `node_metrics`, dashboard charts wired (the metrics registry and time series; M2a-2b P20 built only a node-local snapshot, 09 §6).
-- [ ] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today) and `ferrite seed demo` atomicity (each step is its own transaction; `--force` adds a new batch rather than completing the failed one).
+- [ ] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today).
+- [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
 - [ ] Release builds for all targets, published Docker image (a `Dockerfile` exists since M1.5, built in CI), systemd unit, cluster runbook.
 - [ ] Backward-compat CI job (from first tag).
 - [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
@@ -474,7 +478,7 @@ Design: [09](design/09-operations.md).
     - [ ] The Vitest test `renders_the_shell_with_translated_title` came near its 5 s timeout under load; watch it on CI.
   - [ ] Contact sheet, from M2b-3: `icon-sm`/`icon-xs` buttons under 44 px on touch (11 §8; AA's 24 px is met); a faint edge on dark dropdown menus; the palette's stale rows, dimmed to 60 % during a slow search, fall below 4.5:1.
 - [ ] Deferred from M3 ([`m3-exit.md`](superpowers/m3-exit.md) "Open follow-ups"):
-  - [ ] The orphan sweep (with `artifacts.gc`): `import` inputs left when a lease expires on the last attempt or the runner's timeout or a panic ends it (R70), blobs an upload stored but did not record when the 5 s lock wait failed or the request was dropped during it (R68), and report files an attempt replaced (P29).
+  - [x] The orphan sweep (with `artifacts.gc`, M4-1: GC steps 2 and 3, 03 §6): `import` inputs left when a lease expires on the last attempt or the runner's timeout or a panic ends it (R70), blobs an upload stored but did not record when the 5 s lock wait failed or the request was dropped during it (R68), and report files an attempt replaced (P29).
   - [ ] A `run_at`-leading index for the job claim's due branch if future jobs grow past about 500 000 (R54).
   - [ ] `permalink.redirects`: an item whose `published_at` moves later during the job gets no redirect (R62); imported posts may get redirects from never-live paths (R63); `LOCK_TYPES` is held for a page of 500; the E2E sweep assumes at most 500 posts.
   - [ ] Import job: a job whose lease expired still counts as live until it is reclaimed (R69); a truncated zip is retried, not refused; a corrupt work file is removed on the attempt that fails.
@@ -483,10 +487,25 @@ Design: [09](design/09-operations.md).
   - [ ] Expand lint (Task 1 minors): the down's match ignores the table name; duplicate literals are not flagged.
   - [ ] Admin (Tasks 8–9 minors): a BOM trim edge and `maxLength` counting UTF-16 units in the SEO fields; the SEO fields have no live region; the import screen's first live-region text lands in the same commit as its mount; the in-progress wait has no Retry button.
   - [ ] `zip =9.1.3` is young (published 2026-10-27, R59): recheck on the next dependency update.
-  - [ ] `examples/cluster/` names `minio/minio` and `minio/mc`, which can no longer be pulled (2026-10-29); the M3 exit ran with `bitnamilegacy/minio` and `bitnamilegacy/minio-client` through an override (`m3-exit.md` §2). Pick maintained images and pin them by digest.
+  - [x] `examples/cluster/` names `minio/minio` and `minio/mc`, which can no longer be pulled (2026-10-29); the M3 exit ran with `bitnamilegacy/minio` and `bitnamilegacy/minio-client` through an override (`m3-exit.md` §2). Pick maintained images and pin them by digest. M4-1 P21: RustFS 1.0.4 and `amazon/aws-cli` 2.34.0, with `postgres:18` and `caddy:2`, all pinned by digest (09 §7).
   - [ ] Load flakes seen in the M3 exit's first Postgres workspace run: `job_kinds_are_in_meta::postgres` (node meta read before it held `job_kinds`) and `login_rate_limit_spans_nodes` (both backends); each passes alone.
   - [ ] From the final review's re-check: a database error deleting an import input's row is logged at `info` like the expected foreign-key refusal; the run-folder sweep can race a starting run's `prepare_ir` rename in a narrow window.
   - [ ] Log which node ran an `import.wordpress` job (the job row clears `locked_by` when done, and no log line names the job).
+- [ ] Deferred from M4-1 ([`m4-1-exit.md`](superpowers/m4-1-exit.md) "Not verified" and "Open follow-ups"; rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)):
+  - [ ] Media-store owner marker on upgrade (R16, R19): a site upgraded to M4-1 deletes nothing on its first GC pass (it writes the marker; a new shared store waits one pass); two sites that already shared a store when they upgraded get an arbitrary owner, and the other skips its deletes for good with a daily error log until the stores are split. `media gc` with skipped deletes exits 0; a cron wrapper that checks only the exit code never notices (a distinct exit code is an option).
+  - [ ] The daily `artifacts.gc` and `site.backup` periodics are both due at 00:00 UTC (epoch-aligned periods): a backup waits up to 300 s for a running GC pass, holding a worker, and a GC pass is `Busy`-requeued every 1–5 s for as long as a backup holds `artifacts.gc` (on Postgres a new lock connection per attempt). Offset one periodic's phase or give these kinds a longer `Busy` delay (R17 accepted residual).
+  - [ ] `ferrite export --with-media` on Postgres while `serve` runs does not hold `artifacts.gc` (only the scheduled export does, R17): a blob the GC deletes during the export is reported as missing (exit 2, R10), not lost silently.
+  - [ ] Untested against a real provider: S3 backup repositories (tested against `s3s-fs` only, `backup_repo_on_s3`), the scheduled Postgres export's S3 upload and its abort (not tested at all: only a local `to`), the owner marker's conditional create (`PutMode::Create`) on providers, AWS's answer to `copy_if_not_exists` values, and the 09 §4a rows marked not verified. On an S3 repository, a run that reuses an old blob no kept snapshot lists does not refresh its age (no mtime on S3), so a concurrent `--keep` prune elsewhere can delete it (R14).
+  - [ ] `site.backup` on two Postgres nodes at once (one run per period by the unique key and the `site.backup` lock) is untested; so is loading a scheduled Postgres export with `import-site` (the same `export_to` the CLI tests round-trip).
+  - [ ] `media regenerate`: the replaced-row race (a media row whose original changes during the run, `record_variants` then refused) has no test; it needs a seam.
+  - [ ] GC scaling: the protected hash list is sent again with every per-hash delete, and `protected()` reads every import report manifest (HEAD + GET) on every pass; both grow with history.
+  - [ ] GC: no test of the error policy (a failed blob or `tmp/` delete is logged, counted as `failed` and retried next pass); a Postgres dry run holds row locks from `mark_orphans` for its rolled-back transaction, so re-uploads of those hashes wait for it.
+  - [ ] Import inputs are still deleted at once (the API's cleanup of unrecorded blobs, R68; the job deleting its inputs, R74), the same-bytes race class P12 closed for extensions; leaving them to the GC would close it.
+  - [ ] `db copy`: a panic during the copy skips the undo of a schema step taken for the target (async, no drop guard).
+  - [ ] `restore`: a failure of the final `load_config`/`open_store` after the folder is in place exits 1 although the restore is complete; a `--keep` prune deleting the snapshot a restore is reading gives "the repository is damaged"; `--force` with an absolute media root inside the old folder leaves the restored site without media (the shared-store warning names the root). The new install id is tested on the archive path only (the repository path shares the code).
+  - [ ] A snapshot taken by the `site.backup` job holds that job's own row as `running` (the snapshot copies the whole database), so a restored site claims it again once the lease expires and writes one more snapshot (into the same repository when `to` is unchanged; `restore` warns), and with the schedule off the row stays `running`. Clear or reset the copied `jobs` rows on restore (export already skips `jobs`, P2). Seen in the M4-1 exit (§3).
+  - [ ] Strip (R1): a JPEG/PNG/WebP is buffered whole (up to 64 MiB) to strip it; a streaming segment walker would lower the peak.
+  - [ ] Later surfaces (P13, P15, P18, P23): an ad-hoc live backup of a SQLite site without the schedule, cron-style backup schedules, a job-based `media regenerate`, a Backups screen and API.
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
@@ -495,7 +514,7 @@ Design: [09](design/09-operations.md).
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
 - [ ] Deferred from M2a-2a:
   - [ ] Per-node option cache, reintroduced only with a measured need (M2a-2 P14; theme settings and `site.*` are read per cache miss, plugin settings per call, each one primary-key read). It needs R13's refresh on `options.changed` on every node ([rulings/m2a.md](superpowers/rulings/m2a.md)).
-  - [ ] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1).
+  - [x] A GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1). Done in M4-1: `discard_staged` is gone, failed installs leave their bytes to the GC (03 §6).
   - [ ] A compile-size or function-count guard (or a compile deadline) for uploaded components: inspecting a component of up to 32 MiB has no time bound today; two compile slots per node bound only the count (05 §6).
   - [ ] Fairness inside the per-render plugin budget (per-plugin shares, or a reservation for renders in the call semaphore; 05 §6 "Known limit").
   - [ ] Signed plugins / publisher identity: plugin data and sealed secrets follow the plugin name only, and the manifest's `publisher` is unverified, so a component from another publisher installed under the same name reads the earlier plugin's data (05 §2; M2a-2a final review M3, ruling R22). Verify a publisher signature on install and update, and show a publisher change in the permission report.
@@ -504,7 +523,7 @@ Design: [09](design/09-operations.md).
   - [ ] On-disk artifact / precompiled-component cache keyed by hash + wasmtime version + CPU features (P19; restarts re-fetch and recompile today).
   - [ ] `node.drain` handling (the event kind exists, the loop ignores it; P26).
   - [ ] PgBouncer transaction pooling (listeners and locks need direct connections; 02 §6, P26).
-  - [ ] Run the cluster example end to end (`docker compose up` behind Caddy, MinIO bucket init, Caddy health checks) in CI or a release check (P24).
+  - [ ] Run the cluster example end to end (`docker compose up` behind Caddy, the RustFS bucket init, Caddy health checks) in CI or a release check (P24; run by hand in the M3 and M4-1 exits).
   - [ ] An OS-level crash test (SIGKILL a `ferrite serve` child mid-job) and a silent network partition of the `LISTEN` connection (TCP proxy), neither exercised in M1.5 (P25; m15-exit.md).
 - [ ] Performance follow-ups from the M1c-2 final review:
   - [ ] Sitemaps: the index walks every public row of every type (with ancestors, terms and permalinks) just to count files and take `max(lastmod)`, and `/sitemap-<kind>-<n>.xml` walks `n − 1` full files to find its cursor; both re-run on the first crawler request after any write to the kind. Use `sitemap_files` (a count) for the file count, a per-file aggregate for `lastmod`, and keyset seeking instead of walking (`crates/ferrite-http/src/app/feeds.rs`).

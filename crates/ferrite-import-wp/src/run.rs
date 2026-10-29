@@ -129,6 +129,8 @@ pub struct ImportOptions {
     pub takeover: bool,
     /// The largest attachment file accepted (`media.max_upload`, P13).
     pub max_upload: u64,
+    /// Strip EXIF and XMP from imported JPEG, PNG and WebP files (`media.strip_metadata`).
+    pub strip_metadata: bool,
     /// Called as each step that runs begins: `parse`, `pass1`…`pass4`, `fixup`, then
     /// `report` (P28). Steps an earlier run finished are skipped without a call.
     pub on_step: Option<OnStep>,
@@ -162,6 +164,7 @@ impl Default for ImportOptions {
             tag_base: "tag".into(),
             takeover: false,
             max_upload: DEFAULT_MAX_UPLOAD,
+            strip_metadata: false,
             on_step: None,
             job_id: None,
             #[cfg(feature = "test-seams")]
@@ -186,6 +189,7 @@ impl std::fmt::Debug for ImportOptions {
             .field("tag_base", &self.tag_base)
             .field("takeover", &self.takeover)
             .field("max_upload", &self.max_upload)
+            .field("strip_metadata", &self.strip_metadata)
             .field("on_step", &self.on_step.as_ref().map(|_| "Fn"))
             .field("job_id", &self.job_id);
         #[cfg(feature = "test-seams")]

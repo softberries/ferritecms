@@ -319,6 +319,7 @@ impl ImportService {
                 bytes,
                 mime: mime.to_owned(),
                 created_at: Timestamp::now(),
+                orphaned_at: None,
             });
             Ok::<_, CoreError>(hash)
         };

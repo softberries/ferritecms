@@ -240,6 +240,7 @@ async fn periodic_job_runs_once_per_period() {
             kind: TICK,
             every: Duration::from_secs(1),
             payload: json!({"v": 1}),
+            max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
         }]),
         scheduler_tick: Some(Duration::from_millis(100)),
         ..NodeOptions::default()

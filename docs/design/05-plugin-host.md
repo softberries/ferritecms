@@ -64,12 +64,12 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   The rows are recorded by `ExtensionAdmin::install_plugin` (API: `manage_plugins` +
   `extensions:write`, audit row `plugin.install`) or `ExtensionService::install_plugin`
   (CLI, operator path, no audit), under the `extensions` lock, with `plugins.changed`, in
-  one transaction. When the API's record step fails (for example `503 busy`), the handler
-  deletes the uploaded bytes again unless an artifact row names them
-  (`Installer::discard_staged`, under the `extensions` lock); anything else left behind
-  waits for the artifact GC (M4). Residual race (accepted): a concurrent install of the same bytes
-  that uploaded them but has not yet recorded its rows loses its blob, and that plugin
-  fails to load until it is reinstalled; closing it needs a GC grace period (M4).
+  one transaction. When the record step fails (for example `503 busy`), the uploaded bytes
+  stay in the media store with no row; the artifacts GC deletes them once they are older
+  than its grace period (`media.gc_grace_days`, default 7 days; 03 §6, M4-1 P12). Nothing
+  deletes them in the request, which closes the M2a-2a race where a concurrent install of
+  the same bytes, uploaded but not yet recorded, lost its blob; the cost is that refused
+  install bytes stay up to the grace period.
 - **Permission report and approval (P3, P6).** `Manifest::permission_report` lists every
   capability as a plain-language line (`key`, `text`, `detail`, `risk`: `low`, `medium` or
   `high`; the API also sends `high_risk` = `risk == "high"`): high risk are `content.read`,

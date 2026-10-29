@@ -226,6 +226,7 @@ pub async fn artifact_kind_import_round_trips(db: &TestDb) {
         bytes: 4096,
         mime: "application/xml".into(),
         created_at: later(0),
+        orphaned_at: None,
     };
     assert!(artifacts.insert_if_absent(&artifact).await.unwrap());
     assert_eq!(

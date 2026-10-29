@@ -3,12 +3,14 @@
 mod codec;
 mod connect;
 mod exec;
+mod export;
+mod import_writer;
 mod listen;
 mod lock;
 mod migrate;
 mod repos;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_store::{
@@ -74,6 +76,21 @@ impl Store for PgStore {
         self.locks.try_lock(name).await
     }
 
+    async fn lock_wait(
+        &self,
+        name: &str,
+        wait: Duration,
+    ) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        check_lock_name(name)?;
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        if wait.is_zero() {
+            return self.locks.try_lock(name).await;
+        }
+        self.locks.lock_wait(name, wait).await
+    }
+
     async fn migration_status(
         &self,
         binary: &semver::Version,
@@ -91,6 +108,25 @@ impl Store for PgStore {
 
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.verify().await
+    }
+
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        let pool = self.export_pool().await?;
+        Ok(Box::new(export::PgExportReader::open(pool).await?))
+    }
+
+    /// One transaction on a dedicated connection (`<application_name>:import`).
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        if self.pool.is_closed() {
+            return Err(map_db_err(sqlx::Error::PoolClosed));
+        }
+        let pool = self.import_pool().await?;
+        Ok(Box::new(ferrite_store::Loader::new(
+            import_writer::PgLoadTarget::open(pool).await?,
+        )))
     }
 
     async fn snapshot(&self, _dest: &std::path::Path) -> Result<(), StoreError> {

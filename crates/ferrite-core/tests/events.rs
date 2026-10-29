@@ -519,6 +519,7 @@ pub async fn publishing_a_referenced_draft_is_a_dependency(db: &TestDb) {
             bytes: 10,
             mime: "image/png".into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();

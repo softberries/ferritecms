@@ -29,6 +29,7 @@ async fn install(store: Arc<dyn Store>, name: &str, seed: u8, hooks: &[&str], en
         bytes: 1,
         mime: "application/wasm".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let hooks: serde_json::Map<String, Value> =
         hooks.iter().map(|h| ((*h).to_owned(), json!(10))).collect();

@@ -273,6 +273,7 @@ pub fn periodics() -> Vec<Periodic> {
         kind,
         every: PRUNE_EVERY,
         payload: json!({"v": 1}),
+        max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
     })
     .collect()
 }

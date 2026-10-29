@@ -4,7 +4,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{DEFAULT_MAX_ATTEMPTS, NewJob, Timestamp};
+use ferrite_domain::{NewJob, Timestamp};
 use ferrite_store::Store;
 use serde_json::Value;
 use tokio::{task::JoinHandle, time::MissedTickBehavior};
@@ -21,6 +21,8 @@ pub struct Periodic {
     pub every: Duration,
     /// The job payload (a JSON object).
     pub payload: Value,
+    /// Attempts each period's job gets (usually [`ferrite_domain::DEFAULT_MAX_ATTEMPTS`]).
+    pub max_attempts: i32,
 }
 
 /// `(unique_key, period start)` for `kind` at `db_now`: the start is
@@ -90,7 +92,7 @@ impl Scheduler {
                 unique_key: Some(key),
                 run_at: Some(start),
                 priority: 0,
-                max_attempts: DEFAULT_MAX_ATTEMPTS,
+                max_attempts: periodic.max_attempts,
             };
             match repos.jobs().enqueue(&job).await {
                 Ok(Some(id)) => tracing::debug!(kind = periodic.kind, %id, "periodic job inserted"),

@@ -1,10 +1,11 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
-    comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
-    import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files,
-    migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*, semantics::*,
-    site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
+    batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
+    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
+    menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
+    plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    user_filters::*,
 };
 
 backend_tests!(
@@ -158,6 +159,13 @@ backend_tests!(
 
 backend_tests!(
     artifact_insert_if_absent,
+    artifact_list_page_is_ordered_and_paged,
+    existing_returns_present_subset,
+    migration_0011_roundtrip,
+    delete_if_orphaned_keeps_each_reference_kind,
+    mark_orphans_marks_unreferenced_and_clears_referenced,
+    insert_if_absent_clears_orphan_mark,
+    delete_if_orphaned_respects_before_refs_and_protected,
     media_insert_get_update_variants,
     media_find_by_artifact,
     media_variants_backfill,
@@ -232,6 +240,8 @@ backend_tests!(
     lock_is_exclusive_and_released,
     lock_excludes_peer_store,
     lock_released_when_holder_dies,
+    pg_lock_wait_times_out,
+    pg_lock_wait_cancel_does_not_leak,
     lock_names_are_validated,
     nodes_register_heartbeat_list_prune,
     nodes_prune_in_batches,
@@ -267,6 +277,8 @@ backend_tests!(
 
 backend_tests_spawning!(
     lock_waits_then_busy,
+    pg_lock_wait_wakes_on_release,
+    pg_lock_wait_opens_one_connection,
     concurrent_writers,
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,
@@ -364,3 +376,17 @@ fn no_unsupported_left() {
     );
     assert!(hits.iter().any(|h| h.contains(expected[0])), "{hits:#?}");
 }
+
+backend_tests!(
+    catalogue_matches_live_schema,
+    catalogue_is_fk_ordered,
+    artifact_foreign_keys_are_gc_references,
+    export_reader_encodes_neutrally,
+    export_reader_pages_by_key,
+    export_reader_sees_one_snapshot,
+    export_reader_drop_releases,
+    import_writer_round_trip,
+    import_writer_rollback_leaves_nothing,
+    import_writer_self_refs_any_order,
+    import_writer_site_id_batches_refusals,
+);

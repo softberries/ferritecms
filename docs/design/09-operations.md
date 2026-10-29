@@ -110,22 +110,304 @@ rollback is always driven by the newer binary before swapping back.
 |---|---|---|
 | Primary | `ferrite backup --to <dir|file.tar.zst|s3://…>`: `VACUUM INTO` snapshot + `ferrite.toml` + media artifacts (incremental by hash) | Provider automated backups + PITR; S3 bucket versioning/replication |
 | Portable | `ferrite export` ([02 §10](02-storage.md#10-portable-export-d14)) | same — independent of the provider |
-| Schedule | `[backup] schedule = "daily"`, `keep = 7`, `to = "s3://…"` → periodic job | external (provider) + optional scheduled `export` to S3 |
+| Schedule | `[backup] schedule = "daily"\|"weekly"`, `to = "<dir>\|s3://…"`, `keep = 7` → the `site.backup` job inside `serve`: a repository snapshot, `keep` snapshots kept | external (provider), plus the same `[backup]`: an export archive to `<to>/exports/`, `keep` archives kept |
 | Restore | `ferrite restore <backup> --data ./site` (into empty folder or with `--force` moving the old one aside) | provider restore / `ferrite import-site` |
 
 Content-level "undo" (point-in-time for a single item) is revisions (02). Site-wide
 point-in-time is backup restore (solo) or PITR (cluster).
 
-Backups are verified: after writing, the snapshot is opened read-only and
-`PRAGMA integrity_check` runs; S3 uploads compare sha256.
+Backups are verified: the snapshot is opened read-only and `PRAGMA integrity_check` must
+return `ok` before anything is written, and a repository's `ferrite.db` is read back after
+the upload and its sha256 compared.
+
+**As built (M4-1, `crates/ferrite/src/backup/`).** `ferrite backup` is SQLite only (a
+Postgres site exits 1 with a pointer to the provider's backups and `ferrite export`) and,
+like every SQLite CLI command, needs `serve` stopped; a running site is backed up by the
+`[backup]` schedule, a job inside `serve` (the CLI cannot open the database while `serve`
+holds `ferrite.lock`). It refuses (exit 1) a site whose `database.url` is not
+`sqlite://ferrite.db` (relative to the data folder): `restore` only restores a database at
+`DIR/ferrite.db`, and an absolute URL, even to the site's own `<data>/ferrite.db`, would point
+the restored configuration back at the original folder, so such a backup could never be
+restored (B-I2). With media, a run holds the `artifacts.gc` lock from before the snapshot
+until the blobs are written (R17, [03 §6](03-media.md#6-garbage-collection)), waiting up to
+5 minutes for a running GC pass, then failing with exit 1. The sequence:
+
+1. `VACUUM INTO <data>/backups/backup-<UTC yyyymmddThhmmssZ>.db` (mode 0600; never
+   `pre-*.db`, which the pre-migration snapshot pruning deletes); files older than a day
+   with exactly the names a run writes (`backup-<yyyymmddThhmmssZ>.` + `db`, `db-wal`,
+   `db-shm`, `db-journal`, `toml`, `key` or `artifacts.txt`), left by killed runs, are removed
+   first, and nothing else in the folder is touched; an archive `--to` inside `backups/` is
+   refused;
+2. open it read-only, `PRAGMA integrity_check` must say `ok`, read its `artifacts` hashes,
+   schema version and site id;
+3. write the target (below), copying the blobs from the site's media store (`ferrite.toml`
+   and `secret.key` are copied once into the backups folder and hashed as they are copied);
+4. delete the local files (also when a step failed).
+
+`--to` decides the shape:
+
+- **a `.tar.zst` file, or `-` (stdout):** one archive in the [02 §10](02-storage.md#10-portable-export-d14)
+  format with `kind: "backup"`: `manifest.json`, then `ferrite.toml`, `secret.key` (unless
+  `--no-secret-key`), `ferrite.db` and, with media, `artifacts.txt` (the archived blobs, one
+  hash per line), each listed in the manifest's `files` with its size and sha256, then
+  `artifacts/<ab>/<hash>` (unless `--no-media`);
+- **a folder or `s3://bucket[/prefix]`: a repository.** It is marked by
+  `<repo>/ferrite-backup-repo.json` (`{"format": 1, "created_at": …}`), written by the first
+  backup into an empty or new folder or prefix (a folder holding only a filesystem's
+  `lost+found` counts as empty); a non-empty location without the marker is refused (exit 1)
+  and nothing in it is touched, and so is a folder inside the data folder or the local media
+  root, or an S3 prefix overlapping the media store's. A marker of a newer format than the
+  binary is exit 3, as for `restore`.
+  `<repo>/artifacts/<ab>/<hash>` is shared by all snapshots and a blob is copied only when
+  the repository lacks it (incremental by hash); each run adds
+  `<repo>/snapshots/<UTC yyyymmddThhmmssZ>/` with `ferrite.db`, `ferrite.toml`,
+  `secret.key`, `artifacts.txt` (the blobs the snapshot needs, one hash per line; its size,
+  sha256 and line count are in the manifest, so the list has no size limit) and, written
+  last, `manifest.json`. A snapshot without a manifest is incomplete and ignored. Two runs in
+  the same second get consecutive names. `--keep N` (1–1000; default keep all) then deletes
+  the snapshot folders older than the newest N complete ones (only the file names a snapshot
+  holds), then every repository blob no kept snapshot lists that is older than 24 hours, and
+  staging objects under `tmp/` (media-store names only) older than 24 hours: one site per
+  repository. A younger unlisted blob is kept (R14): it may belong to a snapshot another
+  process is still writing into the same repository (its manifest, which lists it, comes
+  last); a run marks the local blobs it finds already present as used now for the same
+  reason (S3 objects are not touched, so on S3 a reused blob is protected only by being
+  listed in a kept snapshot). When pruning
+  fails after the snapshot was written, the command exits 1 and the new snapshot stays. S3
+  credentials and endpoint come from the `AWS_*` environment, as for `media sync`.
+
+**Scheduled backups (as built, M4-1 P15, `crates/ferrite/src/jobs/backup.rs`).** With
+`[backup] schedule = "daily"` or `"weekly"` ([01 §4](01-architecture.md#4-configuration)),
+`serve` registers the `site.backup` job and a periodic every 86 400 s or 604 800 s; with
+`"off"` (the default) it registers neither. Like every periodic, each period's job has the
+unique key `site.backup:<period start>`, so one node runs it per period; one run at a time
+holds the store lock `site.backup` (a second is `Busy` and tried again a few seconds
+later). Its timeout is 6 hours, and a failure is retried up to 3 attempts in all, then the
+job is `dead` (System → Jobs; the next period starts again). Periods are aligned to the Unix
+epoch on the database clock: a daily backup is due at 00:00 UTC, a weekly one on Thursday
+00:00 UTC (1970-01-01 was a Thursday). The first `serve` in a period inserts that period's
+job due at the period's start, which has passed, so it runs right away; a node restarted
+later in the same period does not run it again. `to` is a folder or
+`s3://bucket[/prefix]` (`AWS_*` credentials, as above), never an archive path; a relative
+path is relative to the data folder (made absolute first, so `--data .` works) and must lie
+outside it (`"../backups"`). `config check` and `serve` run the same location check (the
+repository rules of `ferrite backup --to <folder>`: not inside the data folder or the local
+media root, symlinks resolved where the paths exist, no S3 prefix overlapping the media
+store's; a local folder must be absent, empty but for `lost+found`, or already hold the
+repository marker (B-I3); an S3 prefix's content is checked only when the job runs, since
+the check opens no network connection), and `serve` refuses to start when it fails. On a
+SQLite site both also refuse a `database.url` other than `sqlite://ferrite.db` (see
+`ferrite backup` above). A run holds the `artifacts.gc` lock while it copies blobs (R17);
+a GC pass holding it longer than 5 minutes makes the run `Busy` (retried a few seconds
+later, the attempt refunded).
+
+- **SQLite:** the repository backup above, in process (the snapshot is safe next to the
+  live writers), with `secret.key`, the blobs unless `with_media = false`, and
+  `--keep <keep>`. Restore with `ferrite restore <to>`. A restored folder keeps the same
+  `[backup]`, and a relative `to` such as `../backups` then names the same repository for
+  a sibling copy: `ferrite restore` prints a warning naming the repository when the
+  restored schedule is not off. Set `FERRITE_BACKUP__SCHEDULE=off` (or edit `[backup]`)
+  before serving a copy that must not write into it; otherwise both sites' snapshots count
+  towards `keep` and `ferrite restore <to>` takes the newest of either.
+- **Postgres:** a [02 §10](02-storage.md#10-portable-export-d14) export archive (blobs
+  unless `with_media = false`; never `secret.key`) written to
+  `<data>/backups/export-<UTC yyyymmddThhmmssZ>.tmp` (mode 0600), uploaded to
+  `<to>/exports/<UTC yyyymmddThhmmssZ>.ferrite.tar.zst` (a local folder gets it as
+  `….part` first, then renamed; S3 sees it only when the upload completes), read back and its
+  sha256 compared, then the local file is deleted (on every path; leftovers of killed runs
+  older than a day are removed first). The tables are spooled as NDJSON in a
+  `<data>/backups/ferrite-export-*` folder while the archive is built (not the system
+  temporary folder, which the CLI `ferrite export` uses; removed afterwards, a killed run's
+  after a day). An S3 upload cut off by the timeout is aborted in the background; one left
+  by a killed process stays an incomplete multipart upload, so give the bucket a lifecycle
+  rule that removes those. `<to>` is a repository with its marker like any other; the newest `keep` archives are kept and only names of that exact form are deleted
+  (plus `.part` leftovers older than a day). Load one with `ferrite import-site`. In
+  cluster mode a local `to` is on whichever node ran the job (`serve` logs a warning):
+  use `s3://` or a shared folder.
+
+A scheduled run whose site lacks some blobs (below) succeeds, with a warning in the log that
+gives the count and the first hashes; it is not retried.
+
+An artifact whose blob is missing from the media store is left out and named in the
+manifest's `missing` list (exit 2); a blob whose content does not hash to its name fails the
+backup (exit 1). Nothing is encrypted: archives, repository files and restored files that
+hold secrets are written with mode `0600`, and `--to -` can be piped to `age` or `gpg`.
+
+`ferrite restore SOURCE --data DIR` takes a backup archive, `-` (stdin) or a repository (the newest
+complete snapshot, or `--snapshot <name>`; a repository holding only a Postgres site's `exports/`
+archives is refused with a pointer to `ferrite import-site`). `DIR` must be absent or empty (a
+filesystem's `lost+found` does not count, so a fresh volume works); `--force` moves a non-empty
+folder aside to `DIR.pre-restore-<ts>` (a sibling, never deleted), refused while another process
+holds its `ferrite.lock`. That lock is the only sign of a running site it checks: a folder whose
+`ferrite.toml` keeps the database (and so the lock) elsewhere, or a Postgres folder, has none, so
+stop `serve` yourself first. The manifest is checked first: an export archive, a non-SQLite backup,
+an unexpected file name or a schema newer than the binary (exit 3) are refused before anything is
+written. The files go to a staging folder, `.<name>.restoring-<ts>-<pid>` next to an absent or
+occupied `DIR` (for an absent one inside `DIR`, then created, when its parent refuses the sibling),
+or `DIR/.restoring-<ts>-<pid>` inside an empty `DIR`; the blobs go through the media store the
+**restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted by their
+content hash); the restored configuration must keep the database at `DIR/ferrite.db`. Only then is
+the sibling staging folder renamed to the absent `DIR`, or the staged entries moved into the empty
+`DIR` with `ferrite.db` last (a folder holding the database is complete; a name that appeared there
+meanwhile is refused, never replaced), or the old folder moved aside and the staging folder renamed
+to `DIR`. A failed restore leaves `DIR` as it was; blobs it already stored in an absolute local or
+an S3 media root stay (content-addressed; the store's owner GC collects them after the grace period
+if nothing references them). Staging folders older than a day with exactly those names, left by
+killed runs, are removed at the start. A bind mount on the same device as its parent is not detected
+up front: `--force` then fails at the final rename and changes nothing. It then prints `migrate
+status`; it does not migrate (`serve` does, under `database.auto_migrate`). A backup without
+`secret.key` restores with a note on TOTP (below).
+
+**A restored site is a new install (R16, R19).** A backup snapshot carries no
+`schema_meta.install_id`; before the restored site is put in place it gets a fresh one and
+every `artifacts.orphaned_at` mark is cleared. Its media GC deletes only on a pass that reads
+an owner marker (`ferrite-owner.json`) naming its install
+([03 §6](03-media.md#6-garbage-collection)), so a copy restored next to the live site onto
+the same S3 bucket or absolute media root never deletes from it. The live site, which owns
+the store, still deletes what *its* database does not reference after the grace period,
+including the copy's own new uploads: a copy that keeps running and uploading needs its own
+`[media]` store. `restore` warns when the restored media store is outside `DIR`. For a
+restore **in place** after a disaster (the original site is gone and the restored one takes
+over its store), run `ferrite media gc --data DIR --claim` once: until then the restored
+site's GC marks but deletes nothing there, and logs an error each day. One media store
+belongs to one site: never claim a store another running site uses.
+
+**Clones made outside Ferrite keep the install id.** A Postgres PITR restore or `pg_dump`
+copy, or a copied `ferrite.db`, has the original's `install_id`, so served next to the
+original on the same media store both would delete as its owner. Before serving such a
+clone, give it a new install: `DELETE FROM schema_meta WHERE key = 'install_id';` on the
+clone (the next migration or GC pass writes a fresh one; for Postgres, in the site's schema).
+A backup archive or repository snapshot unpacked by hand needs nothing: its snapshot holds
+no install id.
+
+A mount point cannot be renamed, so `--force` refuses one (and any folder on another device
+than its parent) before doing any work. In the container image `/data` is a volume: restore
+into it while it is empty (`docker run --rm -v site:/data -v "$PWD":/in <image> restore
+/in/site.tar.zst --data /data`, the image's entrypoint being `ferrite`, with the serving
+container stopped), or empty it first, keeping a copy of what it held.
 
 **The site key is not in the database** (M2a-1, P4). A solo site keeps it in
 `<data>/secret.key` (mode `0600`); a cluster gets it from `auth.secret_key[_file]`. Back it
 up separately from database dumps and keep it with the same care as the database
 credentials: without it, a restored database still has its users, sessions and API tokens,
 but stored TOTP secrets cannot be opened (those users need `ferrite user disable-totp` and a
-new enrollment). Until `ferrite backup` exists (M4), copying the data folder by hand
-includes `secret.key`.
+new enrollment). A solo `ferrite backup` includes `secret.key` unless `--no-secret-key`; an
+`export` never does.
+
+## 4a. S3 media buckets
+
+Applies to `[media] backend = "s3"` (see [03 §3](03-media.md#s3-backend)). Checked on
+2026-10-29; every provider statement below is backed by the table at the end of this
+section. What is not in that table as "yes" is not stated as fact here.
+
+### Lifecycle rules
+
+Ferrite stages large uploads under `<prefix>tmp/<uuid>` as S3 multipart uploads and cleans up
+after itself on errors and cancellation, best effort ([03 §3](03-media.md#staging-cleanup)).
+A crash can still leave an incomplete multipart upload or a `tmp/` object. Add two bucket
+lifecycle rules as the backstop:
+
+1. abort incomplete multipart uploads after 1 day (the whole bucket);
+2. expire objects under `<prefix>tmp/` after 1 day. With no `[media] prefix`, that is `tmp/`.
+
+An **example, field names not verified** (see the claims table: the JSON field names were not
+checked against the AWS API reference; check them there before use) for `aws s3api
+put-bucket-lifecycle-configuration --bucket BUCKET --lifecycle-configuration
+file://lifecycle.json` (with `prefix = "site1/"` use `site1/tmp/`):
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "ferrite-abort-incomplete-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    },
+    {
+      "ID": "ferrite-expire-tmp",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "tmp/" },
+      "Expiration": { "Days": 1 }
+    }
+  ]
+}
+```
+
+On a versioned bucket `Expiration` only adds a delete marker; also add a
+`NoncurrentVersionExpiration` action (not tested here) to free the space.
+
+Never put a lifecycle expiry on `artifacts/`: those are the site's media, plugins and themes.
+Other providers have their own lifecycle features and syntax; none is described here because
+none was checked (see the table).
+
+### `copy_if_not_exists` and `conditional_put` per provider
+
+Ferrite publishes an upload with a conditional put (`If-None-Match: *`) and a server-side
+copy. `copy_if_not_exists` tells the client how the store makes that copy fail when the
+destination exists; without it the client falls back to a `head` then `copy`, which is not
+atomic but is safe here because keys are content hashes
+([03 §3](03-media.md#write-paths-and-the-8-mib-threshold)). The value uses `object_store`'s
+encoding: `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or
+`multipart`. `ferrite config check` cannot tell whether a value is right for your store:
+after changing it, upload a file of 8 MiB or more and check the logs: smaller uploads are
+never placed with a copy, so they do not exercise it.
+
+| Provider | `copy_if_not_exists` | `conditional_put` |
+|---|---|---|
+| AWS S3 | `multipart` (the mode `object_store` documents for S3; it does not copy tags or attributes) | `etag` (default) |
+| Cloudflare R2 | not verified (`object_store`'s docs only): `header:cf-copy-destination-if-none-match:*` is the value they give; Cloudflare's docs do not list the header, so leave it unset unless you have tested it | `etag`: R2 documents `If-None-Match` on PutObject |
+| RustFS (cluster example) | leave unset (fallback) | `etag`: tested, a second `If-None-Match: *` put gets `412 PreconditionFailed` |
+| Backblaze B2, Hetzner, Scaleway | leave unset (fallback) | not verified: if uploads fail with a precondition error, set `conditional_put = "disabled"` |
+
+AWS also documents `If-None-Match` on CopyObject; `header:If-None-Match:*` is therefore a
+candidate for AWS S3, but it has not been run against Ferrite, so the table above keeps
+`multipart`. Neither the `ferrite init` template nor 01 §4 suggests a concrete header (R18).
+`multipart` does not copy object attributes; Ferrite sets none on stored artifacts today, so
+the `config check` note about it costs nothing yet. Whatever the value, a placement the
+store refuses as "exists" is checked with a `head` of the final key and fails the upload
+when no object is there (R18), so a wrong value shows up as failed uploads of 8 MiB and
+more, not as lost ones.
+
+### Endpoints and addressing
+
+- **Cloudflare R2:** endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, region
+  `auto` (an empty region or `us-east-1` is an alias for it). Cloudflare's docs do not say which
+  addressing styles work, so leave `virtual_hosted_style` at its default (off, the bucket goes in the path); whether R2 needs that is not verified.
+- **Backblaze B2:** endpoint `https://s3.<region>.backblazeb2.com`, HTTPS only, no bucket in
+  the host. Backblaze's page shows `us-east-005` as a region name; take the region from the
+  endpoint your B2 console shows for the bucket (the naming rule is not verified). Both path and virtual-hosted style are supported.
+- **Hetzner Object Storage:** endpoint `https://<location>.your-objectstorage.com`, where
+  `<location>` is the bucket's location (`fsn1` and `nbg1` are shown in Hetzner's guides), and the same
+  location code is the `region`. Hetzner's guides use virtual-hosted style, so set
+  `virtual_hosted_style = true` and give the endpoint without the bucket.
+- **Scaleway:** not verified; see the table. Check the endpoint for your region in
+  Scaleway's console before use.
+
+### Claims and their sources
+
+| Claim | Source | Verified (yes/no, date) |
+|---|---|---|
+| `AbortIncompleteMultipartUpload` is a lifecycle action, set in days; `Expiration` applies per prefix `Filter` | AWS S3 user guide, lifecycle configuration elements | yes, 2026-10-29 |
+| The JSON field names `DaysAfterInitiation` and `Filter.Prefix` in the example above | AWS S3 API reference for lifecycle (not fetched; the user guide above names the actions only) | no |
+| Expiry of `tmp/` is the only safe expiry (`artifacts/` holds referenced media) | Ferrite's own key layout, 03 §3 | yes (code and design, 2026-10-29) |
+| AWS S3 supports `If-None-Match` on PutObject, CopyObject and CompleteMultipartUpload; losers get 412 | docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html | yes, 2026-10-29 |
+| `object_store` encodes S3 copy-if-not-exists as `header:`, `header-with-status:` or `multipart`; `multipart` is the native S3 mode and does not copy attributes | docs.rs/object_store/0.14.2 `S3CopyIfNotExists` | yes, 2026-10-29 |
+| R2 copy-if-not-exists works with header `cf-copy-destination-if-none-match: *` | docs.rs `S3CopyIfNotExists` (R2 example). Cloudflare's own S3 compatibility page does not list the header; its release notes only say CopyObject accepts Cloudflare headers conditional on the destination | no (header name not found in Cloudflare docs) |
+| R2 supports `If-None-Match` on PutObject, atomically (one of concurrent writers wins, others get 412) | developers.cloudflare.com/r2/api/s3/api/ | yes, 2026-10-29 |
+| R2 endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; region `auto` (`us-east-1` and empty are aliases) | developers.cloudflare.com/r2/api/s3/api/ | yes, 2026-10-29 |
+| R2 needs path-style addressing | only third-party guides (Botble, RcloneView) found; not on Cloudflare's pages | no |
+| B2 endpoint is `https://s3.<region>.backblazeb2.com`, HTTPS only | backblaze.com/docs/cloud-storage-call-the-s3-compatible-api | yes, 2026-10-29 |
+| B2 supports path-style and virtual-hosted style; `us-east-005` is a region name | same page | yes, 2026-10-29 |
+| B2 region naming rule (the region is the segment in the bucket's endpoint) and B2 conditional put or copy behaviour | not found on the pages read | no |
+| Hetzner endpoint is `https://<location>.your-objectstorage.com`; region is the location code (`fsn1`, `nbg1` shown); guides use virtual-hosted style | docs.hetzner.com/storage/object-storage/getting-started/using-s3-api-tools | yes, 2026-10-29 |
+| Hetzner conditional put or copy support, and the `hel1` endpoint | Hetzner's list of supported actions was not read; `hel1` only from third-party pages | no |
+| Scaleway endpoints `s3.<region>.scw.cloud` for `fr-par`, `nl-ams`, `pl-waw` | seen in search results quoting Scaleway's docs; the pages returned 403 when fetched | no |
+| `docker pull minio/minio` and `minio/mc` fail | observed locally with Docker 29.8.1 | yes, 2026-10-29 (the reason, MinIO no longer publishing them, is not verified) |
+| RustFS is Apache-2.0 licensed | github.com/rustfs/rustfs (License section) | yes, 2026-10-29 |
+| RustFS 1.0.4 was released on 2026-10-25 | github.com/rustfs/rustfs/releases (listing shows 25 Oct; the year is taken from the asset timestamps) | yes, 2026-10-29 |
+| RustFS image runs as UID 10001; ports 9000/9001; `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY` | docs.rustfs.com/installation/docker | yes, 2026-10-29 |
+| RustFS 1.0.4 accepts a first `If-None-Match: *` PutObject and rejects the second with `PreconditionFailed` | run against the cluster example, 2026-10-29 | yes, 2026-10-29 |
 
 ## 5. TLS
 
@@ -217,30 +499,33 @@ of truth for real monitoring.)
   ```
 
   Services: `postgres` (`postgres:18`, `pg_isready` health check, data volume at
-  `/var/lib/postgresql`), `minio` (`minio/minio`, `server /data`), `minio-init`
-  (`minio/mc`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
+  `/var/lib/postgresql`), `rustfs` (`rustfs/rustfs:1.0.4`, an S3-compatible
+  server, `/data`), `bucket-init` (`amazon/aws-cli`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
   repository, `serve --data /data`, `env_file: ferrite.env`, `ferrite.toml` mounted
   read-only at `/data/ferrite.toml`, `FERRITE_CLUSTER__NODE_NAME` per node, health check
   `/ferrite healthcheck --url http://127.0.0.1:8080/readyz`, start after Postgres is
-  healthy and `minio-init` completed, `stop_grace_period: 20s`) and `caddy` (`caddy:2`,
+  healthy and `bucket-init` completed, `stop_grace_period: 20s`) and `caddy` (`caddy:2`,
   port `8080:8080`, `reverse_proxy node1:8080 node2:8080` with `lb_policy round_robin`
   and `health_uri /readyz`). The shared `ferrite.toml` sets `site.url =
   "http://localhost:8080"`, `server.listen = "0.0.0.0:8080"`, `server.trusted_proxies =
   ["172.28.0.0/16"]` (the compose network's subnet, so Caddy's `X-Forwarded-For` is
-  honoured), `cluster.mode = "cluster"` and S3 media on MinIO (`bucket = "ferrite"`,
-  `region = "us-east-1"`, `endpoint = "http://minio:9000"`, `allow_http = true`).
+  honoured), `cluster.mode = "cluster"` and S3 media on RustFS (`bucket = "ferrite"`,
+  `region = "us-east-1"`, `endpoint = "http://rustfs:9000"`, `allow_http = true`).
   `ferrite.env` holds `FERRITE_DATABASE__URL` and the S3 key pair: **demo values**,
-  shared with the `postgres` and `minio` service definitions; replace them together.
+  shared with the `postgres` and `rustfs` service definitions; replace them together.
   **Verification status (P24):** `crates/ferrite/tests/examples.rs` loads the example's
   `ferrite.toml` + `ferrite.env` through `ferrite_config::load` and `ferrite config check`,
   and checks that every `FERRITE_*` name in the compose file is a known setting; CI runs
-  `docker compose … config --quiet`, `caddy validate` on the Caddyfile and `docker build`. `docker compose up` is not run
-  anywhere yet, so problems in the runtime wiring (Caddy health checks, the MinIO bucket
-  init) would only show when someone runs it.
+  `docker compose … config --quiet`, `caddy validate` on the Caddyfile and `docker build`. `docker compose up` is not run in CI. It was run by
+  hand on 2026-10-29 (M4-1): both nodes healthy, an upload through node1 read back
+  byte for byte through node2, the object in the `ferrite` bucket on RustFS. Every image is
+  pinned as `name:tag@sha256:<index digest>`; the digests stay valid until the registry
+  deletes them, and need a manual bump to follow new releases. On 2026-10-29 `docker pull minio/minio` and `docker pull minio/mc` were denied ("pull access
+  denied ... repository does not exist or may require 'docker login'"), so the example moved to RustFS 1.0.4 (§4a table for its licence, release date and UID).
 
 ## 8. CLI summary
 
-### Implemented (M1c-1, M1c-2, M1.5, M2a-1 and M2a-2a: `crates/ferrite`)
+### Implemented (M1c-1 to M4-1: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -251,6 +536,14 @@ ferrite migrate verify --data DIR
 ferrite serve          --data DIR                      # M1c-2; cluster wiring M1.5
 ferrite seed demo      --data DIR [--force]            # M1c-2
 ferrite config check   --data DIR                      # M1.5
+ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
+ferrite media gc       --data DIR [--dry-run] [--grace-days N] [--claim]  # M4-1
+ferrite media regenerate --data DIR [--all] [--item ID]        # M4-1
+ferrite export         --data DIR --out FILE|- [--with-media]                      # M4-1
+ferrite import-site    ARCHIVE|- --data DIR [--with-media]                         # M4-1
+ferrite db copy        --from URL --to URL [--from-schema S] [--to-schema S]       # M4-1; URL = postgres://… | sqlite:PATH
+ferrite backup         --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]  # M4-1
+ferrite restore        SOURCE --data DIR [--snapshot NAME] [--force]               # M4-1; SOURCE = FILE.tar.zst | - | DIR | s3://…
 ferrite healthcheck    [--url URL]                     # M1.5, for container health checks
 ferrite user create    --data DIR --login L --email E [--role admin|editor|author|contributor]
                        [--display-name N] [--password-stdin]                     # M2a
@@ -289,11 +582,139 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (`mode`
-is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set), exit
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (`mode`
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.
+
+`config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
+work but may cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
+attributes; Ferrite sets none on stored artifacts today, so it costs nothing yet, and it is the
+value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
+`serve` would refuse, a local folder included that is not empty and not a repository, and, on
+SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
+
+**`ferrite media sync`** (`crates/ferrite/src/media_cmd.rs`): `--to STORE` and one of `--from STORE`
+or `--data DIR` (the site's configured store; only `ferrite.toml` is read, so it runs while `serve`
+runs). A STORE is `local:<path>` or `s3://bucket[/prefix]`; every `s3://` URL takes its credentials,
+endpoint and options from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`, `AWS_COPY_IF_NOT_EXISTS`,
+`AWS_CONDITIONAL_PUT`), a `--data` S3 store from `[media.s3]`. Copies every object under
+`artifacts/` (recorded in the database or not), skips keys already at the destination with the same
+size, checks the size after each copy, never deletes, never copies `tmp/`, 8 copies at once (memory
+peaks near 192 MiB, design 03 §8); the destination is probed first and an unusable one exits 1; keys
+that are not artifacts are ignored with a notice. Prints `copied N (B bytes), skipped M, failed F`
+on stdout and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some
+copies failed (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error
+(neither `--from` nor `--data`, or both) exits 2 as clap does.
+
+**`ferrite export`**, **`ferrite import-site`**, **`ferrite db copy`**
+(`crates/ferrite/src/export_cmd.rs`, `site_copy.rs`, `archive.rs`; format and rules in [02
+§10](02-storage.md#10-portable-export-d14)): `export` writes the portable archive of the site in
+`--data` to `--out` (a new file with mode 0600, an existing one is refused and a failed export
+removes it; `-` writes stdout, and the summary goes to stderr); `--with-media` adds every stored
+artifact. An artifact whose file is missing from the media store is left out: one `missing artifact
+<hash>` line each on stderr, the count in the summary, the hashes in the manifest's `missing` list,
+and exit 2; a file whose content does not hash to its name fails the export (exit 1, the hash
+named); a usage error (a bad or missing flag) is exit 2 too, as clap does, so a wrapper that treats
+2 as "written" must check that the archive exists. The database must be at this binary's schema
+(older: exit 1, run `ferrite migrate up`; newer: exit 3); with SQLite stop `serve` first, a Postgres
+site can be exported live. `import-site ARCHIVE --data DIR` (`-` reads stdin) loads an export into
+the fresh database of a folder made by `ferrite init`, in one transaction, then migrates up and
+rebuilds search; `--with-media` puts the archive's blobs into the site's media store (present ones
+are skipped), without it they are read, checked and reported but not stored. Prints the row count
+and, when users have TOTP on, how to keep their sign-in working (copy `secret.key`, set
+`auth.secret_key` or `ferrite user disable-totp`), and a warning when the site's media store is
+outside its data folder (it may be another site's: the target keeps its own install id, so its media
+GC deletes nothing there until `ferrite media gc --claim`, [03
+§6](03-media.md#6-garbage-collection)). Imported `artifacts` rows start without a GC mark. Exit 0
+done; 3 when the archive's format or schema (or the target's schema) is newer than the binary; 1 on
+any other error, among them a target that is not fresh (the message names the first table with
+rows), a tampered table (sha256), a hostile path, an over-long row line (64 MiB), more artifact
+bytes than the manifest declares, a truncated stream, an archive that is a backup, database settings
+that would refuse the migration to the binary's schema after the load (`database.auto_migrate` off,
+or a Postgres contract migration without `database.allow_contract`). No refusal leaves rows behind,
+and a schema step taken for the archive is undone (best effort; a warning says when that failed, and
+it is skipped when the target holds rows after a commit that reported an error), so the import can
+be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
+file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to ferrite.db>` (the
+folder lock is taken in its folder; an absent target file is created, and removed again when the
+copy fails, with the `ferrite.lock` the run created). URLs only, no stdin. Same source and target
+rules and exit codes as `export` and `import-site` (no exit 2: no media); it copies no media (`media
+sync`) and writes no `ferrite.toml`, but prints the `[database]` block to put there: a SQLite target
+named `ferrite.db` as `url = "sqlite://ferrite.db"` (relative to its folder, which is then the data
+folder: the form `backup` and `restore` need), another SQLite file by its absolute path with a note
+that `backup` refuses such a site; a Postgres password, in the user info or a `password` query
+parameter, is shown as `PASSWORD`, with a note after the block. A last note says the copy has its
+own install id: once the site runs on it, run `ferrite media gc --claim` after the old database has
+stopped serving the media store (R16).
+
+**`ferrite backup`**, **`ferrite restore`** (`crates/ferrite/src/backup/`; rules in §4):
+`backup --data DIR --to TARGET` backs up a solo site to a `.tar.zst` file (a new file with mode
+0600, an existing one is refused, a failed backup removes it), `-` (stdout; the summary goes to
+stderr) or a repository (a folder, created if missing, or `s3://bucket[/prefix]`).
+`--no-media` leaves the artifacts out, `--no-secret-key` leaves `secret.key` out, `--keep N`
+(repositories only) prunes to the newest N snapshots and the blobs they list. Prints the files,
+the schema, the artifact counts (for a repository: copied and already present) and what was
+pruned. Exit 0 done; 2 done but artifacts were missing from the media store (one `missing
+artifact <hash>` line each on stderr, listed in the manifest), and also a usage error (clap,
+e.g. `--keep 0`): check that the archive or snapshot exists before treating 2 as written; 3 a
+repository of a newer format than the binary; 1 on any other error: a Postgres site, a
+`database.url` other than `sqlite://ferrite.db`, `serve` running (the folder lock), an
+artifacts GC pass holding its lock for more than 5 minutes, a failed integrity check, a damaged
+blob, `--keep` with an archive, an archive inside `<data>/backups`, a repository location that
+is not empty (but for `lost+found`) and has no marker or lies inside the data folder or media
+root; a failed backup leaves no archive, no repository snapshot and no local files, except that
+a `--keep` prune failing after the snapshot was written keeps the snapshot.
+`restore SOURCE --data DIR [--snapshot NAME] [--force]` prints what it restored, the artifact
+counts, notes on missing artifacts and a missing `secret.key`, the folder moved aside, a warning
+when the restored media store is outside `DIR` (the restored database is a new install, R16:
+`ferrite media gc --claim` only for a restore in place), then the `migrate status` report.
+Exit 0 done; 3 when the backup's schema or the repository's format is newer than the binary
+(nothing written); 1 on any other error: a non-empty folder without `--force` (`lost+found`
+alone does not count), a folder in use, an export archive, a repository with only export
+archives (use `import-site`), an unknown snapshot, a damaged archive or repository (sha256,
+size), a restored configuration whose database is not `DIR/ferrite.db`.
+
+**`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design 03
+§6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc` job runs.
+It opens the database (with SQLite, stop `serve` first: it holds the data folder's lock) and the
+configured media store, then marks unreferenced artifact rows, deletes rows marked longer than the
+grace period and then their files, files under `artifacts/` with no row that are older than the
+grace period, and `tmp/` objects older than 24 h. Files named by a queued or running job or by an
+import report are kept. `--grace-days N` (1..=365) overrides `media.gc_grace_days` (default 7) for
+this run; `--dry-run` marks and deletes nothing and reports what a run would do (it writes neither
+the owner marker nor a missing install id). Deletes happen only on a pass that reads the media
+store's owner marker `ferrite-owner.json` naming this database's install id (R16, R19, 03 §6): a
+pass that finds no marker writes it and deletes nothing yet; on a store another site owns, or whose
+marker cannot be read, the pass marks and cleans `tmp/` only and logs an error. Either way it
+appends `; deletes skipped: <reason>` to its line (exit 0). `--claim` rewrites the marker for this
+site first, for a site that replaced the store's owner (a restore in place, a moved database), and
+appends `; claimed the media store from install <id> (site …, claimed …)`; with `--dry-run` it names
+that owner and writes nothing. Prints `marked N, unmarked M, deleted rows R (B bytes), deleted
+unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: ` for a dry run; `, failed
+F` is appended when some blob or `tmp/` deletes failed, which are logged and retried by the next
+pass, the exit code staying 0). Exit 0 done, 3 the `artifacts.gc` lock is held (a cluster node's
+job, another `media gc`, or a backup copying blobs, R17), 1 on an error; a bad flag (`--grace-days
+0`) exits 2 as clap does.
+
+**`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again
+in process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus
+the `[images]` of the theme active in the database (`variant_specs`). By default an item is
+processed when it is raster and its recorded `variants` lack a size that applies to its width: a
+width-bounded size wider than the original is never made, so it never counts as lacking and a second
+run changes nothing. Only size names are compared, so a theme that changes the width of an existing
+size needs `--all`, which redoes every raster item. `--item ID` (a content id; unknown is exit 1)
+limits the run to one item; a complete item is skipped unless `--all` is given too. Items in the
+trash are included. Non-raster items and originals over 64 MiB are skipped (the latter with a line
+on stderr). Per item it decodes with the job's code (one image at a time), stores each variant and
+records them only while the row still holds that original; the replaced variant files stay for
+`media gc`. With SQLite it opens the database like `seed`, so `serve` must be stopped; with Postgres
+it may run beside the nodes (each item appends its `post:<id>` invalidation event; tested on
+Postgres). Progress goes to stderr every 50 items; stdout is `regenerated N, skipped S, failed F`
+and each failure is a `failed <id>: <reason>` line on stderr. Exit 0 done, 2 when some items failed
+(the rest were done), 1 on an error.
 
 **`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
 `http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on
@@ -512,18 +933,18 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 - Refuses (exit 1) when the site already has content, unless `--force`, which adds another
   batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
   both menus and the two options are replaced to point at the new batch).
-- **Not atomic:** each step is its own transaction, so a run that fails part-way leaves what
-  it wrote; `--force` then adds a whole new batch, it does not resume (ROADMAP M2a-2b: seed
-  atomicity).
+- **Atomic (M4-1 P20):** the image files are stored first (content-addressed), then every row
+  (user, terms, the image's media item, artifacts and `media` row, posts, pages, menus,
+  options, with the events the services emit) is written in one transaction
+  (`ferrite_core::seed::DemoBatch`). A run that fails part-way writes no row, so a plain
+  re-run without `--force` succeeds. The image files of a failed run stay in the media store
+  until the artifacts GC removes them.
 - Requires an initialised site (with SQLite it fails when `ferrite.db` is missing instead of
   creating it) and runs the same migration check as `serve`.
 
 ### Planned (later milestones)
 
 ```
-ferrite backup / restore                                        # M4
-ferrite export / import-site / db copy                          # M4
-ferrite media sync / media gc                                   # M4
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

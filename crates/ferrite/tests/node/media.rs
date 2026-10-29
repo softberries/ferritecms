@@ -54,6 +54,7 @@ async fn record(
         bytes: i64::try_from(stored.bytes).unwrap(),
         mime: stored.mime.clone(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let item = services(store)
         .record_upload(

@@ -7,9 +7,7 @@ use axum::{
     body::Body,
     http::{Method, StatusCode, header},
 };
-use ferrite_domain::{
-    Artifact, ArtifactHash, ArtifactKind, Event, NewNode, NodeId, Role, Timestamp,
-};
+use ferrite_domain::{ArtifactHash, Event, NewNode, NodeId, Role};
 use ferrite_http::extensions::UPLOAD_SLOTS;
 use ferrite_store::{LOCK_EXTENSIONS, lock};
 use serde_json::{Value, json};
@@ -33,7 +31,7 @@ api_tests!(
     broken_components_are_refused,
     reserved_name_is_refused,
     uploads_are_bounded_per_node,
-    failed_install_discards_unreferenced_blob,
+    failed_install_leaves_blob_for_gc,
 );
 
 const PLUGINS: &str = "/api/v1/plugins";
@@ -766,9 +764,10 @@ async fn uploads_are_bounded_per_node(api: Api) -> Api {
     api
 }
 
-/// A staged component whose rows are not recorded is deleted again, unless an artifact
-/// row names the same bytes.
-async fn failed_install_discards_unreferenced_blob(api: Api) -> Api {
+/// A staged component whose rows are not recorded stays in the store, with no row, for
+/// the artifacts GC (M4-1 P12: nothing deletes it in the request, so a concurrent install
+/// of the same bytes never loses its blob).
+async fn failed_install_leaves_blob_for_gc(api: Api) -> Api {
     let mut c = admin(&api).await;
     let (manifest, wasm) = (plugin_manifest("hello"), plugin_wasm("hello"));
     let fingerprint = inspect(&mut c, &api, &manifest, &wasm).await.json()["fingerprint"]
@@ -778,8 +777,9 @@ async fn failed_install_discards_unreferenced_blob(api: Api) -> Api {
     let hash = ArtifactHash::parse(&sha256(&wasm)).unwrap();
 
     // The `extensions` lock is held while the install records: `busy`. The test frees
-    // the lock once the blob is staged and the install's lock wait is over, so the
-    // cleanup gets it and deletes the blob nothing names.
+    // the lock once the blob is staged and the install's lock wait is over, so any
+    // cleanup still waiting for the lock (the removed `discard_staged` waited up to 5 s)
+    // would get it and could delete the blob.
     let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
         .await
         .unwrap();
@@ -795,29 +795,12 @@ async fn failed_install_discards_unreferenced_blob(api: Api) -> Api {
     let r = install(&mut c, &api, &manifest, &wasm, &fingerprint).await;
     r.assert_problem(503, "busy");
     releaser.await.unwrap();
-    nothing_stored(&api, hash.as_str()).await;
-
-    // An artifact row names the same bytes (here with another kind, so the install
-    // is refused): the blob stays.
-    let other = Artifact {
-        hash: hash.clone(),
-        kind: ArtifactKind::Theme,
-        bytes: wasm.len() as i64,
-        mime: "application/x-tar".into(),
-        created_at: Timestamp::now(),
-    };
-    api.store
-        .read()
-        .artifacts()
-        .insert_if_absent(&other)
-        .await
-        .unwrap();
-    let r = install(&mut c, &api, &manifest, &wasm, &fingerprint).await;
-    r.assert_problem(422, "validation");
     assert!(api.store.read().plugins().list().await.unwrap().is_empty());
+    assert_eq!(api.store.read().artifacts().get(&hash).await.unwrap(), None);
     assert_eq!(
         api.api.media.head(&hash).await.unwrap(),
-        Some(wasm.len() as u64)
+        Some(wasm.len() as u64),
+        "left for the GC"
     );
     api
 }

@@ -17,6 +17,25 @@ pub struct S3Config {
     pub secret_access_key: Option<Secret>,
     pub allow_http: bool,
     pub virtual_hosted_style: bool,
+    /// How the store places a staged upload at its final key, in object_store's encoding:
+    /// `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or `multipart`
+    /// (see [`crate::validate_copy_if_not_exists`]). `None` leaves the builder's setting
+    /// (the `AWS_COPY_IF_NOT_EXISTS` variable on the environment path) and, without one,
+    /// placement takes the head-then-copy fallback.
+    pub copy_if_not_exists: Option<String>,
+    /// `None` leaves the builder's default (`etag`, or `AWS_CONDITIONAL_PUT` on the environment
+    /// path); a value is always set on the builder.
+    pub conditional_put: Option<ConditionalPut>,
+}
+
+/// Whether the S3 backend creates objects with `If-None-Match` (conditional put).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConditionalPut {
+    /// `If-None-Match: *` on create; the builder's default.
+    #[default]
+    Etag,
+    /// For stores that reject the header: a plain put after the existence check.
+    Disabled,
 }
 
 #[derive(Debug, Clone)]

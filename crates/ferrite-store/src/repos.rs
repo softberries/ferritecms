@@ -61,6 +61,30 @@ pub trait Store: Send + Sync + 'static {
     /// dropped, or when the connection dies. SQLite: an in-process mutex per store (one
     /// process owns the data folder). To wait for a lock use [`lock`](crate::lock()).
     async fn try_lock(&self, name: &str) -> Result<Option<Box<dyn LockGuard>>, StoreError>;
+    /// Waits up to `wait` for the named lock (P19); `Ok(None)` when it stayed held. The
+    /// default retries [`try_lock`](Self::try_lock) every [`LOCK_POLL`](crate::LOCK_POLL)
+    /// (first attempt immediate, last one at `wait`); SQLite uses it. Postgres overrides
+    /// it with one dedicated connection that sets `lock_timeout` and blocks in
+    /// `pg_advisory_lock`, so a release wakes the waiter at once. Dropping the future
+    /// cancels the wait and frees a lock granted late. Callers use
+    /// [`lock`](crate::lock()), which turns `None` into `Busy`.
+    async fn lock_wait(
+        &self,
+        name: &str,
+        wait: Duration,
+    ) -> Result<Option<Box<dyn LockGuard>>, StoreError> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if let Some(guard) = self.try_lock(name).await? {
+                return Ok(Some(guard));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(crate::LOCK_POLL.min(deadline - now)).await;
+        }
+    }
     /// Compares applied migrations with those embedded in this binary.
     async fn migration_status(
         &self,
@@ -72,6 +96,15 @@ pub trait Store: Send + Sync + 'static {
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
     /// Checks that applied migration checksums match the embedded ones.
     async fn verify_migrations(&self) -> Result<(), StoreError>;
+    /// Opens a reader over one read snapshot of the whole database (M4-1 P3), for an
+    /// export or a copy; see [`ExportReader`](crate::ExportReader). Release it with
+    /// [`ExportReader::finish`](crate::ExportReader::finish).
+    async fn export_reader(&self) -> Result<Box<dyn crate::ExportReader>, StoreError>;
+    /// Opens the single-transaction row loader (M4-1 P4), for import-site and `db copy`;
+    /// see [`ImportWriter`](crate::ImportWriter). Nothing is written until
+    /// [`ImportWriter::commit`](crate::ImportWriter::commit). SQLite: holds the writer
+    /// connection until then; Postgres: one dedicated connection (`<application_name>:import`).
+    async fn import_writer(&self) -> Result<Box<dyn crate::ImportWriter>, StoreError>;
     /// Writes a consistent copy of the database to `dest`; Postgres returns `Unsupported`.
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError>;
     /// Closes the connection pools: waits until every checked-out connection is back
@@ -426,6 +459,14 @@ pub trait UserRepo: Send + Sync {
     async fn get_many(&self, ids: &[UserId]) -> Result<Vec<User>, StoreError>;
 }
 
+/// Artifact rows and the GC queries over them.
+///
+/// `media.artifact_hash`, `plugins.artifact_hash` and `themes.artifact_hash` are foreign
+/// keys; `media_variants.hash` and `import_runs.report_hash` are not, so a writer of
+/// those must call [`insert_if_absent`](Self::insert_if_absent) for the hash before it
+/// writes the reference. [`delete_if_orphaned`](Self::delete_if_orphaned) may return
+/// `StoreError::ForeignKey` when an FK-backed reference races in; callers treat that as
+/// "kept".
 #[async_trait]
 pub trait ArtifactRepo: Send + Sync {
     /// Inserts an artifact unless its hash exists; returns true if inserted.
@@ -434,6 +475,48 @@ pub trait ArtifactRepo: Send + Sync {
     async fn get(&self, hash: &ArtifactHash) -> Result<Option<Artifact>, StoreError>;
     /// Deletes an artifact by hash (missing: no-op).
     async fn delete(&self, hash: &ArtifactHash) -> Result<(), StoreError>;
+    /// Up to `limit` (1 through `MAX_PAGE`) artifacts ordered by hash, after `after`.
+    async fn list_page(
+        &self,
+        after: Option<&ArtifactHash>,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError>;
+    /// The given hashes that have a row (at most [`MAX_EXISTING_HASHES`](crate::MAX_EXISTING_HASHES)
+    /// hashes, else `Invalid`).
+    async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError>;
+    /// One GC mark pass. Sets `orphaned_at = now` on unmarked rows that nothing
+    /// references (`media.artifact_hash`, `media_variants.hash`, `plugins.artifact_hash`,
+    /// `themes.artifact_hash`, `import_runs.report_hash`) and that are not in
+    /// `protected`; clears the mark on marked rows that are referenced or protected.
+    async fn mark_orphans(
+        &self,
+        now: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<MarkCounts, StoreError>;
+    /// Up to `limit` artifacts marked orphaned before `before`, ordered by hash.
+    async fn orphaned_before(
+        &self,
+        before: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError>;
+    /// Deletes the row when it is marked before `before`, referenced by nothing and not
+    /// in `protected`, in one statement (the references are re-checked there); returns
+    /// whether it was deleted.
+    async fn delete_if_orphaned(
+        &self,
+        hash: &ArtifactHash,
+        before: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<bool, StoreError>;
+}
+
+/// What one [`ArtifactRepo::mark_orphans`] pass changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MarkCounts {
+    /// Rows newly marked orphaned.
+    pub marked: u64,
+    /// Marked rows that are referenced (or protected) again and lost their mark.
+    pub unmarked: u64,
 }
 
 #[async_trait]

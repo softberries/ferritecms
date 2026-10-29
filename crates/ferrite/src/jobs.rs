@@ -1,14 +1,18 @@
 //! Core job handlers run by every node (ruling P12): scheduled publishing, the plugin
 //! data purge (M2a-2 P9), plugin actions (P20), media variants (M2a-2b P8,
 //! [`MediaVariantsHandler`]) and permalink-change redirects (M3-2 P30,
-//! [`PermalinkRedirectsHandler`]). The kinds and payloads are fixed in
+//! [`PermalinkRedirectsHandler`]) and the artifacts GC (M4-1 P12, [`ArtifactsGcHandler`],
+//! built by `serve` with the node's media store), and the scheduled backup (M4-1 P15,
+//! [`SiteBackupHandler`], registered by `serve` only when `[backup] schedule` is on). The kinds and payloads are fixed in
 //! [`ferrite_core::jobs`]; the WordPress import (M3-2 P27, [`ImportWordpressHandler`])
 //! is built by `serve` with the node's media store and data folder. The per-node 30 s
 //! ticker of M1c-2 is the periodic
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
+mod backup;
+mod gc;
 mod import;
-mod media;
+pub(crate) mod media;
 mod permalinks;
 
 use std::{sync::Arc, time::Duration};
@@ -29,6 +33,14 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+pub(crate) use backup::backup_location;
+pub use backup::{
+    SITE_BACKUP_KIND, SITE_BACKUP_MAX_ATTEMPTS, SITE_BACKUP_TIMEOUT, SiteBackupHandler, site_backup,
+};
+pub use gc::{
+    ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_TIMEOUT, ArtifactsGcHandler,
+    artifacts_gc_periodic,
+};
 pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
@@ -336,12 +348,24 @@ pub fn handlers(
     ]
 }
 
+/// The periodics `serve` schedules besides `ferrite-cluster`'s built-ins:
+/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`] and
+/// [`artifacts_gc_periodic`].
+pub fn core_periodics() -> Vec<Periodic> {
+    vec![
+        publish_due_periodic(),
+        plugin_purge_sweep_periodic(),
+        artifacts_gc_periodic(),
+    ]
+}
+
 /// The [`PUBLISH_DUE_KIND`] periodic, every [`PUBLISH_DUE_EVERY`].
 pub fn publish_due_periodic() -> Periodic {
     Periodic {
         kind: PUBLISH_DUE_KIND,
         every: PUBLISH_DUE_EVERY,
         payload: json!({"v": 1}),
+        max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
     }
 }
 
@@ -351,6 +375,7 @@ pub fn plugin_purge_sweep_periodic() -> Periodic {
         kind: PLUGIN_PURGE_SWEEP_KIND,
         every: PLUGIN_PURGE_SWEEP_EVERY,
         payload: json!({"v": 1}),
+        max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
     }
 }
 

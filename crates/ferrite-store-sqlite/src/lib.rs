@@ -5,6 +5,8 @@ mod codec;
 mod connect;
 mod constraint;
 mod exec;
+mod export;
+mod import_writer;
 mod lock;
 mod migrate;
 mod repos;
@@ -20,6 +22,7 @@ use sqlx::SqlitePool;
 
 pub use connect::SqliteOptions;
 use exec::map_db_err;
+pub use migrate::latest_schema_version;
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
 use repos::{SqliteRepos, SqliteTx};
 
@@ -86,6 +89,20 @@ impl Store for SqliteStore {
 
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.verify().await
+    }
+
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        Ok(Box::new(
+            export::SqliteExportReader::open(&self.reader).await?,
+        ))
+    }
+
+    /// One transaction on the writer connection: other writes wait until the load ends.
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        let tx = self.writer.begin().await.map_err(map_db_err)?;
+        Ok(Box::new(ferrite_store::Loader::new(
+            import_writer::SqliteLoadTarget::new(tx),
+        )))
     }
 
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {

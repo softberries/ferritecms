@@ -537,6 +537,12 @@ impl Store for FaultyStore {
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.inner.verify_migrations().await
     }
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        self.inner.export_reader().await
+    }
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        self.inner.import_writer().await
+    }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.snapshot(dest).await
     }
@@ -876,6 +882,8 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
         kind: "test.tick",
         every: Duration::from_secs(1),
         payload: json!({"v": 1}),
+        // Not the default (5): the inserted jobs must carry the periodic's own value.
+        max_attempts: 3,
     };
     let stop = CancellationToken::new();
     let start_now = first.read().nodes().db_now().await.unwrap();
@@ -903,6 +911,19 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
         let mut probe = NewJob::new("test.tick", json!({"v": 1}));
         probe.unique_key = Some(format!("test.tick:{s}"));
         assert_eq!(jobs.enqueue(&probe).await.unwrap(), None, "period {s}");
+    }
+    let listed = jobs
+        .list(&JobQuery {
+            status: None,
+            kind: Some("test.tick".into()),
+            limit: 100,
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert!(!listed.items.is_empty());
+    for job in &listed.items {
+        assert_eq!(job.max_attempts, 3, "{job:?}");
     }
 }
 

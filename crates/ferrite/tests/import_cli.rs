@@ -665,6 +665,74 @@ async fn failed_import_writes_a_partial_report_and_exits_1() {
     assert!(html.contains("parse"));
 }
 
+/// A copy of `site-a-uploads` whose `cover.png` carries an XMP `iTXt` chunk holding
+/// [`XMP_MARKER`] (the walker does not check CRCs; the chunk's is zero).
+fn uploads_with_xmp() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let from = corpus("site-a-uploads/2026/10");
+    let to = dir.path().join("2026/10");
+    std::fs::create_dir_all(&to).unwrap();
+    for entry in std::fs::read_dir(&from).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+    }
+    let cover = to.join("cover.png");
+    let png = std::fs::read(&cover).unwrap();
+    let mut data = b"XML:com.adobe.xmp\0\0\0\0\0".to_vec();
+    data.extend_from_slice(XMP_MARKER.as_bytes());
+    let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+    chunk.extend_from_slice(b"iTXt");
+    chunk.extend_from_slice(&data);
+    chunk.extend_from_slice(&[0; 4]);
+    // After the 8-byte signature and the 25-byte IHDR chunk.
+    let mut out = png[..33].to_vec();
+    out.extend(chunk);
+    out.extend_from_slice(&png[33..]);
+    std::fs::write(&cover, out).unwrap();
+    dir
+}
+
+const XMP_MARKER: &str = "<x:xmpmeta>GPS 52.5N 13.4E</x:xmpmeta>";
+
+/// Whether any file under `dir` contains `needle`.
+fn any_file_contains(dir: &Path, needle: &str) -> bool {
+    std::fs::read_dir(dir).unwrap().any(|e| {
+        let path = e.unwrap().path();
+        if path.is_dir() {
+            any_file_contains(&path, needle)
+        } else {
+            let bytes = std::fs::read(&path).unwrap();
+            bytes.windows(needle.len()).any(|w| w == needle.as_bytes())
+        }
+    })
+}
+
+/// `media.strip_metadata = true` (here through the environment) strips imported files
+/// (M4-1 P17); with it off the XMP is stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_strips_metadata_when_the_option_is_on() {
+    let uploads = uploads_with_xmp();
+    for (strip, label) in [(false, "off"), (true, "on")] {
+        let mut site = Site::sqlite().await;
+        if strip {
+            site.env
+                .push(("FERRITE_MEDIA__STRIP_METADATA".into(), "true".into()));
+        }
+        let out = site
+            .import(
+                &corpus("site-a.xml"),
+                &["--uploads", uploads.path().to_str().unwrap()],
+            )
+            .await;
+        assert!(out.status.success(), "{label}: {}", text(&out));
+        assert_eq!(
+            any_file_contains(&site.data().join("media"), XMP_MARKER),
+            !strip,
+            "{label}: the XMP is stored only with stripping off"
+        );
+    }
+}
+
 /// `--uploads` takes a zip of the uploads as well as a folder; another file is refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn uploads_zip_is_accepted() {

@@ -23,6 +23,10 @@ pub enum MediaError {
     Unsupported { mime: String },
     #[error("the SVG could not be made safe: {0}")]
     Svg(SvgError),
+    /// `media.strip_metadata` is on and the image's metadata cannot be removed (it is over
+    /// the strip limit or cannot be parsed); the reason is a fixed text.
+    #[error("metadata could not be removed: {0}")]
+    Metadata(String),
     /// A blocking task panicked or was cancelled.
     #[error("internal error: {0}")]
     Task(String),

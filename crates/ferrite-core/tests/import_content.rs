@@ -819,6 +819,7 @@ async fn subscriber(store: Arc<dyn Store>) {
         bytes: 1,
         mime: "application/wasm".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let now = Timestamp::now();
     let svc = ExtensionService::new(store);

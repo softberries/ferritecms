@@ -20,6 +20,7 @@ fn artifact(kind: ArtifactKind, seed: u8) -> Artifact {
         bytes: 42,
         mime: "application/x-tar".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

@@ -226,14 +226,11 @@ pub async fn install_plugin(
         }
         Err(e) => return Err(e.into()),
     };
-    if let Err(e) = api.extensions.install_plugin(actor, &artifact, &row).await {
-        // No row this request wrote names the staged blob; drop it unless another row
-        // names the same bytes.
-        if let Err(cleanup) = api.installer.discard_staged(&artifact.hash).await {
-            tracing::warn!(artifact = %artifact.hash, error = %cleanup, "cannot discard a staged plugin component");
-        }
-        return Err(e.into());
-    }
+    // When this fails, the staged blob has no row and is left to the artifacts GC
+    // (M4-1 P12).
+    api.extensions
+        .install_plugin(actor, &artifact, &row)
+        .await?;
     let stored = api.extensions.get_plugin(actor, &row.name).await?;
     let (status, headers) = created_at(&format!("{BASE}/plugins/{}", stored.name));
     let body = dto(&api, stored, &live_nodes(&api).await?);

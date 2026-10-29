@@ -376,6 +376,7 @@ fn artifact(r: &ArtifactRef, mime: &str) -> Artifact {
         bytes: i64::try_from(r.bytes).unwrap_or(i64::MAX),
         mime: mime.to_owned(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

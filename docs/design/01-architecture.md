@@ -17,15 +17,22 @@ ferritecms/
 │   │                             #   `config check`, `healthcheck`, `user`, `theme` (with `pack`,
 │   │                             #   M2b-3), `plugin`), logging, startup check,
 │   │                             #   site key file, node wiring (hot swap, jobs), shutdown; anyhow
-│   │                             #   at the top level
+│   │                             #   at the top level. M4-1: `export`, `import-site`, `db copy`
+│   │                             #   (`archive`, `site_copy`, `export_cmd`), `backup`/`restore`
+│   │                             #   (`backup/`), `media sync|gc|regenerate` (`media_cmd`,
+│   │                             #   `media_url`, `gc`), the `artifacts.gc` and `site.backup`
+│   │                             #   jobs (`jobs/{gc,backup}.rs`)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
-│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
+│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
+│   │                             #   the table `catalogue`, `export` reader, `import_writer`
 │   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
 │   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
 │   │                             #   other crates reuse its harness as a dev-dependency
-│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
+│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants;
+│   │                             #   M4-1: metadata stripping (`strip`), store listing and copy,
+│   │                             #   the owner marker
 │   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
 │   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
@@ -43,6 +50,7 @@ ferritecms/
 │   │                             #   `diagnostics::scrub`. M2b-3: user filters, sessions, an
 │   │                             #   admin's TOTP reset, retained plugin data, audit filters,
 │   │                             #   the test mail, relation `types`, inline image `srcset`.
+│   │                             #   M4-1: `seed` (`DemoBatch`, the atomic `seed demo`).
 │   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
@@ -113,7 +121,7 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                ├─ ferrite-import-wp (M3-1: `import_fetch::HttpSource` implements its
  │                │                     `MediaSource`)
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
- ├─ ferrite-config ─── ferrite-domain
+ ├─ ferrite-config ─── ferrite-domain, ferrite-media (M4-1 R4: `ConditionalPut`, the `copy_if_not_exists` check)
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
  └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
 ```
@@ -288,6 +296,8 @@ root         = "media"                 # default; relative to the data folder
 # max_upload = "256MB"                 # M2a-2b: largest uploaded file, 1 byte..=1GiB; default 256MB
 # image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
 # upload_idle_timeout = "30s"          # M2a-2b: an upload receiving nothing this long is aborted
+# strip_metadata = false               # M4-1: strip EXIF/XMP (GPS) from JPEG/PNG/WebP originals on ingest
+# gc_grace_days = 7                    # M4-1: days the artifacts GC keeps unreferenced files, 1..=365; default 7
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -296,6 +306,8 @@ root         = "media"                 # default; relative to the data folder
 # access_key_id / secret_access_key (or *_file)        # both or neither; neither = environment credentials
 # allow_http = false
 # virtual_hosted_style = false
+# copy_if_not_exists = "..."          # M4-1: object_store encoding (header:<name>:<value>, header-with-status:…, multipart); unset = head + copy fallback (03 §3); values per provider and what is verified: 09 §4a
+# conditional_put = "etag"            # M4-1: "etag" (default) | "disabled" for stores that reject If-None-Match
 # prefix = ""
 # public_base_url = "https://cdn.example.com"          # optional, http(s) URL
 
@@ -332,6 +344,13 @@ volatile_ttl = "60s"                   # M2a-2b: TTL of pages with volatile or f
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
 #   smtps:// implicit TLS; smtp://…?tls=required STARTTLS; plain smtp:// (credentials only to a loopback relay)
 # from = "Site <noreply@example.com>"  # required with smtp_url; "a@b" or "Name <a@b>"
+
+[backup]                               # M4-1 P15; optional
+schedule = "off"                       # "off" | "daily" | "weekly"
+# to = "../backups"                    # required unless off: a folder outside the data
+                                       #   folder (relative to it) or s3://bucket[/prefix]
+keep = 7                               # 1 ..= 1000 snapshots (SQLite) or archives (Postgres)
+with_media = true
 ```
 
 **Mail** (`[mail]`, M2a-2 P17). The SMTP password lives only in the URL, so only in the
@@ -384,7 +403,46 @@ before the store switches to a staging object (2 MiB for an SVG, which is read w
 be sanitised), so uploads use at most about 64 MiB per node (8 slots × 8 MiB) besides
 the 8 KiB head each; size small VMs for it. The file name is checked (1..=255 bytes, no
 control or format characters) before the file is read. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
-variants are made only for raster originals of at most 64 MiB.
+variants are made only for raster originals of at most 64 MiB. `strip_metadata` (boolean,
+default `false`, M4-1 P17) removes EXIF and XMP losslessly from JPEG, PNG and WebP originals
+before they are hashed and stored, for browser uploads and the WordPress importer alike
+(03 §4). **Refusal rule:** with the option on, a JPEG, PNG or WebP whose metadata cannot
+be removed is refused, never stored with it: one over 64 MiB (`STRIP_MAX_BYTES`) or one
+the walker cannot parse (a truncated PNG, a WebP whose RIFF size runs past the file) gets
+`422 validation` on `POST /media` (`errors[0].field` = `file`, "metadata could not be
+removed: ...") and is recorded as refused media in an import report. **Memory with the
+option on:** the image is buffered whole, so a slot holds up to the buffer (at most 64 MiB
+of data in a `BytesMut` that grows by doubling, so up to 128 MiB reserved) plus the
+stripped copy (at most the input's size, 64 MiB): about 192 MiB per upload at the peak, so
+up to about 1.5 GiB for 8 slots, plus up to 192 MiB for a running import. The 64 MiB
+figure above holds only with the option off.
+
+**Artifacts GC grace** (`[media] gc_grace_days`, M4-1 P11, `Config.uploads.gc_grace_days`):
+an integer number of days, 1..=365, default 7, valid with either backend. An artifact row
+is deleted once it has been marked unreferenced for longer than this, and a file under
+`artifacts/` with no row once it is older than this (03 §6), and only on a pass that
+reads the media store's owner marker naming this database's install id (R16, R19, 03 §6); `ferrite media gc
+--grace-days N` overrides it for one run. `config check` reports an out-of-range value as
+`media.gc_grace_days: must be between 1 and 365`.
+
+**Scheduled backups** (`[backup]`, M4-1 P15, `Config.backup: BackupConfig`). `schedule` is
+`"off"` (default), `"daily"` or `"weekly"`; when it is not off, `serve` runs the
+`site.backup` job (09 §4): on SQLite a repository snapshot, on Postgres an export archive
+to `<to>/exports/`. `to` is kept as written and required unless the schedule is off
+(`backup.to: required unless backup.schedule is "off"`); it is a folder or
+`s3://bucket[/prefix]` (credentials and endpoint from the `AWS_*` environment), and `-`, a
+`.tar.zst` path, another `scheme://` and a folder inside the data folder (`load` compares
+lexically after making the data folder absolute and resolving a relative `to` against it)
+are refused. `config check` and `serve` (which then refuses to start) also run the
+repository location check of `ferrite backup`: symlinks resolved where the paths exist, not
+inside the local media root, no S3 prefix overlapping the media store's, and a local folder
+absent, empty (but for `lost+found`) or already a repository (its marker present; an S3
+prefix is checked when the job runs). On SQLite they also refuse a `database.url` other than
+`sqlite://ferrite.db` (`database.url: …`), since a backup of a database elsewhere could not be
+restored (09 §4).
+`keep` (1..=1000, default 7) is how many snapshots or archives are kept; `with_media`
+(default `true`) includes the blobs. With Postgres in cluster mode a local `to` is on
+whichever node runs the job; use `s3://` or a shared folder.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,
@@ -421,7 +479,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes

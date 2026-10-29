@@ -31,7 +31,8 @@
 //!    runner (`cluster.workers`; built-in prune jobs, scheduled publishing, plugin
 //!    actions, `media.variants` bounded by `media.image_workers`, and the caller's
 //!    handlers), the periodic scheduler (prune jobs hourly,
-//!    `content.publish_due` every 30 s) and the heartbeat (`nodes.meta` carries the
+//!    `content.publish_due` every 30 s, `artifacts.gc` daily, `site.backup` daily or weekly
+//!    when `[backup]` is on) and the heartbeat (`nodes.meta` carries the
 //!    theme, plugin and permalink state; the reloader beats after every reload);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
 //!     services and the site key are set up in step 7, so a missing or bad key stops
@@ -495,6 +496,7 @@ async fn boot(
     let max_upload = config.uploads.max_upload;
     let uploader = Arc::new(
         Uploader::new(media.clone(), max_upload)
+            .with_strip_metadata(config.uploads.strip_metadata)
             .with_idle_timeout(Duration::from_secs(config.uploads.idle_timeout_secs)),
     );
     // One install pipeline per node: its compile slots bound the node (P8).
@@ -581,10 +583,26 @@ async fn boot(
         data_dir: config.data_dir.clone(),
         site_url: config.site.url.as_str().trim_end_matches('/').to_owned(),
         max_upload,
+        strip_metadata: config.uploads.strip_metadata,
         version: binary_version()?.to_string(),
         #[cfg(feature = "test-seams")]
         fail_after_batches: opts.import_fail_after_batches,
     }));
+    handlers.push(Arc::new(jobs::ArtifactsGcHandler::new(
+        store.clone(),
+        media.clone(),
+        crate::gc::grace_days(config.uploads.gc_grace_days),
+    )));
+    // `[backup]` (P15): nothing is registered while the schedule is off.
+    let backup_periodic = match jobs::site_backup(config, store.clone(), media.clone())
+        .context("cannot set up the scheduled backup ([backup])")?
+    {
+        Some((handler, periodic)) => {
+            handlers.push(Arc::new(handler));
+            Some(periodic)
+        }
+        None => None,
+    };
     #[cfg(feature = "test-seams")]
     handlers.extend(opts.extra_handlers);
     // What the job list's `handled` reads (P19).
@@ -601,8 +619,8 @@ async fn boot(
     let runner = JobRunner::new(store.clone(), runner_config, handlers)
         .context("cannot set up the job runner")?;
     let mut periodics = builtin::periodics();
-    periodics.push(jobs::publish_due_periodic());
-    periodics.push(jobs::plugin_purge_sweep_periodic());
+    periodics.extend(jobs::core_periodics());
+    periodics.extend(backup_periodic);
     let tick = SCHEDULER_TICK;
     #[cfg(feature = "test-seams")]
     let (periodics, tick) = (
