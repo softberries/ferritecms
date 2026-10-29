@@ -10,7 +10,7 @@
 //! other files and the read-back check of `ferrite.db`, and deleted first when a snapshot
 //! is pruned. A non-empty folder or prefix without the marker is never used, and pruning
 //! only deletes keys of this layout. One site per repository: pruning deletes every blob no
-//! kept snapshot lists.
+//! kept snapshot lists once it is older than a day (R14).
 
 use std::collections::HashSet;
 use std::io::{BufRead, Read};
@@ -301,6 +301,16 @@ impl Repo {
         let mut out = BlobCopy::default();
         for hash in hashes {
             if let Some(size) = self.blobs.head(hash).await? {
+                // A local repository's blob is marked as used now, so a concurrent prune
+                // (which spares blobs younger than a day, R14) keeps it until this
+                // snapshot's manifest lists it. Best effort; S3 objects are not touched.
+                if let Some(root) = &self.local {
+                    let h = hash.as_str();
+                    let path = root.join(format!("{}artifacts/{}/{h}", self.prefix, &h[..2]));
+                    if let Ok(file) = std::fs::File::options().write(true).open(&path) {
+                        let _ = file.set_modified(std::time::SystemTime::now());
+                    }
+                }
                 out.present += 1;
                 out.listed_bytes += size;
                 out.listed.push(hash.clone());
@@ -406,14 +416,21 @@ impl Repo {
         let mut file = tokio::fs::File::open(src)
             .await
             .with_context(|| format!("cannot open {}", src.display()))?;
-        let mut writer = object_store::buffered::BufWriter::new(self.store.clone(), self.key(rel));
+        let mut upload = Upload(None);
+        let writer = upload.0.insert(object_store::buffered::BufWriter::new(
+            self.store.clone(),
+            self.key(rel),
+        ));
         let copied = async {
-            tokio::io::copy(&mut file, &mut writer).await?;
+            tokio::io::copy(&mut file, writer).await?;
             writer.shutdown().await
         }
         .await;
+        let writer = upload.0.take();
         if let Err(e) = copied {
-            let _ = writer.abort().await;
+            if let Some(mut writer) = writer {
+                let _ = writer.abort().await;
+            }
             return Err(e).with_context(|| format!("cannot upload {rel}"));
         }
         Ok(())
@@ -513,8 +530,10 @@ impl Repo {
     }
 
     /// Keeps the newest `keep` complete snapshots and deletes the older snapshot folders
-    /// (incomplete ones included), then every blob no kept snapshot lists, and staging
-    /// leftovers under `tmp/` older than 24 hours. `keep` must be at least 1.
+    /// (incomplete ones included), then every blob no kept snapshot lists that is older
+    /// than 24 hours (R14: a younger one may belong to a snapshot still being written by
+    /// another process), and staging leftovers under `tmp/` older than 24 hours. `keep`
+    /// must be at least 1.
     pub async fn prune(&self, keep: usize) -> anyhow::Result<PruneReport> {
         if keep == 0 {
             bail!("keep must be at least 1");
@@ -547,16 +566,19 @@ impl Repo {
                 report.snapshots.push(name);
             }
         }
+        // R14: an unlisted blob younger than a day may belong to a snapshot still being
+        // written (another site or process sharing the repository); it is kept.
+        let cutoff = Timestamp::from(chrono::Utc::now() - TMP_GRACE);
         let listed: Vec<_> = self.blobs.list_artifacts().try_collect().await?;
         for object in listed {
             if let Some(hash) = object.hash
                 && !needed.contains(&hash)
+                && object.last_modified.as_micros() < cutoff.as_micros()
             {
                 self.blobs.delete(&hash).await?;
                 report.artifacts += 1;
             }
         }
-        let cutoff = Timestamp::from(chrono::Utc::now() - TMP_GRACE);
         let tmp: Vec<_> = self.blobs.list_tmp().try_collect().await?;
         let tmp_dir = format!("{}tmp/", self.prefix);
         for object in tmp {
@@ -569,6 +591,24 @@ impl Repo {
             }
         }
         Ok(report)
+    }
+}
+
+/// An S3 upload in progress. Dropped before it finished (the job's timeout drops the
+/// future), it aborts the multipart upload in a background task, so no incomplete upload
+/// is left behind (best effort: a killed process still leaves one; a bucket lifecycle rule
+/// for incomplete multipart uploads cleans those up).
+struct Upload(Option<object_store::buffered::BufWriter>);
+
+impl Drop for Upload {
+    fn drop(&mut self) {
+        if let Some(mut writer) = self.0.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = writer.abort().await;
+            });
+        }
     }
 }
 

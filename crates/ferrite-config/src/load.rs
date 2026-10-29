@@ -836,7 +836,11 @@ fn check_backup_to(data_dir: &Path, to: &str) -> Result<(), String> {
         }
         out
     };
-    if normal(&resolve(data_dir, to)).starts_with(normal(data_dir)) {
+    // Absolute first (no filesystem access): a relative `--data` such as `.` must not
+    // normalise to an empty path, and a leading `..` must climb out of the real folder.
+    let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let data = absolute(data_dir);
+    if normal(&absolute(&resolve(&data, to))).starts_with(normal(&data)) {
         return Err(
             "must be outside the data folder (a relative path is relative to it, e.g. \
              \"../backups\")"
@@ -1134,3 +1138,30 @@ pub fn render_default_toml(
 
 /// The `[backup]` section of the `ferrite init` template (commented out: off).
 const BACKUP_TEMPLATE: &str = "# [backup]\n# Scheduled backups while `serve` runs: \"off\", \"daily\" or \"weekly\". SQLite: a\n# snapshot into a backup repository (`ferrite restore` reads it); Postgres: an export\n# archive in <to>/exports/ (`ferrite import-site` reads it).\n# schedule = \"daily\"\n# A folder outside the data folder (relative paths are relative to it) or\n# s3://bucket[/prefix] (credentials from the AWS_* environment).\n# to = \"../backups\"\n# Snapshots or archives kept (1..=1000).\n# keep = 7\n# with_media = true\n";
+
+#[cfg(test)]
+mod backup_to_tests {
+    use std::path::Path;
+
+    use super::check_backup_to;
+
+    #[test]
+    fn relative_data_folders_are_made_absolute() {
+        // `--data .`: an absolute or sibling `to` is outside, `.`-relative ones inside.
+        let dot = Path::new(".");
+        assert_eq!(check_backup_to(dot, "/srv/backups"), Ok(()));
+        assert_eq!(check_backup_to(Path::new("./"), "/srv/b"), Ok(()));
+        assert_eq!(check_backup_to(dot, "../backups"), Ok(()));
+        assert!(check_backup_to(dot, "repo").is_err());
+        assert!(check_backup_to(dot, "./x/../y").is_err());
+        // `--data site`: `..` climbs out of the real folder.
+        let site = Path::new("site");
+        assert_eq!(check_backup_to(site, "../backups"), Ok(()));
+        assert_eq!(check_backup_to(site, "../../site/x"), Ok(()));
+        assert!(check_backup_to(site, "../site/x").is_err());
+        assert!(check_backup_to(site, "x").is_err());
+        // An absolute `to` inside a relative data folder.
+        let inside = std::path::absolute("site").unwrap().join("repo");
+        assert!(check_backup_to(site, inside.to_str().unwrap()).is_err());
+    }
+}

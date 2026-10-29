@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use clap::Subcommand;
-use ferrite_config::{ClusterMode, Config, ConfigError, DbKind, MediaSection};
+use ferrite_config::{ClusterMode, Config, ConfigError, ConfigProblem, DbKind, MediaSection};
 
 use crate::cli::DataArg;
 use crate::utf8_env;
@@ -22,6 +22,17 @@ pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
     match cmd {
         ConfigCommand::Check(args) => match ferrite_config::load(&args.data, utf8_env()?) {
             Ok(config) => {
+                // The repository checks `serve` runs before it starts (no database needed).
+                if let Err(e) = crate::jobs::backup_location(&config) {
+                    let e = ConfigError {
+                        problems: vec![ConfigProblem {
+                            path: "backup.to".to_owned(),
+                            message: format!("{e:#}"),
+                        }],
+                    };
+                    eprintln!("{}", problems(&e));
+                    return Ok(ExitCode::FAILURE);
+                }
                 for warning in warnings(&config) {
                     eprintln!("warning: {warning}");
                 }

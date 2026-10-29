@@ -54,14 +54,9 @@ pub fn site_backup(
     let Some(every) = backup.schedule.every_secs() else {
         return Ok(None);
     };
-    let to = backup
-        .to
-        .as_deref()
+    let repo = backup_location(config)
+        .context("backup.to")?
         .context("backup.to is required unless backup.schedule is \"off\"")?;
-    let Target::Repo(repo) = Target::parse(to, &config.data_dir)? else {
-        bail!("backup.to must be a folder or s3://bucket[/prefix]");
-    };
-    check_repo_location(config, &repo).context("backup.to")?;
     if let RepoLocation::Dir(dir) = &repo
         && config.effective_cluster_mode() == ClusterMode::Cluster
     {
@@ -85,6 +80,20 @@ pub fn site_backup(
         max_attempts: SITE_BACKUP_MAX_ATTEMPTS,
     };
     Ok(Some((handler, periodic)))
+}
+
+/// The repository `backup.to` names (`None` without one), checked as `serve` checks it:
+/// a folder or `s3://`, not inside the data folder or the media store (symlinks resolved
+/// where the paths exist). No database or network access, so `config check` runs it too.
+pub(crate) fn backup_location(config: &Config) -> anyhow::Result<Option<RepoLocation>> {
+    let Some(to) = config.backup.to.as_deref() else {
+        return Ok(None);
+    };
+    let Target::Repo(repo) = Target::parse(to, &config.data_dir)? else {
+        bail!("must be a folder or s3://bucket[/prefix]");
+    };
+    check_repo_location(config, &repo)?;
+    Ok(Some(repo))
 }
 
 impl SiteBackupHandler {
@@ -182,9 +191,7 @@ impl JobHandler for SiteBackupHandler {
         if let Err(e) = guard.release().await {
             tracing::warn!(error = %e, "cannot release the backup lock");
         }
-        result.map_err(|e| {
-            tracing::warn!(error = %format!("{e:#}"), "scheduled backup failed");
-            JobError::Retry(format!("{e:#}"))
-        })
+        // The runner logs the failed attempt with this message.
+        result.map_err(|e| JobError::Retry(format!("{e:#}")))
     }
 }

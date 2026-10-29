@@ -306,6 +306,30 @@ async fn scheduled_backup_while_serving_restores() {
     .await
     .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    // R14: the restored ferrite.toml still schedules backups into the same repository.
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        err.contains("warning: the restored ferrite.toml schedules backups"),
+        "{err}"
+    );
+    assert!(err.contains("FERRITE_BACKUP__SCHEDULE=off"), "{err}");
+    assert!(err.contains(repo.to_str().unwrap()), "{err}");
+    // With the schedule off in the environment there is no warning.
+    let (r, t) = (repo.clone(), tmp.path().join("restored-quiet"));
+    let out = tokio::task::spawn_blocking(move || {
+        let mut c = ferrite();
+        c.env("FERRITE_BACKUP__SCHEDULE", "off");
+        c.arg("restore").arg(&r).arg("--data").arg(&t);
+        c.output().unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("schedules backups"),
+        "{}",
+        text(&out)
+    );
 
     // It holds the content written before and during the backups.
     let (has_marker, during): (i64, i64) = {
@@ -337,6 +361,139 @@ async fn scheduled_backup_while_serving_restores() {
     assert!(body.contains("Welcome to FerriteCMS"), "{body}");
     node.shutdown().await.unwrap();
     store.close().await;
+}
+
+/// `serve` with its own periodics (no test override) schedules `site.backup` when
+/// `[backup]` is on: the current period's job row appears, keyed by the day's start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_schedules_site_backup_with_default_periodics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_owned();
+    let data = tokio::task::spawn_blocking(move || {
+        seeded(
+            &root,
+            "site",
+            "\n[backup]\nschedule = \"daily\"\nto = \"../repo\"\n",
+        )
+    })
+    .await
+    .unwrap();
+    let config = site_config(&data, &[]);
+    let store = open_store(&config, OpenMode::MustExist).await.unwrap();
+    let node = start(&config, store.clone(), NodeOptions::default())
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let key = loop {
+        let key: Option<String> = {
+            let mut conn = sqlite(&data).await;
+            let key = sqlx::query_scalar(
+                "SELECT unique_key FROM jobs WHERE kind = 'site.backup' LIMIT 1",
+            )
+            .fetch_optional(&mut conn)
+            .await
+            .unwrap();
+            let _ = conn.close().await;
+            key
+        };
+        if let Some(key) = key {
+            break key;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no site.backup job was scheduled"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    node.shutdown().await.unwrap();
+    store.close().await;
+    let start_secs: i64 = key
+        .strip_prefix("site.backup:")
+        .unwrap_or_else(|| panic!("{key}"))
+        .parse()
+        .unwrap();
+    assert_eq!(start_secs % 86_400, 0, "{key}: aligned to 00:00 UTC");
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    assert!(now - start_secs < 86_400 + 60, "{key}");
+}
+
+/// R14: pruning a repository spares unlisted blobs younger than a day, so a snapshot still
+/// being written into the same repository (another site, another process) keeps the blobs
+/// it copied, or found already there, before its manifest exists. Older unlisted blobs go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prune_spares_blobs_of_a_snapshot_in_flight() {
+    use ferrite::backup::repo::Repo;
+    use ferrite::backup::target::RepoLocation;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_owned();
+    let data = tokio::task::spawn_blocking(move || seeded(&root, "site", ""))
+        .await
+        .unwrap();
+    let repo_dir = tmp.path().join("repo");
+    // A complete snapshot of site A.
+    let (d, r) = (data.clone(), repo_dir.clone());
+    tokio::task::spawn_blocking(move || {
+        let mut c = ferrite();
+        c.args(["backup", "--data"]).arg(&d).arg("--to").arg(&r);
+        ok(c);
+    })
+    .await
+    .unwrap();
+    let repo = Repo::open(&RepoLocation::Dir(repo_dir.clone()), false)
+        .await
+        .unwrap();
+    let blob_file = |h: &str| repo_dir.join("artifacts").join(&h[..2]).join(h);
+    let age = |path: &Path| {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * 86_400))
+            .unwrap();
+    };
+
+    // Another site's media: one blob it reuses (already in the repository, old), one it
+    // copies now, one abandoned long ago.
+    let other = local_media(&tmp.path().join("other-media"));
+    let mut hashes = Vec::new();
+    for data in ["reused", "in flight", "abandoned"] {
+        hashes.push(
+            other
+                .put_artifact(Bytes::from(data.to_owned()))
+                .await
+                .unwrap()
+                .hash,
+        );
+    }
+    let (reused, in_flight, abandoned) = (&hashes[0], &hashes[1], &hashes[2]);
+    repo.copy_blobs(&other, &[reused.clone(), abandoned.clone()])
+        .await
+        .unwrap();
+    age(&blob_file(reused.as_str()));
+    age(&blob_file(abandoned.as_str()));
+    // The in-flight run: copies `in flight`, finds `reused` present; no manifest yet.
+    let copy = repo
+        .copy_blobs(&other, &[reused.clone(), in_flight.clone()])
+        .await
+        .unwrap();
+    assert_eq!((copy.written, copy.present), (1, 1));
+
+    // Site A's prune runs before the other run writes its manifest.
+    let report = repo.prune(1).await.unwrap();
+    assert!(
+        blob_file(in_flight.as_str()).is_file(),
+        "copied blob spared"
+    );
+    assert!(blob_file(reused.as_str()).is_file(), "reused blob spared");
+    assert!(
+        !blob_file(abandoned.as_str()).exists(),
+        "old unlisted blob deleted"
+    );
+    assert_eq!(report.artifacts, 1);
 }
 
 /// With `schedule = "off"` (the default) there is no `site.backup` handler or periodic.

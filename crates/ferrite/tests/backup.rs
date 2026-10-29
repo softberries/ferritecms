@@ -382,6 +382,12 @@ fn backup_repo_keep_prunes_snapshots_and_unlisted_blobs() {
     let stray_path = blob_path(&repo, &stray_hash);
     std::fs::create_dir_all(stray_path.parent().unwrap()).unwrap();
     std::fs::write(&stray_path, stray).unwrap();
+    // A young unlisted blob is kept (R14: it may belong to a snapshot in progress).
+    let young = b"young blob";
+    let young_path = blob_path(&repo, &ferrite_domain::to_hex(&Sha256::digest(young)));
+    std::fs::create_dir_all(young_path.parent().unwrap()).unwrap();
+    std::fs::write(&young_path, young).unwrap();
+    set_age(&stray_path, 2 * 86_400);
     ok_backup(&source, &repo, &[]);
     let before = snapshots(&repo);
     let out = ok_backup(&source, &repo, &["--keep", "2"]);
@@ -389,7 +395,8 @@ fn backup_repo_keep_prunes_snapshots_and_unlisted_blobs() {
     assert_eq!(after.len(), 2, "{after:?}");
     assert_eq!(after[0], before[1]);
     assert!(!after.contains(&before[0]));
-    assert!(!stray_path.exists(), "the unlisted blob is pruned");
+    assert!(!stray_path.exists(), "the old unlisted blob is pruned");
+    assert!(young_path.is_file(), "the young unlisted blob is kept");
     for hash in site_hashes(&source) {
         assert!(blob_path(&repo, &hash).is_file(), "{hash}");
     }

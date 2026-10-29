@@ -168,9 +168,19 @@ fn is_local_file(name: &str) -> bool {
             .is_some_and(repo::is_snapshot_name)
 }
 
-/// Removes the files killed runs left in the backups folder: exactly the names a run writes
-/// ([`is_local_file`]), older than [`STALE`] (a running backup's files are young). Anything
-/// else there, such as an archive a user put there, is never touched.
+/// Whether `name` is a scheduled export's table spool folder: [`SPOOL_PREFIX`] and the six
+/// alphanumeric characters `tempfile` adds.
+///
+/// [`SPOOL_PREFIX`]: crate::site_copy::SPOOL_PREFIX
+fn is_spool_dir(name: &str) -> bool {
+    name.strip_prefix(crate::site_copy::SPOOL_PREFIX)
+        .is_some_and(|rest| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// Removes what killed runs left in the backups folder: files with exactly the names a run
+/// writes ([`is_local_file`]) and export spool folders ([`is_spool_dir`]), older than
+/// [`STALE`] (a running backup's files are young). Anything else there, such as an archive
+/// a user put there, is never touched.
 fn sweep_stale(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -187,6 +197,8 @@ fn sweep_stale(dir: &Path) {
             .is_some_and(|age| age > STALE);
         if is_local_file(name) && old && entry.path().is_file() {
             let _ = std::fs::remove_file(entry.path());
+        } else if is_spool_dir(name) && old && entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
         }
     }
 }
@@ -592,7 +604,8 @@ pub async fn run_export_backup(
     let file = crate::init::create_private(&tmp)?;
     let binary = binary_version()?;
     let (manifest, out) =
-        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary).await?;
+        crate::site_copy::export_to(store, media, BufWriter::new(file), &binary, Some(&dir))
+            .await?;
     let file = out.into_inner().map_err(|e| e.into_error())?;
     file.sync_all()?;
     drop(file);
@@ -805,6 +818,15 @@ mod tests {
             assert!(is_local_file(&format!("backup-20261029T101500Z.{suffix}")));
         }
         assert!(is_local_file("export-20261029T101500Z.tmp"));
+        assert!(is_spool_dir("ferrite-export-a1B2c3"));
+        for name in [
+            "ferrite-export-",
+            "ferrite-export-abc",
+            "ferrite-export-a1B2c3x",
+            "x",
+        ] {
+            assert!(!is_spool_dir(name), "{name}");
+        }
         for name in [
             "backup-2026-10-28.tar.zst",
             "backup-20261029T101500Z.tar.zst",

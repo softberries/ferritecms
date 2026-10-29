@@ -422,9 +422,11 @@ is deleted once it has been marked unreferenced for longer than this, and a file
 to `<to>/exports/`. `to` is kept as written and required unless the schedule is off
 (`backup.to: required unless backup.schedule is "off"`); it is a folder or
 `s3://bucket[/prefix]` (credentials and endpoint from the `AWS_*` environment), and `-`, a
-`.tar.zst` path, another `scheme://` and a folder inside the data folder (compared
-lexically after resolving a relative path against the data folder; `serve` checks again
-with symlinks resolved, and also refuses one inside the local media root) are refused.
+`.tar.zst` path, another `scheme://` and a folder inside the data folder (`load` compares
+lexically after making the data folder absolute and resolving a relative `to` against it)
+are refused. `config check` and `serve` (which then refuses to start) also run the
+repository location check of `ferrite backup`: symlinks resolved where the paths exist, not
+inside the local media root, no S3 prefix overlapping the media store's.
 `keep` (1..=1000, default 7) is how many snapshots or archives are kept; `with_media`
 (default `true`) includes the blobs. With Postgres in cluster mode a local `to` is on
 whichever node runs the job; use `s3://` or a shared folder.

@@ -33,6 +33,7 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+pub(crate) use backup::backup_location;
 pub use backup::{
     SITE_BACKUP_KIND, SITE_BACKUP_MAX_ATTEMPTS, SITE_BACKUP_TIMEOUT, SiteBackupHandler, site_backup,
 };
