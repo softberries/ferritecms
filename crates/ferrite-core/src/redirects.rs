@@ -15,7 +15,7 @@ use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, RowError,
     actor::{Area, Capability, can, require, require_read},
     events,
-    jobs::PermalinkRedirects,
+    jobs::{PermalinkRedirects, permalink_redirects_job},
     permalink::{
         self, PermalinkInput, PermalinkRules, Permalinks, ancestors, load_input, primary_term,
     },
@@ -37,6 +37,11 @@ pub const MAX_IMPORT_ROWS: usize = 10_000;
 /// [`RedirectService::structure_change`] walks.
 pub const STRUCTURE_PAGE: usize = 500;
 
+/// Pages one `permalink.redirects` job walks (10 000 items) before it hands the rest to
+/// a continuation job, so each job fits the default job timeout and a retry redoes at
+/// most this much (final review BE2).
+pub const STRUCTURE_JOB_PAGES: u32 = 20;
+
 /// What [`RedirectService::structure_change`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PermalinkRedirectReport {
@@ -50,6 +55,8 @@ pub struct PermalinkRedirectReport {
     pub refused: u32,
     /// Transactions of at most [`STRUCTURE_PAGE`] items.
     pub pages: u32,
+    /// The page budget ran out: a continuation job was enqueued for the rest.
+    pub continued: bool,
 }
 
 /// What an import did.
@@ -296,22 +303,37 @@ impl RedirectService {
 
     /// The `permalink.redirects` job (M3-2 P30): redirects every published post and page
     /// from its path under `payload.prev` to its path under the structures stored now,
-    /// page by page ([`structure_page`](Self::structure_page)) until the last.
-    /// Re-running it is harmless: the second run rewrites the same rows. No capability
-    /// check (a system job). Term-path changes (a `%category%` term renamed) are not
-    /// covered.
+    /// page by page ([`structure_page`](Self::structure_page)) from `payload.cursor`, for
+    /// at most `max_pages` pages ([`STRUCTURE_JOB_PAGES`] for the job). When pages are
+    /// left it enqueues a continuation job from the next cursor (same structures and
+    /// version; its unique key names the cursor, so a retry enqueues it once) and
+    /// reports [`continued`](PermalinkRedirectReport::continued). Re-running a job is
+    /// harmless: it rewrites the same rows. No capability check (a system job).
+    /// Term-path changes (a `%category%` term renamed) are not covered.
     pub async fn structure_change(
         &self,
         payload: &PermalinkRedirects,
+        max_pages: u32,
     ) -> Result<PermalinkRedirectReport, CoreError> {
         let mut report = PermalinkRedirectReport::default();
-        let mut cursor = None;
-        loop {
+        let mut cursor = payload.cursor.clone();
+        for _ in 0..max_pages.max(1) {
             cursor = self.structure_page(payload, cursor, &mut report).await?;
             if cursor.is_none() {
                 return Ok(report);
             }
         }
+        let next = PermalinkRedirects {
+            cursor,
+            ..payload.clone()
+        };
+        self.store
+            .read()
+            .jobs()
+            .enqueue(&permalink_redirects_job(&next))
+            .await?;
+        report.continued = true;
+        Ok(report)
     }
 
     /// One page of [`structure_change`](Self::structure_change): up to

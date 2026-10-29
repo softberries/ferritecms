@@ -7,12 +7,21 @@
 // post permalink structure and runs a job. The `finally` puts the three settings back and
 // removes the `slug-change` redirects that putting the structure back makes (as the
 // Settings spec does), so the specs after it see the site they expect.
+//
+// It survives a CI retry against the same site (AD2): the settings to put back are the
+// ones the first attempt saw (kept in a file per site), an import job left queued or
+// running by an earlier attempt is waited for before starting, and a second import of the
+// same export counts its media as unchanged and leaves the permalink structure alone (the
+// old URL then redirects to the post). `--repeat-each 2` runs it twice on one site.
 
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { ContentApi, type Redirect } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { E2E_STATE_DIR } from "./support/server";
 import { zipFolder } from "./support/zip";
 
 const CORPUS = join(
@@ -25,6 +34,46 @@ const RESTORED = ["site.title", "site.description", "permalink.post"] as const;
 
 const screen = (page: Page) => page.locator("[data-slot=import-screen]");
 const panel = (page: Page) => page.locator("[data-slot=import-run]");
+
+/**
+ * The settings the import changes, as the first attempt on this site found them: saved
+ * once per site (its URL names the run's server), read back by a retry.
+ */
+async function baseline(api: ContentApi, key: string, data: string): Promise<Settings> {
+  // Keyed by the site's own data folder (a fresh temp folder per site), never its port,
+  // which a later run may get again; global setup also empties the folder per run.
+  const site = createHash("sha256").update(data).digest("hex").slice(0, 16);
+  const file = join(E2E_STATE_DIR, `import-${key}-${site}.json`);
+  if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as Settings;
+  const now = await api.getSettings();
+  const kept = Object.fromEntries(RESTORED.map((k) => [k, now[k] ?? null]));
+  mkdirSync(E2E_STATE_DIR, { recursive: true });
+  writeFileSync(file, JSON.stringify(kept));
+  return kept;
+}
+type Settings = Record<string, unknown>;
+
+/** Waits until no `import.wordpress` job is queued or running (an earlier attempt's). */
+async function noImportJob(api: ContentApi): Promise<void> {
+  const count = async (status: string) => {
+    const res = await api.ctx.get(
+      `/api/v1/system/jobs?kind=import.wordpress&status=${status}&limit=10`,
+    );
+    expect(res.ok(), await res.text()).toBe(true);
+    return ((await res.json()) as { items: unknown[] }).items.length;
+  };
+  await expect
+    .poll(async () => (await count("queued")) + (await count("running")), { timeout: 150_000 })
+    .toBe(0);
+}
+
+/** Whether a run of export A finished before this attempt (a re-import). */
+async function importedBefore(api: ContentApi): Promise<boolean> {
+  const res = await api.ctx.get("/api/v1/import/runs?limit=50");
+  expect(res.ok(), await res.text()).toBe(true);
+  const runs = ((await res.json()) as { items: { source: string; state: string }[] }).items;
+  return runs.some((r) => r.source.startsWith("http://localhost:8099") && r.state === "done");
+}
 
 async function open(page: Page): Promise<void> {
   await expect(screen(page).getByRole("heading", { name: "Import", level: 1 })).toBeVisible();
@@ -41,11 +90,14 @@ test("import_export_a_through_the_screen", async ({
 }) => {
   test.setTimeout(180_000);
   const api = await ContentApi.as(siteKey, site.url, "admin");
-  const before = await api.getSettings();
+  const before = await baseline(api, siteKey, site.data);
   let started = false;
   let thrown: { error: unknown } | null = null;
   const page = await as("admin");
   try {
+    // A retry: an earlier attempt's import may still be queued or running.
+    await noImportJob(api);
+    const reimport = await importedBefore(api);
     // The sidebar's Import item, between Plugins and Settings, and `g i`.
     await page.goto("/admin/");
     const nav = page.getByRole("navigation", { name: "Main" });
@@ -100,8 +152,10 @@ test("import_export_a_through_the_screen", async ({
     await expect(steps.locator("[data-state=done]")).toHaveCount(7);
     const counts = panel(page).getByRole("table");
     await expect(counts.locator("tr[data-kind=post]")).toBeVisible();
-    // The zip's files became media.
-    await expect(counts.locator("tr[data-kind=media] td").first()).not.toHaveText("0");
+    // The zip's files became media: created by a first import, unchanged by a re-import.
+    const media = counts.locator("tr[data-kind=media] td");
+    const cell = async (i: number) => Number((await media.nth(i).textContent()) ?? "0");
+    expect((await cell(0)) + (await cell(2))).toBeGreaterThan(0);
     await snap(page, "import-done");
     await expectAccessible(page);
 
@@ -134,8 +188,9 @@ test("import_export_a_through_the_screen", async ({
     await expect(row).toContainText("http://localhost:8099");
     await expect(row.locator("[data-slot=run-state]").first()).toHaveText("Done");
 
-    // The post at its old WordPress URL.
-    const old = await page.request.get(OLD_URL, { maxRedirects: 0 });
+    // The post at its old WordPress URL: served there by a first import (which takes the
+    // old structure); a re-import keeps the site's structure and redirects the old URL.
+    const old = await page.request.get(OLD_URL, { maxRedirects: reimport ? 1 : 0 });
     expect(old.status()).toBe(200);
     expect(await old.text()).toContain("Every core block");
 
@@ -160,10 +215,16 @@ test("import_export_a_through_the_screen", async ({
         problems.push(error);
       }
     };
+    // Only a structure the import changed moves posts back (a re-import keeps it).
+    let moved = false;
+    await step(async () => {
+      const now = await api.getSettings();
+      moved = (now["permalink.post"] ?? null) !== (before["permalink.post"] ?? null);
+    });
     await step(() =>
       api.patchSettings(Object.fromEntries(RESTORED.map((k) => [k, before[k] ?? null]))),
     );
-    if (started) {
+    if (started && moved) {
       // Putting the structure back moves every dated post to `/%slug%/` and redirects the
       // dated paths (P30). Once the job has made this post's, remove every `slug-change`
       // redirect from or to a dated path, as the Settings spec does.

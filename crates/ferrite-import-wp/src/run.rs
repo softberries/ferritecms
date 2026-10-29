@@ -20,7 +20,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use ferrite_core::import::{ImportBatch, ImportHandle, ImportService};
+use ferrite_core::import::{
+    ImportBatch, ImportHandle, ImportService, STEP_FIXUP, STEP_PARSE as PARSE, STEP_PASS1,
+    STEP_PASS2, STEP_PASS3, STEP_PASS4, STEP_REPORT as REPORT,
+};
 use ferrite_core::{Actor, SwappablePermalinks};
 use ferrite_domain::{ImportRunState, JobId, Timestamp};
 use ferrite_media::MediaStore;
@@ -40,10 +43,6 @@ const DIGEST_KEY: &str = "wxr_sha256";
 const FINISHED: &str = "finished";
 /// The `DIGEST_KEY` of a dry run's work file: never resumed, even when deleting it failed.
 const DRY_RUN: &str = "dry-run";
-/// The step that fills the IR.
-const PARSE: &str = "parse";
-/// The step that builds the report.
-const REPORT: &str = "report";
 /// Records in flight between the parser thread and the IR writer. An item may hold
 /// up to 64 MiB of text, so the queue is short: memory stays near a few items.
 const PARSE_QUEUE: usize = 8;
@@ -581,31 +580,31 @@ async fn run_steps(
         ir,
         ended: AtomicU32::new(0),
     };
-    if begin_pass(progress, fence, opts, ir, "pass1").await? {
+    if begin_pass(progress, fence, opts, ir, STEP_PASS1).await? {
         crate::pass::pass1(&session, report).await?;
-        end_step(opts, ir, "pass1").await?;
+        end_step(opts, ir, STEP_PASS1).await?;
     }
-    if stops_after(opts, "pass1") {
+    if stops_after(opts, STEP_PASS1) {
         return Ok(());
     }
-    if begin_pass(progress, fence, opts, ir, "pass2").await? {
+    if begin_pass(progress, fence, opts, ir, STEP_PASS2).await? {
         crate::pass::pass2(&session, report).await?;
-        end_step(opts, ir, "pass2").await?;
+        end_step(opts, ir, STEP_PASS2).await?;
     }
-    if stops_after(opts, "pass2") {
+    if stops_after(opts, STEP_PASS2) {
         return Ok(());
     }
-    if begin_pass(progress, fence, opts, ir, "pass3").await? {
+    if begin_pass(progress, fence, opts, ir, STEP_PASS3).await? {
         crate::pass::content::import(&session, report).await?;
-        end_step(opts, ir, "pass3").await?;
+        end_step(opts, ir, STEP_PASS3).await?;
     }
-    if begin_pass(progress, fence, opts, ir, "pass4").await? {
+    if begin_pass(progress, fence, opts, ir, STEP_PASS4).await? {
         crate::pass::pass4(&session, report).await?;
-        end_step(opts, ir, "pass4").await?;
+        end_step(opts, ir, STEP_PASS4).await?;
     }
-    if begin_pass(progress, fence, opts, ir, "fixup").await? {
+    if begin_pass(progress, fence, opts, ir, STEP_FIXUP).await? {
         crate::pass::fixup::run(&session, report).await?;
-        end_step(opts, ir, "fixup").await?;
+        end_step(opts, ir, STEP_FIXUP).await?;
     }
     Ok(())
 }
@@ -941,9 +940,14 @@ mod tests {
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), Some(parsed));
         // Of several, the one with the most finished passes, whatever the listing order.
         for name in ["a-early", "z-early"] {
-            make_with(name, "aaa", &[PARSE, "pass1"]).await;
+            make_with(name, "aaa", &[PARSE, STEP_PASS1]).await;
         }
-        let furthest = make_with("m-furthest", "aaa", &[PARSE, "pass1", "pass2", "pass3"]).await;
+        let furthest = make_with(
+            "m-furthest",
+            "aaa",
+            &[PARSE, STEP_PASS1, STEP_PASS2, STEP_PASS3],
+        )
+        .await;
         assert_eq!(find_ir(work.path(), "aaa").await.unwrap(), Some(furthest));
         assert_eq!(
             find_ir(&work.path().join("none"), "aaa").await.unwrap(),

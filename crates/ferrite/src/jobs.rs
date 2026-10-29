@@ -16,7 +16,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
-    ContentService, CoreError, ExtensionService, RedirectService,
+    ContentService, CoreError, ExtensionService, RedirectService, STRUCTURE_JOB_PAGES,
     jobs::{
         PLUGIN_ACTION_KIND, PLUGIN_ACTION_VERSION, PLUGIN_PURGE_KIND, PLUGIN_PURGE_SWEEP_EVERY,
         PLUGIN_PURGE_SWEEP_KIND, PLUGIN_PURGE_VERSION, PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND,
@@ -330,6 +330,7 @@ pub fn handlers(
         }),
         Arc::new(PermalinkRedirectsHandler {
             redirects: Arc::new(RedirectService::new(store.clone())),
+            pages: STRUCTURE_JOB_PAGES,
         }),
         Arc::new(PluginActionHandler::new(store, host, action_slots)),
     ]

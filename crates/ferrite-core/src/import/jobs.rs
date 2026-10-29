@@ -10,12 +10,14 @@
 //!
 //! **Readers never see a run's fencing token**: the reads return [`ImportRunView`].
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, Job, JobId,
     JobQuery, JobStatus, Role, Timestamp, UserId, UserStatus,
 };
-use ferrite_store::{JobRepo, LOCK_IMPORT};
+use ferrite_store::{JobRepo, LOCK_IMPORT, Repos, StoreError, lock};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -35,6 +37,9 @@ use crate::{
 const ALREADY: &str = "an import is already queued or running";
 /// The importer check's refusal (P27).
 const ACTIVE_ADMIN: &str = "an active admin";
+/// How long [`ImportService::enqueue`] waits for the import lock before it answers that
+/// another import is starting (final review BE-m4).
+pub const ENQUEUE_LOCK_WAIT: Duration = Duration::from_secs(2);
 /// The import lock could not be taken (an error, not another holder).
 const NO_LOCK: &str = "the import lock is unavailable";
 /// Current version of the report manifest.
@@ -138,8 +143,10 @@ impl ImportService {
     /// is abandoned instead, since the admin asked to import.
     ///
     /// The check and the insert are one transaction, with the import lock taken around
-    /// it so two enqueues cannot both pass the check; the lock held elsewhere is the same
-    /// refusal, and failing to take it is [`CoreError::Unavailable`]. A CLI import that
+    /// it so two enqueues cannot both pass the check. The lock is waited for up to
+    /// [`ENQUEUE_LOCK_WAIT`] (a failed upload's cleanup holds it briefly); still held
+    /// then (an import is starting or running) is the same refusal, and failing to take
+    /// it is [`CoreError::Unavailable`]. A CLI import that
     /// starts between this check and the job's run is still caught: the run's unique
     /// `running` index refuses one of the two, and the job retries a `Busy` start.
     pub async fn enqueue(
@@ -165,9 +172,9 @@ impl ImportService {
             user: actor.user,
             source_name: request.source_name,
         };
-        let lock = match self.store.try_lock(LOCK_IMPORT).await {
-            Ok(Some(guard)) => guard,
-            Ok(None) => return Err(CoreError::Changed(ALREADY)),
+        let lock = match lock(self.store.as_ref(), LOCK_IMPORT, ENQUEUE_LOCK_WAIT).await {
+            Ok(guard) => guard,
+            Err(StoreError::Busy) => return Err(CoreError::Changed(ALREADY)),
             Err(e) => {
                 tracing::warn!(error = %e, "taking the import lock failed");
                 return Err(CoreError::Unavailable(NO_LOCK));
@@ -235,13 +242,13 @@ impl ImportService {
         cursor: Option<(Timestamp, Uuid)>,
     ) -> Result<Vec<ImportRunView>, CoreError> {
         require_reader(actor, Capability::Import)?;
-        let runs = self
-            .store
-            .read()
-            .imports()
-            .list_runs_page(limit, cursor)
-            .await?;
-        Ok(runs.into_iter().map(ImportRunView::from).collect())
+        let repos = self.store.read();
+        let runs = repos.imports().list_runs_page(limit, cursor).await?;
+        let mut views = Vec::with_capacity(runs.len());
+        for run in runs {
+            views.push(view(repos, run, None).await?);
+        }
+        Ok(views)
     }
 
     /// Run `id`. Needs `import:read`.
@@ -251,13 +258,13 @@ impl ImportService {
         id: ImportRunId,
     ) -> Result<ImportRunView, CoreError> {
         require_reader(actor, Capability::Import)?;
-        self.store
-            .read()
+        let repos = self.store.read();
+        let run = repos
             .imports()
             .get_run(id)
             .await?
-            .map(ImportRunView::from)
-            .ok_or(CoreError::NotFound)
+            .ok_or(CoreError::NotFound)?;
+        view(repos, run, None).await
     }
 
     /// The `import.wordpress` job `job_id` and its newest run (P26-1); another kind's job
@@ -275,11 +282,11 @@ impl ImportService {
             .await?
             .filter(|j| j.kind == IMPORT_WORDPRESS_KIND)
             .ok_or(CoreError::NotFound)?;
-        let run = repos.imports().run_by_job(job_id).await?;
-        Ok(ImportJobView {
-            job,
-            run: run.map(ImportRunView::from),
-        })
+        let run = match repos.imports().run_by_job(job_id).await? {
+            Some(run) => Some(view(repos, run, Some(&job)).await?),
+            None => None,
+        };
+        Ok(ImportJobView { job, run })
     }
 
     /// Stores run `run`'s report files as `import` artifacts and points the run at them
@@ -380,6 +387,31 @@ impl ImportService {
             "import reports need the media store",
         ))
     }
+}
+
+/// What readers see of `run` (final review BE-m2): a `running` run with a stale
+/// heartbeat whose job is no longer queued or running (its last attempt died of a
+/// timeout, a lost lease or a panic, or the job was pruned) reads as `abandoned`, the
+/// state the next import's takeover will write. A CLI run (no job) and a job that will
+/// retry keep `running`. `job` is the run's job when the caller has it.
+async fn view(
+    repos: &dyn Repos,
+    run: ImportRun,
+    job: Option<&Job>,
+) -> Result<ImportRunView, CoreError> {
+    let mut view = ImportRunView::from(run);
+    let stale =
+        view.state == ImportRunState::Running && view.heartbeat_at < stale_before(Timestamp::now());
+    if let (true, Some(id)) = (stale, view.job_id) {
+        let status = match job {
+            Some(j) if j.id == id => Some(j.status),
+            _ => repos.jobs().get(id).await?.map(|j| j.status),
+        };
+        if !matches!(status, Some(JobStatus::Queued | JobStatus::Running)) {
+            view.state = ImportRunState::Abandoned;
+        }
+    }
+    Ok(view)
 }
 
 /// An `import.wordpress` job is queued or running.

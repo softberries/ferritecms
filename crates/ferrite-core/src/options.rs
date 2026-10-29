@@ -289,6 +289,7 @@ async fn enqueue_redirects(
         prev: structures(prev),
         next: structures(&next),
         version,
+        cursor: None,
     });
     repos.jobs().enqueue(&job).await?;
     Ok(())

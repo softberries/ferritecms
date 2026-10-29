@@ -258,12 +258,18 @@ under the current one, 500 items per transaction, with the content-move rules (o
 old path that is another published item's path now gets none. Each page's transaction takes the
 `types` lock that `permalink.*` writes take and reads the stored structures inside it, so a job
 still paging when a later change commits redirects its remaining items to the newer structure
-and the two jobs never undo each other's rows. Until the job has run, the old URLs answer 404.
-Known limits: the job pages by the content list's published-order cursor, not by id (the store
+and the two jobs never undo each other's rows. One job walks at most 20 pages (10 000 items)
+and then enqueues a continuation job from its cursor with the same structures and version (its
+unique key `permalink.redirects:<version>:<cursor digest>`), so each job fits the default job
+timeout and a retry redoes at most its own pages. Until the jobs have run, the old URLs answer
+404. Known limits: the job pages by the content list's published-order cursor, not by id (the store
 has no id ordering yet), so an item whose `published_at` moves later while the job runs jumps
 ahead of the cursor and gets no redirect. An import that writes `permalink.*` (P30) makes the
 job redirect the imported posts from their old default-structure paths, which they never had:
-one harmless row per item, accepted under P30's cost.
+one harmless row per item, accepted under P30's cost. The check that an old path is not another
+published item's path runs in the page's transaction, so an item published at exactly that path
+by another transaction committing while the page runs is not seen: the redirect row then shadows
+it until someone deletes the row (a narrow window, accepted; M3-2 final review BE-m1).
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →

@@ -19,6 +19,7 @@ import { UploadNetworkError, UploadReplyError, uploadWordpressImport } from "@/a
 import { Alert } from "@/auth/auth-layout";
 import { DropZone } from "@/components/kit/drop-zone";
 import { FormField, SwitchRow } from "@/components/kit/form-field";
+import { ProgressBar } from "@/components/kit/progress-bar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -26,8 +27,8 @@ import { formatBytes } from "@/media/format";
 import { MAX_BASE, baseIsValid } from "./import-model";
 
 /** The server's limits (`MAX_WXR`, `MAX_UPLOADS`). */
-export const MAX_WXR_BYTES = 512 * 1024 * 1024;
-export const MAX_UPLOADS_BYTES = 4 * 1024 * 1024 * 1024;
+const MAX_WXR_BYTES = 512 * 1024 * 1024;
+const MAX_UPLOADS_BYTES = 4 * 1024 * 1024 * 1024;
 /** The longest wait before the automatic retry of an in-progress `409`. */
 const MAX_AUTO_RETRY_S = 10;
 
@@ -423,7 +424,7 @@ export function StartCard({ onStarted, onBusy, busyAction, focusHeading = false 
                 {t("start.cancel")}
               </Button>
             </div>
-            <ProgressBar value={progress ?? 0} label={t("start.uploadLabel")} />
+            <ProgressBar value={progress ?? 0} label={t("start.uploadLabel")} className="h-1.5" />
           </div>
         ) : (
           <div className="flex flex-wrap items-center justify-end gap-3">
@@ -574,25 +575,6 @@ function FileChip({
       >
         <XIcon />
       </Button>
-    </div>
-  );
-}
-
-function ProgressBar({ value, label }: { value: number; label: string }): ReactNode {
-  const percent = Math.round(value * 100);
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent}
-      className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-    >
-      <div
-        className="h-full origin-left rounded-full bg-primary transition-transform duration-(--dur-base) ease-out motion-reduce:transition-none"
-        style={{ transform: `scaleX(${value})` }}
-      />
     </div>
   );
 }

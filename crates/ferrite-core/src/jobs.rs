@@ -10,6 +10,7 @@ use std::time::Duration;
 use ferrite_domain::{Artifact, ContentId, NewJob, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Publishes one scheduled item at its scheduled time; payload [`PublishScheduled`].
 pub const PUBLISH_SCHEDULED_KIND: &str = "content.publish_scheduled";
@@ -202,7 +203,9 @@ pub struct PermalinkStructures {
 }
 
 /// Payload of a [`PERMALINK_REDIRECTS_KIND`] job:
-/// `{"v":1,"prev":{"post":…,"page":…},"next":{"post":…,"page":…},"version":<seq>}`.
+/// `{"v":1,"prev":{"post":…,"page":…},"next":{"post":…,"page":…},"version":<seq>}`, plus
+/// `"cursor":"<content cursor>"` on a continuation (a job that ran out of its page budget
+/// hands on to the next one from there, final review BE2).
 /// `prev` are the structures before the write, `next` the ones it left (informational:
 /// the job redirects to the structures stored when it runs, so jobs of two quick changes
 /// give the same result in either order). `version` is the options version of the write:
@@ -213,10 +216,15 @@ pub struct PermalinkRedirects {
     pub prev: PermalinkStructures,
     pub next: PermalinkStructures,
     pub version: i64,
+    /// Where a continuation starts; `None`: the first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 /// The job for `redirects`: due now, unique key `permalink.redirects:<version>` (one per
-/// options version), default priority and attempts.
+/// options version), or `permalink.redirects:<version>:<cursor digest>` for a
+/// continuation (the first 32 hex digits of the cursor's SHA-256, so the key stays short
+/// whatever the cursor), default priority and attempts.
 pub fn permalink_redirects_job(redirects: &PermalinkRedirects) -> NewJob {
     let structures = |s: &PermalinkStructures| {
         let mut m = Map::new();
@@ -229,8 +237,15 @@ pub fn permalink_redirects_job(redirects: &PermalinkRedirects) -> NewJob {
     payload.insert("prev".into(), structures(&redirects.prev));
     payload.insert("next".into(), structures(&redirects.next));
     payload.insert("version".into(), Value::from(redirects.version));
+    let mut key = format!("{PERMALINK_REDIRECTS_KIND}:{}", redirects.version);
+    if let Some(cursor) = &redirects.cursor {
+        payload.insert("cursor".into(), Value::String(cursor.clone()));
+        let digest = ferrite_domain::to_hex(&Sha256::digest(cursor.as_bytes()));
+        key.push(':');
+        key.push_str(&digest[..32]);
+    }
     let mut job = NewJob::new(PERMALINK_REDIRECTS_KIND, Value::Object(payload));
-    job.unique_key = Some(format!("{PERMALINK_REDIRECTS_KIND}:{}", redirects.version));
+    job.unique_key = Some(key);
     job
 }
 
@@ -466,6 +481,7 @@ mod tests {
                 page: "/%parent_path%/%slug%/".into(),
             },
             version: 42,
+            cursor: None,
         };
         let job = permalink_redirects_job(&typed);
         assert_eq!(job.kind, "permalink.redirects");
@@ -476,6 +492,22 @@ mod tests {
         assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
         let back: PermalinkRedirects = serde_json::from_value(job.payload).unwrap();
         assert_eq!(back, typed);
+
+        // A continuation carries its cursor and a key of its own, short whatever the
+        // cursor's length.
+        let next = PermalinkRedirects {
+            cursor: Some("c".repeat(500)),
+            ..typed
+        };
+        let job = permalink_redirects_job(&next);
+        let key = job.unique_key.clone().unwrap();
+        assert!(
+            key.starts_with("permalink.redirects:42:") && key.len() < 64,
+            "{key}"
+        );
+        assert_eq!(job.payload["cursor"], "c".repeat(500));
+        let back: PermalinkRedirects = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, next);
     }
 
     #[test]
