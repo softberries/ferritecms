@@ -254,7 +254,7 @@ are deleted by `sessions.prune` (§6); an expired row met on a request is delete
 | `media.variants` | a raster upload (`MediaService::record_upload`) enqueues it in the upload's `Tx`: `unique_key = "media.variants:<item>:<artifact>"`, payload `{"v":1,"item","artifact"}`. One of the node's `media.image_workers` slots is taken without waiting (none free: `JobError::Busy`, attempt refunded, due again in 1–5 s); originals over 64 MiB get no variants; a bad payload or an image that does not decode is `Permanent` (dead at once, the original stays served); store and media errors retry (03 §4, P8, F17) | built (M2a-2b) |
 | `permalink.redirects` | every write of `permalink.post`/`permalink.page` (`OptionService`, the importer's `ImportBatch::options`) enqueues it in the write's `Tx`: payload `{"v":1,"prev","next","version"}` (`"cursor"` on a continuation), `unique_key = "permalink.redirects:<version>"` (`…:<cursor digest>` on a continuation), default timeout and attempts. Redirects every published post and page from its path under `prev` to its path under the stored structures, 500 items per transaction, at most 20 pages per job, then a continuation job from the cursor (06 §3, M3-2 P30, R61, R62, R75); an invalid payload is `Permanent`, a store error retries | built (M3-2) |
 | `import.wordpress` | `POST /import/wordpress` enqueues it in the transaction that records the input artifacts (`ImportService::enqueue`: no `unique_key`, refused with `409` while one is queued or running, `max_attempts` 3); payload `{"v":1,"wxr","uploads","options","user","source_name"}`, `user` set from the caller. Timeout 6 h. The handler checks the user is still an active admin, then that a run could start (else `Busy`, nothing fetched), copies the inputs to the node's `<data>/import/job-<id>/`, runs the import with its own permalink rules, stores the report (a failed run's partial one too), deletes the inputs once the run is `done` or the job fails for good (a `Permanent` error or a `Retry` of the last attempt; the `artifacts` row first and the blob only when that worked, so a media item sharing the bytes keeps its file, R74), and removes leftover `job-*` folders and run work folders of jobs that are over (a CLI run's stays, R78). `Unavailable` → `Busy`; `Changed`, `Forbidden`, invalid input and bad XML or archives → `Permanent`; the rest → `Retry`. Its start takes over a stale run that has no job, is its own, or whose job is not `running` (08 §2, M3-2 P27, R69); a retry on another node parses again | built (M3-2) |
-| `artifacts.gc` | periodic | M4 |
+| `artifacts.gc` | periodic, daily (`every` 86 400 s), payload `{"v":1}`: one pass of the artifacts GC (`gc::run`, 03 §6) with the node's `media.gc_grace_days`: marks unreferenced rows, deletes rows marked longer than the grace period and then their blobs, row-less blobs older than the grace period and `tmp/` objects older than 24 h; protected are the hashes in unfinished job payloads and import report manifests (P10). Timeout 3 600 s (a pass cut short continues the next day). Takes the `artifacts.gc` lock with `try_lock`: held (another pass, or `ferrite media gc`) is `JobError::Busy`; a store or media error retries. The handler is in `crates/ferrite/src/jobs/gc.rs` because `ferrite-cluster` has no media dependency | built (M4-1) |
 
 `revisions.prune` is not a job: core prunes revisions on save (P26).
 
@@ -355,7 +355,7 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 ## 7. Distributed locks
 
 **As built (P13):** `Store::try_lock(name)` and `ferrite_store::lock(store, name, wait)`
-(retries every 250 ms until `wait`, then `Busy`). Names are `[a-z0-9._-]{1,64}`.
+(waits up to `wait`, then `Busy`; via `Store::lock_wait`, P19). Names are `[a-z0-9._-]{1,64}`.
 
 | Name | Held by | Wait |
 |---|---|---|
@@ -368,8 +368,13 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 Postgres: a session-level `PgAdvisoryLock` keyed by `"ferrite:<schema>:<name>"` (advisory
 locks are database-wide, so the key includes the schema) on a dedicated connection per
 held lock (`application_name` `<app>:lock:<name>`, TCP keepalives on), so a crashed holder
-releases it when its connection dies. Each attempt opens a new connection (a held
-connection with `lock_timeout` is M4, R3). sqlx's own migration lock is taken as well.
+releases it when its connection dies. `lock` waits on one connection: `SET lock_timeout`,
+then a blocking `pg_advisory_lock`, so the server wakes the waiter when the holder
+releases (SQLSTATE `55P03` = timed out = `Busy`; `lock_timeout` is reset to 0 on success;
+a cancelled wait drops the connection, which frees a lock granted late; the server
+notices the closed socket only when it next writes to it, so the abandoned backend can
+stay queued until `lock_timeout` fires or the lock is granted, never longer than `wait`).
+`try_lock` opens one connection per attempt. SQLite polls `try_lock` every 250 ms. sqlx's own migration lock is taken as well.
 SQLite: an in-process mutex per store (one process owns the data folder).
 
 **A lock is not a fence.** The holder is not told when a Postgres advisory lock is lost:
@@ -394,7 +399,8 @@ every write, as the job leases do, P6) and must not rely on the lock for exclusi
   refused before anything is written: the admin API (`ExtensionAdmin`, which checks
   `manage_themes`/`manage_plugins` with the `extensions` scope and audits, closing R11) and
   the CLI (`ferrite theme|plugin`, `ExtensionService`, the operator path). Orphan artifacts
-  are not collected yet (`artifacts.gc`, M4).
+  (replaced versions, staged bytes of a failed install) are collected by `artifacts.gc`
+  after the grace period (03 §6).
 - **Themes** are deterministic ustar bundles (P17, [06 §1](06-themes-rendering.md#1-theme-package)).
   In cluster mode a node reads only the artifact named by the active `themes` row
   (`data/themes/` is ignored, C5); solo keeps the folder as a development fallback.

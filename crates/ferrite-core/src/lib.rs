@@ -21,6 +21,7 @@ mod menu;
 mod options;
 pub mod permalink;
 mod redirects;
+pub mod seed;
 pub mod settings;
 pub mod site;
 pub mod slug;

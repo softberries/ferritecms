@@ -198,6 +198,16 @@ fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// One table of the live schema ([`TestDb::live_tables`]).
+#[derive(Debug, Clone)]
+pub struct LiveTable {
+    pub name: String,
+    /// `(column, declared type)` in schema order.
+    pub columns: Vec<(String, String)>,
+    /// Primary-key columns in key order.
+    pub key: Vec<String>,
+}
+
 /// A migrated database for one contract test, plus raw backend access for assertions
 /// the `Store` API deliberately cannot express (schema dumps, tampering).
 pub struct TestDb {
@@ -417,6 +427,138 @@ impl TestDb {
                 .fetch_all(&mut c)
                 .await
                 .expect("list postgres objects")
+            }
+        }
+    }
+
+    /// Every table of the live schema with its columns (schema order, declared type:
+    /// SQLite's `pragma_table_info` type, Postgres's `information_schema` `data_type`)
+    /// and primary key, sorted by name. SQLite's internal `sqlite_*` tables are left out;
+    /// `_sqlx_migrations` and the FTS5 tables are included.
+    pub async fn live_tables(&self) -> Vec<LiveTable> {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let names: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM sqlite_schema \
+                     WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                )
+                .fetch_all(&mut c)
+                .await
+                .expect("list sqlite tables");
+                let mut tables = Vec::new();
+                for name in names {
+                    let cols: Vec<(String, String, i64)> = sqlx::query_as(
+                        "SELECT name, type, pk FROM pragma_table_info(?) ORDER BY cid",
+                    )
+                    .bind(&name)
+                    .fetch_all(&mut c)
+                    .await
+                    .expect("sqlite table info");
+                    let mut key: Vec<(i64, String)> = cols
+                        .iter()
+                        .filter(|(_, _, pk)| *pk > 0)
+                        .map(|(n, _, pk)| (*pk, n.clone()))
+                        .collect();
+                    key.sort();
+                    tables.push(LiveTable {
+                        name,
+                        columns: cols.into_iter().map(|(n, t, _)| (n, t)).collect(),
+                        key: key.into_iter().map(|(_, n)| n).collect(),
+                    });
+                }
+                c.close().await.expect("close raw sqlite connection");
+                tables
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                let names: Vec<String> = sqlx::query_scalar(
+                    "SELECT table_name::text FROM information_schema.tables \
+                     WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name",
+                )
+                .bind(&f.schema)
+                .fetch_all(&mut c)
+                .await
+                .expect("list postgres tables");
+                let cols: Vec<(String, String, String)> = sqlx::query_as(
+                    "SELECT table_name::text, column_name::text, data_type::text \
+                     FROM information_schema.columns WHERE table_schema = $1 \
+                     ORDER BY table_name, ordinal_position",
+                )
+                .bind(&f.schema)
+                .fetch_all(&mut c)
+                .await
+                .expect("list postgres columns");
+                let keys: Vec<(String, String)> = sqlx::query_as(
+                    "SELECT tc.table_name::text, kcu.column_name::text \
+                     FROM information_schema.table_constraints tc \
+                     JOIN information_schema.key_column_usage kcu \
+                       ON kcu.constraint_schema = tc.constraint_schema \
+                      AND kcu.constraint_name = tc.constraint_name \
+                      AND kcu.table_name = tc.table_name \
+                     WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY' \
+                     ORDER BY tc.table_name, kcu.ordinal_position",
+                )
+                .bind(&f.schema)
+                .fetch_all(&mut c)
+                .await
+                .expect("list postgres primary keys");
+                c.close().await.expect("close admin connection");
+                names
+                    .into_iter()
+                    .map(|name| LiveTable {
+                        columns: cols
+                            .iter()
+                            .filter(|(t, _, _)| *t == name)
+                            .map(|(_, n, ty)| (n.clone(), ty.clone()))
+                            .collect(),
+                        key: keys
+                            .iter()
+                            .filter(|(t, _)| *t == name)
+                            .map(|(_, n)| n.clone())
+                            .collect(),
+                        name,
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Every foreign-key column of the live schema as `(table, column, referenced table)`.
+    pub async fn live_foreign_keys(&self) -> Vec<(String, String, String)> {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let fks: Vec<(String, String, String)> = sqlx::query_as(
+                    "SELECT s.name, f.\"from\", f.\"table\" FROM sqlite_schema s \
+                     JOIN pragma_foreign_key_list(s.name) f \
+                     WHERE s.type = 'table' ORDER BY s.name, f.\"from\"",
+                )
+                .fetch_all(&mut c)
+                .await
+                .expect("list sqlite foreign keys");
+                c.close().await.expect("close raw sqlite connection");
+                fks
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                let fks: Vec<(String, String, String)> = sqlx::query_as(
+                    "SELECT cl.relname::text, a.attname::text, rf.relname::text \
+                     FROM pg_constraint co \
+                     JOIN pg_class cl ON cl.oid = co.conrelid \
+                     JOIN pg_namespace n ON n.oid = cl.relnamespace \
+                     JOIN pg_class rf ON rf.oid = co.confrelid \
+                     CROSS JOIN LATERAL unnest(co.conkey) AS k(attnum) \
+                     JOIN pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = k.attnum \
+                     WHERE co.contype = 'f' AND n.nspname = $1 \
+                     ORDER BY 1, 2",
+                )
+                .bind(&f.schema)
+                .fetch_all(&mut c)
+                .await
+                .expect("list postgres foreign keys");
+                c.close().await.expect("close admin connection");
+                fks
             }
         }
     }

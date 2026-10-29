@@ -68,6 +68,7 @@ fn artifact(seed: u8, kind: ArtifactKind, mime: &str) -> Artifact {
         bytes: 1234,
         mime: mime.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 
@@ -769,6 +770,12 @@ impl Store for FailingStore {
     }
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.inner.verify_migrations().await
+    }
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        self.inner.export_reader().await
+    }
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        self.inner.import_writer().await
     }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.snapshot(dest).await

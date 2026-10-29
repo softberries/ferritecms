@@ -94,6 +94,7 @@ fn artifact(seed: u8, mime: &str) -> Artifact {
         bytes: 1234,
         mime: mime.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

@@ -248,10 +248,21 @@ async fn stage(
         }
         Err(e) => return Err(e),
     };
-    let staged = match stage_stream(staging, &file_name, stream, max).await {
+    let staged = match stage_stream(
+        staging,
+        &file_name,
+        stream,
+        max,
+        session.opts().strip_metadata,
+    )
+    .await
+    {
         Ok(staged) => staged,
         Err(
-            e @ (MediaError::TooLarge { .. } | MediaError::Unsupported { .. } | MediaError::Svg(_)),
+            e @ (MediaError::TooLarge { .. }
+            | MediaError::Unsupported { .. }
+            | MediaError::Svg(_)
+            | MediaError::Metadata(_)),
         ) => {
             refused(report, &e);
             return Ok(None);
@@ -279,6 +290,7 @@ async fn stage(
             bytes: i64::try_from(staged.bytes).unwrap_or(i64::MAX),
             mime: staged.mime.clone(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         },
         mime: staged.mime,
         bytes: staged.bytes,

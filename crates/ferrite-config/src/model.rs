@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use ferrite_domain::Secret;
+use ferrite_media::ConditionalPut;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -11,7 +12,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub media: MediaSection,
-    /// `[media] max_upload` and `image_workers` (M2a-2b P8/P9; either backend).
+    /// `[media] max_upload`, `image_workers` (M2a-2b P8/P9), `strip_metadata` and
+    /// `gc_grace_days` (M4-1); either backend.
     pub uploads: UploadConfig,
     pub cluster: ClusterConfig,
     pub cache: CacheConfig,
@@ -64,6 +66,10 @@ pub enum MediaSection {
         secret_access_key: Option<Secret>,
         allow_http: bool,
         virtual_hosted_style: bool,
+        /// object_store's encoding (`header:…`, `header-with-status:…`, `multipart`),
+        /// already validated.
+        copy_if_not_exists: Option<String>,
+        conditional_put: Option<ConditionalPut>,
         prefix: String,
         public_base_url: Option<url::Url>,
     },
@@ -77,8 +83,13 @@ pub const MAX_UPLOAD_CEILING: u64 = 1 << 30;
 pub const MAX_IMAGE_WORKERS: usize = 16;
 /// Default `media.upload_idle_timeout`: 30 s.
 pub const DEFAULT_UPLOAD_IDLE_SECS: u64 = 30;
+/// Default `media.gc_grace_days` (M4-1 P11, 03 §6).
+pub const DEFAULT_GC_GRACE_DAYS: u32 = 7;
+/// Largest `media.gc_grace_days`.
+pub const MAX_GC_GRACE_DAYS: u32 = 365;
 
-/// The upload settings of `[media]` (M2a-2b P8/P9).
+/// The upload settings of `[media]` (M2a-2b P8/P9), and the artifacts GC's grace period
+/// (M4-1 P11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UploadConfig {
     /// Largest uploaded file in bytes (`media.max_upload`): 1..=[`MAX_UPLOAD_CEILING`],
@@ -90,6 +101,13 @@ pub struct UploadConfig {
     /// An upload that receives no bytes for this long is aborted and its slot freed
     /// (`media.upload_idle_timeout`, seconds > 0, default [`DEFAULT_UPLOAD_IDLE_SECS`]).
     pub idle_timeout_secs: u64,
+    /// Strip EXIF and XMP from JPEG, PNG and WebP originals on ingest, losslessly
+    /// (`media.strip_metadata`, default false: the original is kept byte for byte).
+    pub strip_metadata: bool,
+    /// Days an artifact stays after nothing references it, and a blob with no row after
+    /// it was written, before the artifacts GC deletes it (`media.gc_grace_days`,
+    /// 1..=[`MAX_GC_GRACE_DAYS`], default [`DEFAULT_GC_GRACE_DAYS`]).
+    pub gc_grace_days: u32,
 }
 
 impl Default for UploadConfig {
@@ -98,6 +116,8 @@ impl Default for UploadConfig {
             max_upload: DEFAULT_MAX_UPLOAD,
             image_workers: 1,
             idle_timeout_secs: DEFAULT_UPLOAD_IDLE_SECS,
+            strip_metadata: false,
+            gc_grace_days: DEFAULT_GC_GRACE_DAYS,
         }
     }
 }

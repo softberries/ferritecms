@@ -1,14 +1,16 @@
 //! Core job handlers run by every node (ruling P12): scheduled publishing, the plugin
 //! data purge (M2a-2 P9), plugin actions (P20), media variants (M2a-2b P8,
 //! [`MediaVariantsHandler`]) and permalink-change redirects (M3-2 P30,
-//! [`PermalinkRedirectsHandler`]). The kinds and payloads are fixed in
+//! [`PermalinkRedirectsHandler`]) and the artifacts GC (M4-1 P12, [`ArtifactsGcHandler`],
+//! built by `serve` with the node's media store). The kinds and payloads are fixed in
 //! [`ferrite_core::jobs`]; the WordPress import (M3-2 P27, [`ImportWordpressHandler`])
 //! is built by `serve` with the node's media store and data folder. The per-node 30 s
 //! ticker of M1c-2 is the periodic
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
+mod gc;
 mod import;
-mod media;
+pub(crate) mod media;
 mod permalinks;
 
 use std::{sync::Arc, time::Duration};
@@ -29,6 +31,10 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+pub use gc::{
+    ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_TIMEOUT, ArtifactsGcHandler,
+    artifacts_gc_periodic,
+};
 pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
@@ -333,6 +339,17 @@ pub fn handlers(
             pages: STRUCTURE_JOB_PAGES,
         }),
         Arc::new(PluginActionHandler::new(store, host, action_slots)),
+    ]
+}
+
+/// The periodics `serve` schedules besides `ferrite-cluster`'s built-ins:
+/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`] and
+/// [`artifacts_gc_periodic`].
+pub fn core_periodics() -> Vec<Periodic> {
+    vec![
+        publish_due_periodic(),
+        plugin_purge_sweep_periodic(),
+        artifacts_gc_periodic(),
     ]
 }
 

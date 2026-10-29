@@ -27,7 +27,7 @@ api_tests!(
     theme_list_shows_node_state,
     editor_cannot_manage_themes,
     theme_uploads_are_bounded_per_node,
-    failed_theme_install_discards_unreferenced_blob,
+    failed_theme_install_leaves_blob_for_gc,
     activation_race_is_a_conflict,
     hostile_bundles_are_refused,
 );
@@ -608,15 +608,18 @@ async fn theme_uploads_are_bounded_per_node(api: Api) -> Api {
     api
 }
 
-/// A failed install after staging deletes the staged blob nothing names; activation
-/// of an embedded theme too.
-async fn failed_theme_install_discards_unreferenced_blob(api: Api) -> Api {
+/// A failed install after staging leaves the staged blob, with no row, for the artifacts
+/// GC (M4-1 P12); activation of an embedded theme too.
+async fn failed_theme_install_leaves_blob_for_gc(api: Api) -> Api {
     let mut c = admin(&api).await;
     for (what, bytes) in [
         ("upload", bundle("upload-theme")),
         ("embedded", ferrite_theme::pack_embedded("blog").unwrap()),
     ] {
         let hash = sha256(&bytes);
+        let size = bytes.len() as u64;
+        // The lock is freed once the blob is staged and the install's lock wait is over,
+        // so a cleanup still waiting for it (the removed `discard_staged`) would run.
         let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
             .await
             .unwrap();
@@ -635,7 +638,13 @@ async fn failed_theme_install_discards_unreferenced_blob(api: Api) -> Api {
         };
         r.assert_problem(503, "busy");
         releaser.await.unwrap();
-        nothing_stored(&api, &hash).await;
+        assert!(api.store.read().themes().list().await.unwrap().is_empty());
+        assert_eq!(api.store.read().artifacts().get(&hash).await.unwrap(), None);
+        assert_eq!(
+            api.api.media.head(&hash).await.unwrap(),
+            Some(size),
+            "{what}: left for the GC"
+        );
     }
     api
 }

@@ -275,8 +275,8 @@ async fn theme_settings_schema(
     }
 }
 
-/// Records a staged theme; when that fails, drops the staged blob unless another row
-/// names the same bytes.
+/// Records a staged theme; when that fails, the staged blob has no row and is left to
+/// the artifacts GC (M4-1 P12).
 async fn record(
     api: &ApiState,
     actor: &Actor,
@@ -284,17 +284,10 @@ async fn record(
     row: &InstalledTheme,
     activate: bool,
 ) -> Result<(), Problem> {
-    let Err(e) = api
-        .extensions
+    api.extensions
         .install_theme(actor, artifact, row, activate)
-        .await
-    else {
-        return Ok(());
-    };
-    if let Err(cleanup) = api.installer.discard_staged(&artifact.hash).await {
-        tracing::warn!(artifact = %artifact.hash, error = %cleanup, "cannot discard a staged theme bundle");
-    }
-    Err(e.into())
+        .await?;
+    Ok(())
 }
 
 /// The body of `req` if it is `application/x-tar` of at most [`MAX_THEME_UPLOAD_BODY`]

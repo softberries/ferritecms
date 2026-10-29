@@ -51,6 +51,7 @@ fn artifact(kind: ArtifactKind, seed: u8) -> Artifact {
         bytes: 42,
         mime: "application/octet-stream".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

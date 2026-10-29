@@ -37,6 +37,8 @@ pub(crate) fn media_config(config: &Config) -> MediaConfig {
             secret_access_key,
             allow_http,
             virtual_hosted_style,
+            copy_if_not_exists,
+            conditional_put,
             prefix,
             public_base_url,
         } => MediaConfig {
@@ -48,6 +50,8 @@ pub(crate) fn media_config(config: &Config) -> MediaConfig {
                 secret_access_key: secret_access_key.clone(),
                 allow_http: *allow_http,
                 virtual_hosted_style: *virtual_hosted_style,
+                copy_if_not_exists: copy_if_not_exists.clone(),
+                conditional_put: *conditional_put,
             }),
             prefix: prefix.clone(),
             public: public_base_url

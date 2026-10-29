@@ -137,6 +137,7 @@ async fn plugin_artifact(store: &dyn ferrite_store::Store) -> ArtifactHash {
             bytes: 1,
             mime: "application/wasm".into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();

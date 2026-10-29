@@ -96,10 +96,15 @@ pub struct ReadStream { pub size: u64 /* total object size */, pub range: Range<
   return `NotImplemented`/`NotSupported` get the fallback: `head` the final key (exists ->
   `created = false`), else `copy`. This head-then-copy window is the race behind the advisory
   `created`. The final bytes are identical either way because the key is the content hash.
-  **Production S3 currently always uses the fallback**: no `copy_if_not_exists` mode is
-  configured on the S3 builder (M4 follow-up). The s3s-fs test server also takes the
-  fallback, because the test `S3Config` sets no `copy_if_not_exists`; only the local backend
-  exercises the conditional (hard-link) paths in tests.
+  **S3 takes the fallback unless `[media.s3] copy_if_not_exists` is set** (M4-1; it is unset
+  by default, because the right header depends on the provider). The s3s-fs test server takes
+  the fallback too, because the test `S3Config` sets none; only the local backend exercises
+  the conditional (hard-link) paths in tests, and the S3 option is covered with the
+  `multipart` mode.
+- **Conditional create** (`PutMode::Create`, `If-None-Match: *`) is on for S3 by default:
+  object_store's `conditional_put` defaults to `etag`. `conditional_put = "disabled"` is for a
+  store that rejects the header; creates then do a plain put after the existence check, and
+  `created` is advisory as in the fallback.
 
 ### Upload size cap and the 5 GB copy ceiling
 
@@ -225,6 +230,24 @@ Config (`S3Config`): `bucket`, `region`, `endpoint`, `access_key_id`/`secret_acc
 public URL mode are on `MediaConfig`. Config-file wiring (including `*_file` secrets) belongs
 to the core config layer ([01](01-architecture.md#4-configuration)).
 
+Placement options (`[media.s3]`, object_store's own encodings, parsed by object_store):
+
+- `copy_if_not_exists` (default unset): the header that makes a server-side copy fail when the
+  destination exists. `header:<name>:<value>` (for example
+  `header:x-amz-copy-source-if-none-match:*`), `header-with-status:<name>:<value>:<status>`
+  (for stores that answer a failed precondition with a status other than 412), or `multipart`
+  (the copy is a multipart upload that ends in a conditional complete; it **does not copy
+  object attributes** such as content type or tags, so `ferrite config check` warns about it).
+  A wrong header for a provider fails placements of uploads of 8 MiB and more, and
+  `ferrite config check` cannot detect that (it opens nothing): after setting it, test with an
+  upload larger than 8 MiB. An invalid value is a configuration error naming
+  `media.s3.copy_if_not_exists`.
+- `conditional_put` = `"etag"` or `"disabled"` (unset: object_store's default, `etag`).
+
+Both options apply to the explicit-keys path and the environment path alike. Without keys the
+builder also reads `AWS_COPY_IF_NOT_EXISTS` and `AWS_CONDITIONAL_PUT` from the environment; a
+key in `ferrite.toml` wins over them, and `conditional_put` counts as set when the key is present (even `"etag"`); unset, the builder's default or the environment applies.
+
 Provider notes to document (each verified when writing the ops docs, not assumed):
 R2 path-style URLs, B2 region naming, Hetzner/Scaleway endpoints.
 
@@ -251,8 +274,27 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
 - **Orientation**: EXIF orientation is applied; `Processed.width/height` are post-orientation.
 - **Metadata**: output is re-encoded, so variants carry no EXIF, XMP or GPS (no keep option
   yet). The **stored original is kept byte for byte, EXIF (GPS included) and all**, as WordPress
-  does (M2a-2b R11): a photo's location stays readable from its original URL. Optional
-  location-metadata stripping on upload is an M4 item (ROADMAP).
+  does (M2a-2b R11): a photo's location stays readable from its original URL, unless
+  `[media] strip_metadata = true` (default `false`, M4-1 P17). Then `stage_stream` removes
+  EXIF and XMP from JPEG, PNG and WebP originals **before hashing**, so the stored artifact
+  (and its content hash) is the stripped file; it applies to browser uploads and to the
+  WordPress importer alike. The strip is lossless: no pixel is re-encoded. JPEG loses its
+  APP1 Exif and XMP segments; PNG its `eXIf` chunk and XMP `iTXt` chunk; WebP its `EXIF` and
+  `XMP ` chunks (the VP8X flags are fixed). ICC data is kept. An EXIF Orientation other than 1
+  is written back as a minimal EXIF block that holds only that tag, so the picture still
+  displays upright. GIF and SVG are untouched. **With the option on, a JPEG, PNG or WebP whose
+  metadata cannot be removed is refused, never stored with it:** a file over 64 MiB (it is
+  buffered whole), or one the walker cannot parse (a PNG without `IEND`, a WebP whose RIFF
+  size runs past the file, a truncated JPEG). A browser upload gets `422 validation`
+  (`file`: "metadata could not be removed: ..."); the importer records the attachment as
+  refused media in its report; both log a warning with the sanitised name. With the option
+  off such files are stored unchanged, as before. Bytes after a JPEG's EOI, a PNG's `IEND`
+  or a WebP's RIFF end are copied as they are. **Not inspected:** anything after the first
+  JPEG start-of-scan (APP1 segments between progressive scans), images appended after the
+  primary one in a multi-picture JPEG (MPF: gain maps, depth maps, which may carry their own
+  Exif or XMP), and Photoshop APP13 resources (which can embed Exif or XMP); they are kept.
+  Cost: the hash differs from the byte-identical WordPress original, so deduplication
+  against it stops.
   The **ICC profile** is kept only if its colour-space signature (header bytes 16..20) matches
   the output pixels: `RGB ` for JPEG and colour PNG, `GRAY` for grayscale PNG. A mismatching
   profile (for example CMYK) is dropped, as is one the encoder rejects or one larger than 1 MiB
@@ -344,7 +386,7 @@ CPU-bound function (callers use `spawn_blocking`). It does not touch storage.
   task's panic is caught as a `JoinError`) is `Permanent`. Its job goes `dead` at the first
   attempt with the reason in `last_error`, the worker carries on, and the original stays
   served. Store and media-backend errors are `Retry`. Variants are re-encoded, so EXIF (GPS
-  included) and XMP never reach them; the stored original keeps its EXIF, GPS included (R11). Regenerating variants after a theme change is M4 (P8).
+  included) and XMP never reach them; the stored original keeps its EXIF, GPS included (R11). Regenerating variants after a theme change is `ferrite media regenerate` (M4-1 P18, 09 §8): in process, no jobs; it makes the sizes of the active theme that an item lacks (a size wider than the original is never made, so it never counts as lacking) with the same code as this job, and the replaced variant files are left for `media gc`.
 - `ferrite seed demo` still runs `process_image` in-process, with the same
   `variant_specs(theme)`. It writes the `media` and `artifacts` rows in one transaction that
   also emits `post:<media id>` (`crates/ferrite/src/seed.rs`).
@@ -472,10 +514,80 @@ Cost: `<style>` sheets, animation, links, external fonts and images are stripped
 
 ## 6. Garbage collection
 
-Artifacts are referenced by `media`, `media.variants`, `plugins`, `themes`, revisions
-(featured images in fields). A periodic job `artifacts.gc` (daily, single-runner via
-unique job key) deletes artifacts unreferenced for > 7 days (grace period protects
-in-flight uploads and rollbacks). Dry-run: `ferrite media gc --dry-run`.
+Built in M4-1 (P10–P12): `crates/ferrite/src/gc.rs` (`gc::run`), run by the daily
+`artifacts.gc` job (`crates/ferrite/src/jobs/gc.rs`, 04 §6) and by `ferrite media gc`
+(09 §8).
+
+**What references an artifact** (P10). A row is referenced when its hash is named by
+`media.artifact_hash`, `media_variants.hash` (the derived table of `media.variants`),
+`plugins.artifact_hash`, `themes.artifact_hash` or `import_runs.report_hash`; the store
+checks these in SQL. On top, the GC computes **protected** hashes in Rust and passes them
+to the store: every 64-lowercase-hex string anywhere in the payload of a `queued` or
+`running` job (object keys included, so it covers `media.variants`, `import.wordpress` and
+any later kind), and the `json` and `html` hashes inside every import report manifest
+(`{"v":1,"json":…,"html":…}`). A manifest that cannot be read (missing, over 1 KiB, not
+that shape) protects every `import`-kind row for that pass. Revisions and
+`content_items.fields` are **not** referrers: they hold media content ids, not hashes (a
+featured image keeps its file through its `media` row).
+
+**Grace and marking** (P11). `artifacts.orphaned_at` (migration `0011_artifact_gc`) records
+since when nothing references a row. One pass, under the `artifacts.gc` lock (`try_lock`: a
+second run at the same time is refused, the job as `Busy`, the CLI with exit 3):
+
+1. **Mark:** unmarked rows that nothing references and that are not protected get
+   `orphaned_at = now`; marked rows that are referenced or protected again lose the mark.
+   `ArtifactRepo::insert_if_absent` on an existing row also clears it: recording the same
+   bytes again counts as a fresh reference.
+2. **Delete rows** marked before `now − grace`, one at a time with `delete_if_orphaned`,
+   which re-checks the references in its own statement (a foreign-key refusal, a reference
+   that raced in, keeps the row). Only when the row is gone is the blob deleted (R74's
+   order).
+3. **Delete row-less blobs:** objects under `artifacts/` whose `last_modified` is older than
+   `now − grace`, that are not protected and have no row (`existing`, asked for each batch
+   of 1 000 right before deleting it). These are uploads whose row never came (R68),
+   refused uploads and staged extension bytes whose install failed.
+4. **Clean `tmp/`:** staging objects, probes included, older than 24 h, whatever the grace.
+
+The grace period is `[media] gc_grace_days` (default 7 days, 1..=365, 01 §4); it covers
+in-flight uploads (every writer stores the blob before its row), rollbacks to an old plugin
+artifact, and the staged bytes of a failed extension install, which the request no longer
+deletes (`Installer::discard_staged` is gone, P12): a concurrent install of the same bytes
+can no longer lose its blob, and refused install bytes stay up to the grace period. With
+the default, nothing is deleted on the first pass after an artifact becomes unreferenced:
+it needs a pass to mark it and one more after the grace period. A pass cut short (the job's
+3 600 s timeout) continues the next day; a blob that cannot be deleted is logged and found
+again as a row-less blob.
+
+**Residual race (accepted).** Every writer stores the blob before its row, and the store's
+put of bytes that already exist is a no-op. Two windows remain, both milliseconds wide:
+
+- step 2: a writer that inserts its row between the GC's row delete and its blob delete;
+- step 3: a writer that inserts its row between the GC's last `existing` check for that
+  hash (asked again for the single hash right before each delete; the batch check of 1 000
+  is only a pre-filter) and the blob delete.
+
+Either writer ends up with a row and no blob. Both need bytes that were unreferenced (step
+2) or row-less (step 3) for longer than the grace period to be uploaded again at that
+instant; uploading the file again fixes it.
+
+Job payloads are read before the mark, so a job enqueued during a pass is seen by the next
+one: its artifact row was inserted (or unmarked) before the job, and is at most marked, never
+deleted, within the grace period. The scan reads `queued`, then `running` jobs; a running job
+released back to `queued` between the two reads is missed for that pass. For a row that only
+means a mark (cleared next pass); a **row-less** blob such a job names and that is older than
+the grace period would be deleted. No kind does that today (`import.wordpress` inputs and
+`media.variants` originals have rows). `dead` jobs are not scanned (P10: queued and running
+only), although `retry_dead` can revive one within its 30 days: `import.wordpress` deletes
+its inputs when it fails for good, and a `media.variants` original is held by its `media`
+row. A future kind whose dead jobs may be retried must keep rows for the hashes it names.
+
+Blob and `tmp/` deletes that fail are logged, counted (`, failed F` is appended to the
+output line) and retried by later passes; a pass that fails part-way logs what it had done.
+
+**Dry run** (`ferrite media gc --dry-run`) marks nothing and deletes nothing: steps 1 and 2
+run in a transaction that is rolled back, so their counts are exact (each tentative delete
+in its own savepoint, so a foreign-key refusal on Postgres does not abort the dry run);
+steps 3 and 4 only count. It prints the same line as a real run after `dry run: `.
 
 ## 7. WordPress media import
 
@@ -488,3 +600,20 @@ copy.
 `ferrite media sync --from local:./site/media --to s3://bucket/prefix` copies all
 artifacts (skips existing keys). Because keys are content hashes, the DB needs no
 rewrite when switching backends; only `[media]` config changes.
+
+`ferrite media sync --to <dest> (--from <src> | --data DIR)` (M4-1; exit codes in
+[09](09-operations.md#8-cli-summary)) lists every object under the source's `artifacts/`,
+whether the database records it or not (it opens no database, so it runs while the site
+serves). A key already at the destination with the same size is skipped; the rest are
+streamed through `put_stream`, which hashes the bytes on the way: an object whose content does
+not hash to its key is reported as failed and not placed under that key. The size at the
+destination is checked after each copy (a same-size destination object is trusted: content is
+not compared). It never deletes and never reads `tmp/`, and copies 8 objects at once; each copy
+buffers up to the first 8 MiB plus two 8 MiB parts, so memory peaks near 8 x 24 MiB = 192 MiB.
+Keys under `artifacts/` that do not name an artifact are ignored with a notice on stderr. The
+destination is probed (`check`) first: if it is unreachable or not writable the command exits 1
+before copying. A corrupt source object leaves its bytes at the destination under their own
+valid hash, an unrecorded orphan for the destination site's GC. Source and destination are `local:<path>` or `s3://bucket[/prefix]`; every
+`s3://` URL takes its credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`,
+`AWS_COPY_IF_NOT_EXISTS`), while `--data` uses the site's `[media]` settings.

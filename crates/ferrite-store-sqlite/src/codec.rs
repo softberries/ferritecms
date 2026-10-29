@@ -216,7 +216,7 @@ pub(crate) fn redirect(row: &SqliteRow) -> Result<Redirect, StoreError> {
     })
 }
 
-pub(crate) const ARTIFACT_COLUMNS: &str = "hash, kind, bytes, mime, created_at";
+pub(crate) const ARTIFACT_COLUMNS: &str = "hash, kind, bytes, mime, created_at, orphaned_at";
 
 /// Maps a row selected with [`ARTIFACT_COLUMNS`].
 pub(crate) fn artifact(row: &SqliteRow) -> Result<Artifact, StoreError> {
@@ -228,6 +228,7 @@ pub(crate) fn artifact(row: &SqliteRow) -> Result<Artifact, StoreError> {
         bytes: row.try_get("bytes").map_err(map_db_err)?,
         mime: row.try_get("mime").map_err(map_db_err)?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        orphaned_at: ts_opt(row.try_get("orphaned_at").map_err(map_db_err)?)?,
     })
 }
 

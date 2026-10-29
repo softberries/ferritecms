@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use ferrite_media::ConditionalPut;
 use ipnet::IpNet;
 use toml::{Table, Value};
 
@@ -372,7 +373,9 @@ fn parse_media(cx: &mut Cx, root: &mut Table) -> (MediaSection, UploadConfig) {
 }
 
 /// `media.max_upload` (1 B..=1 GiB), `media.image_workers` (1..=16) and
-/// `media.upload_idle_timeout` (a positive duration), for either backend.
+/// `media.upload_idle_timeout` (a positive duration), `media.strip_metadata` (a
+/// boolean, default false) and `media.gc_grace_days` (1..=365, default 7), for either
+/// backend.
 fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let defaults = UploadConfig::default();
     let max_upload = match cx.size(t, "media", "max_upload", false) {
@@ -395,10 +398,24 @@ fn parse_uploads(cx: &mut Cx, t: &mut Table) -> UploadConfig {
     let idle_timeout_secs = cx
         .duration_secs(t, "media", "upload_idle_timeout", false)
         .unwrap_or(defaults.idle_timeout_secs);
+    let strip_metadata = cx
+        .boolean(t, "media", "strip_metadata")
+        .unwrap_or(defaults.strip_metadata);
+    const MAX_GRACE: u64 = MAX_GC_GRACE_DAYS as u64;
+    let gc_grace_days = match cx.uint(t, "media", "gc_grace_days") {
+        None => defaults.gc_grace_days,
+        Some(n @ 1..=MAX_GRACE) => n as u32,
+        Some(_) => {
+            cx.push("media.gc_grace_days", "must be between 1 and 365");
+            defaults.gc_grace_days
+        }
+    };
     UploadConfig {
         max_upload,
         image_workers,
         idle_timeout_secs,
+        strip_metadata,
+        gc_grace_days,
     }
 }
 
@@ -477,6 +494,24 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
     let virtual_hosted_style = cx
         .boolean(&mut t, b, "virtual_hosted_style")
         .unwrap_or(false);
+    let copy_if_not_exists = cx.string(&mut t, b, "copy_if_not_exists");
+    if let Some(mode) = &copy_if_not_exists
+        && let Err(message) = ferrite_media::validate_copy_if_not_exists(mode)
+    {
+        cx.push("media.s3.copy_if_not_exists", message);
+    }
+    let conditional_put = match cx.string(&mut t, b, "conditional_put").as_deref() {
+        None => None,
+        Some("etag") => Some(ConditionalPut::Etag),
+        Some("disabled") => Some(ConditionalPut::Disabled),
+        Some(_) => {
+            cx.push(
+                "media.s3.conditional_put",
+                "must be \"etag\" or \"disabled\"",
+            );
+            None
+        }
+    };
     let prefix = cx.string(&mut t, b, "prefix").unwrap_or_default();
     let public_base_url =
         cx.string(&mut t, b, "public_base_url")
@@ -499,6 +534,8 @@ fn parse_s3(cx: &mut Cx, mut t: Table) -> MediaSection {
         secret_access_key,
         allow_http,
         virtual_hosted_style,
+        copy_if_not_exists,
+        conditional_put,
         prefix,
         public_base_url,
     }
@@ -897,7 +934,7 @@ impl InitMedia {
 }
 
 /// The upload keys of `[media]` in the `ferrite init` template (commented defaults).
-const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n";
+const UPLOAD_TEMPLATE: &str = "# Largest uploaded file (1 byte to 1GiB).\n# max_upload = \"256MB\"\n# Image variant jobs at once per node (1..=16).\n# image_workers = 1\n# An upload that sends nothing for this long is aborted.\n# upload_idle_timeout = \"30s\"\n# Strip EXIF and XMP (GPS included) from uploaded JPEG, PNG and WebP originals.\n# strip_metadata = false\n# Days the artifacts GC keeps unreferenced files before deleting them (1..=365).\n# gc_grace_days = 7\n";
 
 /// Template for `ferrite init`. For S3 the bucket and prefix are concrete and region
 /// defaults to `us-east-1`; the operator must still set credentials/endpoint.
@@ -938,7 +975,13 @@ pub fn render_default_toml(
             out.push_str("# endpoint = \"https://s3.eu-central-1.amazonaws.com\"\n");
             out.push_str("# access_key_id_file = \"/run/secrets/s3_key\"\n");
             out.push_str("# secret_access_key_file = \"/run/secrets/s3_secret\"\n");
-            out.push_str("# public_base_url = \"https://cdn.example.com\"\n\n");
+            out.push_str("# public_base_url = \"https://cdn.example.com\"\n");
+            out.push_str(
+                "# How uploads are placed without a race, if your provider supports it (03 §2):\n",
+            );
+            out.push_str("# copy_if_not_exists = \"header:x-amz-copy-source-if-none-match:*\"\n");
+            out.push_str("# For a store that rejects If-None-Match on create:\n");
+            out.push_str("# conditional_put = \"disabled\"\n\n");
         }
         InitMedia::Local => {
             out.push_str("[media]\nbackend = \"local\"\nroot = \"media\"\n");
