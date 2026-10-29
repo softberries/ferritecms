@@ -15,7 +15,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, Job, JobId,
     JobQuery, JobStatus, Role, Timestamp, UserId, UserStatus,
 };
-use ferrite_store::{JobRepo, LOCK_IMPORT};
+use ferrite_store::{JobRepo, LOCK_IMPORT, Repos};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -235,13 +235,13 @@ impl ImportService {
         cursor: Option<(Timestamp, Uuid)>,
     ) -> Result<Vec<ImportRunView>, CoreError> {
         require_reader(actor, Capability::Import)?;
-        let runs = self
-            .store
-            .read()
-            .imports()
-            .list_runs_page(limit, cursor)
-            .await?;
-        Ok(runs.into_iter().map(ImportRunView::from).collect())
+        let repos = self.store.read();
+        let runs = repos.imports().list_runs_page(limit, cursor).await?;
+        let mut views = Vec::with_capacity(runs.len());
+        for run in runs {
+            views.push(view(repos, run, None).await?);
+        }
+        Ok(views)
     }
 
     /// Run `id`. Needs `import:read`.
@@ -251,13 +251,13 @@ impl ImportService {
         id: ImportRunId,
     ) -> Result<ImportRunView, CoreError> {
         require_reader(actor, Capability::Import)?;
-        self.store
-            .read()
+        let repos = self.store.read();
+        let run = repos
             .imports()
             .get_run(id)
             .await?
-            .map(ImportRunView::from)
-            .ok_or(CoreError::NotFound)
+            .ok_or(CoreError::NotFound)?;
+        view(repos, run, None).await
     }
 
     /// The `import.wordpress` job `job_id` and its newest run (P26-1); another kind's job
@@ -275,11 +275,11 @@ impl ImportService {
             .await?
             .filter(|j| j.kind == IMPORT_WORDPRESS_KIND)
             .ok_or(CoreError::NotFound)?;
-        let run = repos.imports().run_by_job(job_id).await?;
-        Ok(ImportJobView {
-            job,
-            run: run.map(ImportRunView::from),
-        })
+        let run = match repos.imports().run_by_job(job_id).await? {
+            Some(run) => Some(view(repos, run, Some(&job)).await?),
+            None => None,
+        };
+        Ok(ImportJobView { job, run })
     }
 
     /// Stores run `run`'s report files as `import` artifacts and points the run at them
@@ -380,6 +380,31 @@ impl ImportService {
             "import reports need the media store",
         ))
     }
+}
+
+/// What readers see of `run` (final review BE-m2): a `running` run with a stale
+/// heartbeat whose job is no longer queued or running (its last attempt died of a
+/// timeout, a lost lease or a panic, or the job was pruned) reads as `abandoned`, the
+/// state the next import's takeover will write. A CLI run (no job) and a job that will
+/// retry keep `running`. `job` is the run's job when the caller has it.
+async fn view(
+    repos: &dyn Repos,
+    run: ImportRun,
+    job: Option<&Job>,
+) -> Result<ImportRunView, CoreError> {
+    let mut view = ImportRunView::from(run);
+    let stale =
+        view.state == ImportRunState::Running && view.heartbeat_at < stale_before(Timestamp::now());
+    if let (true, Some(id)) = (stale, view.job_id) {
+        let status = match job {
+            Some(j) if j.id == id => Some(j.status),
+            _ => repos.jobs().get(id).await?.map(|j| j.status),
+        };
+        if !matches!(status, Some(JobStatus::Queued | JobStatus::Running)) {
+            view.state = ImportRunState::Abandoned;
+        }
+    }
+    Ok(view)
 }
 
 /// An `import.wordpress` job is queued or running.

@@ -127,6 +127,11 @@ fn input(c: char, mime: &str) -> Artifact {
 /// A `running` run written straight to the store (no lock held, as after a crash) with
 /// its heartbeat `secs` ago.
 async fn running_run(store: &dyn Store, by: UserId, secs: i64) -> ImportRunId {
+    job_run(store, by, secs, None).await
+}
+
+/// [`running_run`] started by job `job`.
+async fn job_run(store: &dyn Store, by: UserId, secs: i64, job: Option<JobId>) -> ImportRunId {
     let at = Timestamp::from(Timestamp::now().as_datetime() - chrono::Duration::seconds(secs));
     let run = ImportRun {
         id: ImportRunId::new(),
@@ -139,7 +144,7 @@ async fn running_run(store: &dyn Store, by: UserId, secs: i64) -> ImportRunId {
         finished_at: None,
         stats: json!({}),
         dry_run: false,
-        job_id: None,
+        job_id: job,
         step: None,
         report_hash: None,
     };
@@ -175,6 +180,7 @@ backend_tests!(
     enqueue_refuses_while_the_import_lock_is_held,
     reports_need_an_artifact_store,
     enqueue_checks_the_bases,
+    stale_run_of_an_ended_job_reads_abandoned,
 );
 
 /// The payload keeps the CLI's defaults and refuses unknown fields.
@@ -727,4 +733,71 @@ pub async fn enqueue_checks_the_bases(db: &TestDb) {
         .enqueue(&admin, with("/topics/", "blog/tags-2"))
         .await
         .unwrap();
+}
+
+/// A `running` run whose heartbeat is stale and whose job is no longer queued or running
+/// (its last attempt died: a timeout, a cancelled lease, a panic) reads as `abandoned`
+/// in every read; the row itself is left for the next import to take over. A fresh
+/// heartbeat, or a job that will retry, keeps it `running`.
+pub async fn stale_run_of_an_ended_job_reads_abandoned(db: &TestDb) {
+    let f = service(db);
+    let store = db.store();
+    let admin = actor(store, Role::Admin).await;
+    let job = f.svc.enqueue(&admin, request()).await.unwrap();
+    let jobs = store.read().jobs();
+    let claimed = jobs
+        .claim(
+            NodeId::new(),
+            &[IMPORT_WORDPRESS_KIND.to_owned()],
+            1,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    let lease = claimed[0].lease().unwrap();
+
+    // Still running: its run stays `running` even when stale.
+    let run = job_run(store, admin.user, 300, Some(job)).await;
+    let state = |v: ImportJobView| v.run.unwrap().state;
+    assert_eq!(
+        state(f.svc.job_status(&admin, job).await.unwrap()),
+        ImportRunState::Running
+    );
+    jobs.fail(&lease, "lease lost", true).await.unwrap();
+    assert_eq!(
+        state(f.svc.job_status(&admin, job).await.unwrap()),
+        ImportRunState::Abandoned
+    );
+    assert_eq!(
+        f.svc.get_run(&admin, run).await.unwrap().state,
+        ImportRunState::Abandoned
+    );
+    let listed = f.svc.list_runs(&admin, 10, None).await.unwrap();
+    assert_eq!(listed[0].state, ImportRunState::Abandoned);
+    let row = store.read().imports().get_run(run).await.unwrap().unwrap();
+    assert_eq!(row.state, ImportRunState::Running);
+
+    // A fresh heartbeat (the run of a node still going) is believed.
+    store
+        .read()
+        .imports()
+        .fence(run, &[7; 16], Timestamp::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        f.svc.get_run(&admin, run).await.unwrap().state,
+        ImportRunState::Running
+    );
+    // A stale CLI run (no job) stays `running`: nothing says it stopped.
+    store
+        .read()
+        .imports()
+        .set_state(run, ImportRunState::Failed, &json!({}), Timestamp::now())
+        .await
+        .unwrap();
+    let cli = running_run(store, admin.user, 300).await;
+    assert_eq!(
+        f.svc.get_run(&admin, cli).await.unwrap().state,
+        ImportRunState::Running
+    );
 }
