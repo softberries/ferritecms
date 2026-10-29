@@ -20,6 +20,7 @@
 
 use std::collections::BTreeMap;
 
+use ferrite_core::import::STEP_REPORT;
 use ferrite_domain::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -863,7 +864,7 @@ pub(crate) async fn finish_failed(
     step: &str,
     error: &ImportError,
 ) {
-    let ir = ir.filter(|_| step != "report");
+    let ir = ir.filter(|_| step != STEP_REPORT);
     let mapped = match ir {
         Some(ir) => match finish(report, ir).await {
             Ok(()) => true,

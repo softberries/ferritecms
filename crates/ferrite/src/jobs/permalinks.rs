@@ -12,11 +12,15 @@ use ferrite_domain::Job;
 
 /// `permalink.redirects`: redirects every published post and page from its path under
 /// the payload's previous structures to its path under the stored ones
-/// ([`RedirectService::structure_change`], 500 items per transaction). A payload that
-/// does not parse, or whose previous structures are invalid, is `Permanent`; a store
-/// error is retried, and the pages done before it are simply rewritten by the retry.
+/// ([`RedirectService::structure_change`], 500 items per transaction), at most
+/// [`pages`](Self::pages) transactions per job; the rest goes to a continuation job from
+/// the cursor, so each job fits the default timeout. A payload that does not parse, or
+/// whose previous structures are invalid, is `Permanent`; a store error is retried, and
+/// the pages of this job done before it are simply rewritten by the retry.
 pub struct PermalinkRedirectsHandler {
     pub redirects: Arc<RedirectService>,
+    /// Pages per job: [`STRUCTURE_JOB_PAGES`](ferrite_core::STRUCTURE_JOB_PAGES).
+    pub pages: u32,
 }
 
 #[async_trait]
@@ -34,7 +38,7 @@ impl JobHandler for PermalinkRedirectsHandler {
             .map_err(|e| JobError::Permanent(format!("invalid payload: {e}")))?;
         let report = self
             .redirects
-            .structure_change(&payload)
+            .structure_change(&payload, self.pages)
             .await
             .map_err(|e| match e {
                 CoreError::Invalid(_) | CoreError::InvalidField { .. } => {
@@ -47,6 +51,7 @@ impl JobHandler for PermalinkRedirectsHandler {
             moved = report.moved,
             kept = report.kept,
             refused = report.refused,
+            continued = report.continued,
             "permalink structure redirects written"
         );
         Ok(())

@@ -22,7 +22,7 @@ use ferrite_core::jobs::{ImportJobOptions, ImportJobRequest};
 use ferrite_core::{Actor, PermalinkRules};
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentQuery, ImportRun, ImportRunId, ImportRunState,
-    Job, JobId, JobStatus, MEDIA_KIND, NewJob, NewUser, NodeId, Role, Timestamp, UserId,
+    Job, JobId, JobStatus, MEDIA_KIND, Media, NewJob, NewUser, NodeId, Role, Timestamp, UserId,
     UserStatus,
 };
 use ferrite_http::import_blobs::MediaArtifacts;
@@ -491,12 +491,57 @@ async fn last_attempt_retry_deletes_inputs(db: Arc<TestDb>) {
     assert_eq!(site.artifact_exists(&wxr).await, (true, true));
     assert!(!gone.exists());
     assert!(kept.exists());
+    // Not final: the run's work folder stays for the retry to resume.
+    let first = site.run_of(id).await;
+    assert!(import.join(first.id.to_string()).exists());
     job.attempts = job.max_attempts;
     let err = handler.run(&job).await.unwrap_err();
     assert!(matches!(err, JobError::Retry(_)), "{err:?}");
     for hash in [&wxr, &uploads] {
         assert_eq!(site.artifact_exists(hash).await, (false, false), "{hash}");
     }
+    // Final: the work folder goes too (BE-m3).
+    let last = site.run_of(id).await;
+    assert_ne!(last.id, first.id);
+    for run in [first.id, last.id] {
+        assert!(!import.join(run.to_string()).exists(), "{run}");
+    }
+}
+
+/// Each attempt removes the work folders of runs whose job is over (`done` or `dead`);
+/// a CLI run's folder (no job) stays for the next CLI run of the same file to resume
+/// (M3-1 R27), and so does one whose job may still retry.
+async fn attempt_sweeps_work_folders_of_ended_jobs(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    let folder = site.folder();
+    let import = folder.dir.path().join("import");
+    let dead = site.other_job(true).await;
+    let live = site.other_job(false).await;
+    let ended = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), Some(dead))
+        .await;
+    let retrying = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), Some(live))
+        .await;
+    let cli = site
+        .run_in(ImportRunState::Failed, Duration::from_secs(600), None)
+        .await;
+    for run in [ended, retrying, cli] {
+        std::fs::create_dir_all(import.join(run.to_string())).unwrap();
+    }
+    // A live CLI run makes the attempt busy; the sweep runs first anyway.
+    site.running_run(Duration::ZERO, None).await;
+    let err = site
+        .handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Busy(_)), "{err:?}");
+    assert!(!import.join(ended.to_string()).exists());
+    assert!(import.join(retrying.to_string()).exists());
+    assert!(import.join(cli.to_string()).exists());
 }
 
 /// An attempt that finds its input gone after its run was `done` (a drop between the
@@ -564,6 +609,50 @@ async fn job_dead_when_user_demoted(db: Arc<TestDb>) {
             .is_none()
     );
     node.shutdown().await.unwrap();
+}
+
+/// A media item uploaded with the same bytes as a queued import's uploads zip shares its
+/// artifact row (kind `import`, `insert_if_absent`). When the job's inputs are spent, the
+/// row is deleted first and the foreign key refuses it, so the media item keeps both its
+/// row and its file; the WXR, which nothing else holds, goes.
+async fn input_shared_with_media_keeps_its_file(db: Arc<TestDb>) {
+    let site = Site::new(db).await;
+    let (wxr, uploads) = site.site_a().await;
+    let id = site.enqueue(&wxr, Some(&uploads)).await;
+    let store = site.store();
+    let mut user = store.read().users().get(site.admin).await.unwrap().unwrap();
+    let post = ferrite_store_tests::fixtures::new_post(&user, "uploads-zip");
+    store.read().content().insert(&post).await.unwrap();
+    store
+        .read()
+        .media()
+        .insert(&Media {
+            item_id: post.id,
+            artifact_hash: uploads.clone(),
+            mime: "application/zip".into(),
+            bytes: 1,
+            width: None,
+            height: None,
+            alt: String::new(),
+            original_name: "uploads.zip".into(),
+            variants: serde_json::json!({}),
+            sanitized: false,
+        })
+        .await
+        .unwrap();
+    // The job is spent at once: its user is no longer an admin (`Permanent`).
+    user.role = Role::Editor;
+    store.read().users().update(&user).await.unwrap();
+    let folder = site.folder();
+    let err = site
+        .handler(&folder, None)
+        .run(&site.job(id).await)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JobError::Permanent(_)), "{err:?}");
+    assert_eq!(site.artifact_exists(&wxr).await, (false, false));
+    assert_eq!(site.artifact_exists(&uploads).await, (true, true));
+    assert!(store.read().media().get(post.id).await.unwrap().is_some());
 }
 
 /// An input artifact that is not in the store: `dead` on the first attempt.
@@ -641,8 +730,10 @@ backend_tests_spawning!(
     job_takes_over_stale_runs_without_a_live_job,
     busy_attempt_fetches_nothing,
     last_attempt_retry_deletes_inputs,
+    attempt_sweeps_work_folders_of_ended_jobs,
     missing_input_of_a_done_run_is_done,
     job_dead_when_user_demoted,
+    input_shared_with_media_keeps_its_file,
     job_dead_when_artifact_missing,
     job_retry_on_fresh_node_reparses,
 );
