@@ -1,7 +1,8 @@
 //! The `examples/cluster` compose example, checked without Docker (P24): the shared
 //! `ferrite.toml` plus `ferrite.env` must load as a valid cluster configuration, and
 //! every `FERRITE_*` variable the compose file sets must be a known setting. CI also
-//! runs `docker compose config` and `docker build`; nobody runs `docker compose up`.
+//! runs `docker compose config` and `docker build`; `docker compose up` is not run in CI
+//! (it was run by hand, docs/design/09-operations.md §7).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};

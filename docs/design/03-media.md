@@ -233,14 +233,14 @@ to the core config layer ([01](01-architecture.md#4-configuration)).
 Placement options (`[media.s3]`, object_store's own encodings, parsed by object_store):
 
 - `copy_if_not_exists` (default unset): the header that makes a server-side copy fail when the
-  destination exists. `header:<name>:<value>` (for example
-  `header:x-amz-copy-source-if-none-match:*`), `header-with-status:<name>:<value>:<status>`
+  destination exists. `header:<name>:<value>` (the header is
+  provider-specific; the values per provider are in [09 §4a](09-operations.md#4a-s3-media-buckets)), `header-with-status:<name>:<value>:<status>`
   (for stores that answer a failed precondition with a status other than 412), or `multipart`
   (the copy is a multipart upload that ends in a conditional complete; it **does not copy
   object attributes** such as content type or tags, so `ferrite config check` warns about it).
   A wrong header for a provider fails placements of uploads of 8 MiB and more, and
   `ferrite config check` cannot detect that (it opens nothing): after setting it, test with an
-  upload larger than 8 MiB. An invalid value is a configuration error naming
+  upload of 8 MiB or more. An invalid value is a configuration error naming
   `media.s3.copy_if_not_exists`.
 - `conditional_put` = `"etag"` or `"disabled"` (unset: object_store's default, `etag`).
 
@@ -248,11 +248,8 @@ Both options apply to the explicit-keys path and the environment path alike. Wit
 builder also reads `AWS_COPY_IF_NOT_EXISTS` and `AWS_CONDITIONAL_PUT` from the environment; a
 key in `ferrite.toml` wins over them, and `conditional_put` counts as set when the key is present (even `"etag"`); unset, the builder's default or the environment applies.
 
-Provider notes to document (each verified when writing the ops docs, not assumed):
-R2 path-style URLs, B2 region naming, Hetzner/Scaleway endpoints.
-
-Recommended bucket lifecycle rules, provider endpoints and the `copy_if_not_exists` values per
-provider: [09 §4a](09-operations.md#4a-s3-media-buckets).
+Bucket lifecycle rules, provider endpoints and the `copy_if_not_exists` values per provider
+(R2, B2, Hetzner, Scaleway, each marked verified or not): [09 §4a](09-operations.md#4a-s3-media-buckets).
 
 ## 4. Images and variants
 

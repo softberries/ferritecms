@@ -165,6 +165,9 @@ AWS S3 JSON for `aws s3api put-bucket-lifecycle-configuration --bucket BUCKET
 }
 ```
 
+On a versioned bucket `Expiration` only adds a delete marker; also add a
+`NoncurrentVersionExpiration` action (not tested here) to free the space.
+
 Never put a lifecycle expiry on `artifacts/`: those are the site's media, plugins and themes.
 Other providers have their own lifecycle features and syntax; none is described here because
 none was checked (see the table).
@@ -178,27 +181,28 @@ atomic but is safe here because keys are content hashes
 ([03 §3](03-media.md#write-paths-and-the-8-mib-threshold)). The value uses `object_store`'s
 encoding: `header:<name>:<value>`, `header-with-status:<name>:<value>:<status>` or
 `multipart`. `ferrite config check` cannot tell whether a value is right for your store:
-after changing it, upload a file and look at the logs.
+after changing it, upload a file of 8 MiB or more and check the logs: smaller uploads are
+never placed with a copy, so they do not exercise it.
 
 | Provider | `copy_if_not_exists` | `conditional_put` |
 |---|---|---|
 | AWS S3 | `multipart` (the mode `object_store` documents for S3; it does not copy tags or attributes) | `etag` (default) |
-| Cloudflare R2 | `header:cf-copy-destination-if-none-match:*` (the example in `object_store`'s docs) | `etag`: R2 documents `If-None-Match` on PutObject |
+| Cloudflare R2 | not verified (`object_store`'s docs only): `header:cf-copy-destination-if-none-match:*` is the value they give; Cloudflare's docs do not list the header, so leave it unset unless you have tested it | `etag`: R2 documents `If-None-Match` on PutObject |
 | RustFS (cluster example) | leave unset (fallback) | `etag`: tested, a second `If-None-Match: *` put gets `412 PreconditionFailed` |
 | Backblaze B2, Hetzner, Scaleway | leave unset (fallback) | not verified: if uploads fail with a precondition error, set `conditional_put = "disabled"` |
 
 AWS also documents `If-None-Match` on CopyObject; `header:If-None-Match:*` is therefore a
 candidate for AWS S3, but it has not been run against Ferrite, so the table above keeps
-`multipart`.
+`multipart`. The header example in [03 §3](03-media.md#s3-backend) shows the syntax only.
 
 ### Endpoints and addressing
 
 - **Cloudflare R2:** endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`, region
   `auto` (an empty region or `us-east-1` is an alias for it). Cloudflare's docs do not say which
-  addressing styles work, so keep `virtual_hosted_style` off (the bucket goes in the path).
+  addressing styles work, so leave `virtual_hosted_style` at its default (off, the bucket goes in the path); whether R2 needs that is not verified.
 - **Backblaze B2:** endpoint `https://s3.<region>.backblazeb2.com`, HTTPS only, no bucket in
-  the host. Region names look like `us-east-005`: use the segment of your bucket's own
-  endpoint as `region`. Both path and virtual-hosted style are supported.
+  the host. Backblaze's page shows `us-east-005` as a region name; take the region from the
+  endpoint your B2 console shows for the bucket (the naming rule is not verified). Both path and virtual-hosted style are supported.
 - **Hetzner Object Storage:** endpoint `https://<location>.your-objectstorage.com`, where
   `<location>` is the bucket's location (`fsn1` and `nbg1` are shown in Hetzner's guides), and the same
   location code is the `region`. Hetzner's guides use virtual-hosted style, so set
@@ -225,6 +229,10 @@ candidate for AWS S3, but it has not been run against Ferrite, so the table abov
 | Hetzner endpoint is `https://<location>.your-objectstorage.com`; region is the location code (`fsn1`, `nbg1` shown); guides use virtual-hosted style | docs.hetzner.com/storage/object-storage/getting-started/using-s3-api-tools | yes, 2026-10-29 |
 | Hetzner conditional put or copy support, and the `hel1` endpoint | Hetzner's list of supported actions was not read; `hel1` only from third-party pages | no |
 | Scaleway endpoints `s3.<region>.scw.cloud` for `fr-par`, `nl-ams`, `pl-waw` | seen in search results quoting Scaleway's docs; the pages returned 403 when fetched | no |
+| `docker pull minio/minio` and `minio/mc` fail | observed locally with Docker 29.8.1 | yes, 2026-10-29 (the reason, MinIO no longer publishing them, is not verified) |
+| RustFS is Apache-2.0 licensed | github.com/rustfs/rustfs (License section) | yes, 2026-10-29 |
+| RustFS 1.0.4 was released on 2026-10-25 | github.com/rustfs/rustfs/releases (listing shows 25 Oct; the year is taken from the asset timestamps) | yes, 2026-10-29 |
+| RustFS image runs as UID 10001; ports 9000/9001; `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY` | docs.rustfs.com/installation/docker | yes, 2026-10-29 |
 | RustFS 1.0.4 accepts a first `If-None-Match: *` PutObject and rejects the second with `PreconditionFailed` | run against the cluster example, 2026-10-29 | yes, 2026-10-29 |
 
 ## 5. TLS
@@ -317,7 +325,7 @@ of truth for real monitoring.)
   ```
 
   Services: `postgres` (`postgres:18`, `pg_isready` health check, data volume at
-  `/var/lib/postgresql`), `rustfs` (`rustfs/rustfs:1.0.4`, an Apache-2.0 S3-compatible
+  `/var/lib/postgresql`), `rustfs` (`rustfs/rustfs:1.0.4`, an S3-compatible
   server, `/data`), `bucket-init` (`amazon/aws-cli`: creates bucket `ferrite`, then exits), `node1`/`node2` (built from the
   repository, `serve --data /data`, `env_file: ferrite.env`, `ferrite.toml` mounted
   read-only at `/data/ferrite.toml`, `FERRITE_CLUSTER__NODE_NAME` per node, health check
@@ -338,8 +346,8 @@ of truth for real monitoring.)
   hand on 2026-10-29 (M4-1): both nodes healthy, an upload through node1 read back
   byte for byte through node2, the object in the `ferrite` bucket on RustFS. Every image is
   pinned as `name:tag@sha256:<index digest>`; the digests stay valid until the registry
-  deletes them, and need a manual bump to follow new releases. MinIO's `minio/minio` and
-  `minio/mc` images could not be pulled any more, so RustFS (release 1.0.4 of 2026-10-25) replaced them.
+  deletes them, and need a manual bump to follow new releases. On 2026-10-29 `docker pull minio/minio` and `docker pull minio/mc` were denied ("pull access
+  denied ... repository does not exist or may require 'docker login'"), so the example moved to RustFS 1.0.4 (§4a table for its licence, release date and UID).
 
 ## 8. CLI summary
 

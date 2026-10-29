@@ -59,8 +59,8 @@ services:
       - pgdata:/var/lib/postgresql
     networks: [ferrite]
 
-  # S3-compatible object store: RustFS (Apache-2.0, single container). MinIO's community
-  # images are no longer published (docs/design/09-operations.md 7). Runs as UID 10001;
+  # S3-compatible object store: RustFS (single container), which replaced MinIO
+  # because minio/minio and minio/mc could not be pulled (docs/design/09-operations.md §7). Runs as UID 10001;
   # the named volume needs no extra setup.
   rustfs:
     image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
