@@ -300,6 +300,39 @@ pub struct ImportJobRequest {
     pub source_name: String,
 }
 
+/// The longest category or tag base.
+pub const MAX_IMPORT_BASE: usize = 100;
+
+/// Checks the options a request may set: the category and tag bases are paths of
+/// segments of `A-Z a-z 0-9 - _ . ~` (surrounding slashes are ignored), at most
+/// [`MAX_IMPORT_BASE`] characters, no empty, `.` or `..` segment; else
+/// [`CoreError::InvalidField`](crate::CoreError::InvalidField) naming the field.
+pub fn check_import_options(options: &ImportJobOptions) -> Result<(), crate::CoreError> {
+    for (field, base) in [
+        ("category_base", &options.category_base),
+        ("tag_base", &options.tag_base),
+    ] {
+        let path = base.trim_matches('/');
+        let segment_ok = |s: &str| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+        };
+        if base.len() > MAX_IMPORT_BASE || !path.split('/').all(segment_ok) {
+            return Err(crate::CoreError::InvalidField {
+                field,
+                message: format!(
+                    "a path of segments of letters, digits, '-', '_', '.' and '~', at most \
+                     {MAX_IMPORT_BASE} characters"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The job for `import`: due now, no unique key (P25's conflict rule stands in for it),
 /// [`IMPORT_WORDPRESS_ATTEMPTS`] attempts.
 pub fn import_wordpress_job(import: &ImportJobPayload) -> NewJob {

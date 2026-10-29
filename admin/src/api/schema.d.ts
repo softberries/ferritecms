@@ -6137,7 +6137,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportJobDto"];
                 };
             };
-            /** @description `malformed-body`: an unknown, unnamed or repeated part, a malformed body or `options` part; `malformed-header`: a malformed `Idempotency-Key` */
+            /** @description `malformed-body`: an unknown, unnamed or repeated part, a malformed body or `options` part, or a part that received no bytes for `media.upload_idle_timeout` (`errors[0].field` names it; the upload is aborted); `malformed-header`: a malformed `Idempotency-Key` */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6164,7 +6164,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `conflict`: another import is queued or running, or a request with this `Idempotency-Key` is in progress (`Retry-After: 5`) */
+            /** @description `conflict`: another import is queued or running (checked before the body is read, and again when the job is queued), or a request with this `Idempotency-Key` is in progress (`Retry-After: 5`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6191,7 +6191,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: no `wxr` part; the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`) */
+            /** @description `validation`: no `wxr` part; an `options` `category_base` or `tag_base` that is not a path of URL-safe segments (`errors[0].field` names it); the `Idempotency-Key` was used for another method or path (`errors[0].field` = `Idempotency-Key`) */
             422: {
                 headers: {
                     [name: string]: unknown;

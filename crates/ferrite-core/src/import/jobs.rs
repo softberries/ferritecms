@@ -15,7 +15,7 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, Job, JobId,
     JobQuery, JobStatus, Role, Timestamp, UserId, UserStatus,
 };
-use ferrite_store::LOCK_IMPORT;
+use ferrite_store::{JobRepo, LOCK_IMPORT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -26,7 +26,7 @@ use crate::{
     actor::{Capability, require, require_reader},
     jobs::{
         IMPORT_WORDPRESS_KIND, IMPORT_WORDPRESS_VERSION, ImportJobPayload, ImportJobRequest,
-        import_wordpress_job,
+        check_import_options, import_wordpress_job,
     },
     tx::finish,
 };
@@ -105,9 +105,28 @@ struct Manifest {
 
 impl ImportService {
     /// `Ok` if `actor` may start an import ([`Capability::Import`] with `import:write`):
-    /// what the API checks before it reads an upload.
+    /// what the API checks before it claims an `Idempotency-Key`.
     pub fn authorize_import(&self, actor: &Actor) -> Result<(), CoreError> {
         require(actor, Capability::Import)
+    }
+
+    /// What the API checks before it reads an upload: `actor` may start an import
+    /// ([`Capability::Import`] with `import:write`), and no `import.wordpress` job is
+    /// queued or running and no run is `running` with a fresh heartbeat
+    /// ([`CoreError::Changed`]). Read-only: a stale run passes and is left alone;
+    /// [`enqueue`](Self::enqueue) decides for good.
+    pub async fn check_start(&self, actor: &Actor) -> Result<(), CoreError> {
+        require(actor, Capability::Import)?;
+        let repos = self.store.read();
+        if let Some(run) = repos.imports().running().await?
+            && run.heartbeat_at >= stale_before(Timestamp::now())
+        {
+            return Err(CoreError::Changed(ALREADY));
+        }
+        if import_job_active(repos.jobs()).await? {
+            return Err(CoreError::Changed(ALREADY));
+        }
+        Ok(())
     }
 
     /// Queues an `import.wordpress` job for `request` (P25, P27), run as `actor` (the
@@ -129,6 +148,7 @@ impl ImportService {
         request: ImportJobRequest,
     ) -> Result<JobId, CoreError> {
         require(actor, Capability::Import)?;
+        check_import_options(&request.options)?;
         let inputs: Vec<Artifact> = std::iter::once(request.wxr)
             .chain(request.uploads)
             .collect();
@@ -178,16 +198,8 @@ impl ImportService {
                 }
                 tracing::warn!(run = %run.id, "an import request took over a stale run");
             }
-            for status in [JobStatus::Queued, JobStatus::Running] {
-                let query = JobQuery {
-                    status: Some(status),
-                    kind: Some(IMPORT_WORDPRESS_KIND.to_owned()),
-                    limit: 1,
-                    cursor: None,
-                };
-                if !tx.jobs().list(&query).await?.items.is_empty() {
-                    return Err(CoreError::Changed(ALREADY));
-                }
+            if import_job_active(tx.jobs()).await? {
+                return Err(CoreError::Changed(ALREADY));
             }
             for input in inputs {
                 tx.artifacts().insert_if_absent(input).await?;
@@ -368,6 +380,22 @@ impl ImportService {
             "import reports need the media store",
         ))
     }
+}
+
+/// An `import.wordpress` job is queued or running.
+async fn import_job_active(jobs: &dyn JobRepo) -> Result<bool, CoreError> {
+    for status in [JobStatus::Queued, JobStatus::Running] {
+        let query = JobQuery {
+            status: Some(status),
+            kind: Some(IMPORT_WORDPRESS_KIND.to_owned()),
+            limit: 1,
+            cursor: None,
+        };
+        if !jobs.list(&query).await?.items.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn parse(hash: &str) -> Result<ArtifactHash, CoreError> {

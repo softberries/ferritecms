@@ -11,19 +11,24 @@ use ferrite_core::{
     jobs::{IMPORT_WORDPRESS_KIND, ImportJobPayload},
 };
 use ferrite_domain::{
-    ArtifactHash, ArtifactKind, ImportRunState, JobId, JobQuery, Role, User, to_hex,
+    ArtifactHash, ArtifactKind, ImportRun, ImportRunId, ImportRunState, JobId, JobQuery, Role,
+    Timestamp, User, to_hex,
 };
 use ferrite_http::api::{
     idempotency::{IDEMPOTENCY_HEADER, REPLAYED_HEADER},
     import::IMPORT_ROUTE_LIMIT,
 };
+use ferrite_http::media::Uploader;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
     api_tests,
-    harness::{Api, Client, Resp, multipart_body},
+    harness::{
+        Api, Client, MAX_UPLOAD, Part, Resp, gated_body, multipart_body, part_head,
+        upload_content_type,
+    },
 };
 
 api_tests!(
@@ -35,6 +40,10 @@ api_tests!(
     import_routes_need_import_capability,
     job_status_then_run_then_report_json_and_html,
     runs_page_cursor,
+    start_import_precheck_refuses_before_reading,
+    start_import_dropped_request_leaves_no_blob,
+    start_import_idle_part_is_aborted,
+    start_import_422_on_bad_bases,
 );
 
 const START: &str = "/api/v1/import/wordpress";
@@ -432,5 +441,198 @@ async fn runs_page_cursor(api: Api) -> Api {
     r.assert_problem(400, "validation");
     let r = c.get(&api, &format!("{RUNS}?limit=0")).await;
     r.assert_problem(400, "validation");
+    api
+}
+
+/// The first part complete, then the head of `next` and a few of its bytes; the rest
+/// waits for the returned gate (keep it alive to hold the request in its body).
+fn stalled(
+    c: &Client,
+    first: (&str, &[u8]),
+    next: &str,
+) -> (axum::http::Request<Body>, tokio::sync::oneshot::Sender<()>) {
+    let mut sent = part_head(&Part {
+        name: first.0,
+        filename: Some("export.xml"),
+        content_type: Some("application/xml"),
+        bytes: &[],
+    });
+    sent.extend_from_slice(first.1);
+    sent.extend_from_slice(b"\r\n");
+    sent.extend_from_slice(&part_head(&Part {
+        name: next,
+        filename: Some("next.bin"),
+        content_type: Some("application/octet-stream"),
+        bytes: &[],
+    }));
+    sent.extend_from_slice(b"PK\x03\x04 partial");
+    let (body, gate) = gated_body(sent, b"rest".to_vec());
+    let req = c
+        .builder(Method::POST, START)
+        .header(header::CONTENT_TYPE, upload_content_type())
+        .body(body)
+        .unwrap();
+    (req, gate)
+}
+
+/// Waits up to 5 s for the media store to hold no files (a spawned cleanup).
+async fn eventually_empty(api: &Api) {
+    for _ in 0..100 {
+        if api.stored_files().is_empty() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("files left behind: {:?}", api.stored_files());
+}
+
+/// A running run written straight to the store, its heartbeat `secs` ago.
+async fn running_run(api: &Api, by: &User, secs: i64) -> ImportRunId {
+    let at = Timestamp::from(Timestamp::now().as_datetime() - chrono::Duration::seconds(secs));
+    let run = ImportRun {
+        id: ImportRunId::new(),
+        source: SOURCE.into(),
+        token: [9; 16],
+        state: ImportRunState::Running,
+        started_by: by.id,
+        started_at: at,
+        heartbeat_at: at,
+        finished_at: None,
+        stats: json!({}),
+        dry_run: false,
+        job_id: None,
+        step: None,
+        report_hash: None,
+    };
+    api.store.read().imports().create_run(&run).await.unwrap();
+    run.id
+}
+
+/// While a job is queued, or a run is live, a start is `409` before its body is read
+/// (the body here never ends); a stale run does not refuse it.
+async fn start_import_precheck_refuses_before_reading(api: Api) -> Api {
+    let (user, mut c) = admin(&api).await;
+    let job = accepted(&start(&api, &mut c, &[("wxr", &wxr("queued"))], None).await);
+    let files = api.stored_files();
+    let (req, _gate) = stalled(&c, ("wxr", &wxr("second")), "uploads");
+    let r = tokio::time::timeout(std::time::Duration::from_secs(5), api.send(req))
+        .await
+        .expect("answered before the body ended");
+    r.assert_problem(409, "conflict");
+    assert_eq!(api.stored_files(), files);
+
+    // The job is done; a live run refuses too, a stale one does not.
+    let jobs = api.store.read().jobs();
+    let claimed = jobs
+        .claim(
+            ferrite_domain::NodeId::new(),
+            &[IMPORT_WORDPRESS_KIND.to_owned()],
+            1,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed[0].id, job);
+    assert!(jobs.complete(&claimed[0].lease().unwrap()).await.unwrap());
+    let live = running_run(&api, &user, 5).await;
+    let (req, _gate) = stalled(&c, ("wxr", &wxr("third")), "uploads");
+    let r = tokio::time::timeout(std::time::Duration::from_secs(5), api.send(req))
+        .await
+        .expect("answered before the body ended");
+    r.assert_problem(409, "conflict");
+    api.store
+        .read()
+        .imports()
+        .set_state(live, ImportRunState::Failed, &json!({}), Timestamp::now())
+        .await
+        .unwrap();
+    let stale = running_run(&api, &user, 300).await;
+    accepted(&start(&api, &mut c, &[("wxr", &wxr("fourth"))], None).await);
+    let run = api
+        .store
+        .read()
+        .imports()
+        .get_run(stale)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.state, ImportRunState::Abandoned);
+    api
+}
+
+/// A client that goes away while `uploads` streams (the request future is dropped)
+/// leaves no stored `wxr` behind.
+async fn start_import_dropped_request_leaves_no_blob(api: Api) -> Api {
+    let (_, c) = admin(&api).await;
+    let big = {
+        let mut v = wxr("dropped");
+        v.resize(64 * 1024, b' ');
+        v
+    };
+    let (req, gate) = stalled(&c, ("wxr", &big), "uploads");
+    let dropped = tokio::time::timeout(std::time::Duration::from_millis(500), api.send(req)).await;
+    assert!(
+        dropped.is_err(),
+        "the request should still be reading its body"
+    );
+    drop(gate);
+    eventually_empty(&api).await;
+    assert_eq!(import_jobs(&api).await, 0);
+    api
+}
+
+/// A part that receives nothing for `media.upload_idle_timeout` is aborted like a media
+/// upload (`400`, the part named), and what was stored is removed.
+async fn start_import_idle_part_is_aborted(api: Api) -> Api {
+    let (_, c) = admin(&api).await;
+    let uploader = Uploader::new(api.api.media.clone(), MAX_UPLOAD)
+        .with_idle_timeout(std::time::Duration::from_millis(300));
+    let (router, _) = api.router_with_uploader(uploader);
+    let (req, _gate) = stalled(&c, ("wxr", &wxr("idle")), "uploads");
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::harness::send(&router, req),
+    )
+    .await
+    .expect("aborted by the idle timeout");
+    let body = r.assert_problem(400, "malformed-body");
+    assert_eq!(body["errors"][0]["field"], "uploads", "{body}");
+    eventually_empty(&api).await;
+    assert_eq!(import_jobs(&api).await, 0);
+    api
+}
+
+/// An empty, `/`-only or otherwise unusable category or tag base is `422` (core), and the
+/// stored WXR is removed.
+async fn start_import_422_on_bad_bases(api: Api) -> Api {
+    let (_, mut c) = admin(&api).await;
+    let x = wxr("bases");
+    for (options, field) in [
+        (r#"{"category_base":""}"#, "category_base"),
+        (r#"{"category_base":"/"}"#, "category_base"),
+        (r#"{"tag_base":"a//b"}"#, "tag_base"),
+        (r#"{"tag_base":"../up"}"#, "tag_base"),
+        (r#"{"tag_base":"has space"}"#, "tag_base"),
+    ] {
+        let r = start(
+            &api,
+            &mut c,
+            &[("wxr", &x), ("options", options.as_bytes())],
+            None,
+        )
+        .await;
+        let body = r.assert_problem(422, "validation");
+        assert_eq!(body["errors"][0]["field"], field, "{options}: {body}");
+    }
+    let ok = r#"{"category_base":"/topics/","tag_base":"blog/tags"}"#;
+    accepted(
+        &start(
+            &api,
+            &mut c,
+            &[("wxr", &x), ("options", ok.as_bytes())],
+            None,
+        )
+        .await,
+    );
     api
 }
