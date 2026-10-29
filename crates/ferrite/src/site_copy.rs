@@ -122,6 +122,17 @@ pub(crate) struct LoadStats {
     pub blobs_ignored: u64,
 }
 
+/// Clears the artifacts GC mark of a loaded row (C-minor): a mark is GC state of the
+/// source's install, so on the target every artifact starts unmarked and an unreferenced
+/// one gets a full grace period again.
+fn unmark(table: &TableSpec, row: &mut Row) {
+    if table.name == "artifacts"
+        && let Some(mark) = row.get_mut("orphaned_at")
+    {
+        *mark = serde_json::Value::Null;
+    }
+}
+
 impl LoadStats {
     fn observe(&mut self, table: &TableSpec, row: &Row) {
         self.rows += 1;
@@ -769,8 +780,9 @@ fn load_table<R: Read>(
                 MAX_LINE / (1024 * 1024)
             );
         }
-        let row: Row = serde_json::from_slice(&line)
+        let mut row: Row = serde_json::from_slice(&line)
             .with_context(|| format!("{path}: line {count} is not a JSON object"))?;
+        unmark(spec, &mut row);
         stats.observe(spec, &row);
         batch.push(row);
         if batch.len() == BATCH {
@@ -891,11 +903,12 @@ async fn copy_rows(
         for table in tables {
             let mut after = None;
             loop {
-                let rows = next_page(reader.as_mut(), table, &mut after).await?;
+                let mut rows = next_page(reader.as_mut(), table, &mut after).await?;
                 if rows.is_empty() {
                     break;
                 }
-                for row in &rows {
+                for row in &mut rows {
+                    unmark(table, row);
                     stats.observe(table, row);
                 }
                 writer

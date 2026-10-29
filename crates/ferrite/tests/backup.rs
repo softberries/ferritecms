@@ -1184,6 +1184,75 @@ fn restore_refuses_a_database_outside_the_folder() {
     assert!(!elsewhere.exists());
 }
 
+fn meta(data: &Path, key: &str) -> Option<String> {
+    let key = key.to_owned();
+    block_on(async {
+        let mut conn = sqlite(data).await;
+        sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&mut conn)
+            .await
+            .unwrap()
+    })
+}
+
+/// R16: a restored database is a new install (same site id, new install id) whose
+/// artifacts carry no GC mark of the original's; with its media store outside the data
+/// folder, restore warns that the store may be another site's.
+#[test]
+fn restore_is_a_new_install_without_gc_marks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    // The media store outside the data folder, where the original keeps its files.
+    let shared = tmp.path().join("shared-media");
+    std::fs::rename(source.join("media"), &shared).unwrap();
+    let toml = source.join("ferrite.toml");
+    let text_toml = std::fs::read_to_string(&toml).unwrap();
+    assert!(text_toml.contains("root = \"media\""), "{text_toml}");
+    std::fs::write(
+        &toml,
+        text_toml.replace(
+            "root = \"media\"",
+            &format!("root = {:?}", shared.to_str().unwrap()),
+        ),
+    )
+    .unwrap();
+    exec(&source, "UPDATE artifacts SET orphaned_at = 1000000");
+    let install = meta(&source, "install_id").expect("init wrote an install id");
+
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let target = tmp.path().join("restored");
+    let out = restore(&archive, &target, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        stderr(&out).contains("is outside") && stderr(&out).contains("--claim"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(meta(&target, "site_id"), meta(&source, "site_id"));
+    let restored = meta(&target, "install_id").expect("an install id");
+    assert_ne!(restored, install);
+    uuid::Uuid::parse_str(&restored).unwrap();
+    assert!(count(&target, "artifacts") > 0);
+    let marked: i64 = block_on(async {
+        let mut conn = sqlite(&target).await;
+        sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE orphaned_at IS NOT NULL")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap()
+    });
+    assert_eq!(marked, 0);
+
+    // A restore whose media store is inside the folder says nothing about it.
+    let plain = seeded(tmp.path(), "plain");
+    let archive = tmp.path().join("p.tar.zst");
+    ok_backup(&plain, &archive, &[]);
+    let out = restore(&archive, &tmp.path().join("plain-restored"), &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(!stderr(&out).contains("is outside"), "{}", text(&out));
+}
+
 #[test]
 fn incomplete_snapshots_are_ignored_and_pruned() {
     let tmp = tempfile::tempdir().unwrap();

@@ -353,6 +353,35 @@ fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+/// The warning `restore` and `import-site` print when the site's media store is outside its
+/// data folder (S3, or a local root elsewhere), where another site may already keep its
+/// files (R16): this copy has its own install id, so its media GC deletes nothing from a
+/// store another install owns until `ferrite media gc --claim`.
+pub(crate) fn shared_media_warning(config: &Config) -> Option<String> {
+    let store = match &config.media {
+        MediaSection::S3 { bucket, prefix, .. } => format!("s3://{bucket}/{prefix}"),
+        MediaSection::Local { root, .. } => {
+            let inside = match (resolve(root), resolve(&config.data_dir)) {
+                (Ok(root), Ok(data)) => root.starts_with(data),
+                _ => false,
+            };
+            if inside {
+                return None;
+            }
+            root.display().to_string()
+        }
+    };
+    let data = config.data_dir.display();
+    Some(format!(
+        "warning: the media store {store} is outside {data}, so another site may use it too. \
+         This database has its own install id: its media GC deletes nothing from a store \
+         another site owns (ferrite-owner.json). If this site replaces that one (a restore in \
+         place, a moved database), run `ferrite media gc --data {data} --claim` once the old \
+         site is stopped for good; if the other site keeps running, point [media] of this one \
+         at its own store before serving it: a media store belongs to one site."
+    ))
+}
+
 /// Refuses a repository inside the data folder or the media store (R11): pruning it, or the
 /// media GC, would delete the other's files.
 pub(crate) fn check_repo_location(config: &Config, loc: &RepoLocation) -> anyhow::Result<()> {

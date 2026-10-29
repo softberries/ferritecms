@@ -356,7 +356,17 @@ pub async fn export_reader_pages_by_key(db: &TestDb) {
     let keys: Vec<&str> = page.iter().map(|r| r["key"].as_str().unwrap()).collect();
     assert_eq!(keys, ["p.03", "p.04"]);
 
-    // schema_meta: only the site id (P2).
+    // schema_meta: only the site id (P2); never the install id (R16), which each
+    // database has for itself.
+    assert!(
+        store
+            .read()
+            .schema_meta()
+            .get(ferrite_store::SCHEMA_META_INSTALL_ID)
+            .await
+            .unwrap()
+            .is_some()
+    );
     let meta = dump(reader.as_mut(), spec("schema_meta"), 10).await;
     assert_eq!(meta.len(), 1);
     assert_eq!(meta[0]["key"], json!("site_id"));

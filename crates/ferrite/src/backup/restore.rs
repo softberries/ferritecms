@@ -25,6 +25,9 @@ use anyhow::{Context, bail};
 use clap::Args;
 use ferrite_config::{Config, DbKind};
 use ferrite_media::{MediaError, MediaStore};
+use ferrite_store::SCHEMA_META_INSTALL_ID;
+use sqlx::Connection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode};
 use tokio::runtime::Handle;
 
 use super::repo::{Repo, SNAPSHOT_FORMAT, read_hash_list};
@@ -393,6 +396,7 @@ pub async fn restore(
             (from, manifest, staging, stats)
         }
     };
+    new_install(&staging.path.join(DB_FILE)).await?;
     let moved_aside = put_in_place(staging, dir, &state, &ts)?;
     drop(state);
     Ok(RestoreReport {
@@ -402,6 +406,45 @@ pub async fn restore(
         blobs_present: stats.blobs_present,
         moved_aside,
     })
+}
+
+/// Makes the staged database a new install (R16): a fresh `schema_meta.install_id`, so the
+/// restored site's media GC never deletes from a store the original site owns, and no
+/// artifact keeps a GC mark of the original's (the grace period starts over here).
+async fn new_install(db: &Path) -> anyhow::Result<()> {
+    let opts = SqliteConnectOptions::new()
+        .filename(db)
+        .journal_mode(SqliteJournalMode::Delete);
+    let mut conn = SqliteConnection::connect_with(&opts)
+        .await
+        .context("cannot open the restored database")?;
+    let result = async {
+        let mut tx = conn.begin().await?;
+        sqlx::query(
+            "INSERT INTO schema_meta (key, value) VALUES (?, ?) \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(SCHEMA_META_INSTALL_ID)
+        .bind(uuid::Uuid::now_v7().to_string())
+        .execute(&mut *tx)
+        .await?;
+        // A backup older than migration 0011 has no marks.
+        let marks: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pragma_table_info('artifacts') WHERE name = 'orphaned_at'",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if marks > 0 {
+            sqlx::query("UPDATE artifacts SET orphaned_at = NULL WHERE orphaned_at IS NOT NULL")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        anyhow::Ok(())
+    }
+    .await;
+    let _ = conn.close().await;
+    result.context("cannot give the restored database its own install id")
 }
 
 async fn pick_snapshot(repo: &Repo, wanted: Option<&str>) -> anyhow::Result<String> {
@@ -690,6 +733,9 @@ async fn restore_cmd(args: RestoreArgs) -> anyhow::Result<ExitCode> {
         );
     }
     let config = load_config(&args.data)?;
+    if let Some(warning) = super::shared_media_warning(&config) {
+        eprintln!("{warning}");
+    }
     // R14: the restored copy would back itself up into the same repository.
     if config.backup.schedule != ferrite_config::BackupSchedule::Off {
         let to = config.backup.to.as_deref().unwrap_or_default();

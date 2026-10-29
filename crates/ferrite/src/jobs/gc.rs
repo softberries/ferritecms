@@ -21,8 +21,10 @@ pub const ARTIFACTS_GC_EVERY: Duration = Duration::from_secs(86_400);
 pub const ARTIFACTS_GC_TIMEOUT: Duration = Duration::from_secs(3_600);
 
 /// `artifacts.gc`: one GC pass with the node's grace period (`media.gc_grace_days`).
-/// Another pass holding the `artifacts.gc` lock (a `ferrite media gc`, or this job on
-/// another node) is [`JobError::Busy`]; a store or media error is `Retry`.
+/// Another pass holding the `artifacts.gc` lock (a `ferrite media gc`, this job on
+/// another node, or a backup copying blobs, R17) is [`JobError::Busy`]; a store or media
+/// error is `Retry`. A pass on a media store another install owns (R16) succeeds after
+/// logging an error: retrying cannot change the owner.
 pub struct ArtifactsGcHandler {
     store: Arc<dyn Store>,
     media: Arc<MediaStore>,
@@ -54,6 +56,7 @@ impl JobHandler for ArtifactsGcHandler {
             grace: self.grace,
             dry_run: false,
             now: Timestamp::now(),
+            claim: false,
         };
         match gc::run(self.store.as_ref(), &self.media, &opts).await {
             Ok(Some(_)) => Ok(()),

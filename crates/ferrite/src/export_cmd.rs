@@ -249,6 +249,9 @@ async fn import_site(args: ImportSiteArgs) -> anyhow::Result<ExitCode> {
         );
     }
     site_copy::print_totp_hint(stats.totp_users, Some(&args.data));
+    if let Some(warning) = crate::backup::shared_media_warning(&config) {
+        eprintln!("{warning}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

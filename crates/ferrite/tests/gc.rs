@@ -63,6 +63,7 @@ fn opts(now: Timestamp, grace: Duration) -> GcOptions {
         grace,
         dry_run: false,
         now,
+        claim: false,
     }
 }
 
@@ -510,6 +511,7 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             grace: WEEK,
             dry_run: true,
             now: t1,
+            claim: false,
         },
     )
     .await
@@ -526,6 +528,7 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             deleted_blob_bytes: 5,
             deleted_tmp: 1,
             failed: 0,
+            not_owner: None,
         }
     );
     assert_eq!(
@@ -537,6 +540,107 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
         assert!(has_blob(&m.store, hash).await);
     }
     assert!(tmp_exists(&m, "leftover"));
+}
+
+/// R16: two sites (two databases) on one media store, as a restored or staging copy is.
+/// The first pass of site A writes the owner marker; site B then marks its rows and cleans
+/// `tmp/` but deletes nothing (not A's row-less blobs, not its own expired rows) and says
+/// whose store it is. A dry-run claim writes nothing; `claim` takes the store over, after
+/// which B deletes and A no longer does.
+async fn gc_second_site_on_one_store_deletes_nothing(db: Arc<TestDb>) {
+    let a = db.store();
+    let other = if db.is_sqlite() {
+        TestDb::sqlite().await
+    } else {
+        TestDb::postgres().await.expect("postgres is configured")
+    };
+    let b = other.store();
+    let m = media();
+    let install_a = gc::install_id(a).await.unwrap();
+    let install_b = gc::install_id(b).await.unwrap();
+    assert_ne!(install_a, install_b);
+
+    let a_row = artifact(a, &m.store, "uploaded by site A", ArtifactKind::Media).await;
+    let b_row = artifact(b, &m.store, "uploaded by site B", ArtifactKind::Media).await;
+    let t0 = future();
+    let first = run(a, &m.store, &opts(t0, WEEK)).await;
+    assert_eq!(first.not_owner, None);
+    let marker = m.store.read_owner().await.unwrap().expect("marker written");
+    assert_eq!(marker.install_id, install_a);
+    assert!(m.dir.path().join("ferrite-owner.json").is_file());
+
+    // B, a month later: A's row-less (for B) blob and B's own expired row both stay.
+    tmp_object(&m, "leftover");
+    let month = later(t0, 30 * DAY);
+    run(b, &m.store, &opts(t0, DAY)).await;
+    let skipped = run(b, &m.store, &opts(month, DAY)).await;
+    assert_eq!(skipped.not_owner.as_deref(), Some(install_a.as_str()));
+    assert_eq!(
+        (skipped.deleted_rows, skipped.deleted_blobs),
+        (0, 0),
+        "{skipped:?}"
+    );
+    assert!(
+        skipped
+            .to_string()
+            .contains("deletes skipped: the media store belongs to install"),
+        "{skipped}"
+    );
+    assert!(has_blob(&m.store, &a_row.hash).await);
+    assert!(has_blob(&m.store, &b_row.hash).await);
+    assert!(row(b, &b_row.hash).await.is_some());
+    assert!(!tmp_exists(&m, "leftover"), "tmp/ is still cleaned");
+
+    // A dry-run claim reports what B could delete and writes no marker.
+    let dry = gc::run(
+        b,
+        &m.store,
+        &GcOptions {
+            grace: DAY,
+            dry_run: true,
+            now: month,
+            claim: true,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(dry.not_owner, None);
+    assert_eq!((dry.deleted_rows, dry.deleted_blobs), (1, 1), "{dry:?}");
+    assert_eq!(
+        m.store.read_owner().await.unwrap().unwrap().install_id,
+        install_a
+    );
+
+    // The claim: B owns the store and deletes; A no longer does.
+    let claimed = run(
+        b,
+        &m.store,
+        &GcOptions {
+            claim: true,
+            ..opts(month, DAY)
+        },
+    )
+    .await;
+    assert_eq!(claimed.not_owner, None);
+    assert_eq!(
+        (claimed.deleted_rows, claimed.deleted_blobs),
+        (1, 1),
+        "{claimed:?}"
+    );
+    assert_eq!(
+        m.store.read_owner().await.unwrap().unwrap().install_id,
+        install_b
+    );
+    assert!(!has_blob(&m.store, &a_row.hash).await);
+    assert!(!has_blob(&m.store, &b_row.hash).await);
+    let after = run(a, &m.store, &opts(later(month, DAY), DAY)).await;
+    assert_eq!(after.not_owner.as_deref(), Some(install_b.as_str()));
+    assert!(
+        row(a, &a_row.hash).await.is_some(),
+        "A's row is not deleted"
+    );
+    other.teardown().await;
 }
 
 fn gc_job() -> Job {
@@ -612,6 +716,7 @@ backend_tests_spawning!(
     gc_tmp_older_than_a_day_deleted,
     gc_dry_run_changes_nothing,
     gc_concurrent_runs_one_busy,
+    gc_second_site_on_one_store_deletes_nothing,
 );
 
 // ---- `ferrite media gc` ----

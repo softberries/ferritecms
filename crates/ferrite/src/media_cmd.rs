@@ -48,10 +48,18 @@ pub enum MediaCommand {
     /// period, and `tmp/` objects older than 24 h. Files named by a queued or running job
     /// or by an import report are kept. With SQLite, stop `serve` first.
     ///
+    /// Deletes happen only while the media store's owner marker (`ferrite-owner.json`)
+    /// names this site's database (written by the first pass); a pass on a store another
+    /// site owns (a restored or staging copy on the same store) marks and cleans `tmp/` but
+    /// deletes nothing else and says so. `--claim` makes this site the owner first: use it
+    /// only when this site replaced the other one (a restore in place, a moved database).
+    ///
     /// Prints `marked N, unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U
     /// (B bytes), deleted tmp T` (with `--dry-run`, after `dry run: `, counting what would
-    /// happen; `, failed F` is appended when some deletes failed, retried by the next pass).
-    /// Exit code: 0, or 3 when another GC is running, or 1 on an error.
+    /// happen; `, failed F` is appended when some deletes failed, retried by the next pass;
+    /// `; deletes skipped: …` when another site owns the store).
+    /// Exit code: 0, or 3 when another GC or a backup's blob copy holds the GC lock, or 1 on
+    /// an error, or 2 for a usage error (clap).
     Gc(GcArgs),
     /// Make the image size variants again, in process (after a theme adds sizes).
     ///
@@ -80,6 +88,11 @@ pub struct GcArgs {
     /// Days to keep unreferenced files (1..=365); default `media.gc_grace_days` (7).
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=365))]
     grace_days: Option<u32>,
+    /// Make this site the owner of its media store first (rewrites `ferrite-owner.json`),
+    /// for a site that replaced the store's previous owner. With `--dry-run`, nothing is
+    /// written; the counts are those the claim would allow.
+    #[arg(long)]
+    claim: bool,
 }
 
 #[derive(Debug, Args)]
@@ -126,6 +139,7 @@ async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
             grace: gc::grace_days(args.grace_days.unwrap_or(config.uploads.gc_grace_days)),
             dry_run: args.dry_run,
             now: ferrite_domain::Timestamp::now(),
+            claim: args.claim,
         };
         gc::run(store.as_ref(), &media, &opts).await
     }
@@ -135,7 +149,7 @@ async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
         Some(report) if args.dry_run => println!("dry run: {report}"),
         Some(report) => println!("{report}"),
         None => {
-            eprintln!("another artifacts GC is running");
+            eprintln!("another artifacts GC (or a backup copying artifacts) is running");
             return Ok(ExitCode::from(3));
         }
     }

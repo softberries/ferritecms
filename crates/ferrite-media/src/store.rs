@@ -97,6 +97,25 @@ pub struct StoredObject {
     pub last_modified: Timestamp,
 }
 
+/// The name of the owner marker under the store's prefix (M4-1 R16).
+pub const OWNER_MARKER: &str = "ferrite-owner.json";
+/// The largest owner marker read (it holds two ids and a time).
+const MAX_OWNER_BYTES: u64 = 4096;
+
+/// Which site installation owns a media store (M4-1 R16), kept at
+/// `<prefix>ferrite-owner.json`. The artifacts GC deletes from a store only while this
+/// names its own install (`schema_meta.install_id`), so two sites on one store (a restored
+/// or staging copy) never delete each other's files.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OwnerMarker {
+    /// The owning database's `schema_meta.install_id`.
+    pub install_id: String,
+    /// Its `schema_meta.site_id` (informative: copies of one site share it).
+    pub site_id: String,
+    /// When the marker was written, RFC 3339.
+    pub claimed_at: String,
+}
+
 pub struct MediaStore {
     inner: Arc<dyn ObjectStore>,
     prefix: String,
@@ -509,6 +528,61 @@ impl MediaStore {
             None => Err(MediaError::Backend(format!(
                 "copy of {hash} is missing at the destination"
             ))),
+        }
+    }
+
+    /// Reads the owner marker ([`OwnerMarker`]); `Ok(None)` when there is none. A marker
+    /// that is not a marker (bad JSON, over 4 KiB) is [`MediaError::Backend`].
+    pub async fn read_owner(&self) -> Result<Option<OwnerMarker>, MediaError> {
+        let key = keys::owner_key(&self.prefix);
+        let res = match self.inner.get(&key).await {
+            Ok(res) => res,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if res.meta.size > MAX_OWNER_BYTES {
+            return Err(MediaError::Backend(format!(
+                "{key} is {} bytes, not an owner marker",
+                res.meta.size
+            )));
+        }
+        let bytes = res.bytes().await?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| MediaError::Backend(format!("{key} is not an owner marker: {e}")))
+    }
+
+    /// Writes the owner marker. With `replace` it overwrites any marker and returns `true`;
+    /// without, it writes only when there is none (a conditional create; a backend without
+    /// conditional put falls back to a check followed by a plain put) and returns `false`
+    /// when a marker is already there.
+    pub async fn write_owner(
+        &self,
+        marker: &OwnerMarker,
+        replace: bool,
+    ) -> Result<bool, MediaError> {
+        let key = keys::owner_key(&self.prefix);
+        let body = Bytes::from(
+            serde_json::to_vec(marker).map_err(|e| MediaError::Backend(e.to_string()))?,
+        );
+        if replace {
+            self.inner.put(&key, body.into()).await?;
+            return Ok(true);
+        }
+        let opts = PutOptions::from(PutMode::Create);
+        match self.inner.put_opts(&key, body.clone().into(), opts).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+            Err(object_store::Error::NotImplemented { .. }) => {
+                match self.inner.head(&key).await {
+                    Ok(_) => return Ok(false),
+                    Err(object_store::Error::NotFound { .. }) => {}
+                    Err(e) => return Err(e.into()),
+                }
+                self.inner.put(&key, body.into()).await?;
+                Ok(true)
+            }
+            Err(e) => Err(e.into()),
         }
     }
 

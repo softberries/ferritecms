@@ -823,6 +823,77 @@ fn import_site_prints_totp_hint() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains("two-factor"));
 }
 
+fn meta(data: &Path, key: &str) -> Option<String> {
+    let key = key.to_owned();
+    block_on(async {
+        let mut conn = sqlite(data).await;
+        sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&mut conn)
+            .await
+            .unwrap()
+    })
+}
+
+fn marked(data: &Path) -> i64 {
+    block_on(async {
+        let mut conn = sqlite(data).await;
+        sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE orphaned_at IS NOT NULL")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap()
+    })
+}
+
+/// R16: the install id never travels (the archive's `schema_meta` holds only the site id);
+/// an import-site or db copy target keeps its own, and no artifact keeps a GC mark of the
+/// source's.
+#[test]
+fn import_site_and_db_copy_keep_their_install_id_and_drop_gc_marks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    exec(&source, "UPDATE artifacts SET orphaned_at = 1000000");
+    assert!(marked(&source) > 0);
+    let source_install = meta(&source, "install_id").expect("init wrote one");
+    let archive = tmp.path().join("site.tar.zst");
+    let out = export(&source, &archive, true);
+    assert!(out.status.success(), "{}", text(&out));
+    let entries = unpack(&std::fs::read(&archive).unwrap());
+    let (_, schema_meta) = entries
+        .iter()
+        .find(|(p, _)| p == "tables/schema_meta.ndjson")
+        .expect("schema_meta is exported");
+    let schema_meta = String::from_utf8_lossy(schema_meta);
+    assert_eq!(schema_meta.lines().count(), 1, "{schema_meta}");
+    assert!(schema_meta.contains("site_id"), "{schema_meta}");
+    assert!(!schema_meta.contains("install_id"), "{schema_meta}");
+
+    let target = tmp.path().join("target");
+    init(&target);
+    let target_install = meta(&target, "install_id").expect("init wrote one");
+    let out = import_site(&target, &archive, &["--with-media"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("is outside"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(meta(&target, "site_id"), meta(&source, "site_id"));
+    assert_eq!(meta(&target, "install_id"), Some(target_install.clone()));
+    assert_ne!(target_install, source_install);
+    assert!(count(&target, "artifacts") > 0);
+    assert_eq!(marked(&target), 0);
+
+    let copy = tmp.path().join("copy");
+    std::fs::create_dir_all(&copy).unwrap();
+    let out = db_copy(&source, &copy);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(meta(&copy, "site_id"), meta(&source, "site_id"));
+    let copy_install = meta(&copy, "install_id").expect("migrations wrote one");
+    assert_ne!(copy_install, source_install);
+    assert_eq!(marked(&copy), 0);
+}
+
 #[test]
 fn db_copy_sqlite_to_new_sqlite_file() {
     let tmp = tempfile::tempdir().unwrap();

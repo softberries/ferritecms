@@ -7,8 +7,8 @@ use std::{
 };
 
 use ferrite_store::{
-    Directives, MigrationStatus, PendingMigration, SCHEMA_META_MIN_BINARY, StoreError,
-    next_min_binary, parse_directives, plan_down,
+    Directives, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID, SCHEMA_META_MIN_BINARY,
+    StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -187,15 +187,17 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Writes `site_id` and `created_by_version` when absent and updates
+    /// Writes `site_id`, `install_id` (R16) and `created_by_version` when absent and updates
     /// `min_binary_version` per [`next_min_binary`]; `reverted` = versions just undone.
     async fn sync_schema_meta(&self, reverted: &[i64]) -> Result<(), StoreError> {
         if !self.table_exists("schema_meta").await? {
             return Ok(());
         }
         let site_id = uuid::Uuid::now_v7().to_string();
+        let install_id = uuid::Uuid::now_v7().to_string();
         for (key, value) in [
             ("site_id", site_id.as_str()),
+            (SCHEMA_META_INSTALL_ID, install_id.as_str()),
             ("created_by_version", env!("CARGO_PKG_VERSION")),
         ] {
             sqlx::query(
