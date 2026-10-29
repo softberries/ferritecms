@@ -2,9 +2,12 @@
 //! data folder, or, with `--force`, in place of an existing one, which is moved aside to
 //! `<dir>.pre-restore-<ts>` (never deleted) unless a running process holds its lock.
 //!
-//! Everything is first written to a staging folder: inside the target when it is absent
-//! (then created) or empty (`<dir>/.restoring-<ts>-<pid>`, so a mount point such as a
-//! container volume works), or next to an occupied target (`.<name>.restoring-<ts>-<pid>`).
+//! Everything is first written to a staging folder: next to an absent target
+//! (`.<name>.restoring-<ts>-<pid>`, renamed to the target at the end; inside the target,
+//! then created, when the parent is not writable), inside an empty one
+//! (`<dir>/.restoring-<ts>-<pid>`, so a mount point such as a container volume works; its
+//! entries are moved in with `ferrite.db` last, so a folder holding the database is
+//! complete), or next to an occupied target.
 //! The files go there first, then the blobs through a media store opened from the restored
 //! `ferrite.toml` (a relative local media root lands inside the staging folder). Only when
 //! all of it is in place are the staged entries moved into the empty target, or the old
@@ -84,16 +87,36 @@ pub struct RestoreReport {
 
 /// The target folder, checked before anything is read.
 enum TargetState {
-    /// Absent or empty: staged inside it.
+    /// Absent: staged next to it (or inside it, created, when that fails).
+    Absent,
+    /// Empty: staged inside it.
     Empty,
     /// Holds something (only with `force`): staged next to it, then moved aside; its
     /// `ferrite.lock` is held until then.
     Occupied { _lock: Option<File> },
 }
 
+/// [`TargetState`] without the lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Absent,
+    Empty,
+    Occupied,
+}
+
+impl TargetState {
+    fn shape(&self) -> Shape {
+        match self {
+            TargetState::Absent => Shape::Absent,
+            TargetState::Empty => Shape::Empty,
+            TargetState::Occupied { .. } => Shape::Occupied,
+        }
+    }
+}
+
 fn check_target(dir: &Path, force: bool) -> anyhow::Result<TargetState> {
-    if !dir.exists() {
-        return Ok(TargetState::Empty);
+    if std::fs::symlink_metadata(dir).is_err() {
+        return Ok(TargetState::Absent);
     }
     if !dir.is_dir() {
         bail!("{} exists and is not a folder", dir.display());
@@ -192,49 +215,64 @@ fn check_manifest(manifest: &Manifest, source: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The staging folder, removed when dropped unless [`Staging::keep`] was called.
+/// The staging folder, removed when dropped unless [`Staging::keep`] was called (with the
+/// target folder, when this run created it to stage inside).
 struct Staging {
     path: PathBuf,
+    /// Inside the target (its entries are moved in), or next to it (renamed).
+    inside: bool,
+    /// The target folder this run created.
+    created: Option<PathBuf>,
     keep: bool,
 }
 
 impl Staging {
-    /// Inside `dir` for an absent or empty target, next to it for an occupied one.
-    fn create(dir: &Path, state: &TargetState, ts: &str) -> anyhow::Result<Staging> {
+    /// Next to an absent target (inside it, created, when the parent refuses) or an
+    /// occupied one; inside an empty one.
+    fn create(dir: &Path, shape: Shape, ts: &str) -> anyhow::Result<Staging> {
         let pid = std::process::id();
-        let path = match state {
-            TargetState::Empty => {
-                std::fs::create_dir_all(dir)
-                    .with_context(|| format!("cannot create {}", dir.display()))?;
-                dir.join(format!(".restoring-{ts}-{pid}"))
-            }
-            TargetState::Occupied { .. } => {
-                let (parent, name) = parent_and_name(dir)?;
-                parent.join(format!(".{name}.restoring-{ts}-{pid}"))
-            }
+        let (parent, name) = parent_and_name(dir)?;
+        let sibling = parent.join(format!(".{name}.restoring-{ts}-{pid}"));
+        let inside = dir.join(format!(".restoring-{ts}-{pid}"));
+        let new = |path: PathBuf, inside: bool, created: Option<PathBuf>| {
+            std::fs::create_dir(&path)
+                .with_context(|| format!("cannot create {}", path.display()))?;
+            anyhow::Ok(Staging {
+                path,
+                inside,
+                created,
+                keep: false,
+            })
         };
-        std::fs::create_dir(&path).with_context(|| format!("cannot create {}", path.display()))?;
-        Ok(Staging { path, keep: false })
+        match shape {
+            Shape::Occupied => new(sibling, false, None),
+            Shape::Empty => new(inside, true, None),
+            Shape::Absent => {
+                let _ = std::fs::create_dir_all(&parent);
+                if std::fs::create_dir(&sibling).is_ok() {
+                    return Ok(Staging {
+                        path: sibling,
+                        inside: false,
+                        created: None,
+                        keep: false,
+                    });
+                }
+                std::fs::create_dir(dir)
+                    .with_context(|| format!("cannot create {}", dir.display()))?;
+                new(inside, true, Some(dir.to_path_buf()))
+            }
+        }
     }
 }
 
 impl Drop for Staging {
     fn drop(&mut self) {
         if !self.keep {
-            // Only this run's own staging folder.
+            // Only this run's own staging folder (and the empty target it created).
             let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
-/// Removes a target folder this run created, when it is left empty (dropped after the
-/// staging folder inside it).
-struct CreatedDir(Option<PathBuf>);
-
-impl Drop for CreatedDir {
-    fn drop(&mut self) {
-        if let Some(dir) = &self.0 {
-            let _ = std::fs::remove_dir(dir);
+            if let Some(dir) = &self.created {
+                let _ = std::fs::remove_dir(dir);
+            }
         }
     }
 }
@@ -261,6 +299,17 @@ fn sweep_stale(dir: &Path) {
     };
     let now = std::time::SystemTime::now();
     let sibling = format!(".{name}.restoring-");
+    // `<prefix><yyyymmddThhmmssZ>-<pid>`, exactly as `Staging::create` names them.
+    let is_staging = |file_name: &str, prefix: &str| {
+        file_name
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.split_once('-'))
+            .is_some_and(|(ts, pid)| {
+                super::repo::is_snapshot_name(ts)
+                    && !pid.is_empty()
+                    && pid.bytes().all(|b| b.is_ascii_digit())
+            })
+    };
     for (folder, prefix) in [
         (dir.to_path_buf(), ".restoring-"),
         (parent, sibling.as_str()),
@@ -270,7 +319,7 @@ fn sweep_stale(dir: &Path) {
         };
         for entry in entries.flatten() {
             let file_name = entry.file_name();
-            let ours = file_name.to_str().is_some_and(|n| n.starts_with(prefix));
+            let ours = file_name.to_str().is_some_and(|n| is_staging(n, prefix));
             let old = entry
                 .metadata()
                 .and_then(|m| m.modified())
@@ -315,7 +364,6 @@ pub async fn restore(
     sweep_stale(dir);
     let state = check_target(dir, opts.force)?;
     let ts = chrono::Utc::now().format(SNAPSHOT_FORMAT).to_string();
-    let mut created = CreatedDir((!dir.exists()).then(|| dir.to_path_buf()));
     let (from, manifest, staging, stats) = match source {
         Target::Repo(loc) => {
             let repo = Repo::open(loc, false).await?;
@@ -323,7 +371,7 @@ pub async fn restore(
             let manifest = repo.read_manifest(&name).await?;
             let from = format!("snapshot {name} of {}", repo.display());
             check_manifest(&manifest, &from)?;
-            let staging = Staging::create(dir, &state, &ts)?;
+            let staging = Staging::create(dir, state.shape(), &ts)?;
             let stats = restore_repo(&repo, &name, &manifest, &staging.path).await?;
             (from, manifest, staging, stats)
         }
@@ -335,23 +383,17 @@ pub async fn restore(
                 _ => Box::new(std::io::stdin()),
             };
             let from = source.describe();
-            let occupied = matches!(state, TargetState::Occupied { .. });
+            let shape = state.shape();
             let (dir, ts, from2) = (dir.to_owned(), ts.clone(), from.clone());
             let handle = Handle::current();
             let (manifest, staging, stats) = tokio::task::spawn_blocking(move || {
-                let state = if occupied {
-                    TargetState::Occupied { _lock: None }
-                } else {
-                    TargetState::Empty
-                };
-                restore_archive(&handle, input, &dir, &state, &ts, &from2)
+                restore_archive(&handle, input, &dir, shape, &ts, &from2)
             })
             .await??;
             (from, manifest, staging, stats)
         }
     };
     let moved_aside = put_in_place(staging, dir, &state, &ts)?;
-    created.0 = None;
     drop(state);
     Ok(RestoreReport {
         from,
@@ -431,7 +473,7 @@ fn restore_archive(
     handle: &Handle,
     input: Box<dyn Read + Send>,
     dir: &Path,
-    state: &TargetState,
+    shape: Shape,
     ts: &str,
     from: &str,
 ) -> anyhow::Result<(Manifest, Staging, LoadStats)> {
@@ -439,7 +481,7 @@ fn restore_archive(
     let mut entries = reader.entries()?;
     let manifest = entries.manifest().clone();
     check_manifest(&manifest, from)?;
-    let staging = Staging::create(dir, state, ts)?;
+    let staging = Staging::create(dir, shape, ts)?;
     let files = manifest.files.as_deref().unwrap_or_default().len();
     let mut seen = 0usize;
     let mut media: Option<Arc<MediaStore>> = None;
@@ -483,21 +525,42 @@ fn restore_archive(
     Ok((manifest, staging, stats))
 }
 
-/// Puts the staged site in place. Empty target: moves the staged entries into it (it may be
-/// a mount point). Occupied target: renames it aside, then the staging folder to it; if
-/// that fails it is renamed back. Returns where the old folder went.
+/// Whether anything (a file, folder or link) is at `path`.
+fn occupied(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Puts the staged site in place.
+///
+/// - Staged inside the target: moves the entries into it, `ferrite.db` last (a folder
+///   holding the database is complete), refusing any name that appeared meanwhile.
+/// - Staged next to an absent target: renames the staging folder to it.
+/// - Occupied target: renames it aside, then the staging folder to it; if that fails it is
+///   renamed back.
+///
+/// Returns where the old folder went.
 fn put_in_place(
     mut staging: Staging,
     dir: &Path,
     state: &TargetState,
     ts: &str,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if let TargetState::Empty = state {
+    if staging.inside {
+        let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(&staging.path)?
+            .map(|e| e.map(|e| e.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        names.sort_by_key(|n| n == DB_FILE);
         let mut moved: Vec<std::ffi::OsString> = Vec::new();
         let result = (|| -> anyhow::Result<()> {
-            for entry in std::fs::read_dir(&staging.path)? {
-                let name = entry?.file_name();
-                std::fs::rename(staging.path.join(&name), dir.join(&name)).with_context(|| {
+            for name in names {
+                let to = dir.join(&name);
+                if occupied(&to) {
+                    bail!(
+                        "{} appeared during the restore; refusing to replace it",
+                        to.display()
+                    );
+                }
+                std::fs::rename(staging.path.join(&name), &to).with_context(|| {
                     format!("cannot move the restored files into {}", dir.display())
                 })?;
                 moved.push(name);
@@ -506,8 +569,8 @@ fn put_in_place(
         })();
         if let Err(e) = result {
             // Back into staging, which is then removed.
-            for name in moved {
-                let _ = std::fs::rename(dir.join(&name), staging.path.join(&name));
+            for name in moved.iter().rev() {
+                let _ = std::fs::rename(dir.join(name), staging.path.join(name));
             }
             return Err(e);
         }
@@ -516,9 +579,21 @@ fn put_in_place(
         staging.keep = true;
         return Ok(None);
     }
+    if let TargetState::Absent = state {
+        if occupied(dir) {
+            bail!(
+                "{} appeared during the restore; refusing to replace it",
+                dir.display()
+            );
+        }
+        std::fs::rename(&staging.path, dir)
+            .with_context(|| format!("cannot move the restored site to {}", dir.display()))?;
+        staging.keep = true;
+        return Ok(None);
+    }
     let (parent, name) = parent_and_name(dir)?;
     let aside = parent.join(format!("{name}.pre-restore-{ts}"));
-    if aside.exists() {
+    if occupied(&aside) {
         bail!("{} already exists", aside.display());
     }
     std::fs::rename(dir, &aside).with_context(|| {
@@ -529,6 +604,14 @@ fn put_in_place(
             aside.display()
         )
     })?;
+    if occupied(dir) {
+        let _ = std::fs::rename(&aside, dir);
+        bail!(
+            "{} appeared during the restore; the old site stays at {}",
+            dir.display(),
+            aside.display()
+        );
+    }
     if let Err(e) = std::fs::rename(&staging.path, dir) {
         if let Err(back) = std::fs::rename(&aside, dir) {
             return Err(e).with_context(|| {

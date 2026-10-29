@@ -143,8 +143,27 @@ impl Drop for LocalFiles {
     }
 }
 
-/// Removes `backup-*` files older than [`STALE`] from the backups folder: what killed runs
-/// left (ours by name; a running backup's files are young).
+/// The suffixes of the files a run writes in the backups folder (after `backup-<ts>.`).
+const LOCAL_SUFFIXES: [&str; 7] = [
+    "db",
+    "db-wal",
+    "db-shm",
+    "db-journal",
+    "toml",
+    "key",
+    "artifacts.txt",
+];
+
+/// Whether `name` is exactly a file a backup run writes: `backup-<yyyymmddThhmmssZ>.<suffix>`.
+fn is_local_file(name: &str) -> bool {
+    name.strip_prefix("backup-")
+        .and_then(|rest| rest.split_once('.'))
+        .is_some_and(|(ts, suffix)| repo::is_snapshot_name(ts) && LOCAL_SUFFIXES.contains(&suffix))
+}
+
+/// Removes the files killed runs left in the backups folder: exactly the names a run writes
+/// ([`is_local_file`]), older than [`STALE`] (a running backup's files are young). Anything
+/// else there, such as an archive a user put there, is never touched.
 fn sweep_stale(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -159,7 +178,7 @@ fn sweep_stale(dir: &Path) {
             .ok()
             .and_then(|t| now.duration_since(t).ok())
             .is_some_and(|age| age > STALE);
-        if name.starts_with("backup-") && old && entry.path().is_file() {
+        if is_local_file(name) && old && entry.path().is_file() {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -387,10 +406,17 @@ pub async fn run_backup(
     if opts.keep.is_some() && !matches!(target, Target::Repo(_)) {
         bail!("--keep applies to a repository (a folder or s3://), not to an archive");
     }
-    if let Target::Repo(loc) = target {
-        check_repo_location(config, loc)?;
-    }
     let dir = config.data_dir.join("backups");
+    match target {
+        Target::Repo(loc) => check_repo_location(config, loc)?,
+        Target::File(path) if resolve(path)?.starts_with(resolve(&dir)?) => bail!(
+            "{} is inside the backups folder {}, which holds the site's own snapshots; write \
+             the archive somewhere else",
+            path.display(),
+            dir.display()
+        ),
+        _ => {}
+    }
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     sweep_stale(&dir);
     let ts = chrono::Utc::now().format(repo::SNAPSHOT_FORMAT).to_string();
@@ -699,6 +725,23 @@ fn print_report(report: &BackupReport, target: &Target) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_files_are_matched_exactly() {
+        for suffix in LOCAL_SUFFIXES {
+            assert!(is_local_file(&format!("backup-20261029T101500Z.{suffix}")));
+        }
+        for name in [
+            "backup-2026-10-28.tar.zst",
+            "backup-20261029T101500Z.tar.zst",
+            "backup-20261029T101500Z.db.bak",
+            "backup-latest.db",
+            "pre-10-to-11-20261029T101500Z.db",
+            "mybackup-20261029T101500Z.db",
+        ] {
+            assert!(!is_local_file(name), "{name}");
+        }
+    }
 
     #[test]
     fn local_snapshot_is_never_pruned_as_pre_migration() {

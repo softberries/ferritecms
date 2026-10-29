@@ -573,7 +573,7 @@ impl Repo {
 }
 
 /// `yyyymmddThhmmssZ`.
-fn is_snapshot_name(name: &str) -> bool {
+pub(crate) fn is_snapshot_name(name: &str) -> bool {
     name.len() == 16 && chrono::NaiveDateTime::parse_from_str(name, SNAPSHOT_FORMAT).is_ok()
 }
 

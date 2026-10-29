@@ -127,8 +127,11 @@ like every SQLite CLI command, needs `serve` stopped; a running site is backed u
 holds `ferrite.lock`). The sequence:
 
 1. `VACUUM INTO <data>/backups/backup-<UTC yyyymmddThhmmssZ>.db` (mode 0600; never
-   `pre-*.db`, which the pre-migration snapshot pruning deletes); `backup-*` files older than
-   a day, left by killed runs, are removed first;
+   `pre-*.db`, which the pre-migration snapshot pruning deletes); files older than a day
+   with exactly the names a run writes (`backup-<yyyymmddThhmmssZ>.` + `db`, `db-wal`,
+   `db-shm`, `db-journal`, `toml`, `key` or `artifacts.txt`), left by killed runs, are removed
+   first, and nothing else in the folder is touched; an archive `--to` inside `backups/` is
+   refused;
 2. open it read-only, `PRAGMA integrity_check` must say `ok`, read its `artifacts` hashes,
    schema version and site id;
 3. write the target (below), copying the blobs from the site's media store (`ferrite.toml`
@@ -173,15 +176,19 @@ running site it checks: a folder whose `ferrite.toml` keeps the database (and so
 elsewhere, or a Postgres folder, has none, so stop `serve` yourself first. The manifest is
 checked first: an export archive, a non-SQLite backup, an unexpected file name or a schema
 newer than the binary (exit 3) are refused before anything is written. The files go to a
-staging folder, `DIR/.restoring-<ts>-<pid>` for an absent (then created) or empty `DIR`, or
-`.<name>.restoring-<ts>-<pid>` next to an occupied one; the blobs go through the media store
+staging folder, `.<name>.restoring-<ts>-<pid>` next to an absent or occupied `DIR` (for an
+absent one inside `DIR`, then created, when its parent refuses the sibling), or
+`DIR/.restoring-<ts>-<pid>` inside an empty `DIR`; the blobs go through the media store
 the **restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted
 by their content hash); the restored configuration must keep the database at
-`DIR/ferrite.db`. Only then are the staged entries moved into the empty `DIR`, or the old
-folder moved aside and the staging folder renamed to `DIR`. A failed restore leaves `DIR` as
+`DIR/ferrite.db`. Only then is the sibling staging folder renamed to the absent `DIR`, or
+the staged entries moved into the empty `DIR` with `ferrite.db` last (a folder holding the
+database is complete; a name that appeared there meanwhile is refused, never replaced), or
+the old folder moved aside and the staging folder renamed to `DIR`. A failed restore leaves `DIR` as
 it was; blobs it already stored in an absolute local or an S3 media root stay (they are
-content-addressed and harmless). Staging folders older than a day, left by killed runs, are
-removed at the start. It then prints `migrate status`; it does not migrate (`serve` does,
+content-addressed and harmless). Staging folders older than a day with exactly those names,
+left by killed runs, are removed at the start. A bind mount on the same device as its parent
+is not detected up front: `--force` then fails at the final rename and changes nothing. It then prints `migrate status`; it does not migrate (`serve` does,
 under `database.auto_migrate`). A backup without `secret.key` restores with a note on TOTP
 (below).
 
@@ -431,7 +438,7 @@ the schema, the artifact counts (for a repository: copied and already present) a
 pruned. Exit 0 done; 2 done but artifacts were missing from the media store (one `missing
 artifact <hash>` line each on stderr, listed in the manifest); 1 on any other error: a Postgres
 site, `serve` running (the folder lock), a failed integrity check, a damaged blob, `--keep` with
-an archive, a repository location that is not empty and has no marker or lies inside the data
+an archive, an archive inside `<data>/backups`, a repository location that is not empty and has no marker or lies inside the data
 folder or media root; a failed backup leaves no archive, no repository snapshot and no local
 files, except that a `--keep` prune failing after the snapshot was written keeps the snapshot.
 `restore SOURCE --data DIR [--snapshot NAME] [--force]` prints what it restored, the artifact

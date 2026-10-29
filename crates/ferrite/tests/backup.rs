@@ -592,8 +592,97 @@ fn backup_name_survives_pre_migration_prune() {
     let stale = source.join("backups/backup-20250101T000000Z.db");
     std::fs::write(&stale, b"x").unwrap();
     set_age(&stale, 2 * 24 * 3600);
+    // A user's own file there with a similar name is never touched, however old.
+    let user = source.join("backups/backup-2026-10-28.tar.zst");
+    std::fs::write(&user, b"the only copy").unwrap();
+    set_age(&user, 2 * 24 * 3600);
     ok_backup(&source, &tmp.path().join("b.tar.zst"), &[]);
-    assert_eq!(local_snapshots(&source), ["backup-20260101T000000Z.db"]);
+    let mut left = local_snapshots(&source);
+    left.sort();
+    assert_eq!(
+        left,
+        ["backup-2026-10-28.tar.zst", "backup-20260101T000000Z.db"]
+    );
+    assert_eq!(std::fs::read(&user).unwrap(), b"the only copy");
+    // An archive into the backups folder is refused.
+    let inside = source.join("backups/new.tar.zst");
+    let out = backup(&source, &inside, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(stderr(&out).contains("backups folder"), "{}", text(&out));
+    assert!(!inside.exists());
+}
+
+#[test]
+fn restore_force_without_a_lock_file_moves_aside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let target = tmp.path().join("site");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("notes.txt"), b"old").unwrap();
+    assert!(!target.join("ferrite.lock").exists());
+    let out = restore(&archive, &target, &["--force"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let aside: Vec<PathBuf> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("site.pre-restore-")
+        })
+        .collect();
+    assert_eq!(aside.len(), 1, "{aside:?}");
+    assert_eq!(std::fs::read(aside[0].join("notes.txt")).unwrap(), b"old");
+    assert!(target.join("ferrite.db").is_file());
+    assert!(!target.join("notes.txt").exists());
+}
+
+/// Makes a folder look `secs` seconds old.
+fn set_dir_age(path: &Path, secs: u64) {
+    let dir = std::fs::File::open(path).unwrap();
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+    dir.set_modified(t).unwrap();
+}
+
+#[test]
+fn restore_sweeps_only_old_staging_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let target = tmp.path().join("site");
+    // Left by killed restores: one inside the (otherwise empty) target, one next to it.
+    let inside = target.join(".restoring-20250101T000000Z-123");
+    let old_sibling = tmp.path().join(".site.restoring-20250101T000000Z-124");
+    let young_sibling = tmp.path().join(".site.restoring-20250102T000000Z-125");
+    let foreign = tmp.path().join(".site.restoring-notes");
+    for d in [&inside, &old_sibling, &young_sibling, &foreign] {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join("x"), b"x").unwrap();
+    }
+    for d in [&inside, &old_sibling, &foreign] {
+        set_dir_age(d, 2 * 24 * 3600);
+    }
+    let out = restore(&archive, &target, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        !inside.exists(),
+        "an old staging folder inside the target is swept"
+    );
+    assert!(
+        !old_sibling.exists(),
+        "an old sibling staging folder is swept"
+    );
+    assert!(
+        young_sibling.exists(),
+        "a young one may belong to a running restore"
+    );
+    assert!(foreign.exists(), "a name of another shape is never touched");
+    assert!(target.join("ferrite.db").is_file());
 }
 
 #[test]
