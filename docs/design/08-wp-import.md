@@ -183,7 +183,8 @@ attempt did (P29). Contents:
 
 Lists keep at most 1 000 entries with `totals` counting every one seen, notes at most 500
 kinds, the HTML page 200 rows per table (R42). An attempt that replaces an earlier one's
-report leaves the old files until the store is cleaned (M4).
+report leaves the old files to the artifacts GC, which deletes them once they have been
+unreferenced for the grace period (03 §6).
 
 ## 7. Test corpus
 

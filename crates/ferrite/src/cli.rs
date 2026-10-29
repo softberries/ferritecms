@@ -77,11 +77,11 @@ pub enum Command {
     /// artifact <hash>` line each on stderr, listed in the manifest); a file whose content
     /// does not match its hash fails the backup.
     ///
-    /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 1 on any
-    /// other error (a failed backup leaves no archive or snapshot, except that a failed
-    /// `--keep` prune keeps the snapshot it follows). A repository folder or prefix must be
-    /// empty or carry ferrite-backup-repo.json, and lie outside the data folder and the media
-    /// store.
+    /// Exit code: 0 ok, 2 done but artifacts were missing from the media store, 3 when the
+    /// repository is of a newer format than this binary, 1 on any other error (a failed
+    /// backup leaves no archive or snapshot, except that a failed `--keep` prune keeps the
+    /// snapshot it follows). A repository folder or prefix must be empty or carry
+    /// ferrite-backup-repo.json, and lie outside the data folder and the media store.
     Backup(backup::BackupArgs),
     /// Restore a backup into an empty data folder (or, with --force, in place of one).
     ///

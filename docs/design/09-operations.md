@@ -218,10 +218,9 @@ later, the attempt refunded).
   older than a day are removed first). The tables are spooled as NDJSON in a
   `<data>/backups/ferrite-export-*` folder while the archive is built (not the system
   temporary folder, which the CLI `ferrite export` uses; removed afterwards, a killed run's
-  after a day). An S3 upload cut off by
-  the timeout is aborted in the background; one left by a killed process stays an
-  incomplete multipart upload, so give the bucket a lifecycle rule that removes those. `<to>` is a repository with its marker like any
-  other; the newest `keep` archives are kept and only names of that exact form are deleted
+  after a day). An S3 upload cut off by the timeout is aborted in the background; one left
+  by a killed process stays an incomplete multipart upload, so give the bucket a lifecycle
+  rule that removes those. `<to>` is a repository with its marker like any other; the newest `keep` archives are kept and only names of that exact form are deleted
   (plus `.part` leftovers older than a day). Load one with `ferrite import-site`. In
   cluster mode a local `to` is on whichever node ran the job (`serve` logs a warning):
   use `s3://` or a shared folder.
@@ -234,31 +233,30 @@ manifest's `missing` list (exit 2); a blob whose content does not hash to its na
 backup (exit 1). Nothing is encrypted: archives, repository files and restored files that
 hold secrets are written with mode `0600`, and `--to -` can be piped to `age` or `gpg`.
 
-`ferrite restore SOURCE --data DIR` takes a backup archive, `-` (stdin) or a repository
-(the newest complete snapshot, or `--snapshot <name>`; a repository holding only a Postgres
-site's `exports/` archives is refused with a pointer to `ferrite import-site`). `DIR` must be
-absent or empty (a filesystem's `lost+found` does not count, so a fresh volume works);
-`--force` moves a non-empty folder aside to `DIR.pre-restore-<ts>` (a sibling, never deleted),
-refused while another process holds its `ferrite.lock`. That lock is the only sign of a
-running site it checks: a folder whose `ferrite.toml` keeps the database (and so the lock)
-elsewhere, or a Postgres folder, has none, so stop `serve` yourself first. The manifest is
-checked first: an export archive, a non-SQLite backup, an unexpected file name or a schema
-newer than the binary (exit 3) are refused before anything is written. The files go to a
-staging folder, `.<name>.restoring-<ts>-<pid>` next to an absent or occupied `DIR` (for an
-absent one inside `DIR`, then created, when its parent refuses the sibling), or
-`DIR/.restoring-<ts>-<pid>` inside an empty `DIR`; the blobs go through the media store
-the **restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted
-by their content hash); the restored configuration must keep the database at
-`DIR/ferrite.db`. Only then is the sibling staging folder renamed to the absent `DIR`, or
-the staged entries moved into the empty `DIR` with `ferrite.db` last (a folder holding the
-database is complete; a name that appeared there meanwhile is refused, never replaced), or
-the old folder moved aside and the staging folder renamed to `DIR`. A failed restore leaves `DIR` as
-it was; blobs it already stored in an absolute local or an S3 media root stay (content-addressed;
-the store's owner GC collects them after the grace period if nothing references them). Staging folders older than a day with exactly those names,
-left by killed runs, are removed at the start. A bind mount on the same device as its parent
-is not detected up front: `--force` then fails at the final rename and changes nothing. It then prints `migrate status`; it does not migrate (`serve` does,
-under `database.auto_migrate`). A backup without `secret.key` restores with a note on TOTP
-(below).
+`ferrite restore SOURCE --data DIR` takes a backup archive, `-` (stdin) or a repository (the newest
+complete snapshot, or `--snapshot <name>`; a repository holding only a Postgres site's `exports/`
+archives is refused with a pointer to `ferrite import-site`). `DIR` must be absent or empty (a
+filesystem's `lost+found` does not count, so a fresh volume works); `--force` moves a non-empty
+folder aside to `DIR.pre-restore-<ts>` (a sibling, never deleted), refused while another process
+holds its `ferrite.lock`. That lock is the only sign of a running site it checks: a folder whose
+`ferrite.toml` keeps the database (and so the lock) elsewhere, or a Postgres folder, has none, so
+stop `serve` yourself first. The manifest is checked first: an export archive, a non-SQLite backup,
+an unexpected file name or a schema newer than the binary (exit 3) are refused before anything is
+written. The files go to a staging folder, `.<name>.restoring-<ts>-<pid>` next to an absent or
+occupied `DIR` (for an absent one inside `DIR`, then created, when its parent refuses the sibling),
+or `DIR/.restoring-<ts>-<pid>` inside an empty `DIR`; the blobs go through the media store the
+**restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted by their
+content hash); the restored configuration must keep the database at `DIR/ferrite.db`. Only then is
+the sibling staging folder renamed to the absent `DIR`, or the staged entries moved into the empty
+`DIR` with `ferrite.db` last (a folder holding the database is complete; a name that appeared there
+meanwhile is refused, never replaced), or the old folder moved aside and the staging folder renamed
+to `DIR`. A failed restore leaves `DIR` as it was; blobs it already stored in an absolute local or
+an S3 media root stay (content-addressed; the store's owner GC collects them after the grace period
+if nothing references them). Staging folders older than a day with exactly those names, left by
+killed runs, are removed at the start. A bind mount on the same device as its parent is not detected
+up front: `--force` then fails at the final rename and changes nothing. It then prints `migrate
+status`; it does not migrate (`serve` does, under `database.auto_migrate`). A backup without
+`secret.key` restores with a note on TOTP (below).
 
 **A restored site is a new install (R16, R19).** A backup snapshot carries no
 `schema_meta.install_id`; before the restored site is put in place it gets a fresh one and
@@ -527,7 +525,7 @@ of truth for real monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1, M1c-2, M1.5, M2a-1 and M2a-2a: `crates/ferrite`)
+### Implemented (M1c-1 to M4-1: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -593,61 +591,64 @@ Checks that need the database (site id, live nodes, migrations) are not part of 
 `config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
 work but may cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
 attributes; Ferrite sets none on stored artifacts today, so it costs nothing yet, and it is the
-value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to`
-that `serve` would refuse, a local folder included that is not empty and not a repository, and,
-on SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
+value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
+`serve` would refuse, a local folder included that is not empty and not a repository, and, on
+SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
 
 **`ferrite media sync`** (`crates/ferrite/src/media_cmd.rs`): `--to STORE` and one of `--from STORE`
 or `--data DIR` (the site's configured store; only `ferrite.toml` is read, so it runs while `serve`
-runs). A STORE is `local:<path>` or `s3://bucket[/prefix]`; every `s3://` URL takes its
-credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`), a `--data` S3 store from `[media.s3]`. Copies
-every object under `artifacts/` (recorded in the database or not), skips keys already at the
-destination with the same size, checks the size after each copy, never deletes, never copies
-`tmp/`, 8 copies at once (memory peaks near 192 MiB, design 03 §8); the destination is probed first and an
-unusable one exits 1; keys that are not artifacts are ignored with a notice. Prints `copied N (B bytes), skipped M, failed F` on stdout
-and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some copies failed
-(the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error (neither
-`--from` nor `--data`, or both) exits 2 as clap does.
+runs). A STORE is `local:<path>` or `s3://bucket[/prefix]`; every `s3://` URL takes its credentials,
+endpoint and options from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`, `AWS_COPY_IF_NOT_EXISTS`,
+`AWS_CONDITIONAL_PUT`), a `--data` S3 store from `[media.s3]`. Copies every object under
+`artifacts/` (recorded in the database or not), skips keys already at the destination with the same
+size, checks the size after each copy, never deletes, never copies `tmp/`, 8 copies at once (memory
+peaks near 192 MiB, design 03 §8); the destination is probed first and an unusable one exits 1; keys
+that are not artifacts are ignored with a notice. Prints `copied N (B bytes), skipped M, failed F`
+on stdout and one `failed <key>: <reason>` line per failure on stderr. Exit 0 done, 2 when some
+copies failed (the rest were copied), 1 on an error (a bad URL, an unreadable store); a usage error
+(neither `--from` nor `--data`, or both) exits 2 as clap does.
 
-**`ferrite export`**, **`ferrite import-site`**, **`ferrite db copy`** (`crates/ferrite/src/export_cmd.rs`,
-`site_copy.rs`, `archive.rs`; format and rules in [02 §10](02-storage.md#10-portable-export-d14)):
-`export` writes the portable archive of the site in `--data` to `--out` (a new file with mode 0600,
-an existing one is refused and a failed export removes it; `-` writes stdout, and the summary goes
-to stderr); `--with-media` adds every stored artifact. An artifact whose file is missing from the
-media store is left out: one `missing artifact <hash>` line each on stderr, the count in the summary,
-the hashes in the manifest's `missing` list, and exit 2; a file whose content does not hash to its
-name fails the export (exit 1, the hash named); a usage error (a bad or missing flag) is exit 2
-too, as clap does, so a wrapper that treats 2 as "written" must check that the archive exists.
-The database must be at this binary's schema
-(older: exit 1, run `ferrite migrate up`; newer: exit 3); with SQLite stop `serve` first, a
-Postgres site can be exported live. `import-site ARCHIVE --data DIR` (`-` reads stdin) loads an
-export into the fresh database of a folder made by `ferrite init`, in one transaction, then migrates
-up and rebuilds search; `--with-media` puts the archive's blobs into the site's media store
-(present ones are skipped), without it they are read, checked and reported but not stored. Prints
-the row count and, when users have TOTP on, how to keep their sign-in working (copy `secret.key`,
-set `auth.secret_key` or `ferrite user disable-totp`), and a warning when the site's media store
-is outside its data folder (it may be another site's: the target keeps its own install id, so its
-media GC deletes nothing there until `ferrite media gc --claim`, [03 §6](03-media.md#6-garbage-collection)).
-Imported `artifacts` rows start without a GC mark. Exit 0 done; 3 when the archive's format or
-schema (or the target's schema) is newer than the binary; 1 on any other error, among them a target
-that is not fresh (the message names the first table with rows), a tampered table (sha256), a
-hostile path, an over-long row line (64 MiB), more artifact bytes than the manifest declares, a
-truncated stream, an archive that is a backup, database settings that would refuse the migration
-to the binary's schema after the load (`database.auto_migrate` off, or a Postgres contract migration
-without `database.allow_contract`). No refusal leaves rows behind, and a schema step taken for the
-archive is undone (best effort; a warning says when that failed, and it is skipped when the target holds rows after a commit that reported an error), so the import can be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
+**`ferrite export`**, **`ferrite import-site`**, **`ferrite db copy`**
+(`crates/ferrite/src/export_cmd.rs`, `site_copy.rs`, `archive.rs`; format and rules in [02
+§10](02-storage.md#10-portable-export-d14)): `export` writes the portable archive of the site in
+`--data` to `--out` (a new file with mode 0600, an existing one is refused and a failed export
+removes it; `-` writes stdout, and the summary goes to stderr); `--with-media` adds every stored
+artifact. An artifact whose file is missing from the media store is left out: one `missing artifact
+<hash>` line each on stderr, the count in the summary, the hashes in the manifest's `missing` list,
+and exit 2; a file whose content does not hash to its name fails the export (exit 1, the hash
+named); a usage error (a bad or missing flag) is exit 2 too, as clap does, so a wrapper that treats
+2 as "written" must check that the archive exists. The database must be at this binary's schema
+(older: exit 1, run `ferrite migrate up`; newer: exit 3); with SQLite stop `serve` first, a Postgres
+site can be exported live. `import-site ARCHIVE --data DIR` (`-` reads stdin) loads an export into
+the fresh database of a folder made by `ferrite init`, in one transaction, then migrates up and
+rebuilds search; `--with-media` puts the archive's blobs into the site's media store (present ones
+are skipped), without it they are read, checked and reported but not stored. Prints the row count
+and, when users have TOTP on, how to keep their sign-in working (copy `secret.key`, set
+`auth.secret_key` or `ferrite user disable-totp`), and a warning when the site's media store is
+outside its data folder (it may be another site's: the target keeps its own install id, so its media
+GC deletes nothing there until `ferrite media gc --claim`, [03
+§6](03-media.md#6-garbage-collection)). Imported `artifacts` rows start without a GC mark. Exit 0
+done; 3 when the archive's format or schema (or the target's schema) is newer than the binary; 1 on
+any other error, among them a target that is not fresh (the message names the first table with
+rows), a tampered table (sha256), a hostile path, an over-long row line (64 MiB), more artifact
+bytes than the manifest declares, a truncated stream, an archive that is a backup, database settings
+that would refuse the migration to the binary's schema after the load (`database.auto_migrate` off,
+or a Postgres contract migration without `database.allow_contract`). No refusal leaves rows behind,
+and a schema step taken for the archive is undone (best effort; a warning says when that failed, and
+it is skipped when the target holds rows after a commit that reported an error), so the import can
+be retried. `db copy --from URL --to URL` streams one database into another (export + import with no
 file): `postgres://…` (with `--from-schema`/`--to-schema`) or `sqlite:<path to ferrite.db>` (the
 folder lock is taken in its folder; an absent target file is created, and removed again when the
 copy fails, with the `ferrite.lock` the run created). URLs only, no stdin. Same source and target
-rules and exit codes as `export` and `import-site` (no exit 2: no media); it copies no media
-(`media sync`) and writes no `ferrite.toml`, but prints the `[database]` block to put there: a
-SQLite target named `ferrite.db` as `url = "sqlite://ferrite.db"` (relative to its folder, which
-is then the data folder: the form `backup` and `restore` need), another SQLite file by its
-absolute path with a note that `backup` refuses such a site; a Postgres password, in the user
-info or a `password` query parameter, is shown as `PASSWORD`, with a note after the block. A last
-note says the copy has its own install id: once the site runs on it, run `ferrite media gc
---claim` after the old database has stopped serving the media store (R16).
+rules and exit codes as `export` and `import-site` (no exit 2: no media); it copies no media (`media
+sync`) and writes no `ferrite.toml`, but prints the `[database]` block to put there: a SQLite target
+named `ferrite.db` as `url = "sqlite://ferrite.db"` (relative to its folder, which is then the data
+folder: the form `backup` and `restore` need), another SQLite file by its absolute path with a note
+that `backup` refuses such a site; a Postgres password, in the user info or a `password` query
+parameter, is shown as `PASSWORD`, with a note after the block. A last note says the copy has its
+own install id: once the site runs on it, run `ferrite media gc --claim` after the old database has
+stopped serving the media store (R16).
 
 **`ferrite backup`**, **`ferrite restore`** (`crates/ferrite/src/backup/`; rules in §4):
 `backup --data DIR --to TARGET` backs up a solo site to a `.tar.zst` file (a new file with mode
@@ -676,44 +677,44 @@ alone does not count), a folder in use, an export archive, a repository with onl
 archives (use `import-site`), an unknown snapshot, a damaged archive or repository (sha256,
 size), a restored configuration whose database is not `DIR/ferrite.db`.
 
-**`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design
-03 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc`
-job runs. It opens the database (with SQLite, stop `serve` first: it holds the data folder's
-lock) and the configured media store, then marks unreferenced artifact rows, deletes rows
-marked longer than the grace period and then their files, files under `artifacts/` with no
-row that are older than the grace period, and `tmp/` objects older than 24 h. Files named
-by a queued or running job or by an import report are kept. `--grace-days N` (1..=365)
-overrides `media.gc_grace_days` (default 7) for this run; `--dry-run` marks and deletes
-nothing and reports what a run would do (it writes neither the owner marker nor a missing
-install id). Deletes happen only on a pass that reads the media store's owner marker
-`ferrite-owner.json` naming this database's install id (R16, R19, 03 §6): a pass that finds
-no marker writes it and deletes nothing yet; on a store another site owns, or whose marker
-cannot be read, the pass marks and cleans `tmp/` only and logs an error. Either way it
-appends `; deletes skipped: <reason>` to its line (exit 0). `--claim` rewrites the marker for
-this site first, for a site that replaced the store's owner (a restore in place, a moved
-database), and appends `; claimed the media store from install <id> (site …, claimed …)`;
-with `--dry-run` it names that owner and writes nothing. Prints `marked N,
-unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U (B bytes), deleted tmp T` on
-stdout (after `dry run: ` for a dry run; `, failed F` is appended when some blob or `tmp/`
-deletes failed, which are logged and retried by the next pass, the exit code staying 0). Exit 0
-done, 3 the `artifacts.gc` lock is held (a cluster node's job, another `media gc`, or a backup
-copying blobs, R17), 1 on an error; a bad flag (`--grace-days 0`) exits 2 as clap does.
+**`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design 03
+§6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc` job runs.
+It opens the database (with SQLite, stop `serve` first: it holds the data folder's lock) and the
+configured media store, then marks unreferenced artifact rows, deletes rows marked longer than the
+grace period and then their files, files under `artifacts/` with no row that are older than the
+grace period, and `tmp/` objects older than 24 h. Files named by a queued or running job or by an
+import report are kept. `--grace-days N` (1..=365) overrides `media.gc_grace_days` (default 7) for
+this run; `--dry-run` marks and deletes nothing and reports what a run would do (it writes neither
+the owner marker nor a missing install id). Deletes happen only on a pass that reads the media
+store's owner marker `ferrite-owner.json` naming this database's install id (R16, R19, 03 §6): a
+pass that finds no marker writes it and deletes nothing yet; on a store another site owns, or whose
+marker cannot be read, the pass marks and cleans `tmp/` only and logs an error. Either way it
+appends `; deletes skipped: <reason>` to its line (exit 0). `--claim` rewrites the marker for this
+site first, for a site that replaced the store's owner (a restore in place, a moved database), and
+appends `; claimed the media store from install <id> (site …, claimed …)`; with `--dry-run` it names
+that owner and writes nothing. Prints `marked N, unmarked M, deleted rows R (B bytes), deleted
+unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: ` for a dry run; `, failed
+F` is appended when some blob or `tmp/` deletes failed, which are logged and retried by the next
+pass, the exit code staying 0). Exit 0 done, 3 the `artifacts.gc` lock is held (a cluster node's
+job, another `media gc`, or a backup copying blobs, R17), 1 on an error; a bad flag (`--grace-days
+0`) exits 2 as clap does.
 
-**`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again in
-process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus the
-`[images]` of the theme active in the database (`variant_specs`). By default an item is processed when
-it is raster and its recorded `variants` lack a size that applies to its width: a width-bounded size
-wider than the original is never made, so it never counts as lacking and a second run changes
-nothing. Only size names are compared, so a theme that changes the width of an existing size needs `--all`,
-which redoes every raster item. `--item ID` (a content id; unknown is exit 1) limits the run to one
-item; a complete item is skipped unless `--all` is given too. Items in the trash are included. Non-raster items and originals over 64 MiB are skipped (the latter with a line on
-stderr). Per item it decodes with the job's code (one image at a time), stores each variant and records
-them only while the row still holds that original; the replaced variant files stay for `media gc`.
-With SQLite it opens the database like `seed`, so `serve` must be stopped; with Postgres it may run
-beside the nodes (each item appends its `post:<id>` invalidation event; tested on Postgres). Progress goes to
-stderr every 50 items; stdout is `regenerated N, skipped S, failed F` and each failure is a
-`failed <id>: <reason>` line on stderr. Exit 0 done, 2 when some items failed (the rest were done), 1
-on an error.
+**`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again
+in process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus
+the `[images]` of the theme active in the database (`variant_specs`). By default an item is
+processed when it is raster and its recorded `variants` lack a size that applies to its width: a
+width-bounded size wider than the original is never made, so it never counts as lacking and a second
+run changes nothing. Only size names are compared, so a theme that changes the width of an existing
+size needs `--all`, which redoes every raster item. `--item ID` (a content id; unknown is exit 1)
+limits the run to one item; a complete item is skipped unless `--all` is given too. Items in the
+trash are included. Non-raster items and originals over 64 MiB are skipped (the latter with a line
+on stderr). Per item it decodes with the job's code (one image at a time), stores each variant and
+records them only while the row still holds that original; the replaced variant files stay for
+`media gc`. With SQLite it opens the database like `seed`, so `serve` must be stopped; with Postgres
+it may run beside the nodes (each item appends its `post:<id>` invalidation event; tested on
+Postgres). Progress goes to stderr every 50 items; stdout is `regenerated N, skipped S, failed F`
+and each failure is a `failed <id>: <reason>` line on stderr. Exit 0 done, 2 when some items failed
+(the rest were done), 1 on an error.
 
 **`ferrite healthcheck`** (`crates/ferrite/src/healthcheck.rs`): `GET`s `--url` (default
 `http://127.0.0.1:8080/readyz`; plain `http://` only) and exits 0 on a 200 response, 1 on

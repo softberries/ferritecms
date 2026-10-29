@@ -16,7 +16,9 @@ pub const LOCK_TYPES: &str = "types";
 /// Reserved for the WordPress import (M3): one at a time per site.
 pub const LOCK_IMPORT: &str = "import";
 /// Held by one artifacts GC run (the `artifacts.gc` job or `ferrite media gc`, M4-1 P12),
-/// taken with [`Store::try_lock`]: a second run is refused, not queued.
+/// taken with [`Store::try_lock`]: a second run is refused, not queued. A backup with media
+/// also holds it while it snapshots and copies blobs (R17), waiting for it with
+/// [`Store::lock_wait`].
 pub const LOCK_GC: &str = "artifacts.gc";
 /// Held by one scheduled backup run (the `site.backup` job, M4-1 P15), taken with
 /// [`Store::try_lock`]: a second run is refused, not queued.

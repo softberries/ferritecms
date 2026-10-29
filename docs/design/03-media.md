@@ -681,7 +681,8 @@ buffers up to the first 8 MiB plus two 8 MiB parts, so memory peaks near 8 x 24 
 Keys under `artifacts/` that do not name an artifact are ignored with a notice on stderr. The
 destination is probed (`check`) first: if it is unreachable or not writable the command exits 1
 before copying. A corrupt source object leaves its bytes at the destination under their own
-valid hash, an unrecorded orphan for the destination site's GC. Source and destination are `local:<path>` or `s3://bucket[/prefix]`; every
-`s3://` URL takes its credentials and endpoint from the environment (`AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`,
-`AWS_COPY_IF_NOT_EXISTS`), while `--data` uses the site's `[media]` settings.
+valid hash, an unrecorded orphan for the destination site's GC. Source and destination are
+`local:<path>` or `s3://bucket[/prefix]`; every `s3://` URL takes its credentials, endpoint and
+options from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,
+`AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`, `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`), while
+`--data` uses the site's `[media]` settings.
