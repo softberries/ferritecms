@@ -2,8 +2,8 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
-    event::*, export::*, idempotency::*, import::*, job::*, job_list::*, lock::*, menu::*,
-    migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
+    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
+    menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
     plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
     user_filters::*,
 };

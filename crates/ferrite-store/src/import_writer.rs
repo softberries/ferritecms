@@ -30,8 +30,20 @@ pub const MAX_LOAD_BATCH: usize = 500;
 /// Tables are loaded in catalogue order ([`catalogue::TABLES`]): the foreign keys of a
 /// row must already be loaded, except the table's own parent column
 /// ([`TableSpec::self_ref`]). A row whose parent is not loaded yet waits in memory and is
-/// inserted right after its parent, so the rows of a tree may come in any order; every
-/// parent must be part of the same load.
+/// inserted right after its parent (never with a placeholder parent: `content_items`'
+/// slug is unique per parent, so placeholders would collide, ruling R6), so the rows of a
+/// tree may come in any order.
+///
+/// Every parent must be part of the same load (ruling R8: the target is fresh). A row
+/// whose parent is in the target's database but not in this load, never comes, or
+/// lies on a cycle (including a row that is its own parent) keeps waiting, and
+/// [`finish_table`](Self::finish_table) and [`commit`](Self::commit) refuse it.
+///
+/// Memory: rows that wait are held (decoded) until their parent arrives. With an export
+/// paged by key (random or time-ordered UUIDs), that can be about half of the non-root
+/// rows of a tree table (`content_items`, `terms`, `comments`, `menu_items`); in
+/// addition the key (16 bytes plus hash-set overhead) of every loaded row of those
+/// tables is kept until the writer ends.
 #[async_trait]
 pub trait ImportWriter: Send {
     /// Deletes every row of `tables` (in reverse foreign-key order, whatever the order
@@ -113,7 +125,9 @@ struct Prepared {
     cells: Vec<Cell>,
 }
 
-/// The backend-neutral [`ImportWriter`] over a backend's [`LoadTarget`].
+/// The backend-neutral [`ImportWriter`] over a backend's [`LoadTarget`]: checks and
+/// decodes rows, orders tree rows parent first (holding waiting rows in memory, see
+/// [`ImportWriter`] for the cost and the same-load rule), batches and poisons.
 pub struct Loader<T> {
     target: T,
     poisoned: bool,
@@ -412,7 +426,10 @@ pub fn delete_sql(
     sql
 }
 
+/// Quotes a catalogue identifier. Not an escaper: callers pass only the static
+/// catalogue's names, which never hold `"`.
 fn quote(ident: &str) -> String {
+    debug_assert!(!ident.contains('"'), "identifier with a quote: {ident}");
     format!("\"{ident}\"")
 }
 
@@ -511,6 +528,72 @@ mod tests {
             "parent first, then the released subtree"
         );
         assert_eq!(tree.waiting_rows(), 1);
+    }
+
+    #[test]
+    fn order_tree_holds_cycles_and_self_parents() {
+        let t = spec("terms");
+        let mut tree = Tree::default();
+        // A -> B -> A, and C -> C: none can ever be inserted.
+        let ready = order_tree(
+            t,
+            "parent_id",
+            &mut tree,
+            vec![term(10, Some(11)), term(11, Some(10)), term(12, Some(12))],
+        )
+        .unwrap();
+        assert!(ready.is_empty());
+        assert_eq!(tree.waiting_rows(), 3);
+        assert!(tree.loaded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn waiting_rows_refuse_finish_and_commit() {
+        struct NoTarget;
+        #[async_trait]
+        impl LoadTarget for NoTarget {
+            fn max_params(&self) -> usize {
+                100
+            }
+            async fn insert(
+                &mut self,
+                _: &'static TableSpec,
+                _: InsertBatch,
+                _: bool,
+            ) -> Result<(), StoreError> {
+                Ok(())
+            }
+            async fn delete(
+                &mut self,
+                _: &'static TableSpec,
+                _: Option<&'static [&'static str]>,
+            ) -> Result<(), StoreError> {
+                Ok(())
+            }
+            async fn commit(self) -> Result<(), StoreError> {
+                Ok(())
+            }
+        }
+        let cycle = || {
+            [(10, 11), (11, 10)]
+                .map(|(id, parent)| {
+                    row(json!({
+                        "id": Uuid::from_u128(id).hyphenated().to_string(),
+                        "parent_id": Uuid::from_u128(parent).hyphenated().to_string(),
+                    }))
+                })
+                .to_vec()
+        };
+        let mut w: Box<dyn ImportWriter> = Box::new(Loader::new(NoTarget));
+        w.rows(spec("terms"), cycle()).await.unwrap();
+        assert!(matches!(
+            w.finish_table(spec("terms")).await,
+            Err(StoreError::Invalid(m)) if m.contains("2 rows wait")
+        ));
+        assert!(matches!(w.commit().await, Err(StoreError::Aborted)));
+        let mut w: Box<dyn ImportWriter> = Box::new(Loader::new(NoTarget));
+        w.rows(spec("terms"), cycle()).await.unwrap();
+        assert!(matches!(w.commit().await, Err(StoreError::Invalid(_))));
     }
 
     #[test]

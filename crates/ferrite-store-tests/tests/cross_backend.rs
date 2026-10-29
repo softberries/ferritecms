@@ -3,7 +3,7 @@
 
 use ferrite_store_tests::{
     TestDb,
-    export::{add_repo_rows, assert_same, dump_all, load_all, rich_site},
+    import_writer::{add_repo_rows, assert_same, dump_all, load_all, rich_site},
 };
 
 #[tokio::test]
