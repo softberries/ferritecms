@@ -20,10 +20,10 @@
 //! never logged.
 //!
 //! With `strip` on, a JPEG, PNG or WebP is read whole (at most [`STRIP_MAX_BYTES`]; a
-//! larger one is streamed unchanged), its EXIF and XMP removed losslessly by
+//! larger one is refused), its EXIF and XMP removed losslessly by
 //! [`strip_metadata`] and the result stored, so the artifact's hash is the stripped
-//! file's. A file that cannot be parsed is stored unchanged; stripping never fails an
-//! upload (M4-1 P17).
+//! file's. A file that cannot be parsed is refused too ([`MediaError::Metadata`]): with
+//! the option on, a file is never stored with its metadata (M4-1 P17, ruling R1).
 
 use std::io;
 
@@ -31,7 +31,8 @@ use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt as _};
 
 use crate::{
-    ArtifactRef, MediaError, MediaStore, inline_safe, is_raster_image, sniff_mime, strip_metadata,
+    ArtifactRef, MediaError, MediaStore, inline_safe, is_raster_image, sanitize_filename,
+    sniff_mime, strip_metadata,
     svg::{MAX_SVG_BYTES, SVG_MIME, looks_like_svg, sanitize_svg},
 };
 
@@ -102,13 +103,31 @@ pub struct StagedFile {
 ///
 /// Fails with [`MediaError::TooLarge`] past `max_bytes` (or the SVG limit),
 /// [`MediaError::Unsupported`] or [`MediaError::Svg`] for a refused type, and
-/// [`MediaError::Io`] when the stream yields an error; nothing is stored then.
+/// [`MediaError::Io`] when the stream yields an error, and, with `strip`, with
+/// [`MediaError::Metadata`] for a JPEG/PNG/WebP over [`STRIP_MAX_BYTES`] or one that
+/// cannot be parsed (its metadata cannot be removed, so it is not stored); nothing is
+/// stored then.
 pub async fn stage_stream<S>(
     store: &MediaStore,
     file_name: &str,
     stream: S,
     max_bytes: u64,
     strip: bool,
+) -> Result<StagedFile, MediaError>
+where
+    S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin,
+{
+    stage_stream_capped(store, file_name, stream, max_bytes, strip, STRIP_MAX_BYTES).await
+}
+
+/// [`stage_stream`] with the strip buffer limit (`strip_cap`) given, for tests.
+async fn stage_stream_capped<S>(
+    store: &MediaStore,
+    file_name: &str,
+    stream: S,
+    max_bytes: u64,
+    strip: bool,
+    strip_cap: usize,
 ) -> Result<StagedFile, MediaError>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin,
@@ -165,14 +184,25 @@ where
     let cut = !ended || head.len() > HEAD_BYTES;
     let mime = classify(sniff, cut, &original_name)?;
     if strip && strippable(&mime) {
-        return stage_stripped(store, mime, original_name, head, ended, stream, max_bytes).await;
+        return stage_stripped(
+            store,
+            mime,
+            original_name,
+            head,
+            ended,
+            stream,
+            (max_bytes, strip_cap),
+        )
+        .await;
     }
     let stream = futures::stream::once(async move { Ok(head.freeze()) }).chain(stream);
     let artifact = store.put_stream(Box::pin(stream), max_bytes).await?;
     Ok(staged(artifact, mime, original_name, false))
 }
 
-/// Reads the rest of an image after `head`, strips it and stores the result.
+/// Reads the rest of an image after `head`, strips it and stores the result. A file
+/// over `cap` or one the walker rejects is refused ([`MediaError::Metadata`]): with
+/// stripping on, a file keeping its metadata is never stored.
 async fn stage_stripped<S>(
     store: &MediaStore,
     mime: String,
@@ -180,33 +210,36 @@ async fn stage_stripped<S>(
     head: BytesMut,
     mut ended: bool,
     mut stream: futures::stream::Fuse<S>,
-    max_bytes: u64,
+    (max_bytes, cap): (u64, usize),
 ) -> Result<StagedFile, MediaError>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Send + Unpin,
 {
+    let refuse = |reason: &str| {
+        tracing::warn!(
+            file = %sanitize_filename(&original_name),
+            reason,
+            "image refused: its metadata cannot be removed"
+        );
+        MediaError::Metadata(reason.to_owned())
+    };
     let mut all = head;
-    let mut oversized = false;
-    while !ended && !oversized {
+    if all.len() > cap {
+        return Err(refuse("the image is too large to strip"));
+    }
+    while !ended {
         match stream.next().await.transpose().map_err(io_error)? {
             Some(chunk) => {
                 if (all.len() + chunk.len()) as u64 > max_bytes {
                     return Err(MediaError::TooLarge { limit: max_bytes });
                 }
                 all.extend_from_slice(&chunk);
-                oversized = all.len() > STRIP_MAX_BYTES;
+                if all.len() > cap {
+                    return Err(refuse("the image is too large to strip"));
+                }
             }
             None => ended = true,
         }
-    }
-    if oversized {
-        tracing::warn!(
-            limit = STRIP_MAX_BYTES,
-            "image too large to strip its metadata; stored unchanged"
-        );
-        let stream = futures::stream::once(async move { Ok(all.freeze()) }).chain(stream);
-        let artifact = store.put_stream(Box::pin(stream), max_bytes).await?;
-        return Ok(staged(artifact, mime, original_name, false));
     }
     let original = all.freeze();
     let kept = original.clone();
@@ -217,10 +250,7 @@ where
     let bytes = match stripped {
         Ok(Some(clean)) => Bytes::from(clean),
         Ok(None) => original,
-        Err(e) => {
-            tracing::debug!(error = %e, "metadata strip skipped; image stored unchanged");
-            original
-        }
+        Err(_) => return Err(refuse("the image could not be parsed")),
     };
     let artifact = store.put_artifact(bytes).await?;
     Ok(staged(artifact, mime, original_name, false))
@@ -567,16 +597,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn corrupt_image_is_stored_unchanged() {
+    async fn corrupt_image_is_refused_when_stripping() {
         let (_dir, store) = local_store();
         // A JPEG head that sniffs as JPEG, then a segment that claims more than is there.
         let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xF0];
         data.extend_from_slice(b"Exif\0\0 truncated");
-        let staged = stage_stream(&store, "bad.jpg", chunks(&data, 5), 1 << 20, true)
+        let err = stage_stream(&store, "bad.jpg", chunks(&data, 5), 1 << 20, true)
             .await
-            .expect("an unparseable image is not refused");
-        assert_eq!(staged.mime, "image/jpeg");
+            .unwrap_err();
+        assert!(matches!(err, MediaError::Metadata(_)), "{err}");
+        // With the option off the same bytes are stored unchanged.
+        let staged = stage_stream(&store, "bad.jpg", chunks(&data, 5), 1 << 20, false)
+            .await
+            .expect("stored");
         assert_eq!(store.get(&staged.artifact.hash).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn truncated_png_and_oversize_riff_webp_are_refused() {
+        let (_dir, store) = local_store();
+        let png = png();
+        let truncated = &png[..png.len() - 12]; // no IEND
+        let mut webp = Vec::new();
+        image::DynamicImage::new_rgb8(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut webp),
+                image::ImageFormat::WebP,
+            )
+            .expect("encode webp");
+        let oversize = webp.len() as u32 + 100;
+        webp[4..8].copy_from_slice(&oversize.to_le_bytes());
+        for (name, data) in [("a.png", truncated.to_vec()), ("a.webp", webp)] {
+            let err = stage_stream(&store, name, chunks(&data, 9), 1 << 20, true)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, MediaError::Metadata(_)), "{name}: {err}");
+            let kept = stage_stream(&store, name, chunks(&data, 9), 1 << 20, false)
+                .await
+                .expect("strip off stores it unchanged");
+            assert_eq!(
+                store.get(&kept.artifact.hash).await.unwrap(),
+                data,
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn over_the_strip_cap_is_refused() {
+        let (_dir, store) = local_store();
+        let data = jpeg_with_metadata();
+        let cap = data.len() - 1;
+        let err = stage_stream_capped(&store, "me.jpg", chunks(&data, 16), 1 << 20, true, cap)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::Metadata(_)), "{err}");
+        // A cap that fits stores the stripped file; off, the cap is not applied.
+        stage_stream_capped(
+            &store,
+            "me.jpg",
+            chunks(&data, 16),
+            1 << 20,
+            true,
+            data.len(),
+        )
+        .await
+        .expect("fits");
+        let kept = stage_stream_capped(&store, "me.jpg", chunks(&data, 16), 1 << 20, false, cap)
+            .await
+            .expect("strip off");
+        assert_eq!(store.get(&kept.artifact.hash).await.unwrap(), data);
     }
 
     #[tokio::test]

@@ -61,6 +61,10 @@ pub enum UploadError {
     /// The SVG cannot be made safe; nothing was stored.
     #[error("the SVG could not be made safe")]
     Svg(SvgError),
+    /// `media.strip_metadata` is on and the image's metadata cannot be removed (too large
+    /// to strip, or not parseable); nothing was stored. The reason is a fixed text.
+    #[error("metadata could not be removed: {0}")]
+    Metadata(String),
     /// Every upload slot of this node is taken; nothing was read.
     #[error("every upload slot of this node is taken")]
     Busy,
@@ -220,6 +224,7 @@ impl From<MediaError> for UploadError {
             MediaError::TooLarge { limit } => Self::TooLarge { limit },
             MediaError::Unsupported { mime } => Self::Unsupported { mime },
             MediaError::Svg(svg) => Self::Svg(svg),
+            MediaError::Metadata(reason) => Self::Metadata(reason),
             MediaError::Task(task) => Self::Task(task),
             other => Self::Media(other),
         }

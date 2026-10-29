@@ -259,7 +259,10 @@ async fn stage(
     {
         Ok(staged) => staged,
         Err(
-            e @ (MediaError::TooLarge { .. } | MediaError::Unsupported { .. } | MediaError::Svg(_)),
+            e @ (MediaError::TooLarge { .. }
+            | MediaError::Unsupported { .. }
+            | MediaError::Svg(_)
+            | MediaError::Metadata(_)),
         ) => {
             refused(report, &e);
             return Ok(None);

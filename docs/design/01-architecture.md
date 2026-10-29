@@ -388,7 +388,16 @@ control or format characters) before the file is read. `image_workers` bounds th
 variants are made only for raster originals of at most 64 MiB. `strip_metadata` (boolean,
 default `false`, M4-1 P17) removes EXIF and XMP losslessly from JPEG, PNG and WebP originals
 before they are hashed and stored, for browser uploads and the WordPress importer alike
-(03 §4); a file is held in memory to do it, so originals over 64 MiB are stored unchanged.
+(03 §4). **Refusal rule:** with the option on, a JPEG, PNG or WebP whose metadata cannot
+be removed is refused, never stored with it: one over 64 MiB (`STRIP_MAX_BYTES`) or one
+the walker cannot parse (a truncated PNG, a WebP whose RIFF size runs past the file) gets
+`422 validation` on `POST /media` (`errors[0].field` = `file`, "metadata could not be
+removed: ...") and is recorded as refused media in an import report. **Memory with the
+option on:** the image is buffered whole, so a slot holds up to the buffer (at most 64 MiB
+of data in a `BytesMut` that grows by doubling, so up to 128 MiB reserved) plus the
+stripped copy (at most the input's size, 64 MiB): about 192 MiB per upload at the peak, so
+up to about 1.5 GiB for 8 slots, plus up to 192 MiB for a running import. The 64 MiB
+figure above holds only with the option off.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,

@@ -241,7 +241,8 @@ fn strip_png(b: &[u8]) -> Result<Option<Vec<u8>>, MediaError> {
             .get(pos + 4..pos + 8)
             .ok_or_else(|| bad("truncated PNG chunk"))?;
         let end = pos
-            .checked_add(12 + len)
+            .checked_add(len)
+            .and_then(|e| e.checked_add(12))
             .filter(|e| *e <= b.len())
             .ok_or_else(|| bad("truncated PNG chunk"))?;
         let data = &b[pos + 8..pos + 8 + len];
@@ -318,10 +319,11 @@ fn strip_webp(b: &[u8]) -> Result<Option<Vec<u8>>, MediaError> {
         let fourcc = &b[pos..pos + 4];
         let len = usize::try_from(rd32(b, pos + 4, true).ok_or_else(|| bad("WebP chunk"))?)
             .map_err(|_| bad("WebP chunk length"))?;
-        let chunk_end = pos + 8 + len;
-        if chunk_end > end {
-            return Err(bad("truncated WebP chunk"));
-        }
+        let chunk_end = pos
+            .checked_add(8)
+            .and_then(|e| e.checked_add(len))
+            .filter(|e| *e <= end)
+            .ok_or_else(|| bad("truncated WebP chunk"))?;
         // Chunks are padded to an even size.
         let next = (chunk_end + (len & 1)).min(end);
         match fourcc {
@@ -379,6 +381,8 @@ fn strip_webp(b: &[u8]) -> Result<Option<Vec<u8>>, MediaError> {
     out.extend_from_slice(&riff.to_le_bytes());
     out.extend_from_slice(b"WEBP");
     out.extend_from_slice(&body);
+    // Bytes after the RIFF end are copied as they are, like a JPEG's or PNG's trailer.
+    out.extend_from_slice(&b[end..]);
     Ok(Some(out))
 }
 
@@ -642,6 +646,34 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_orientation_goes_after_a_leading_jfif() {
+        let plain = encode(ImageFormat::Jpeg);
+        let jfif = jpeg_segment(0xE0, b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        let mut exif = JPEG_EXIF.to_vec();
+        exif.extend_from_slice(&tiff_with_gps(6));
+        let mut src = plain[..2].to_vec();
+        src.extend(&jfif);
+        src.extend(jpeg_segment(0xE1, &exif));
+        src.extend_from_slice(&plain[2..]);
+        let out = strip_metadata(&src, "image/jpeg").unwrap().unwrap();
+        let segs = jpeg_segments(&out);
+        assert_eq!(segs[0].0, 0xE0, "JFIF stays first");
+        assert_eq!(segs[1].0, 0xE1);
+        assert!(segs[1].1.starts_with(JPEG_EXIF));
+        assert_eq!(pixels(&out), pixels(&src));
+    }
+
+    #[test]
+    fn webp_bytes_after_the_riff_end_are_kept() {
+        let mut src = webp_with_metadata(1);
+        src.extend_from_slice(b"TRAILER");
+        let out = strip_metadata(&src, "image/webp").unwrap().unwrap();
+        assert!(out.ends_with(b"TRAILER"));
+        let riff = u32::from_le_bytes(out[4..8].try_into().unwrap()) as usize;
+        assert_eq!(riff + 8 + 7, out.len());
+    }
+
+    #[test]
     fn no_metadata_returns_none() {
         for (format, mime) in [
             (ImageFormat::Jpeg, "image/jpeg"),
@@ -657,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_image_is_an_error_not_a_panic() {
+    fn corrupt_images_never_panic() {
         let jpeg = jpeg_with_metadata(6);
         let png = png_with_metadata();
         let webp = webp_with_metadata(6);
@@ -666,8 +698,23 @@ mod tests {
             (&png, "image/png"),
             (&webp, "image/webp"),
         ] {
-            for cut in [0, 1, 5, 20, bytes.len() / 2, bytes.len() - 3] {
+            // Every cut length: an answer, never a panic.
+            for cut in 0..bytes.len() {
                 let _ = strip_metadata(&bytes[..cut], mime);
+            }
+            // Byte flips (a deterministic xorshift) over the metadata-bearing head.
+            let mut state = 0x2545_F491_4F6C_DD1Du64;
+            let head = bytes.len().min(400);
+            for _ in 0..3000 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let mut copy = bytes.to_vec();
+                for k in 0..3 {
+                    let at = ((state >> (k * 16)) as usize) % head;
+                    copy[at] ^= (state >> (40 + k)) as u8 | 1;
+                }
+                let _ = strip_metadata(&copy, mime);
             }
             assert!(strip_metadata(b"not an image at all", mime).is_err());
         }

@@ -949,6 +949,8 @@ fn media_upload_rules() {
     assert_eq!(r.unwrap().uploads.max_upload, 8 << 20);
     let (_d, r) = run(Some(&format!("{MIN}[media]\nstrip_metadata = true\n")), &[]);
     assert!(r.unwrap().uploads.strip_metadata);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__STRIP_METADATA", "true")]);
+    assert!(r.unwrap().uploads.strip_metadata);
 
     let problem = |toml: &str| {
         let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);

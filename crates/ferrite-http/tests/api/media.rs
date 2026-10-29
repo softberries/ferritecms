@@ -30,6 +30,7 @@ api_tests!(
     aborted_uploads_leave_nothing_staged,
     idle_upload_is_aborted_and_frees_its_slot,
     strip_metadata_option_strips_uploads,
+    unstrippable_image_is_refused_when_stripping,
 );
 
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1022,6 +1023,38 @@ async fn strip_metadata_option_strips_uploads(api: Api) -> Api {
             file.len()
         };
         assert_eq!(item["bytes"], expected, "{tag}");
+    }
+    api
+}
+
+/// With `media.strip_metadata` on, an image whose metadata cannot be removed is refused
+/// (`422 validation`), never stored; with it off the same bytes are stored.
+async fn unstrippable_image_is_refused_when_stripping(api: Api) -> Api {
+    let admin = admin(&api).await;
+    // A JPEG whose Exif segment claims more bytes than the file has.
+    let bad = [
+        0xFF, 0xD8, 0xFF, 0xE1, 0xFF, 0xF0, b'E', b'x', b'i', b'f', 0, 0, 1, 2,
+    ];
+    for (strip, status) in [(true, 422u16), (false, 201)] {
+        let (router, _) = api.router_with_uploader(
+            Uploader::new(api.api.media.clone(), 1 << 20).with_strip_metadata(strip),
+        );
+        let (_, body) = upload_body(&[Part::file("bad.jpg", "image/jpeg", &bad)]);
+        let req = admin
+            .builder(Method::POST, "/api/v1/media")
+            .header(header::CONTENT_TYPE, upload_content_type())
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let r = send(&router, req).await;
+        assert_eq!(r.status.as_u16(), status, "strip={strip}: {r:?}");
+        if strip {
+            let p = r.assert_problem(422, "validation");
+            assert_eq!(field(&p), "file", "{p}");
+            assert!(
+                p.to_string().contains("metadata could not be removed"),
+                "{p}"
+            );
+        }
     }
     api
 }
