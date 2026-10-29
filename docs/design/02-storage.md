@@ -392,7 +392,7 @@ Notes:
     (no `ON DELETE` clause): deleting a parent that still has children fails with
     `StoreError::ForeignKey`; reparenting or deleting children is the core's decision (R9).
   - `content_items.author_id` is non-optional, so an importer must supply a fallback
-    author (M3).
+    author (M3-1: the importing admin).
 - Event emission (cache invalidation, [04](04-cluster.md)) happens **inside the same
   transaction** as the write (transactional outbox), so a committed write always has
   its event.
@@ -402,8 +402,8 @@ Notes:
 Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
-`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo`
-on both backends.
+`0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
+`0009_import` / `0010_import_jobs` on both backends.
 
 ### Content
 
@@ -441,11 +441,18 @@ on both backends.
 | Table | Columns | Notes |
 |---|---|---|
 | `options` | `key` PK, `value` json, `autoload`, `updated_at` | Site settings; `autoload` marks the set every render reads (F23). No per-node cache: it was removed with no reader (M2a-1 R26), and M2a-2a's readers (theme and plugin settings) read the store directly (M2a-2 P14; a cache is M4) |
-| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>` |
+| `artifacts` | `hash` PK (sha256 hex), `kind` (`media`/`variant`/`plugin`/`theme`/`export`/`import`; `import` since `0010`), `bytes`, `mime`, `created_at` | The blob lives in the MediaStore under `artifacts/<hash[0..2]>/<hash>`. `import` rows are an API import's inputs (deleted when the run is done or the job fails for good, M3-2 P23) and its report files and manifest (P29) |
 | `plugins` | `name` PK, `version`, `artifact_hash` FK, `manifest` json, `granted` json (the approved grant: since M2a-2a `{"v":1,"capabilities","limits","routes"}`, 05 §2; the M1c-2 bare `[capabilities]` table and `null` are still read), `enabled`, `disabled_reason`, `installed_at`, `updated_at` | |
 | `plugin_kv` | `plugin`, `key`, `value` bytes, `updated_at`, PK(`plugin`,`key`) | Quotas enforced in core (default 10 MB, 10k keys per plugin) |
 | `plugin_failures` | `plugin`, `hook`, `bucket_start`, `count`, PK(`plugin`,`hook`,`bucket_start`) | Shared failure counters → auto-disable cluster-wide (`PluginFailureRepo` since M1.5: 1-minute buckets from the database clock, pruned by `plugin_failures.prune` after `max(24 h, 2 × plugins.failure_window)`; 05 §8) |
 | `themes` | `name` PK, `version`, `artifact_hash`, `manifest` json, `active`, `installed_at` | Exactly one active (partial unique index / trigger) |
+
+### Import *(since `0009_import`; job columns since `0010_import_jobs`)*
+
+| Table | Columns | Notes |
+|---|---|---|
+| `import_runs` | `id` PK (`import_runs_pkey`), `source` (the normalised `<wp:base_blog_url>`), `token` (32 lowercase hex digits), `state` (`running`/`done`/`failed`/`abandoned`, CHECK), `started_by` → `users` `ON DELETE CASCADE` (`import_runs_started_by_fk`), `started_at`, `heartbeat_at`, `finished_at` null, `stats` json, `dry_run` boolean; since `0010`: `job_id` null (the `import.wordpress` job that started the run; no FK, jobs are pruned; `import_runs_job_idx`), `step` null (`parse`, `pass1`…`pass4`, `fixup`, `report`; checked in core, free text in the store), `report_hash` null (the report manifest artifact); partial unique index `import_runs_running_uq (state) WHERE state = 'running'`, `import_runs_started_idx (started_at, id)`, `import_runs_started_by_idx (started_by)` | One row per WordPress import run (M3-1 P5): every batch first updates `heartbeat_at` where `id`, `token` and `running` match (the fence); at most one run is `running`; a deleted user takes their runs with them (R5) |
+| `import_map` | `source`, `kind` (`user`/`term`/`media`/`content`/`comment`/`menu`/`option`/`redirect`, CHECK), `wp_id`, `ferrite_id` (no FK), `hash` (SHA-256 hex of what the import wrote), `version` (the item's version after the write); PK (`source`, `kind`, `wp_id`) `import_map_pkey` | What each WordPress id became (P3): a re-run updates instead of duplicating; a row whose item is gone counts as not mapped. The `0009` down drops both tables (lossy) |
 
 ### Cluster
 
@@ -453,7 +460,7 @@ on both backends.
 |---|---|---|
 | `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
-| `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (no ORDER BY index: SQLite's planner does not use one for the claim after ANALYZE; since `0006` the SQLite claim is a `UNION ALL` of the due branch on `jobs_due_idx` and the expired-lease branch on `jobs_lease_idx`, each named with `INDEXED BY`, sorted by `priority DESC, run_at, id` and limited across the union; the pre-check and the reaper name their index the same way, and the prune names `jobs_finished_idx`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)`, `jobs_created_idx (created_at, id)` and `jobs_kind_created_idx (kind, created_at, id)` (the admin jobs list by status, by kind or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
+| `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1; since M3-2 the Postgres claim is a `UNION ALL` of the due branch on this index and the expired-lease branch on `jobs_lease_idx`, P31) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (no ORDER BY index: SQLite's planner does not use one for the claim after ANALYZE; since `0006` the SQLite claim is a `UNION ALL` of the due branch on `jobs_due_idx` and the expired-lease branch on `jobs_lease_idx`, each named with `INDEXED BY`, sorted by `priority DESC, run_at, id` and limited across the union; the pre-check and the reaper name their index the same way, and the prune names `jobs_finished_idx`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)`, `jobs_created_idx (created_at, id)` and `jobs_kind_created_idx (kind, created_at, id)` (the admin jobs list by status, by kind or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` per `UNION ALL` branch in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id` |
 
 ### Search
@@ -563,6 +570,11 @@ crates/ferrite-store-sqlite/migrations/
     0007_autosaves.down.sql
     0008_autosave_seo.up.sql        # M2b-2, phase expand, lossy-down: autosaves.seo (P28)
     0008_autosave_seo.down.sql
+    0009_import.up.sql              # M3-1, phase expand, lossy-down: import_runs, import_map
+    0009_import.down.sql
+    0010_import_jobs.up.sql         # M3-2, phase contract here (the `artifacts` CHECK needs a
+    0010_import_jobs.down.sql       #   table rebuild; widens only, no min-binary), lossy-down:
+                                    #   `import` artifacts, run job_id/step/report_hash
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -580,6 +592,10 @@ crates/ferrite-store-postgres/migrations/
     0007_autosaves.down.sql
     0008_autosave_seo.up.sql
     0008_autosave_seo.down.sql
+    0009_import.up.sql
+    0009_import.down.sql
+    0010_import_jobs.up.sql         # M3-2, phase expand (one ALTER TABLE swaps the CHECK)
+    0010_import_jobs.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -708,7 +724,10 @@ silently remove the guard.
 **CI enforcement**
 
 - *Expand check*: a migration without `phase contract` must not contain `DROP`,
-  `RENAME`, `ALTER … TYPE`, or `NOT NULL` without `DEFAULT` (lint over SQL text).
+  `RENAME`, `ALTER … TYPE`, or `NOT NULL` without `DEFAULT` (lint over SQL text,
+  `ferrite_store::migrate::expand_lint`). One `DROP` passes since M3-2: a `DROP CONSTRAINT`
+  that re-adds the same name as a `CHECK (col IN (<string literals>))` whose list is a
+  strict superset of the one the down restores (a widening; Postgres `0010`, ruling R56).
 - *Backward-compat test*: CI checks out the previous release tag, builds it, and runs
   its integration tests against a database migrated by the current branch.
   (Starts mattering from the first tagged release.)

@@ -137,6 +137,29 @@ test("plugins_is_registered", () => {
   expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
 });
 
+test("nav shows Import only with the import capability", () => {
+  // M3-2 P32 registers Import under Administration, between Plugins and Settings: only
+  // `import` sees it, with `g i`.
+  const admin = navFor(me("admin", ["read_admin", "import"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["import", "Import", "/import", "g i"],
+  ]);
+  expect(navItemAt(admin, "/import")?.id).toBe("import");
+  const others = me("admin", ["read_admin", "manage_plugins", "manage_settings"]);
+  expect(
+    navFor(others, TYPES)
+      .flatMap((s) => s.items)
+      .some((i) => i.id === "import"),
+  ).toBe(false);
+  // Never without `read_admin`, whatever else is held.
+  expect(
+    navFor(me("none", ["import"]), TYPES)
+      .flatMap((s) => s.items)
+      .map((i) => i.id),
+  ).toEqual(["dashboard"]);
+});
+
 test("system_is_registered", () => {
   // M2b-3 Task 11 registers System under Administration: only `manage_system` sees it,
   // with `g y`.
@@ -389,6 +412,7 @@ const ADMIN_ENTRIES: ScreenEntry[] = [
   { screen: "system", to: "/system", label: "nav.system", icon: ShapesIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: ShapesIcon },
   { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: ShapesIcon },
+  { screen: "import", to: "/import", label: "nav.import", icon: ShapesIcon },
   { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: ShapesIcon },
   { screen: "users", to: "/users", label: "nav.users", icon: ShapesIcon },
 ];
@@ -408,6 +432,7 @@ test("admin_section_by_role", () => {
       ["Users", "/users", "g u"],
       ["Appearance", "/appearance/themes", "g a"],
       ["Plugins", "/plugins", "g l"],
+      ["Import", "/import", "g i"],
       ["Settings", "/settings", "g s"],
       ["System", "/system", "g y"],
     ],

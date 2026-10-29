@@ -129,7 +129,7 @@ test("permalink_change_confirms_first", async () => {
   ).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
   const confirm = await screen.findByRole("alertdialog", { name: "Change the permalinks?" });
-  expect(confirm).toHaveTextContent("No redirects are created from the old URLs");
+  expect(confirm).toHaveTextContent("Redirects from the old URLs are created in the background");
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(patches).toEqual([]);
   await userEvent.click(screen.getByRole("button", { name: "Save changes" }));

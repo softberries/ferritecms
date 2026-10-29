@@ -6,7 +6,7 @@
 //! output (paragraphs and line breaks, no links). Limits: body 1..=[`MAX_COMMENT_BODY`]
 //! characters (`\r\n` and `\r` become `\n`; no control characters but `\n` and `\t`),
 //! name 1..=[`MAX_COMMENT_NAME`] characters without control or bidi characters
-//! ([`is_bidi_control`](crate::is_bidi_control), R13), e-mail at most [`MAX_COMMENT_EMAIL`] bytes
+//! ([`is_bidi_control`], R13), e-mail at most [`MAX_COMMENT_EMAIL`] bytes
 //! (required for guests), URL empty or at most [`MAX_COMMENT_URL`] characters of
 //! `http`/`https` with a host and no user info. Only `post` items take comments, while
 //! publicly visible and while `comments.enabled` holds (else `NotFound`, as for an
@@ -307,7 +307,7 @@ pub fn settings_from(
 }
 
 /// The body as stored: `\r\n` and lone `\r` become `\n`, then trimmed.
-fn normalize_body(body: &str) -> String {
+pub(crate) fn normalize_body(body: &str) -> String {
     body.replace("\r\n", "\n")
         .replace('\r', "\n")
         .trim()
@@ -393,7 +393,7 @@ fn check_name(name: &str) -> Result<String, CoreError> {
     Ok(name.to_owned())
 }
 
-fn check_email(email: &str) -> Result<String, CoreError> {
+pub(crate) fn check_email(email: &str) -> Result<String, CoreError> {
     let email = email.trim();
     let shape_ok = match email.split_once('@') {
         Some((local, domain)) => !local.is_empty() && !domain.is_empty() && !domain.contains('@'),
@@ -416,7 +416,7 @@ fn check_email(email: &str) -> Result<String, CoreError> {
 /// `""` or an `http`/`https` URL with a host, no user info, no whitespace, control
 /// characters, backslashes, quotes or angle brackets, at most [`MAX_COMMENT_URL`]
 /// characters.
-fn check_url(url: &str) -> Result<String, CoreError> {
+pub(crate) fn check_url(url: &str) -> Result<String, CoreError> {
     let url = url.trim();
     if url.is_empty() {
         return Ok(String::new());

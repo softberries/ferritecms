@@ -32,6 +32,7 @@ string_enum!(
         Plugin => "plugin",
         Theme => "theme",
         Export => "export",
+        Import => "import",
     }
 );
 

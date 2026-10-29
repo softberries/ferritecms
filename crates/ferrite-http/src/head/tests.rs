@@ -93,6 +93,7 @@ fn seo(title: Option<&str>, description: Option<&str>) -> Seo {
     Seo {
         title: title.map(str::to_owned),
         description: description.map(str::to_owned),
+        ..Seo::default()
     }
 }
 
@@ -448,4 +449,60 @@ fn json_ld_is_validated_and_escaped() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(v["name"], "</script><script>alert(1)</script>");
+}
+
+#[test]
+fn seo_canonical_replaces_default_link_and_og_url() {
+    let it = item("T", "");
+    let s = Seo {
+        canonical: Some("https://elsewhere.example/orig/".into()),
+        ..Seo::default()
+    };
+    let h = core_head(SITE, page(Some(&it), "/t/"), &s);
+    let html = render(&h);
+    assert!(
+        html.contains("<link rel=\"canonical\" href=\"https://elsewhere.example/orig/\">"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<meta property=\"og:url\" content=\"https://elsewhere.example/orig/\">")
+    );
+    assert!(!html.contains("example.com/t/"), "{html}");
+    // Ignored without an item.
+    let h = core_head(SITE, page(None, "/"), &s);
+    assert!(render(&h).contains("href=\"https://example.com/\""));
+}
+
+#[test]
+fn seo_robots_is_one_merged_tag() {
+    use ferrite_core::content::Robots;
+    let it = item("T", "");
+    let s = Seo {
+        robots: vec![Robots::NoFollow, Robots::NoIndex],
+        ..Seo::default()
+    };
+    let html = render(&core_head(SITE, page(Some(&it), "/t/"), &s));
+    assert_eq!(html.matches("name=\"robots\"").count(), 1, "{html}");
+    assert!(
+        html.contains("<meta name=\"robots\" content=\"nofollow, noindex\">"),
+        "{html}"
+    );
+    // None set: no tag.
+    let html = render(&core_head(SITE, page(Some(&it), "/t/"), &Seo::default()));
+    assert!(!html.contains("robots"), "{html}");
+}
+
+#[test]
+fn seo_canonical_is_escaped() {
+    let it = item("T", "");
+    let s = Seo {
+        canonical: Some("https://example.org/a?x=1&y=\"2\"".into()),
+        ..Seo::default()
+    };
+    let html = render(&core_head(SITE, page(Some(&it), "/t/"), &s));
+    assert!(
+        html.contains("href=\"https://example.org/a?x=1&amp;y=&quot;2&quot;\""),
+        "{html}"
+    );
+    assert!(!html.contains("y=\"2\""), "{html}");
 }

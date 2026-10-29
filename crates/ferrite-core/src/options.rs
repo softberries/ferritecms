@@ -10,11 +10,15 @@ use crate::{
     Actor, CoreError,
     actor::{Capability, require},
     events,
-    permalink::{self, PAGE_OPTION, POST_OPTION},
+    jobs::{
+        PERMALINK_REDIRECTS_VERSION, PermalinkRedirects, PermalinkStructures,
+        permalink_redirects_job,
+    },
+    permalink::{self, PAGE_OPTION, POST_OPTION, PermalinkRules},
     settings,
     site::FRONT_PAGE_OPTION,
     tx::finish,
-    types::{begin_locked, finish_locked},
+    types::{begin_locked, finish_locked, invalidate_all},
 };
 
 const MAX_KEY_LEN: usize = 200;
@@ -39,7 +43,11 @@ struct Change<'a> {
 /// side can race the other into a combination the router cannot serve. A clash is
 /// `InvalidField { field: "permalink.post" | "permalink.page", .. }` naming the
 /// structure. They emit `invalidate [all]` (R10) besides `options.changed`; each node's
-/// reloader rebuilds its permalink rules and route table from the event.
+/// reloader rebuilds its permalink rules and route table from the event. A write that
+/// changes the structures in effect also enqueues a
+/// [`permalink.redirects`](crate::jobs::PERMALINK_REDIRECTS_KIND) job in its
+/// transaction (M3-2 P30), which redirects the published posts and pages from their old
+/// paths.
 pub struct OptionService {
     store: Arc<dyn Store>,
 }
@@ -111,25 +119,7 @@ impl OptionService {
         changes: &[(String, Option<Value>)],
     ) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
-        let mut pending: Vec<Change<'_>> = Vec::with_capacity(changes.len());
-        for (key, value) in changes {
-            let value = value.as_ref().filter(|v| !v.is_null());
-            match value {
-                Some(v) => settings::validate(key, v)?,
-                None if settings::def(key).is_none() => {
-                    return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
-                }
-                None => {}
-            }
-            if pending.iter().any(|c| c.key == key) {
-                return Err(CoreError::Invalid(format!("setting {key:?} given twice")));
-            }
-            pending.push(Change {
-                key,
-                value,
-                autoload: true,
-            });
-        }
+        let pending = check_settings(changes)?;
         if pending.is_empty() {
             return Ok(());
         }
@@ -146,29 +136,98 @@ impl OptionService {
     ) -> Result<(), CoreError> {
         if changes.iter().any(|c| is_permalink(c.key)) {
             let (guard, tx) = begin_locked(self.store.as_ref()).await?;
-            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            let done = write_with_invalidation(tx.as_ref(), actor, changes, settings_write).await;
             finish_locked(guard, tx, done).await
         } else {
             let tx = self.store.begin().await?;
-            let done = write_changes(tx.as_ref(), actor, changes, settings_write).await;
+            let done = write_with_invalidation(tx.as_ref(), actor, changes, settings_write).await;
             finish(tx, done).await
         }
     }
 }
 
-/// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
-/// for a `settings_write`, the front page), each set or delete with its
-/// `options.changed`, `invalidate [all]` for `permalink.*`, and for a `settings_write`
-/// the audit row `settings.update`.
-async fn write_changes(
+/// [`OptionService::set_many`] inside the caller's `Tx` (M3-1 P1), without the
+/// capability check: the same validation, front-page and `permalink.*` checks, events
+/// and audit row (and `permalink.redirects` job), except the `invalidate [all]`.
+/// Returns whether a `permalink.*` key changed, so the caller emits that invalidation.
+/// A `permalink.*` change needs a `Tx` that holds [`LOCK_TYPES`](ferrite_store::LOCK_TYPES) ([`touches_permalinks`]).
+pub(crate) async fn set_many_in(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[(String, Option<Value>)],
+) -> Result<bool, CoreError> {
+    let pending = check_settings(changes)?;
+    if pending.is_empty() {
+        return Ok(false);
+    }
+    write_changes(repos, actor, &pending, true).await
+}
+
+/// Whether `changes` sets or deletes a `permalink.*` option.
+pub(crate) fn touches_permalinks(changes: &[(String, Option<Value>)]) -> bool {
+    changes.iter().any(|(key, _)| is_permalink(key))
+}
+
+/// The validation of [`OptionService::set_many`]: every key allowlisted and given once,
+/// every value valid; `None` or JSON `null` deletes.
+fn check_settings(changes: &[(String, Option<Value>)]) -> Result<Vec<Change<'_>>, CoreError> {
+    let mut pending: Vec<Change<'_>> = Vec::with_capacity(changes.len());
+    for (key, value) in changes {
+        let value = value.as_ref().filter(|v| !v.is_null());
+        match value {
+            Some(v) => settings::validate(key, v)?,
+            None if settings::def(key).is_none() => {
+                return Err(CoreError::Invalid(format!("unknown setting {key:?}")));
+            }
+            None => {}
+        }
+        if pending.iter().any(|c| c.key == key) {
+            return Err(CoreError::Invalid(format!("setting {key:?} given twice")));
+        }
+        pending.push(Change {
+            key,
+            value,
+            autoload: true,
+        });
+    }
+    Ok(pending)
+}
+
+/// [`write_changes`], then `invalidate [all]` when a `permalink.*` key changed.
+async fn write_with_invalidation(
     repos: &dyn Repos,
     actor: &Actor,
     changes: &[Change<'_>],
     settings_write: bool,
 ) -> Result<(), CoreError> {
+    if write_changes(repos, actor, changes, settings_write).await? {
+        invalidate_all(repos).await?;
+    }
+    Ok(())
+}
+
+/// Inside the write's transaction: the checks that need the store (`permalink.*` pair;
+/// for a `settings_write`, the front page), each set or delete with its
+/// `options.changed`, the `permalink.redirects` job when the `permalink.*` structures
+/// in effect changed (P30), and for a `settings_write` the audit row `settings.update`.
+/// Returns whether a `permalink.*` key changed: the caller then owes `invalidate [all]`.
+async fn write_changes(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[Change<'_>],
+    settings_write: bool,
+) -> Result<bool, CoreError> {
     let permalinks: Vec<&Change<'_>> = changes.iter().filter(|c| is_permalink(c.key)).collect();
+    // The structures before the write; stored values that no longer parse give no
+    // old paths to redirect from.
+    let mut prev = None;
     if !permalinks.is_empty() {
         check_permalinks(repos, &permalinks).await?;
+        prev = match permalink::stored_rules(repos, &[]).await {
+            Ok(rules) => Some(rules),
+            Err(CoreError::Invalid(_)) => None,
+            Err(e) => return Err(e),
+        };
     }
     if settings_write {
         for c in changes {
@@ -179,21 +238,19 @@ async fn write_changes(
             }
         }
     }
+    let mut version = 0;
     for c in changes {
         match c.value {
             Some(v) => repos.options().set(c.key, v, c.autoload).await?,
             None => repos.options().delete(c.key).await?,
         }
-        repos
+        version = repos
             .events()
             .append(&events::options_changed(c.key))
             .await?;
     }
-    if !permalinks.is_empty() {
-        repos
-            .events()
-            .append(&events::invalidate([events::ALL_KEY.to_owned()]))
-            .await?;
+    if let Some(prev) = prev {
+        enqueue_redirects(repos, &prev, version).await?;
     }
     if settings_write {
         let keys: Vec<&str> = changes.iter().map(|c| c.key).collect();
@@ -208,10 +265,37 @@ async fn write_changes(
             })
             .await?;
     }
+    Ok(!permalinks.is_empty())
+}
+
+/// Enqueues the [`permalink.redirects`](crate::jobs::PERMALINK_REDIRECTS_KIND) job when
+/// the structures stored now (the write's pending changes) differ from `prev`; `version`
+/// keys it (the write's last event sequence number).
+async fn enqueue_redirects(
+    repos: &dyn Repos,
+    prev: &PermalinkRules,
+    version: i64,
+) -> Result<(), CoreError> {
+    let next = permalink::stored_rules(repos, &[]).await?;
+    if next == *prev {
+        return Ok(());
+    }
+    let structures = |r: &PermalinkRules| PermalinkStructures {
+        post: r.post().as_str().to_owned(),
+        page: r.page().as_str().to_owned(),
+    };
+    let job = permalink_redirects_job(&PermalinkRedirects {
+        v: PERMALINK_REDIRECTS_VERSION,
+        prev: structures(prev),
+        next: structures(&next),
+        version,
+        cursor: None,
+    });
+    repos.jobs().enqueue(&job).await?;
     Ok(())
 }
 
-fn is_permalink(key: &str) -> bool {
+pub(crate) fn is_permalink(key: &str) -> bool {
     key == POST_OPTION || key == PAGE_OPTION
 }
 

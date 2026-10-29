@@ -542,6 +542,15 @@ a.pagination__next,
   margin-block: var(--space-m);
 }
 
+.prose .embed iframe {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: var(--radius);
+}
+
 .prose figcaption {
   margin-top: var(--space-xs);
   color: var(--muted);

@@ -250,7 +250,26 @@ every slug change (with or without a public archive) delete the redirects from t
 archive path, either slash variant and any origin, in the same transaction, as publishing does
 for content; the `redirect:` keys are emitted. A taxonomy applies to at most 20 content types
 (`content_types`, refused beyond). Not handled: items whose permalink contains `%category%` move
-with the term without redirects (permalink structure redirects are M3, P26).
+with the term without redirects. A `permalink.post`/`permalink.page` structure change does get
+redirects (M3-2 P30): the write enqueues a `permalink.redirects` job in its transaction, and the
+job moves every published post or page from its path under the previous structure to its path
+under the current one, 500 items per transaction, with the content-move rules (origin
+`slug-change`, no chains); an old path holding a `manual` or `import` redirect keeps it, and an
+old path that is another published item's path now gets none. Each page's transaction takes the
+`types` lock that `permalink.*` writes take and reads the stored structures inside it, so a job
+still paging when a later change commits redirects its remaining items to the newer structure
+and the two jobs never undo each other's rows. One job walks at most 20 pages (10 000 items)
+and then enqueues a continuation job from its cursor with the same structures and version (its
+unique key `permalink.redirects:<version>:<cursor digest>`), so each job fits the default job
+timeout and a retry redoes at most its own pages. Until the jobs have run, the old URLs answer
+404. Known limits: the job pages by the content list's published-order cursor, not by id (the store
+has no id ordering yet), so an item whose `published_at` moves later while the job runs jumps
+ahead of the cursor and gets no redirect. An import that writes `permalink.*` (P30) makes the
+job redirect the imported posts from their old default-structure paths, which they never had:
+one harmless row per item, accepted under P30's cost. The check that an old path is not another
+published item's path runs in the page's transaction, so an item published at exactly that path
+by another transaction committing while the page runs is not seen: the redirect row then shadows
+it until someone deletes the row (a narrow window, accepted; M3-2 final review BE-m1).
 
 **Request order** (`crates/ferrite-http/src/app/handler.rs`): methods other than GET/HEAD →
 405; `/healthz`, `/readyz`, `/_media`, `/_theme` (never redirected, not in the page cache) →
@@ -445,7 +464,13 @@ empty footer (no plugin calls).
 Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) using the
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
-sanitised with `ammonia`.
+sanitised with `ammonia`. M3 (P11) adds an `embed` node (`provider` `youtube` or `vimeo`,
+`url`), rendered as a privacy-mode player `<iframe>` (`youtube-nocookie.com`,
+`player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
+recognise renders as a paragraph with a link), and an optional plain-text `caption` on
+`image` (`<figure>…<figcaption>`; without one the output is a bare `<img>` as before).
+`blocks::is_editor_safe` is the twin of the admin editor's node and mark lists; both are
+pinned to `crates/ferrite-core/tests/fixtures/editor-schema.json`.
 
 **Previews.** `/_preview/<id>` (§3) renders `SiteReader::preview(actor, id)` with the
 preview request scope for plugins (05 §7a) and `request.preview = true`. Preview responses

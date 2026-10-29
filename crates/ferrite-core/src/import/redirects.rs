@@ -1,0 +1,109 @@
+//! Imported redirects (P17): rows are checked one by one; the refused ones are reported
+//! and the rest written with origin `import`.
+
+use ferrite_domain::RedirectOrigin;
+
+use super::ImportBatch;
+use crate::{
+    CoreError, MAX_IMPORT_ROWS,
+    redirects::{all_targets_in, published_item_at, redirect_keys, validate_rows, write_rows},
+};
+
+/// Why a row whose source is a live item's path is refused.
+const PUBLISHED_ITEM: &str = "path is a published item";
+
+/// What [`ImportBatch::redirects`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedirectOutcome {
+    /// Rows whose source had no redirect.
+    pub created: u32,
+    /// Rows that replaced the target and code of an existing redirect.
+    pub updated: u32,
+    /// Rows equal (target and code) to the stored redirect of their source: nothing
+    /// written (a re-run).
+    pub unchanged: u32,
+    /// Sources whose stored redirect did not come from an import (edited here, made here,
+    /// or made by a slug change): kept as they are, in input-row order.
+    pub kept: Vec<String>,
+    /// Rows not written: (source, reason), in input-row order whichever check refused them.
+    pub refused: Vec<(String, String)>,
+}
+
+impl ImportBatch<'_> {
+    /// Writes `(source, target, code)` rows as redirects with origin `import`, in chunks
+    /// of [`MAX_IMPORT_ROWS`]. Each row gets the checks of
+    /// [`RedirectService::import`](crate::RedirectService::import) (path rules, router-owned
+    /// sources, code, loops and chains, duplicates; against the stored redirects and the
+    /// valid rows before it), but a failing row does not fail the call: it is returned in
+    /// [`refused`](RedirectOutcome::refused) with its reason and the rest is written.
+    /// A row whose source is the path of a published item (the item is live there, so a
+    /// redirect would never fire) is refused with "path is a published item"; the lookup
+    /// walks the source's segments by slug, for every content type but media.
+    /// A valid row equal to the stored redirect of its source is not written
+    /// ([`unchanged`](RedirectOutcome::unchanged)), and neither is one whose stored
+    /// redirect has another origin than `import` ([`kept`](RedirectOutcome::kept): an
+    /// edit here makes it `manual`). The `redirect:` keys of the written
+    /// sources join the batch's event.
+    ///
+    /// **Errors.** As for [`content`](Self::content): any `Err` (a store failure; row
+    /// problems are never one) leaves the batch unusable, and the caller must
+    /// [`rollback`](Self::rollback) it.
+    pub async fn redirects(
+        &mut self,
+        rows: &[(String, String, u16)],
+    ) -> Result<RedirectOutcome, CoreError> {
+        let mut out = RedirectOutcome {
+            created: 0,
+            updated: 0,
+            unchanged: 0,
+            kept: Vec::new(),
+            refused: Vec::new(),
+        };
+        for chunk in rows.chunks(MAX_IMPORT_ROWS) {
+            let repos = self.tx.as_ref();
+            // (index in `chunk`, row) of the rows that are not refused so far.
+            let mut candidates: Vec<(usize, (String, String, u16))> =
+                Vec::with_capacity(chunk.len());
+            let mut refused: Vec<(usize, String, String)> = Vec::new();
+            for (i, row) in chunk.iter().enumerate() {
+                if published_item_at(repos, self.rules.as_ref(), &row.0).await? {
+                    refused.push((i, row.0.clone(), PUBLISHED_ITEM.into()));
+                } else {
+                    candidates.push((i, row.clone()));
+                }
+            }
+            let kept: Vec<_> = candidates.iter().map(|(_, r)| r.clone()).collect();
+            let errors = validate_rows(&kept, all_targets_in(repos).await?);
+            let mut failed = vec![false; candidates.len()];
+            for e in errors {
+                if let Some((i, row)) = candidates.get(e.row) {
+                    refused.push((*i, row.0.clone(), e.message));
+                    failed[e.row] = true;
+                }
+            }
+            refused.sort_by_key(|(i, _, _)| *i);
+            out.refused
+                .extend(refused.into_iter().map(|(_, source, why)| (source, why)));
+            let candidates: Vec<_> = candidates.into_iter().map(|(_, r)| r).collect();
+            let mut valid = Vec::with_capacity(candidates.len());
+            for (row, failed) in candidates.into_iter().zip(failed) {
+                if failed {
+                    continue;
+                }
+                match repos.redirects().get_by_source(&row.0).await? {
+                    Some(r) if r.origin != RedirectOrigin::Import => out.kept.push(row.0),
+                    Some(r) if r.target == row.1 && r.code == row.2 => out.unchanged += 1,
+                    _ => valid.push(row),
+                }
+            }
+            let report = write_rows(repos, &valid).await?;
+            out.created += report.created;
+            out.updated += report.updated;
+            self.keys.extend(redirect_keys(
+                valid.into_iter().map(|(source, _, _)| source),
+            ));
+            self.items += (report.created + report.updated) as usize;
+        }
+        Ok(out)
+    }
+}

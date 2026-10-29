@@ -1,14 +1,16 @@
 //! Background jobs core enqueues and their payloads (design 04 §6, ruling P12; plugin
-//! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8).
+//! purge M2a-2 P9; plugin actions P20; media variants M2a-2b P8; permalink redirects
+//! M3-2 P30; WordPress imports M3-2 P27).
 //!
 //! The handlers live with the job runner wiring (`ferrite`); this module fixes the kinds,
 //! keys and payload shapes both sides agree on. Payloads carry a version `v` (04 §9).
 
 use std::time::Duration;
 
-use ferrite_domain::{ContentId, NewJob, Timestamp};
+use ferrite_domain::{Artifact, ContentId, NewJob, Timestamp, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Publishes one scheduled item at its scheduled time; payload [`PublishScheduled`].
 pub const PUBLISH_SCHEDULED_KIND: &str = "content.publish_scheduled";
@@ -182,6 +184,202 @@ pub fn media_variants_job(variants: &MediaVariants) -> NewJob {
     job
 }
 
+/// Redirects every published post or page from its path under the previous
+/// `permalink.*` structures to its path under the current ones (M3-2 P30); payload
+/// [`PermalinkRedirects`]. Enqueued by every `permalink.*` write in its `Tx`
+/// ([`OptionService`](crate::OptionService) and the importer's
+/// [`ImportBatch::options`](crate::import::ImportBatch::options)); the handler runs
+/// [`RedirectService::structure_change`](crate::RedirectService::structure_change).
+pub const PERMALINK_REDIRECTS_KIND: &str = "permalink.redirects";
+
+/// Current version of the [`PermalinkRedirects`] payload.
+pub const PERMALINK_REDIRECTS_VERSION: u32 = 1;
+
+/// The post and page structures in effect (defaults filled in).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermalinkStructures {
+    pub post: String,
+    pub page: String,
+}
+
+/// Payload of a [`PERMALINK_REDIRECTS_KIND`] job:
+/// `{"v":1,"prev":{"post":…,"page":…},"next":{"post":…,"page":…},"version":<seq>}`, plus
+/// `"cursor":"<content cursor>"` on a continuation (a job that ran out of its page budget
+/// hands on to the next one from there, final review BE2).
+/// `prev` are the structures before the write, `next` the ones it left (informational:
+/// the job redirects to the structures stored when it runs, so jobs of two quick changes
+/// give the same result in either order). `version` is the options version of the write:
+/// the event sequence number of its last `options.changed` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermalinkRedirects {
+    pub v: u32,
+    pub prev: PermalinkStructures,
+    pub next: PermalinkStructures,
+    pub version: i64,
+    /// Where a continuation starts; `None`: the first page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// The job for `redirects`: due now, unique key `permalink.redirects:<version>` (one per
+/// options version), or `permalink.redirects:<version>:<cursor digest>` for a
+/// continuation (the first 32 hex digits of the cursor's SHA-256, so the key stays short
+/// whatever the cursor), default priority and attempts.
+pub fn permalink_redirects_job(redirects: &PermalinkRedirects) -> NewJob {
+    let structures = |s: &PermalinkStructures| {
+        let mut m = Map::new();
+        m.insert("post".into(), Value::String(s.post.clone()));
+        m.insert("page".into(), Value::String(s.page.clone()));
+        Value::Object(m)
+    };
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(redirects.v));
+    payload.insert("prev".into(), structures(&redirects.prev));
+    payload.insert("next".into(), structures(&redirects.next));
+    payload.insert("version".into(), Value::from(redirects.version));
+    let mut key = format!("{PERMALINK_REDIRECTS_KIND}:{}", redirects.version);
+    if let Some(cursor) = &redirects.cursor {
+        payload.insert("cursor".into(), Value::String(cursor.clone()));
+        let digest = ferrite_domain::to_hex(&Sha256::digest(cursor.as_bytes()));
+        key.push(':');
+        key.push_str(&digest[..32]);
+    }
+    let mut job = NewJob::new(PERMALINK_REDIRECTS_KIND, Value::Object(payload));
+    job.unique_key = Some(key);
+    job
+}
+
+/// Runs one WordPress import from uploaded artifacts (M3-2 P27); payload
+/// [`ImportJobPayload`]. Enqueued by
+/// [`ImportService::enqueue`](crate::import::ImportService::enqueue).
+pub const IMPORT_WORDPRESS_KIND: &str = "import.wordpress";
+
+/// Current version of the [`ImportJobPayload`].
+pub const IMPORT_WORDPRESS_VERSION: u32 = 1;
+
+/// Attempts of an [`IMPORT_WORDPRESS_KIND`] job (P27).
+pub const IMPORT_WORDPRESS_ATTEMPTS: i32 = 3;
+
+/// The import's options, with the CLI's defaults for every missing field (P25).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImportJobOptions {
+    pub dry_run: bool,
+    pub keep_permalinks: bool,
+    pub site_options: bool,
+    pub fetch_media: bool,
+    pub category_base: String,
+    pub tag_base: String,
+}
+
+impl Default for ImportJobOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            keep_permalinks: true,
+            site_options: true,
+            fetch_media: false,
+            category_base: "category".into(),
+            tag_base: "tag".into(),
+        }
+    }
+}
+
+/// Payload of an [`IMPORT_WORDPRESS_KIND`] job:
+/// `{"v":1,"wxr":"<sha256>","uploads":"<sha256>"|null,"options":{…},"user":"<uuid>",
+/// "source_name":"<file name>"}`. `wxr` and `uploads` are `import` artifacts (P23);
+/// `user` is the admin who asked, who must still be an active admin when it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportJobPayload {
+    pub v: u32,
+    pub wxr: String,
+    #[serde(default)]
+    pub uploads: Option<String>,
+    #[serde(default)]
+    pub options: ImportJobOptions,
+    pub user: UserId,
+    /// The uploaded WXR's file name, for the admin's run list.
+    pub source_name: String,
+}
+
+/// What an admin asks to import ([`ImportService::enqueue`](crate::import::ImportService::enqueue)):
+/// the payload without `v` and `user`, which core sets (the job runs as the actor who
+/// asked). `wxr` and `uploads` are the stored inputs, of kind `import` (P23); their rows
+/// are recorded with the job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportJobRequest {
+    pub wxr: Artifact,
+    pub uploads: Option<Artifact>,
+    pub options: ImportJobOptions,
+    pub source_name: String,
+}
+
+/// The longest category or tag base.
+pub const MAX_IMPORT_BASE: usize = 100;
+
+/// Checks the options a request may set: the category and tag bases are paths of
+/// segments of `A-Z a-z 0-9 - _ . ~` (surrounding slashes are ignored), at most
+/// [`MAX_IMPORT_BASE`] characters, no empty, `.` or `..` segment; else
+/// [`CoreError::InvalidField`](crate::CoreError::InvalidField) naming the field.
+pub fn check_import_options(options: &ImportJobOptions) -> Result<(), crate::CoreError> {
+    for (field, base) in [
+        ("category_base", &options.category_base),
+        ("tag_base", &options.tag_base),
+    ] {
+        let path = base.trim_matches('/');
+        let segment_ok = |s: &str| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
+        };
+        if base.len() > MAX_IMPORT_BASE || !path.split('/').all(segment_ok) {
+            return Err(crate::CoreError::InvalidField {
+                field,
+                message: format!(
+                    "a path of segments of letters, digits, '-', '_', '.' and '~', at most \
+                     {MAX_IMPORT_BASE} characters"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The job for `import`: due now, no unique key (P25's conflict rule stands in for it),
+/// [`IMPORT_WORDPRESS_ATTEMPTS`] attempts.
+pub fn import_wordpress_job(import: &ImportJobPayload) -> NewJob {
+    let o = &import.options;
+    let mut options = Map::new();
+    options.insert("dry_run".into(), Value::Bool(o.dry_run));
+    options.insert("keep_permalinks".into(), Value::Bool(o.keep_permalinks));
+    options.insert("site_options".into(), Value::Bool(o.site_options));
+    options.insert("fetch_media".into(), Value::Bool(o.fetch_media));
+    options.insert(
+        "category_base".into(),
+        Value::String(o.category_base.clone()),
+    );
+    options.insert("tag_base".into(), Value::String(o.tag_base.clone()));
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(import.v));
+    payload.insert("wxr".into(), Value::String(import.wxr.clone()));
+    payload.insert(
+        "uploads".into(),
+        import.uploads.clone().map_or(Value::Null, Value::String),
+    );
+    payload.insert("options".into(), Value::Object(options));
+    payload.insert("user".into(), Value::String(import.user.to_string()));
+    payload.insert(
+        "source_name".into(),
+        Value::String(import.source_name.clone()),
+    );
+    let mut job = NewJob::new(IMPORT_WORDPRESS_KIND, Value::Object(payload));
+    job.max_attempts = IMPORT_WORDPRESS_ATTEMPTS;
+    job
+}
+
 /// `at + d`; `at` itself if that overflowed (unreachable for the durations used here,
 /// it only avoids a panic path).
 pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
@@ -268,6 +466,48 @@ mod tests {
         assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
         let back: MediaVariants = serde_json::from_value(job.payload).unwrap();
         assert_eq!(back, typed);
+    }
+
+    #[test]
+    fn permalink_redirects_job_shape() {
+        let typed = PermalinkRedirects {
+            v: PERMALINK_REDIRECTS_VERSION,
+            prev: PermalinkStructures {
+                post: "/%slug%/".into(),
+                page: "/%parent_path%/%slug%/".into(),
+            },
+            next: PermalinkStructures {
+                post: "/blog/%slug%/".into(),
+                page: "/%parent_path%/%slug%/".into(),
+            },
+            version: 42,
+            cursor: None,
+        };
+        let job = permalink_redirects_job(&typed);
+        assert_eq!(job.kind, "permalink.redirects");
+        assert_eq!(job.unique_key.as_deref(), Some("permalink.redirects:42"));
+        assert_eq!(job.run_at, None);
+        assert_eq!(job.priority, 0);
+        assert_eq!(job.max_attempts, ferrite_domain::DEFAULT_MAX_ATTEMPTS);
+        assert_eq!(job.payload, serde_json::to_value(&typed).unwrap());
+        let back: PermalinkRedirects = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, typed);
+
+        // A continuation carries its cursor and a key of its own, short whatever the
+        // cursor's length.
+        let next = PermalinkRedirects {
+            cursor: Some("c".repeat(500)),
+            ..typed
+        };
+        let job = permalink_redirects_job(&next);
+        let key = job.unique_key.clone().unwrap();
+        assert!(
+            key.starts_with("permalink.redirects:42:") && key.len() < 64,
+            "{key}"
+        );
+        assert_eq!(job.payload["cursor"], "c".repeat(500));
+        let back: PermalinkRedirects = serde_json::from_value(job.payload).unwrap();
+        assert_eq!(back, next);
     }
 
     #[test]

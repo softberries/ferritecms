@@ -9,11 +9,13 @@
 //! * A known path with another method: `405 method-not-allowed` with `Allow`.
 //! * A panicking handler: `500 internal` (the public site's HTML 500 never shows for
 //!   the API).
-//! * `Cache-Control: no-store` on every API response, and request bodies of at most
+//! * `Cache-Control: no-store` on every API response that sets none itself (the import
+//!   reports send `private, no-store`), and request bodies of at most
 //!   [`MAX_JSON_BODY`] ([`body_limit`]), except the upload routes, which have a
 //!   route-level limit: plugins [`plugins::MAX_UPLOAD_BODY`], themes
 //!   [`themes::MAX_THEME_UPLOAD_BODY`], media [`media::MEDIA_ROUTE_LIMIT`] (the
-//!   handler enforces `media.max_upload` itself, F12); and the public comment submit,
+//!   handler enforces `media.max_upload` itself, F12), WordPress imports
+//!   [`import::IMPORT_ROUTE_LIMIT`]; and the public comment submit,
 //!   whose limit is smaller ([`comments::MAX_COMMENT_REQUEST`]).
 //!
 //! The API never touches the page cache. [`build_site`](crate::build_site) merges this
@@ -31,6 +33,7 @@ pub mod csv;
 pub mod dto;
 pub mod extract;
 pub mod idempotency;
+pub mod import;
 pub mod list;
 pub mod media;
 pub mod menus;
@@ -218,6 +221,15 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(system::retry_job))
         .routes(routes!(system::send_test_mail))
         .routes(routes!(system::metrics_summary))
+        .merge(uploads(
+            routes!(import::start_wordpress_import),
+            import::IMPORT_ROUTE_LIMIT,
+        ))
+        .routes(routes!(import::get_import_job))
+        .routes(routes!(import::list_import_runs))
+        .routes(routes!(import::get_import_run))
+        .routes(routes!(import::get_import_report_json))
+        .routes(routes!(import::get_import_report_html))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,
@@ -244,7 +256,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     parts().1
 }
 
-/// The committed snapshot's text: [`openapi`] pretty-printed, with a final newline.
+/// The committed snapshot's text: [`openapi`](fn@openapi) pretty-printed, with a final newline.
 pub fn openapi_snapshot() -> String {
     match openapi().to_pretty_json() {
         Ok(mut s) => {
@@ -277,12 +289,13 @@ pub fn body_limit() -> DefaultBodyLimit {
     DefaultBodyLimit::max(MAX_JSON_BODY)
 }
 
-/// The API-only layers: body limit, problem 500 on panic, `Cache-Control: no-store`.
+/// The API-only layers: body limit, problem 500 on panic, `Cache-Control: no-store`
+/// unless the handler set one.
 fn layers(router: Router) -> Router {
     router
         .layer(body_limit())
         .layer(CatchPanicLayer::custom(panic_problem))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))

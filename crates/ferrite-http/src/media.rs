@@ -4,22 +4,14 @@
 //! `Tx`, and hashed while it streams; core then records what was staged
 //! ([`MediaService::record_upload`](ferrite_core::MediaService::record_upload)). The
 //! type is decided from the content's first [`HEAD_BYTES`] before anything is stored,
-//! never from the client's `Content-Type`:
+//! never from the client's `Content-Type`, by [`stage_stream`] (its module docs have
+//! the table; imported files go through it too).
 //!
-//! | Head | Stored as |
-//! |---|---|
-//! | looks like SVG ([`looks_like_svg`]) | the sanitiser's output, `image/svg+xml`, marked sanitised (at most [`MAX_SVG_BYTES`] read) |
-//! | sniffs as `audio/mpeg`, named `.txt`/`.csv`, and the head passes the text rule below | `text/plain` / `text/csv` (infer's MP3 matcher reads only `ID3` or `FF Fx`; a note starting "ID3" is text) |
-//! | sniffs as an [`inline_safe`] type (JPEG, PNG, GIF, WebP, MP3/Ogg/WAV, MP4/WebM, PDF) | that type |
-//! | a ZIP (`PK\x03\x04`) named `.docx .xlsx .pptx .odt .ods .odp .zip` | the type of that extension |
-//! | no known magic, named `.txt`/`.csv`, UTF-8 (BOM allowed) without NUL, first non-space character not `<` | `text/plain` / `text/csv` |
-//! | anything else | refused (`415`) |
-//!
-//! The file name only picks within the ZIP and text classes (F13); documents are served
-//! download-only by `/_media` (R1). At most [`MEDIA_UPLOAD_SLOTS`] uploads stream at
-//! once per node; one more is refused `Busy` before any of its file is read. A body
-//! over `max_upload` is cut while it streams; a cut, a client that goes away and a
-//! refused type leave nothing stored (the store aborts and removes its staging object).
+//! Documents are served download-only by `/_media` (R1). At most [`MEDIA_UPLOAD_SLOTS`]
+//! uploads stream at once per node; one more is refused `Busy` before any of its file is
+//! read. A body over `max_upload` is cut while it streams; a cut, a client that goes
+//! away and a refused type leave nothing stored (the store aborts and removes its
+//! staging object).
 //! An upload that receives no bytes for the idle timeout (`media.upload_idle_timeout`,
 //! default [`DEFAULT_IDLE_TIMEOUT`]) is aborted the same way and frees its slot, so slow
 //! clients cannot hold the node's slots.
@@ -35,15 +27,15 @@ use std::{
 };
 
 use axum::extract::multipart::{Field, MultipartError};
-use bytes::{Bytes, BytesMut};
 use ferrite_domain::{Artifact, ArtifactKind, Timestamp};
 use ferrite_media::{
-    ArtifactRef, MediaError, MediaStore, VariantSpec, default_variants, inline_safe,
-    is_raster_image, sniff_mime,
-    svg::{MAX_SVG_BYTES, SVG_MIME, SvgError, looks_like_svg, sanitize_svg},
+    MediaError, MediaStore, VariantSpec, default_variants,
+    ingest::{StagedFile, stage_stream},
+    svg::SvgError,
 };
+#[cfg(doc)]
+use ferrite_media::{ingest::HEAD_BYTES, svg::MAX_SVG_BYTES};
 use ferrite_theme::Theme;
-use futures::StreamExt as _;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Uploads streaming at once per node (P9); one more is [`UploadError::Busy`].
@@ -52,42 +44,9 @@ pub const MEDIA_UPLOAD_SLOTS: usize = 8;
 /// Largest raster original whose variants are made (P8): 64 MiB.
 pub const MAX_PROCESS_BYTES: u64 = 64 * 1024 * 1024;
 
-/// How much of the file decides its type (P4): 8 KiB.
-pub const HEAD_BYTES: usize = 8 * 1024;
-
 /// Default for how long an upload may receive nothing before it is aborted
 /// (`media.upload_idle_timeout`).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The ZIP-based document classes by extension (R1/F13).
-const ZIP_TYPES: [(&str, &str); 7] = [
-    (
-        "docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ),
-    (
-        "xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ),
-    (
-        "pptx",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ),
-    ("odt", "application/vnd.oasis.opendocument.text"),
-    ("ods", "application/vnd.oasis.opendocument.spreadsheet"),
-    ("odp", "application/vnd.oasis.opendocument.presentation"),
-    ("zip", "application/zip"),
-];
-
-/// The text classes by extension (R1/F13).
-const TEXT_TYPES: [(&str, &str); 2] = [("txt", "text/plain"), ("csv", "text/csv")];
-
-const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
-const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
-/// What `sniff_mime` answers for MP3 (a weak, 2–3 byte match).
-const MP3: &str = "audio/mpeg";
-/// What `sniff_mime` answers for content without known magic.
-const UNKNOWN: &str = "application/octet-stream";
 
 /// Why a file could not be staged.
 #[derive(Debug, thiserror::Error)]
@@ -177,12 +136,10 @@ impl Uploader {
         self.max_upload
     }
 
-    /// The next chunk of `field`, or `Idle` when none arrives within the idle timeout.
-    async fn chunk(&self, field: &mut Field<'_>) -> Result<Option<Bytes>, UploadError> {
-        match tokio::time::timeout(self.idle, field.chunk()).await {
-            Ok(chunk) => chunk.map_err(UploadError::Body),
-            Err(_) => Err(self.idle_error()),
-        }
+    /// How long an upload may receive nothing (`media.upload_idle_timeout`); import
+    /// uploads use it too.
+    pub fn idle_timeout(&self) -> Duration {
+        self.idle
     }
 
     fn idle_error(&self) -> UploadError {
@@ -203,11 +160,9 @@ impl Uploader {
         self.started.load(Ordering::Relaxed)
     }
 
-    /// Stages the `file` part `field` (see the module docs): takes a slot (else
-    /// `Busy`), reads the head, decides the type and stores the file, streamed and
-    /// hashed as it arrives (an SVG is read whole, at most [`MAX_SVG_BYTES`], and its
-    /// sanitised form stored).
-    pub async fn stage(&self, mut field: Field<'_>) -> Result<StagedUpload, UploadError> {
+    /// Stages the `file` part `field`: takes a slot (else `Busy`), then
+    /// [`stage_stream`]s the field with the idle timeout applied to every chunk.
+    pub async fn stage(&self, field: Field<'_>) -> Result<StagedUpload, UploadError> {
         let slot = self
             .slots
             .clone()
@@ -215,71 +170,11 @@ impl Uploader {
             .map_err(|_| UploadError::Busy)?;
         self.started.fetch_add(1, Ordering::Relaxed);
         let original_name = field.file_name().unwrap_or_default().to_owned();
-        let svg_limit = self.max_upload.min(MAX_SVG_BYTES as u64);
-
-        let mut head = BytesMut::new();
-        let mut ended = false;
-        while head.len() < HEAD_BYTES {
-            match self.chunk(&mut field).await? {
-                Some(chunk) => {
-                    if (head.len() + chunk.len()) as u64 > self.max_upload {
-                        return Err(UploadError::TooLarge {
-                            limit: self.max_upload,
-                        });
-                    }
-                    head.extend_from_slice(&chunk);
-                }
-                None => {
-                    ended = true;
-                    break;
-                }
-            }
-        }
-        let sniff = &head[..head.len().min(HEAD_BYTES)];
-
-        if looks_like_svg(sniff) {
-            let mut all = head;
-            while !ended {
-                match self.chunk(&mut field).await? {
-                    Some(chunk) => {
-                        if (all.len() + chunk.len()) as u64 > svg_limit {
-                            return Err(UploadError::TooLarge { limit: svg_limit });
-                        }
-                        all.extend_from_slice(&chunk);
-                    }
-                    None => ended = true,
-                }
-            }
-            if all.len() as u64 > svg_limit {
-                return Err(UploadError::TooLarge { limit: svg_limit });
-            }
-            let input = all.freeze();
-            let clean = tokio::task::spawn_blocking(move || sanitize_svg(&input))
-                .await
-                .map_err(|e| UploadError::Task(e.to_string()))?
-                .map_err(UploadError::Svg)?;
-            let stored = self
-                .media
-                .put_artifact(Bytes::from(clean))
-                .await
-                .map_err(UploadError::Media)?;
-            return Ok(staged(
-                stored,
-                SVG_MIME.to_owned(),
-                original_name,
-                true,
-                slot,
-            ));
-        }
-
-        // The head decides; it is cut when the file goes on past it.
-        let cut = !ended || head.len() > HEAD_BYTES;
-        let mime = classify(sniff, cut, &original_name)?;
-        // The store sees an I/O error and aborts; why the stream failed is kept for the
+        // The stager sees an I/O error and aborts; why the stream failed is kept for the
         // answer.
         let mut failure: Option<Failure> = None;
         let idle = self.idle;
-        let rest = futures::stream::unfold(
+        let stream = futures::stream::unfold(
             (field, &mut failure),
             move |(mut field, failure)| async move {
                 let failed = match tokio::time::timeout(idle, field.chunk()).await {
@@ -293,113 +188,50 @@ impl Uploader {
                 Some((Err(io), (field, failure)))
             },
         );
-        let stream = futures::stream::once(async move { Ok(head.freeze()) }).chain(rest);
-        let stored = self
-            .media
-            .put_stream(Box::pin(stream), self.max_upload)
-            .await;
-        let stored = match stored {
-            Ok(stored) => stored,
-            Err(MediaError::TooLarge { limit }) => return Err(UploadError::TooLarge { limit }),
-            Err(e) => {
-                return Err(match failure {
-                    Some(Failure::Body(body)) => UploadError::Body(body),
-                    Some(Failure::Idle) => self.idle_error(),
-                    None => UploadError::Media(e),
-                });
-            }
-        };
-        Ok(staged(stored, mime, original_name, false, slot))
+        let result = stage_stream(
+            &self.media,
+            &original_name,
+            Box::pin(stream),
+            self.max_upload,
+        )
+        .await;
+        match (result, failure) {
+            (Ok(file), _) => Ok(staged(file, slot)),
+            (Err(_), Some(Failure::Body(body))) => Err(UploadError::Body(body)),
+            (Err(_), Some(Failure::Idle)) => Err(self.idle_error()),
+            (Err(e), None) => Err(e.into()),
+        }
     }
 }
 
-fn staged(
-    stored: ArtifactRef,
-    mime: String,
-    original_name: String,
-    sanitized: bool,
-    slot: OwnedSemaphorePermit,
-) -> StagedUpload {
-    let bytes = stored.bytes;
+impl From<MediaError> for UploadError {
+    fn from(e: MediaError) -> Self {
+        match e {
+            MediaError::TooLarge { limit } => Self::TooLarge { limit },
+            MediaError::Unsupported { mime } => Self::Unsupported { mime },
+            MediaError::Svg(svg) => Self::Svg(svg),
+            MediaError::Task(task) => Self::Task(task),
+            other => Self::Media(other),
+        }
+    }
+}
+
+fn staged(file: StagedFile, slot: OwnedSemaphorePermit) -> StagedUpload {
     StagedUpload {
         artifact: Artifact {
-            hash: stored.hash,
+            hash: file.artifact.hash,
             kind: ArtifactKind::Media,
-            bytes: i64::try_from(bytes).unwrap_or(i64::MAX),
-            mime: mime.clone(),
+            bytes: i64::try_from(file.bytes).unwrap_or(i64::MAX),
+            mime: file.mime.clone(),
             created_at: Timestamp::now(),
         },
-        raster: is_raster_image(&mime),
-        mime,
-        bytes,
-        original_name,
-        sanitized,
+        mime: file.mime,
+        bytes: file.bytes,
+        original_name: file.original_name,
+        sanitized: file.sanitized,
+        raster: file.raster,
         _slot: slot,
     }
-}
-
-/// The type of a non-SVG file from its `head` (the first [`HEAD_BYTES`]; `cut` when
-/// the file goes on) and, within the ZIP and text classes, its file name's extension.
-fn classify(head: &[u8], cut: bool, file_name: &str) -> Result<String, UploadError> {
-    let sniffed = sniff_mime(head);
-    let ext = extension(file_name);
-    let by_ext = |table: &[(&str, &str)]| {
-        ext.as_deref()
-            .and_then(|e| table.iter().find(|(x, _)| *x == e))
-            .map(|(_, mime)| (*mime).to_owned())
-    };
-    if inline_safe(&sniffed) {
-        // infer's MP3 matcher is 2–3 bytes (`ID3`, `FF FB/F3/F2`): a `.txt`/`.csv` whose
-        // head is plain text is text. `FF` is never UTF-8, so only an `ID3`-led note
-        // qualifies; a real MP3 head has NULs or invalid UTF-8 and stays audio.
-        if sniffed == MP3
-            && is_plain_text(head, cut)
-            && let Some(mime) = by_ext(&TEXT_TYPES)
-        {
-            return Ok(mime);
-        }
-        return Ok(sniffed);
-    }
-    if head.starts_with(ZIP_MAGIC)
-        && let Some(mime) = by_ext(&ZIP_TYPES)
-    {
-        return Ok(mime);
-    }
-    if sniffed == UNKNOWN
-        && is_plain_text(head, cut)
-        && let Some(mime) = by_ext(&TEXT_TYPES)
-    {
-        return Ok(mime);
-    }
-    Err(UploadError::Unsupported { mime: sniffed })
-}
-
-/// The lowercase extension of the last `/` or `\` segment of `name`.
-fn extension(name: &str) -> Option<String> {
-    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let (stem, ext) = last.rsplit_once('.')?;
-    (!stem.is_empty() && !ext.is_empty()).then(|| ext.to_ascii_lowercase())
-}
-
-/// `head` is UTF-8 (a UTF-8 BOM allowed; when `cut`, a character split at the end is
-/// allowed) without NUL, and its first non-whitespace character is not `<`.
-fn is_plain_text(head: &[u8], cut: bool) -> bool {
-    let body = head.strip_prefix(UTF8_BOM).unwrap_or(head);
-    if body.contains(&0) {
-        return false;
-    }
-    let text = match std::str::from_utf8(body) {
-        Ok(text) => text,
-        // Only an incomplete last character of a head that was cut.
-        Err(e) if cut && e.error_len().is_none() => {
-            match std::str::from_utf8(&body[..e.valid_up_to()]) {
-                Ok(text) => text,
-                Err(_) => return false,
-            }
-        }
-        Err(_) => return false,
-    };
-    !text.trim_start().starts_with('<')
 }
 
 /// The sizes a `media.variants` job makes on this node (M2a-2b P8): the core sizes
@@ -447,74 +279,5 @@ mod tests {
                 crop: true,
             }
         );
-    }
-
-    #[test]
-    fn classes_follow_content_then_extension() {
-        let ok = |head: &[u8], name: &str| classify(head, false, name).ok();
-        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
-        assert_eq!(ok(png, "x.svg").as_deref(), Some("image/png"));
-        assert_eq!(ok(png, "x.txt").as_deref(), Some("image/png"));
-        assert_eq!(
-            ok(b"%PDF-1.7\n", "x.docx").as_deref(),
-            Some("application/pdf")
-        );
-        let zip = b"PK\x03\x04\x14\0\0\0\x08\0";
-        assert_eq!(
-            ok(zip, "A.DOCX").as_deref(),
-            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        );
-        assert_eq!(ok(zip, "x.zip").as_deref(), Some("application/zip"));
-        assert_eq!(ok(zip, "x.txt"), None);
-        assert_eq!(ok(zip, "x.exe"), None);
-        assert_eq!(ok(zip, "docx"), None);
-        assert_eq!(ok(b"hello", "notes.txt").as_deref(), Some("text/plain"));
-        assert_eq!(ok(b"a,b\n", "d.CSV").as_deref(), Some("text/csv"));
-        assert_eq!(ok(b"", "e.txt").as_deref(), Some("text/plain"));
-        assert_eq!(
-            ok(b"\xEF\xBB\xBFhi", "b.txt").as_deref(),
-            Some("text/plain")
-        );
-        assert_eq!(ok(b"hello", "notes.md"), None);
-        assert_eq!(ok(b"hello", ".txt"), None);
-        assert_eq!(ok(b" \n<html>", "x.txt"), None);
-        assert_eq!(ok(b"\xEF\xBB\xBF<p>", "x.txt"), None);
-        assert_eq!(ok(b"\xFF\xFEh\0i\0", "x.txt"), None);
-        assert_eq!(ok(b"bad \xC3\x28 utf8", "x.txt"), None);
-        // The weak MP3 match yields to text only for a text name and a text head.
-        assert_eq!(
-            ok(b"ID3 tags, explained", "n.txt").as_deref(),
-            Some("text/plain")
-        );
-        assert_eq!(
-            ok(b"ID3 tags, explained", "n.mp3").as_deref(),
-            Some("audio/mpeg")
-        );
-        assert_eq!(
-            ok(b"ID3\x04\0\0\0\0", "n.txt").as_deref(),
-            Some("audio/mpeg")
-        );
-        assert_eq!(ok(b"\xFF\xFBrest", "n.txt").as_deref(), Some("audio/mpeg"));
-        assert!(matches!(
-            classify(b"\x7fELF\x02\x01\x01\0", false, "x.txt"),
-            Err(UploadError::Unsupported { .. })
-        ));
-    }
-
-    #[test]
-    fn a_character_split_by_the_head_cut_is_text() {
-        // "é" is C3 A9; the head ends after C3.
-        let head = b"caf\xC3";
-        assert!(is_plain_text(head, true));
-        assert!(!is_plain_text(head, false));
-    }
-
-    #[test]
-    fn extensions_come_from_the_last_segment() {
-        assert_eq!(extension("a/b.c/report.PDF").as_deref(), Some("pdf"));
-        assert_eq!(extension("a\\b\\x.tar.gz").as_deref(), Some("gz"));
-        assert_eq!(extension("dir.txt/noext"), None);
-        assert_eq!(extension(".bashrc"), None);
-        assert_eq!(extension("trailing."), None);
     }
 }

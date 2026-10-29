@@ -264,7 +264,27 @@ ferrite theme pack     --dir PATH --out FILE                                    
 ferrite plugin check   --data DIR --dir PATH                                     # M2a-2a
 ferrite plugin install --data DIR --dir PATH [--enable] [--yes]                  # M2a-2a
 ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]            # M2a-2a
+ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
+    [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
+    [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
 ```
+
+**`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
+WXR file as the active admin `--as` names (default: the first active admin). Writes
+`report.json` and `report.html` to `--report` or `<data>/import/reports/<run-id>/` and
+prints the counts per kind. `--uploads` is the old `wp-content/uploads` folder or a
+`.zip` of it, read in place (M3-2). Exit 0 done, 2 done with refused redirects or missing
+or refused media, 3 another import running (`--takeover` takes over one with no heartbeat
+for 120 s), 1 on any error (a run that failed after it started still writes its partial
+report, M3-2). With SQLite `serve` holds the data folder's lock: stop it first. Media
+variants are made by the next `serve` (the `media.variants` jobs).
+
+**Imports through the admin and the API** (M3-2; design 08 §1): with `serve` running, an
+admin uploads the WXR file and, optionally, a zip of the uploads on the admin's Import
+screen (`/admin/import`) or with `POST /api/v1/import/wordpress`; the import runs as an
+`import.wordpress` job on whichever node claims it (04 §6), and the report is stored in
+the media store and linked from the runs table. The job needs local disk for a copy of
+the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<run-id>/`).
 
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
@@ -504,7 +524,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 ferrite backup / restore                                        # M4
 ferrite export / import-site / db copy                          # M4
 ferrite media sync / media gc                                   # M4
-ferrite import wordpress …                                      # M3
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
 ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)

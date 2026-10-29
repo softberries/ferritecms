@@ -6,6 +6,7 @@ mod comment;
 mod content;
 mod event;
 mod idempotency;
+mod import;
 mod job;
 mod menu;
 mod node;
@@ -25,10 +26,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
-    EventRepo, IdempotencyRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx,
-    UserRepo,
+    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo,
+    ThemeRepo, Tx, UserRepo,
 };
 use sqlx::PgPool;
 
@@ -138,6 +139,9 @@ impl Repos for PgRepos {
     fn autosaves(&self) -> &dyn AutosaveRepo {
         self
     }
+    fn imports(&self) -> &dyn ImportRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -222,4 +226,5 @@ delegate_repos!(
     comments: CommentRepo,
     idempotency: IdempotencyRepo,
     autosaves: AutosaveRepo,
+    imports: ImportRepo,
 );

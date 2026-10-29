@@ -7,12 +7,15 @@ use async_trait::async_trait;
 use ferrite_domain::{
     ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, AuditQuery, Autosave,
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
-    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, InstalledPlugin, InstalledTheme,
-    Job, JobId, JobLease, JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob,
-    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
-    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId,
-    Timestamp, User, UserId, UserQuery,
+    ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, ImportMapKind, ImportMapRow,
+    ImportRun, ImportRunId, ImportRunState, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
+    JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser,
+    Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery, Revision,
+    RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
+    UserQuery,
 };
+
+use uuid::Uuid;
 
 use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStatus};
 
@@ -145,6 +148,7 @@ pub trait Repos: Send + Sync {
     fn comments(&self) -> &dyn CommentRepo;
     fn idempotency(&self) -> &dyn IdempotencyRepo;
     fn autosaves(&self) -> &dyn AutosaveRepo;
+    fn imports(&self) -> &dyn ImportRepo;
 }
 
 #[async_trait]
@@ -177,6 +181,10 @@ pub trait ContentRepo: Send + Sync {
     ) -> Result<Option<ContentItem>, StoreError>;
     /// Updates WHERE id AND version = item.version, bumping version and updated_at; no row gives `Conflict{current_version}` or `NotFound`.
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
+    /// Sets `updated_at` of item `id` to `at`, leaving `version` and everything else as
+    /// it is (the WordPress import keeps the source's modification time after a write,
+    /// M3-1 P7). A missing item is `NotFound`.
+    async fn set_updated_at(&self, id: ContentId, at: Timestamp) -> Result<(), StoreError>;
     /// Lists items matching the query with cursor pagination.
     ///
     /// **`query.ids` empty means no filter, not "match nothing"** (likewise `exclude`):
@@ -449,7 +457,7 @@ pub trait MediaRepo: Send + Sync {
     /// one query, returned in the order of `ids`; missing ids are skipped and a repeated
     /// id yields its row once (at its first position). More ids is `Invalid`.
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<Media>, StoreError>;
-    /// Up to `limit` (1..=[`MAX_PAGE`](crate::MAX_PAGE)) media rows whose original
+    /// Up to `limit` (1..=`MAX_PAGE`) media rows whose original
     /// (`artifact_hash`) or any variant (`variants.<name>.hash`, a string) is `hash`,
     /// ordered by item id. Variant values that are not objects with a string `hash`
     /// are ignored. Used to decide whether `/_media/<hash>/…` may be served.
@@ -1070,4 +1078,87 @@ pub trait AutosaveRepo: Send + Sync {
     async fn get(&self, item: ContentId, user: UserId) -> Result<Option<Autosave>, StoreError>;
     /// Deletes the row of (`item`, `user`); `true` when there was one.
     async fn delete(&self, item: ContentId, user: UserId) -> Result<bool, StoreError>;
+}
+
+/// WordPress import bookkeeping (`0009_import`, M3-1 P3, P5): the run rows and the
+/// source-id map. Use it through a `Tx` so a batch's [`fence`](ImportRepo::fence) and
+/// its writes commit together.
+#[async_trait]
+pub trait ImportRepo: Send + Sync {
+    /// Inserts a run. A second `running` run is
+    /// `UniqueViolation { constraint: "import_runs_running_uq" }`; an unknown
+    /// `started_by` is [`StoreError::ForeignKey`].
+    async fn create_run(&self, run: &ImportRun) -> Result<(), StoreError>;
+    /// The fence (P5): sets `heartbeat_at = now` on the run when `token` matches and it
+    /// is still `running`; `true` iff one row changed. On Postgres the row lock this
+    /// takes in a `Tx` makes a concurrent [`set_state`](ImportRepo::set_state) wait for
+    /// the commit.
+    async fn fence(
+        &self,
+        run: ImportRunId,
+        token: &[u8; 16],
+        now: Timestamp,
+    ) -> Result<bool, StoreError>;
+    async fn get_run(&self, id: ImportRunId) -> Result<Option<ImportRun>, StoreError>;
+    /// The takeover (P5): sets `state = abandoned` and `finished_at = now` on run `id`
+    /// only while it is `running` with `heartbeat_at < stale_before`; `true` iff one row
+    /// changed. The check and the write are one statement, so on Postgres a takeover that
+    /// waits for a fenced batch's row lock re-checks the heartbeat the batch committed.
+    async fn abandon_stale(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+    ) -> Result<bool, StoreError>;
+    /// [`abandon_stale`](Self::abandon_stale) for a start by job `job` (M3-2 P27 as
+    /// built): also only when the run has no job, is `job`'s own, or its job is not
+    /// `running` (no such job included). One statement, like `abandon_stale`.
+    async fn abandon_stale_for_job(
+        &self,
+        id: ImportRunId,
+        stale_before: Timestamp,
+        now: Timestamp,
+        job: JobId,
+    ) -> Result<bool, StoreError>;
+    /// The run in state `running`, if any.
+    async fn running(&self) -> Result<Option<ImportRun>, StoreError>;
+    /// Runs, newest first; `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
+    async fn list_runs(&self, limit: u32) -> Result<Vec<ImportRun>, StoreError>;
+    /// Runs, newest first by (`started_at`, `id`), after `cursor` (the last row's pair
+    /// of the previous page); `limit` is 1..=[`MAX_PAGE`](ferrite_domain::MAX_PAGE).
+    async fn list_runs_page(
+        &self,
+        limit: u32,
+        cursor: Option<(Timestamp, Uuid)>,
+    ) -> Result<Vec<ImportRun>, StoreError>;
+    /// The newest run of job `job`, if any.
+    async fn run_by_job(&self, job: JobId) -> Result<Option<ImportRun>, StoreError>;
+    /// Sets the run's `step`, fenced like [`fence`](ImportRepo::fence): `true` iff the
+    /// run exists, is `running` and `token` matches.
+    async fn set_step(
+        &self,
+        id: ImportRunId,
+        token: &[u8; 16],
+        step: &str,
+    ) -> Result<bool, StoreError>;
+    /// Sets the run's `report_hash`, whatever its state. A missing run is
+    /// [`StoreError::NotFound`].
+    async fn set_report(&self, id: ImportRunId, hash: &str) -> Result<(), StoreError>;
+    /// Sets the state and the stats; `finished_at` is `now` unless the state is
+    /// `running`. A missing run is [`StoreError::NotFound`].
+    async fn set_state(
+        &self,
+        id: ImportRunId,
+        state: ImportRunState,
+        stats: &serde_json::Value,
+        now: Timestamp,
+    ) -> Result<(), StoreError>;
+    async fn map_get(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        wp_id: i64,
+    ) -> Result<Option<ImportMapRow>, StoreError>;
+    /// Inserts or replaces the row of (`source`, `kind`, `wp_id`).
+    async fn map_put(&self, row: &ImportMapRow) -> Result<(), StoreError>;
 }

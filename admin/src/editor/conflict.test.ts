@@ -36,7 +36,7 @@ function itemWith(extra: Partial<SchemaContentDto> = {}): SchemaContentDto {
     body: para("The first paragraph."),
     excerpt: "An excerpt",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/spring-notes/",
@@ -175,7 +175,7 @@ describe("conflict", () => {
   test("fields_and_seo_differences_are_listed", () => {
     const theirs = itemWith({
       fields: { price: 3, subtitle: null },
-      seo: { title: "Theirs", description: null },
+      seo: { title: "Theirs", description: null, canonical: null, robots: [] },
     });
     // No SEO in the draft (an old slot) and the same fields: nothing differs.
     expect(differingFields(theirs, draftOf(theirs, { seo: null }))).toEqual([]);
@@ -193,6 +193,43 @@ describe("conflict", () => {
     expect(differingFields(theirs, draftOf(theirs, { fields: { price: 3 } }))).toEqual(["fields"]);
     expect(
       differingFields(theirs, draftOf(theirs, { seo: { title: "Mine", description: null } })),
+    ).toEqual(["seo"]);
+  });
+
+  test("conflict lists SEO when only robots differ", () => {
+    const theirs = itemWith({
+      seo: {
+        title: null,
+        description: null,
+        canonical: "https://elsewhere.example/orig/",
+        robots: ["nofollow", "noindex"],
+      },
+    });
+    const same = {
+      title: null,
+      description: null,
+      canonical: " https://elsewhere.example/orig/ ",
+      // Order does not matter: the server sorts them.
+      robots: ["noindex", "nofollow"] as const,
+    };
+    expect(
+      differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: [...same.robots] } })),
+    ).toEqual([]);
+    expect(
+      differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: ["noindex"] } })),
+    ).toEqual(["seo"]);
+    // `null` deletes them, which differs from a stored list.
+    expect(differingFields(theirs, draftOf(theirs, { seo: { ...same, robots: null } }))).toEqual([
+      "seo",
+    ]);
+    // Absent: unchanged.
+    expect(differingFields(theirs, draftOf(theirs, { seo: { title: null } }))).toEqual([]);
+    // A canonical that differs alone counts too.
+    expect(
+      differingFields(
+        theirs,
+        draftOf(theirs, { seo: { canonical: "https://elsewhere.example/other/" } }),
+      ),
     ).toEqual(["seo"]);
   });
 

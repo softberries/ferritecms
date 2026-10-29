@@ -78,7 +78,12 @@ export default defineConfig([
     // A TipTap extension and its React view (node view, suggestion list) share one
     // module, so the extension can name the view; an edit reloads the editor instead of
     // hot-swapping it.
-    files: ["src/editor/html-node.tsx", "src/editor/image-node.tsx", "src/editor/slash-menu.tsx"],
+    files: [
+      "src/editor/embed-node.tsx",
+      "src/editor/html-node.tsx",
+      "src/editor/image-node.tsx",
+      "src/editor/slash-menu.tsx",
+    ],
     rules: { "react-refresh/only-export-components": "off" },
   },
   {

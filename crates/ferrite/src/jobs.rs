@@ -1,17 +1,22 @@
 //! Core job handlers run by every node (ruling P12): scheduled publishing, the plugin
-//! data purge (M2a-2 P9), plugin actions (P20) and media variants (M2a-2b P8,
-//! [`MediaVariantsHandler`]). The kinds and payloads are fixed in
-//! [`ferrite_core::jobs`]; the per-node 30 s ticker of M1c-2 is the periodic
+//! data purge (M2a-2 P9), plugin actions (P20), media variants (M2a-2b P8,
+//! [`MediaVariantsHandler`]) and permalink-change redirects (M3-2 P30,
+//! [`PermalinkRedirectsHandler`]). The kinds and payloads are fixed in
+//! [`ferrite_core::jobs`]; the WordPress import (M3-2 P27, [`ImportWordpressHandler`])
+//! is built by `serve` with the node's media store and data folder. The per-node 30 s
+//! ticker of M1c-2 is the periodic
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
+mod import;
 mod media;
+mod permalinks;
 
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_cluster::{JobError, JobHandler, Periodic};
 use ferrite_core::{
-    ContentService, CoreError, ExtensionService,
+    ContentService, CoreError, ExtensionService, RedirectService, STRUCTURE_JOB_PAGES,
     jobs::{
         PLUGIN_ACTION_KIND, PLUGIN_ACTION_VERSION, PLUGIN_PURGE_KIND, PLUGIN_PURGE_SWEEP_EVERY,
         PLUGIN_PURGE_SWEEP_KIND, PLUGIN_PURGE_VERSION, PUBLISH_DUE_KIND, PUBLISH_SCHEDULED_KIND,
@@ -24,9 +29,11 @@ use ferrite_store::Store;
 use serde_json::json;
 use tokio::sync::Semaphore;
 
+pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};
+pub use permalinks::PermalinkRedirectsHandler;
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
@@ -298,7 +305,7 @@ fn manifest_lists(manifest: &serde_json::Value, hook: &str) -> bool {
 
 /// The core handlers: scheduled publishing on `content`, the plugin purge and its
 /// sweep on `extensions`, plugin actions on `host` (at most `action_slots` at once,
-/// [`action_slots`]).
+/// [`action_slots`]), and the permalink-change redirects.
 pub fn handlers(
     store: Arc<dyn Store>,
     content: Arc<ContentService>,
@@ -320,6 +327,10 @@ pub fn handlers(
         Arc::new(PluginPurgeSweepHandler {
             store: store.clone(),
             extensions,
+        }),
+        Arc::new(PermalinkRedirectsHandler {
+            redirects: Arc::new(RedirectService::new(store.clone())),
+            pages: STRUCTURE_JOB_PAGES,
         }),
         Arc::new(PluginActionHandler::new(store, host, action_slots)),
     ]

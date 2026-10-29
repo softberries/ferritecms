@@ -12,6 +12,7 @@ import { writeContactSheet } from "./contact-sheet";
 import { selectedProjects, SNAP_PROJECT, type SiteProject } from "./projects";
 import {
   authFile,
+  E2E_STATE_DIR,
   publishSites,
   startSite,
   type Site,
@@ -30,6 +31,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     // CI defines `chromium-pg` without the URL so that a job missing it fails (10 §2).
     throw new Error("chromium-pg is selected but FERRITE_TEST_PG_URL is missing");
   }
+  // Retry state belongs to the sites of one run (new sites, new state).
+  rmSync(E2E_STATE_DIR, { recursive: true, force: true });
   // The contact sheet shows this run's screens only; only `chromium-sqlite` takes them.
   const snaps = projects.some((p) => p.name === SNAP_PROJECT);
   if (snaps) rmSync(SCREENS_DIR, { recursive: true, force: true });

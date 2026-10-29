@@ -118,6 +118,8 @@ async fn insert(store: &dyn Store, author: &User, it: Item) -> ContentId {
             menu_order: 0,
             published_at: it.published_at,
             scheduled_at: (it.status == ContentStatus::Scheduled).then(|| at(HOUR)),
+            created_at: None,
+            updated_at: None,
         })
         .await
         .unwrap();
@@ -544,6 +546,8 @@ pub async fn search_total_is_capped(db: &TestDb) {
                 menu_order: 0,
                 published_at: Some(at(-HOUR)),
                 scheduled_at: None,
+                created_at: None,
+                updated_at: None,
             })
             .await
             .unwrap();

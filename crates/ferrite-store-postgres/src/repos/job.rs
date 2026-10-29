@@ -76,16 +76,31 @@ impl JobRepo for PgRepos {
         .bind(kinds)
         .execute(e))?;
         // P5: the MATERIALIZED CTE evaluates the locking subquery exactly once.
+        // P31: two branches, each bounded by LIMIT on its own index (`jobs_claim_idx` for
+        // due jobs, `jobs_lease_idx` for expired leases), as the SQLite claim does. One
+        // OR-filtered scan of `jobs_claim_idx` would read every future-dated job. Postgres
+        // forbids FOR UPDATE on a UNION leaf, so each branch locks inside a derived table; the outer
+        // select only picks the best LIMIT of the (at most 2 x LIMIT) locked ids, and the
+        // rest are released when the statement ends.
         let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
             "WITH next AS MATERIALIZED ( \
-               SELECT id FROM jobs \
-               WHERE kind = ANY($1) \
-                 AND ((status = 'queued' AND run_at <= now()) \
-                   OR (status = 'running' AND locked_until < now() \
-                       AND attempts < max_attempts)) \
+               SELECT id FROM ( \
+                 SELECT id, priority, run_at FROM ( \
+                   SELECT id, priority, run_at FROM jobs \
+                   WHERE kind = ANY($1) AND status = 'queued' AND run_at <= now() \
+                   ORDER BY priority DESC, run_at, id \
+                   LIMIT $2 \
+                   FOR UPDATE SKIP LOCKED) due \
+                 UNION ALL \
+                 SELECT id, priority, run_at FROM ( \
+                   SELECT id, priority, run_at FROM jobs \
+                   WHERE kind = ANY($1) AND status = 'running' AND locked_until < now() \
+                     AND attempts < max_attempts \
+                   ORDER BY priority DESC, run_at, id \
+                   LIMIT $2 \
+                   FOR UPDATE SKIP LOCKED) expired) u \
                ORDER BY priority DESC, run_at, id \
-               LIMIT $2 \
-               FOR UPDATE SKIP LOCKED) \
+               LIMIT $2) \
              UPDATE jobs SET status = 'running', locked_by = $3, \
                locked_until = now() + make_interval(secs => $4), attempts = attempts + 1 \
              FROM next WHERE jobs.id = next.id \

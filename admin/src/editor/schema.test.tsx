@@ -147,6 +147,9 @@ describe("schema", () => {
       "image.src",
       "image.alt",
       "image.title",
+      "image.caption",
+      "embed.provider",
+      "embed.url",
       "tableHeader.colspan",
       "tableHeader.rowspan",
       "tableCell.colspan",
@@ -195,6 +198,22 @@ describe("schema", () => {
         'html.html=""',
       ].sort(),
     );
+  });
+
+  test("embeds_and_captioned_images_are_valid", () => {
+    expect(
+      validateBody({
+        type: "doc",
+        content: [
+          {
+            type: "embed",
+            attrs: { provider: "youtube", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+          },
+          { type: "embed", attrs: { provider: "vimeo", url: "https://vimeo.com/76979871" } },
+          { type: "image", attrs: { src: "/media/a.png", alt: "", caption: "A caption" } },
+        ],
+      }),
+    ).toEqual({ ok: true });
   });
 
   test("non_doc_root_is_unknown", () => {
@@ -303,7 +322,7 @@ function itemWith(body: unknown, extra: Partial<SchemaContentDto> = {}): SchemaC
     body,
     excerpt: "",
     fields: {},
-    seo: { title: null, description: null },
+    seo: { title: null, description: null, canonical: null, robots: [] },
     terms: [],
     menu_order: 0,
     permalink: "/imported/",

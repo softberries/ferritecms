@@ -50,30 +50,48 @@ spec in Chromium on both backends, Firefox and WebKit; the bundle budget; API ad
 user filters, sessions, admin TOTP reset, retained plugin data, audit filters, the test mail,
 relation `types`, inline image `srcset`; `ferrite theme pack`; no migration;
 `m2b3-exit.md`, verified in two parts, the browser and Docker checks in part B), so M2 is
-done (`m2-exit.md`). Open follow-ups stay listed in the roadmap. Next is M3 (WordPress
-import). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
-`docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`).
+done (`m2-exit.md`). Open follow-ups stay listed in the roadmap. M3-1 (the WordPress
+import core: `ferrite import wordpress`, the streaming WXR parser and its IR, `import_map`
+re-runs with the run fence, Gutenberg/classic/shortcode conversion, media from `--uploads`
+or `--fetch-media`, users, terms, comments, menus, options, SEO and ACF, redirects for old
+permalinks, the JSON/HTML report; migration `0009_import`; `m3-1-exit.md`) is done, and so
+is M3-2 (the `import.wordpress` job with step progress and a partial report for a failed
+run, the `/import` API with the inputs as `import` artifacts and the report stored as
+artifacts, the admin Import screen (`g i`), uploads read from a zip in place, the SEO
+canonical and robots fields, `permalink.redirects` for permalink-structure changes, the
+`UNION ALL` job claim on Postgres; migration `0010_import_jobs`), so M3 is done
+(`m3-exit.md`, which lists what was not verified). Next is M4 (ops and release). Work
+top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+`docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
+`m3.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
 -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
 wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
-SMTP mailer, the extension install pipeline `extensions::Installer`; the REST API in
-`src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-cache` (page cache + outbox invalidation
+SMTP mailer, the extension install pipeline `extensions::Installer`, `import_fetch` (the
+importer's SSRF-checked `--fetch-media` source), `import_blobs` (import reports over the
+media store); the REST API in
+`src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress
+importer: WXR parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`,
+`ferrite-media`),
+`ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
 renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService` +
 `ExtensionAdmin`, `ext_settings`, `mail` (`Mailer`, `MailQueue`), action jobs;
 `AuthService` (incl. password reset), `UserService`, content types, settings allowlist,
-roles + token scopes), `ferrite-media`, `ferrite-plugin-host` (grants, permission report;
+roles + token scopes, `import` (`ImportService`/`ImportBatch`: the import's write path; the
+import jobs, run reads and report artifacts)), `ferrite-media`, `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
-`ferrite` also -> `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
+`ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
+`jobs/import.rs`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
 prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the import
-screen and import-wp (M3), backups (M4) (`docs/design/01-architecture.md` §1; API status per
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: backups,
+metrics and the other M4 operations (`docs/design/01-architecture.md` §1; API status per
 endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
@@ -106,6 +124,23 @@ check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` a
 `/api/v1/plugins`: inspect, then install with the report's `fingerprint` as `approve`), or
 the admin's Appearance and Plugins screens. Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
+Import a WordPress site (Tools → Export in WordPress gives the WXR file): `cargo run -p
+ferrite -- import wordpress export.xml --data /tmp/site [--uploads <copy of
+wp-content/uploads, or a .zip of it>] [--fetch-media] [--dry-run] [--report DIR] [--no-keep-permalinks]
+[--no-site-options] [--category-base category] [--tag-base tag] [--as LOGIN] [--takeover]`
+(with SQLite `serve` must be stopped; exit 0 done, 2 done with refused redirects, missing
+or refused media, 3 another import running, 1 error, still with the partial report of a
+run that had started; the report goes to
+`<data>/import/reports/<run-id>/report.{json,html}`; a re-run of the same site updates
+what changed in WordPress and keeps what was edited here, terms are matched, not updated; media variants are made by the
+next `serve`). With `serve` running, import from the admin's Import screen
+(`/admin/import`: the WXR file, optionally a zip of `wp-content/uploads`) or the API:
+`POST /api/v1/import/wordpress` as `multipart/form-data` with parts `wxr`, optional
+`uploads` (zip) and optional `options` (JSON: `dry_run`, `keep_permalinks`,
+`site_options`, `fetch_media`, `category_base`, `tag_base`), an `Idempotency-Key` if
+wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
+`GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
+`import:read` to read; `409` while another import is queued or running).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with

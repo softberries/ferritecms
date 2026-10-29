@@ -97,6 +97,10 @@ pub struct NewContent {
     pub menu_order: i32,
     pub published_at: Option<Timestamp>,
     pub scheduled_at: Option<Timestamp>,
+    /// `None` = now. The WordPress import sets both (M3-1 P7).
+    pub created_at: Option<Timestamp>,
+    /// `None` = now.
+    pub updated_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

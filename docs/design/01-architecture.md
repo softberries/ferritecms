@@ -61,8 +61,13 @@ ferritecms/
 │   │                             #   plugin `http` egress; M2b-1: the embedded admin (`admin`
 │   │                             #   module, rust-embed of `admin/dist`, its CSP and headers;
 │   │                             #   M2b-3: the `ferrite_admin_theme` cookie's class on
-│   │                             #   `index.html`))
-│   ├── ferrite-import-wp/        # (M3) WXR importer
+│   │                             #   `index.html`; M3-1: `import_fetch::HttpSource`, the
+│   │                             #   import's attachment fetcher over the egress SSRF rules;
+│   │                             #   M3-2: the `/import` endpoints and `import_blobs::MediaArtifacts`,
+│   │                             #   core's report storage over the media store))
+│   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
+│   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
+│   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate)
 ├── wit/                          # WIT packages (source of truth for plugin API)
@@ -98,17 +103,19 @@ built are marked with their milestone):
 ```
 ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme, ferrite-core,
  │               ferrite-plugin-host, ferrite-media, ferrite-config, ferrite-store,
- │               ferrite-store-{sqlite,postgres}, ferrite-domain
+ │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1)
  ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
  │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
  │                │                    └─ ferrite-domain
  │                ├─ ferrite-media ─── ferrite-domain
  │                ├─ ferrite-plugin-host ─── ferrite-domain (M2a-2a: the shared setting rules)
+ │                ├─ ferrite-import-wp (M3-1: `import_fetch::HttpSource` implements its
+ │                │                     `MediaSource`)
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
- └─ ferrite-import-wp (M3) ─── ferrite-core
+ └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
 ```
 
 `ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built
@@ -143,7 +150,7 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
 | HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); later `/metrics` (M4) | ferrite-http |
-| Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a); variants and imports later | ferrite-cluster + core |
+| Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a), `media.variants` (M2a-2b), `permalink.redirects` and `import.wordpress` (M3-2; 04 §6) | ferrite-cluster + core + ferrite (bin) |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
 1; rulings P15, P22): config → open the database → migration check under the migrate lock

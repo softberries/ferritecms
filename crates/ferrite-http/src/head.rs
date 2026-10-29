@@ -102,11 +102,18 @@ pub async fn page_head(
 /// the excerpt, cut to [`DESCRIPTION_CHARS`], else the site tagline on item-less
 /// pages), canonical link, and Open Graph title (`seo.title`, else the item title,
 /// else the site title), description, URL, type (`article` for items, `website`
-/// otherwise) and image (featured media). `seo` is the item's SEO meta (ignored
-/// without an item); blank values count as unset.
+/// otherwise) and image (featured media). `seo.canonical` replaces the page URL in the
+/// canonical link and `og:url`; `seo.robots` becomes one `<meta name="robots">`
+/// (`reading.discourage_indexing` acts through `robots.txt` only, so there is no
+/// second robots tag to merge with). `seo` is the item's SEO meta (ignored without an
+/// item); blank values count as unset.
 pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: &Seo) -> Head {
-    let canonical = absolute(site.url, page.path);
     let item = page.item;
+    // The item's own canonical URL (`seo.canonical`, absolute) replaces the page's.
+    let canonical = match set_on(item, seo.canonical.as_deref()) {
+        Some(url) => url.to_owned(),
+        None => absolute(site.url, page.path),
+    };
     let (seo_title, seo_description) = (
         set_on(item, seo.title.as_deref()),
         set_on(item, seo.description.as_deref()),
@@ -126,6 +133,10 @@ pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: &Seo) -> Head {
     let mut metas = Vec::new();
     if !description.is_empty() {
         metas.push(name_meta("description", &description));
+    }
+    if item.is_some() && !seo.robots.is_empty() {
+        let directives: Vec<&str> = seo.robots.iter().map(|r| r.as_str()).collect();
+        metas.push(name_meta("robots", &directives.join(", ")));
     }
     metas.push(og("og:title", og_title));
     if !description.is_empty() {

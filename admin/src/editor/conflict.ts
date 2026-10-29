@@ -5,6 +5,7 @@
 
 import type { ApiError } from "@/api/problem";
 import type { SchemaContentDto } from "@/api/schema";
+import { sameList } from "@/lib/same-list";
 import type { Draft } from "./autosave";
 import { sameValue } from "./fields/fields-model";
 
@@ -54,23 +55,29 @@ export function canonicalBody(body: unknown): string {
   return JSON.stringify(norm(body));
 }
 
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((x, i) => x === b[i]);
-
 /** An SEO member as stored: trimmed, blank is `null` (what the server makes of it). */
 export const seoText = (v: string | null | undefined): string | null => {
   const s = (v ?? "").trim();
   return s === "" ? null : s;
 };
 
-/** Whether the draft's SEO differs from the item's (a draft without SEO leaves it). */
+/** Robots directives as the server stores them: sorted, deduplicated (`null`: none). */
+export const sortedRobots = <T extends string>(v: readonly T[] | null | undefined): T[] =>
+  [...new Set(v ?? [])].sort();
+
+/** Whether the draft's SEO differs from the item's (a draft without SEO leaves it; so
+ * does a member it leaves out). */
 function seoDiffers(theirs: SchemaContentDto, mine: Draft): boolean {
   if (!mine.seo) return false;
   const stored = theirs.seo;
+  const text = (v: string | null | undefined, s: string | null) =>
+    v !== undefined && seoText(v) !== seoText(s);
   return (
-    (mine.seo.title !== undefined && seoText(mine.seo.title) !== seoText(stored.title)) ||
-    (mine.seo.description !== undefined &&
-      seoText(mine.seo.description) !== seoText(stored.description))
+    text(mine.seo.title, stored.title) ||
+    text(mine.seo.description, stored.description) ||
+    text(mine.seo.canonical, stored.canonical) ||
+    (mine.seo.robots !== undefined &&
+      !sameList(sortedRobots(mine.seo.robots), sortedRobots(stored.robots)))
   );
 }
 

@@ -2,7 +2,10 @@
 // (`crates/ferrite-core/src/blocks/render.rs`; M2b P19), so every body the editor saves
 // renders on the site as it looked here, and a body with anything else opens read-only
 // instead of being rewritten (Review Focus 3). Body headings are levels 2–6; the title is
-// the page's h1 (P18). No underline (the renderer has none).
+// the page's h1 (P18). No underline (the renderer has none). The lists are pinned to
+// `crates/ferrite-core/tests/fixtures/editor-schema.json`, which the core's twin
+// `blocks::is_editor_safe` reads too, so the importer writes only bodies this editor opens
+// editable (M3 P11: `embed` and the image `caption`).
 //
 // TipTap defaults that would rewrite stored content are switched off (pre-flight F32):
 // the link mark's `target`, `rel`, `class` and `title` have no default (a stored link
@@ -15,6 +18,7 @@ import { Link as TiptapLink } from "@tiptap/extension-link";
 import { TableKit } from "@tiptap/extension-table";
 import { Placeholder } from "@tiptap/extensions";
 import { StarterKit } from "@tiptap/starter-kit";
+import { EmbedBlock } from "./embed-node";
 import { HtmlBlock } from "./html-node";
 import { MediaImage } from "./image-node";
 import { SlashCommand } from "./slash-menu";
@@ -32,6 +36,7 @@ export const SUPPORTED_NODES = [
   "horizontalRule",
   "hardBreak",
   "image",
+  "embed",
   "table",
   "tableRow",
   "tableHeader",
@@ -82,6 +87,7 @@ export function editorExtensions(opts: EditorExtensionOptions): Extensions {
     TableKit.configure({ table: { resizable: false } }),
     MediaImage.configure({ inline: false, allowBase64: false, resolveMedia: opts.resolveMedia }),
     HtmlBlock,
+    EmbedBlock,
     Placeholder.configure({
       placeholder: ({ editor }) => (editor.isEmpty ? opts.placeholder : ""),
     }),

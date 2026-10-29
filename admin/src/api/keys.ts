@@ -133,4 +133,9 @@ export const qk = {
   pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
   /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */
   pluginsRetained: ["pluginsRetained"] as const,
+  import: {
+    /** The runs table's pages (`useInfiniteQuery` over `next_cursor`). */
+    runs: ["import", "runs"] as const,
+    job: (id: string) => ["import", "job", id] as const,
+  },
 } as const;

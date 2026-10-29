@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config_cmd::ConfigCommand;
 use crate::ext_cmd::{PluginCommand, ThemeCommand};
-use crate::{config_cmd, ext_cmd, healthcheck, init, migrate, seed, serve, user_cmd};
+use crate::{config_cmd, ext_cmd, healthcheck, import_cmd, init, migrate, seed, serve, user_cmd};
 
 #[derive(Debug, Parser)]
 #[command(name = "ferrite", version, about = "FerriteCMS")]
@@ -26,6 +26,9 @@ pub enum Command {
     /// Add sample content.
     #[command(subcommand)]
     Seed(seed::SeedCommand),
+    /// Import content from another CMS.
+    #[command(subcommand)]
+    Import(import_cmd::ImportCommand),
     /// Validate the configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -89,6 +92,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Migrate(cmd) => migrate::run(cmd).await,
         Command::Serve(args) => serve::run(args).await.map(|()| ExitCode::SUCCESS),
         Command::Seed(cmd) => seed::run(cmd).await.map(|()| ExitCode::SUCCESS),
+        Command::Import(cmd) => import_cmd::run(cmd).await,
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),

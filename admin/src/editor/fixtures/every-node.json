@@ -128,6 +128,23 @@
       "attrs": { "src": "/media/local.png", "alt": "Local", "title": "On this site" }
     },
     {
+      "type": "image",
+      "attrs": {
+        "src": "/media/lake.png",
+        "alt": "A lake",
+        "title": "Lake",
+        "caption": "The lake at dawn"
+      }
+    },
+    {
+      "type": "embed",
+      "attrs": { "provider": "youtube", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }
+    },
+    {
+      "type": "embed",
+      "attrs": { "provider": "vimeo", "url": "https://vimeo.com/76979871" }
+    },
+    {
       "type": "table",
       "content": [
         {

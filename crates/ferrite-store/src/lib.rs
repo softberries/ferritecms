@@ -1,6 +1,7 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
 mod error;
+mod import;
 mod json;
 mod lock;
 mod menu;
@@ -13,6 +14,7 @@ mod session;
 mod text;
 
 pub use error::StoreError;
+pub use import::{check_import_map, check_import_run, token_from_db, token_to_db};
 pub use json::validate_json;
 pub use lock::{
     LOCK_EXTENSIONS, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES, LockGuard, check_lock_name,
@@ -43,10 +45,10 @@ pub use paging::{
 };
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
-    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, JobRepo, MediaRepo, MenuRepo,
-    MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo,
-    RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, retained_marker,
+    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo,
+    MenuRepo, MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, retained_marker,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,
