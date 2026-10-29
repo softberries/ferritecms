@@ -81,6 +81,10 @@ pub struct Report {
     pub scheduled_in_past: Vec<ItemRef>,
     /// The post permalink structure inferred from the old site and in effect (P17).
     pub permalink_structure: Option<String>,
+    /// Set when the run failed after it started (P29): the report then covers what was
+    /// done until that step, and its first note says so.
+    #[serde(default)]
+    pub failed: Option<Failure>,
     /// Everything else worth a line, one per kind of note (see the module docs).
     pub notes: Vec<String>,
     /// Per capped list (`missing_media`, `users_must_reset`, `redirects.refused`,
@@ -175,6 +179,14 @@ fn note_kind(text: &str) -> String {
         }
     }
     out
+}
+
+/// Where and why a run failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Failure {
+    /// The step that was running: `parse`, `pass1`…`pass4`, `fixup` or `report`.
+    pub step: String,
+    pub error: String,
 }
 
 /// The outcomes of one kind.
@@ -422,6 +434,12 @@ impl Report {
         h.pair("Site", &self.site_url);
         h.pair("Run", &self.run_id);
         h.pair("Dry run", if self.dry_run { "yes" } else { "no" });
+        if let Some(failed) = &self.failed {
+            h.pair(
+                "Failed",
+                &format!("in step {}: {}", failed.step, failed.error),
+            );
+        }
         h.pair("Started", &time(self.started_at));
         h.pair("Finished", &time(self.finished_at));
         h.pair(
@@ -813,6 +831,12 @@ pub(crate) async fn finish(report: &mut Report, ir: &Ir) -> Result<(), ImportErr
     }
     report.note("no plugin actions (post.saved, post.published) fired for imported items");
     // The collectors are spent: the report is now what it serialises.
+    render_notes(report);
+    Ok(())
+}
+
+/// Renders the collected notes into `notes`, after the resumed note when there is one.
+fn render_notes(report: &mut Report) {
     report.notes = std::mem::take(&mut report.note_log).render();
     report.folded.clear();
     if let Some(steps) = report.resumed.take() {
@@ -826,7 +850,70 @@ pub(crate) async fn finish(report: &mut Report, ir: &Ir) -> Result<(), ImportErr
             ),
         );
     }
-    Ok(())
+}
+
+/// Finishes the report of a run that failed in `step` with `error` (P29): what `ir`
+/// holds is mapped as [`finish`] does (without `ir`, or when that fails, only the notes
+/// are rendered), then `failed` is set and the first note says so. A failure in the
+/// `report` step itself keeps what that step's `finish` mapped: it took the collectors,
+/// so running it again would empty the sections.
+pub(crate) async fn finish_failed(
+    report: &mut Report,
+    ir: Option<&Ir>,
+    step: &str,
+    error: &ImportError,
+) {
+    let ir = ir.filter(|_| step != "report");
+    let mapped = match ir {
+        Some(ir) => match finish(report, ir).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "building the failed import's report from its work file failed");
+                false
+            }
+        },
+        None => false,
+    };
+    if !mapped {
+        // `finish` maps the conversion tallies first; when it failed later, keep those.
+        if report.dropped_formatting.is_empty() {
+            report.dropped_formatting = report.dropped_formatting_now();
+        }
+        render_notes(report);
+    }
+    mark_failed(report, step, error, Rerun::Resumes);
+}
+
+/// What running a failed import again does, for its note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rerun {
+    /// It resumes from the work file the failed run kept.
+    Resumes,
+    /// The work was done and its work file is gone: it starts over, finding the items
+    /// it already wrote unchanged.
+    StartsOver,
+}
+
+/// Sets `failed` and puts the note saying so first.
+pub(crate) fn mark_failed(report: &mut Report, step: &str, error: &ImportError, rerun: Rerun) {
+    let after = match (report.dry_run, rerun) {
+        (true, _) => "a dry run keeps nothing",
+        (false, Rerun::Resumes) => "running the import again resumes it",
+        (false, Rerun::StartsOver) => {
+            "running it again starts over and finds what this run wrote unchanged"
+        }
+    };
+    report.notes.insert(
+        0,
+        format!(
+            "failed: the import stopped in step {step} ({error}); the report covers only \
+             what was done until then, and {after}"
+        ),
+    );
+    report.failed = Some(Failure {
+        step: step.to_owned(),
+        error: error.to_string(),
+    });
 }
 
 /// The top [`MAX_UNMAPPED_META`] keys of `counts`, most first, then by key.
@@ -881,6 +968,63 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// The failed note says what a re-run does: resume, keep nothing (dry run), or start
+    /// over (the run's work was done and its work file is gone).
+    #[test]
+    fn failed_notes_say_what_a_rerun_does() {
+        let cases = [
+            (false, Rerun::Resumes, "running the import again resumes it"),
+            (true, Rerun::Resumes, "a dry run keeps nothing"),
+            (false, Rerun::StartsOver, "running it again starts over"),
+        ];
+        for (dry_run, rerun, says) in cases {
+            let mut report = Report {
+                dry_run,
+                notes: vec!["other".into()],
+                ..Report::default()
+            };
+            mark_failed(&mut report, "pass2", &ImportError::Stopped, rerun);
+            assert!(report.notes[0].starts_with("failed:"), "{:?}", report.notes);
+            assert!(report.notes[0].contains(says), "{}", report.notes[0]);
+            assert_eq!(report.notes[1], "other");
+            assert_eq!(report.failed.as_ref().unwrap().step, "pass2");
+        }
+    }
+
+    /// A failure in the report step keeps what the first `finish` mapped: its
+    /// collectors are spent, so a second one would empty the sections.
+    #[tokio::test]
+    async fn report_step_failure_keeps_the_first_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let ir = Ir::create(&dir.path().join("ir.sqlite")).await.unwrap();
+        let mut report = Report::default();
+        let mut notes = Notes::default();
+        notes.unknown_block("core/thing");
+        report.merge_conversion(&notes);
+        report.note("kept note");
+        // What a first `finish` produced before failing: the collectors taken.
+        report.unknown_blocks = vec![Example {
+            name: "core/thing".into(),
+            count: 1,
+            items: Vec::new(),
+        }];
+        report.conversion = Notes::default();
+        finish_failed(&mut report, Some(&ir), "report", &ImportError::Stopped).await;
+        assert_eq!(
+            report.unknown_blocks.len(),
+            1,
+            "{:?}",
+            report.unknown_blocks
+        );
+        assert!(
+            report.notes.iter().any(|n| n == "kept note"),
+            "{:?}",
+            report.notes
+        );
+        assert!(report.notes[0].starts_with("failed:"));
+        ir.close().await;
+    }
 
     fn sample() -> Report {
         let item = |wp_id, title: &str, path: Option<&str>| ItemRef {

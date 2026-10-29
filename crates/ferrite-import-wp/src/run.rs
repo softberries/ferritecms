@@ -8,6 +8,8 @@
 //! harmless (P3).
 //!
 //! Passes write through [`Session`]: its batches commit, or roll back on a dry run.
+//! [`ImportOptions::on_step`] hears each step as it begins; a run that fails after it
+//! started still returns its report, in [`RunFailed`] (P29).
 
 use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
@@ -40,6 +42,8 @@ const FINISHED: &str = "finished";
 const DRY_RUN: &str = "dry-run";
 /// The step that fills the IR.
 const PARSE: &str = "parse";
+/// The step that builds the report.
+const REPORT: &str = "report";
 /// Records in flight between the parser thread and the IR writer. An item may hold
 /// up to 64 MiB of text, so the queue is short: memory stays near a few items.
 const PARSE_QUEUE: usize = 8;
@@ -106,8 +110,11 @@ impl MediaSource for DirSource {
     }
 }
 
+/// Called with a step's name as it begins.
+pub type OnStep = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// How to import.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ImportOptions {
     /// Run everything, then roll every batch back.
     pub dry_run: bool,
@@ -123,6 +130,9 @@ pub struct ImportOptions {
     pub takeover: bool,
     /// The largest attachment file accepted (`media.max_upload`, P13).
     pub max_upload: u64,
+    /// Called as each step that runs begins: `parse`, `pass1`…`pass4`, `fixup`, then
+    /// `report` (P28). Steps an earlier run finished are skipped without a call.
+    pub on_step: Option<OnStep>,
     /// Items per batch instead of [`ImportBatch::BATCH_ITEMS`].
     #[cfg(feature = "test-seams")]
     pub batch_items: Option<usize>,
@@ -151,6 +161,7 @@ impl Default for ImportOptions {
             tag_base: "tag".into(),
             takeover: false,
             max_upload: DEFAULT_MAX_UPLOAD,
+            on_step: None,
             #[cfg(feature = "test-seams")]
             batch_items: None,
             #[cfg(feature = "test-seams")]
@@ -160,6 +171,26 @@ impl Default for ImportOptions {
             #[cfg(feature = "test-seams")]
             stop_after: None,
         }
+    }
+}
+
+impl std::fmt::Debug for ImportOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("ImportOptions");
+        d.field("dry_run", &self.dry_run)
+            .field("keep_permalinks", &self.keep_permalinks)
+            .field("site_options", &self.site_options)
+            .field("category_base", &self.category_base)
+            .field("tag_base", &self.tag_base)
+            .field("takeover", &self.takeover)
+            .field("max_upload", &self.max_upload)
+            .field("on_step", &self.on_step.as_ref().map(|_| "Fn"));
+        #[cfg(feature = "test-seams")]
+        d.field("batch_items", &self.batch_items)
+            .field("fail_after_batches", &self.fail_after_batches)
+            .field("step_hook", &self.step_hook)
+            .field("stop_after", &self.stop_after);
+        d.finish()
     }
 }
 
@@ -206,7 +237,26 @@ pub struct ImportContext {
     pub site_url: String,
 }
 
-pub use crate::report::{Counts, MissingMedia, MustReset, Report, UnmappedAcf};
+pub use crate::report::{Counts, Failure, MissingMedia, MustReset, Report, UnmappedAcf};
+
+/// A run that failed. `report` is set once the run had started (P29): what was done until
+/// the failure, with [`Report::failed`] naming the step; errors before that (an unreadable
+/// file, a busy run) have none. The report is boxed: it is large, and errors travel by value.
+#[derive(Debug, thiserror::Error)]
+#[error("{error}")]
+pub struct RunFailed {
+    pub error: ImportError,
+    pub report: Option<Box<Report>>,
+}
+
+impl From<ImportError> for RunFailed {
+    fn from(error: ImportError) -> Self {
+        Self {
+            error,
+            report: None,
+        }
+    }
+}
 
 /// A started run as the passes see it: the IR, the options, and batches that end as the
 /// run requires.
@@ -348,49 +398,71 @@ impl<'a> Session<'a> {
 }
 
 /// Imports the WXR file `wxr` (see the module docs). Errors before the run starts (an
-/// unreadable file, a busy run) leave no run; later ones finish it `failed`.
-pub async fn run(
-    ctx: ImportContext,
-    wxr: &Path,
-    opts: ImportOptions,
-) -> Result<Report, ImportError> {
+/// unreadable file, a busy run) leave no run and no report; later ones finish it `failed`
+/// and come with the report of what was done.
+pub async fn run(ctx: ImportContext, wxr: &Path, opts: ImportOptions) -> Result<Report, RunFailed> {
     let (digest, channel) = inspect(wxr).await?;
     let source = normalise_source(&channel.base_blog_url)?;
     let handle = ctx
         .import
         .start(&ctx.actor, &source, opts.dry_run, opts.takeover)
-        .await?;
+        .await
+        .map_err(ImportError::from)?;
     let dir = ctx.work_dir.join(handle.run().id.to_string());
-    let outcome = drive(&ctx, &opts, &handle, wxr, &digest, &dir).await;
+    let mut report = Report::default();
+    report.dry_run = opts.dry_run;
+    let outcome = drive(&ctx, &opts, &handle, wxr, &digest, &dir, &mut report).await;
     // A dry run's work file holds rolled-back work: it goes on every exit (a real
     // run's stays when it fails, for the next run to resume).
     if opts.dry_run || outcome.is_ok() {
         remove_work_dir(&dir).await;
     }
-    match outcome {
-        Ok(mut report) => {
-            report.run_id = handle.run().id.to_string();
-            report.source.clone_from(&handle.run().source);
-            report.started_at = Some(handle.run().started_at);
-            report.finished_at = Some(Timestamp::now());
-            report.site_url.clone_from(&ctx.site_url);
-            let stats = serde_json::to_value(&report.counts)?;
-            handle
-                .finish(&ctx.import, ImportRunState::Done, stats)
-                .await?;
-            Ok(report)
-        }
-        Err(e) => {
-            let stats = serde_json::json!({ "error": e.to_string() });
-            if let Err(f) = handle
-                .finish(&ctx.import, ImportRunState::Failed, stats)
-                .await
-            {
-                tracing::warn!(error = %f, "marking the import run failed did not work");
+    report.run_id = handle.run().id.to_string();
+    report.source.clone_from(&handle.run().source);
+    report.started_at = Some(handle.run().started_at);
+    report.finished_at = Some(Timestamp::now());
+    report.site_url.clone_from(&ctx.site_url);
+    let error = match outcome {
+        Ok(()) => {
+            let stats = serde_json::to_value(&report.counts).map_err(ImportError::from);
+            let done = match stats {
+                Ok(stats) => handle
+                    .finish(&ctx.import, ImportRunState::Done, stats)
+                    .await
+                    .map_err(ImportError::from),
+                Err(e) => Err(e),
+            };
+            match done {
+                Ok(()) => return Ok(report),
+                // The work is done (its work file marked finished and removed) but the
+                // run could not be closed (taken over): a re-run starts over.
+                Err(error) => {
+                    crate::report::mark_failed(
+                        &mut report,
+                        REPORT,
+                        &error,
+                        crate::report::Rerun::StartsOver,
+                    );
+                    return Err(RunFailed {
+                        error,
+                        report: Some(Box::new(report)),
+                    });
+                }
             }
-            Err(e)
         }
+        Err(error) => error,
+    };
+    let stats = serde_json::json!({ "error": error.to_string() });
+    if let Err(f) = handle
+        .finish(&ctx.import, ImportRunState::Failed, stats)
+        .await
+    {
+        tracing::warn!(error = %f, "marking the import run failed did not work");
     }
+    Err(RunFailed {
+        error,
+        report: Some(Box::new(report)),
+    })
 }
 
 /// Removes a run's work folder; a failure is logged (the folder's IR is marked so no run
@@ -404,7 +476,8 @@ async fn remove_work_dir(dir: &Path) {
     }
 }
 
-/// Opens the IR (reused or new), runs the steps and closes it.
+/// Opens the IR (reused or new), runs the steps into `report` and closes it. On a
+/// failure `report` is still finished, from what the IR holds, with the failed step.
 async fn drive(
     ctx: &ImportContext,
     opts: &ImportOptions,
@@ -412,48 +485,49 @@ async fn drive(
     wxr: &Path,
     digest: &str,
     dir: &Path,
-) -> Result<Report, ImportError> {
-    let mut ir = prepare_ir(&ctx.work_dir, dir, digest, opts.dry_run).await?;
-    let mut done = steps(ctx, opts, handle, wxr, &mut ir).await;
-    if let Ok(report) = &mut done {
-        report.dry_run = opts.dry_run;
-        if let Err(e) = crate::report::finish(report, &ir).await {
-            done = Err(e);
+    report: &mut Report,
+) -> Result<(), ImportError> {
+    let mut progress = Progress {
+        current: PARSE,
+        ..Progress::default()
+    };
+    let mut ir = match prepare_ir(&ctx.work_dir, dir, digest, opts.dry_run).await {
+        Ok(ir) => ir,
+        Err(e) => {
+            crate::report::finish_failed(report, None, PARSE, &e).await;
+            return Err(e);
         }
+    };
+    let mut done = run_steps(ctx, opts, handle, wxr, &mut ir, &mut progress, report).await;
+    if progress.skipped {
+        report.resumed = Some(std::mem::take(&mut progress.run));
     }
-    // A finished run's work file is never resumed, even if deleting its folder fails:
-    // it no longer names the file it holds.
-    if done.is_ok()
-        && let Err(e) = ir.set_meta(DIGEST_KEY, FINISHED).await
-    {
-        tracing::warn!(error = %e, "marking the import's work file finished failed");
+    if done.is_ok() {
+        progress.current = REPORT;
+        on_step(opts, REPORT);
+        done = crate::report::finish(report, &ir).await;
+    }
+    match &done {
+        // A finished run's work file is never resumed, even if deleting its folder
+        // fails: it no longer names the file it holds.
+        Ok(()) => {
+            if let Err(e) = ir.set_meta(DIGEST_KEY, FINISHED).await {
+                tracing::warn!(error = %e, "marking the import's work file finished failed");
+            }
+        }
+        Err(e) => crate::report::finish_failed(report, Some(&ir), progress.current, e).await,
     }
     ir.close().await;
     done
 }
 
-/// The passes this process ran, and whether any was skipped as done by an earlier run.
+/// The steps this process ran, whether any was skipped as done by an earlier run, and
+/// the step running now.
 #[derive(Default)]
 struct Progress {
     run: Vec<String>,
     skipped: bool,
-}
-
-/// Runs the steps; when a pass was skipped as already done, the report says it covers
-/// only the passes run now.
-async fn steps(
-    ctx: &ImportContext,
-    opts: &ImportOptions,
-    handle: &ImportHandle,
-    wxr: &Path,
-    ir: &mut Ir,
-) -> Result<Report, ImportError> {
-    let mut progress = Progress::default();
-    let mut report = run_steps(ctx, opts, handle, wxr, ir, &mut progress).await?;
-    if progress.skipped {
-        report.resumed = Some(progress.run);
-    }
-    Ok(report)
+    current: &'static str,
 }
 
 /// [`begin_step`] for a pass, recording in `progress` whether it runs.
@@ -461,9 +535,9 @@ async fn begin_pass(
     progress: &mut Progress,
     opts: &ImportOptions,
     ir: &Ir,
-    name: &str,
+    name: &'static str,
 ) -> Result<bool, ImportError> {
-    let runs = begin_step(opts, ir, name).await?;
+    let runs = begin_step(progress, opts, ir, name).await?;
     if runs {
         progress.run.push(name.to_owned());
     } else {
@@ -479,8 +553,9 @@ async fn run_steps(
     wxr: &Path,
     ir: &mut Ir,
     progress: &mut Progress,
-) -> Result<Report, ImportError> {
-    if begin_step(opts, ir, PARSE).await? {
+    report: &mut Report,
+) -> Result<(), ImportError> {
+    if begin_step(progress, opts, ir, PARSE).await? {
         parse_into(ir, wxr, ctx, handle).await?;
         ir.mark_pass(PARSE).await?;
     }
@@ -491,34 +566,33 @@ async fn run_steps(
         ir,
         ended: AtomicU32::new(0),
     };
-    let mut report = Report::default();
     if begin_pass(progress, opts, ir, "pass1").await? {
-        crate::pass::pass1(&session, &mut report).await?;
+        crate::pass::pass1(&session, report).await?;
         end_step(opts, ir, "pass1").await?;
     }
     if stops_after(opts, "pass1") {
-        return Ok(report);
+        return Ok(());
     }
     if begin_pass(progress, opts, ir, "pass2").await? {
-        crate::pass::pass2(&session, &mut report).await?;
+        crate::pass::pass2(&session, report).await?;
         end_step(opts, ir, "pass2").await?;
     }
     if stops_after(opts, "pass2") {
-        return Ok(report);
+        return Ok(());
     }
     if begin_pass(progress, opts, ir, "pass3").await? {
-        crate::pass::content::import(&session, &mut report).await?;
+        crate::pass::content::import(&session, report).await?;
         end_step(opts, ir, "pass3").await?;
     }
     if begin_pass(progress, opts, ir, "pass4").await? {
-        crate::pass::pass4(&session, &mut report).await?;
+        crate::pass::pass4(&session, report).await?;
         end_step(opts, ir, "pass4").await?;
     }
     if begin_pass(progress, opts, ir, "fixup").await? {
-        crate::pass::fixup::run(&session, &mut report).await?;
+        crate::pass::fixup::run(&session, report).await?;
         end_step(opts, ir, "fixup").await?;
     }
-    Ok(report)
+    Ok(())
 }
 
 /// Whether the run ends after step `name` (the `stop_after` test seam).
@@ -532,20 +606,33 @@ fn stops_after(opts: &ImportOptions, name: &str) -> bool {
     }
 }
 
-/// Whether step `name` still has to run (it did not finish on this IR); calls the test
-/// hook before one that does.
-async fn begin_step(opts: &ImportOptions, ir: &Ir, name: &str) -> Result<bool, ImportError> {
+/// Whether step `name` still has to run (it did not finish on this IR); it becomes
+/// `progress.current`, and when it runs `on_step` and the test hook hear of it.
+async fn begin_step(
+    progress: &mut Progress,
+    opts: &ImportOptions,
+    ir: &Ir,
+    name: &'static str,
+) -> Result<bool, ImportError> {
+    // Set first, so an error checking the step names it.
+    progress.current = name;
     if ir.pass_done(name).await? {
         tracing::debug!(step = name, "import step already done; skipped");
         return Ok(false);
     }
+    on_step(opts, name);
     #[cfg(feature = "test-seams")]
     if let Some(hook) = &opts.step_hook {
         (hook.0)(name)?;
     }
-    #[cfg(not(feature = "test-seams"))]
-    let _ = opts;
     Ok(true)
+}
+
+/// Tells [`ImportOptions::on_step`] that step `name` begins.
+fn on_step(opts: &ImportOptions, name: &str) {
+    if let Some(f) = &opts.on_step {
+        f(name);
+    }
 }
 
 /// Records a finished pass. A dry run rolled its writes back, so it records none.

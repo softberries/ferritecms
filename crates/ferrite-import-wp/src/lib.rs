@@ -3,7 +3,8 @@
 //! [`wxr::parse`] streams a WXR file into [`model::Record`]s, one item at a time;
 //! [`php::unserialize`] reads the PHP-serialised values WordPress stores in meta;
 //! [`ir::Ir`] keeps a parsed file for the passes, and [`run::run`] drives an import
-//! through [`pass`]; [`acf`] reads ACF field definitions and [`urls`] maps old media URLs.
+//! through [`pass`]; [`acf`] reads ACF field definitions and [`urls`] maps old media URLs;
+//! [`zip_source`] reads attachment files from a zip of the uploads.
 
 pub mod acf;
 pub mod convert;
@@ -19,5 +20,6 @@ pub mod run;
 pub mod seo;
 pub mod urls;
 pub mod wxr;
+pub mod zip_source;
 
 pub use error::ImportError;

@@ -30,8 +30,10 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
+unicode-normalization.workspace = true
 url.workspace = true
 uuid.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 ferrite-import-wp = { path = ".", features = ["test-seams"] }

@@ -26,6 +26,7 @@ use ferrite_import_wp::run::{
     MustReset, Report, StepHook, UnmappedAcf, run,
 };
 use ferrite_import_wp::urls::MediaIndex;
+use ferrite_import_wp::zip_source::ZipSource;
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode};
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -468,7 +469,8 @@ pub async fn pass2_media_index_is_kept_in_the_ir(db: &TestDb) {
     };
     let err = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     let dir = std::fs::read_dir(&site.ctx.work_dir)
         .unwrap()
@@ -556,6 +558,129 @@ pub async fn pass2_missing_file_is_reported(db: &TestDb) {
         missing: "2026/10/square-two.png",
     });
     let site = site(db, source).await;
+    let report = run_until(&site, &corpus("site-a.xml"), "pass2").await;
+    assert_eq!(
+        counts(&report, "media"),
+        Counts {
+            created: 3,
+            skipped: 1,
+            ..Counts::default()
+        }
+    );
+    assert_eq!(
+        report.missing_media,
+        [MissingMedia {
+            wp_id: 6,
+            path: "2026/10/square-two.png".into(),
+            url: "http://localhost:8099/wp-content/uploads/2026/10/square-two.png".into(),
+        }]
+    );
+}
+
+/// Zips the files below `dir` into `out` under `prefix`. The entry named `bomb` holds
+/// 10 MiB of zeros but declares 1 KiB (its central and local headers both say so).
+fn zip_dir(dir: &Path, prefix: &str, out: &Path, bomb: Option<&str>) {
+    use std::io::Write;
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    files.sort();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let deflate = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for file in &files {
+        let rel = file.strip_prefix(dir).unwrap().to_str().unwrap();
+        let name = format!("{prefix}{rel}");
+        zip.start_file(name.as_str(), deflate).unwrap();
+        if bomb == Some(rel) {
+            zip.write_all(&vec![0u8; 10 << 20]).unwrap();
+        } else {
+            zip.write_all(&std::fs::read(file).unwrap()).unwrap();
+        }
+    }
+    let mut bytes = zip.finish().unwrap().into_inner();
+    if let Some(rel) = bomb {
+        set_declared_size(&mut bytes, &format!("{prefix}{rel}"), 1024);
+    }
+    std::fs::write(out, bytes).unwrap();
+}
+
+/// Rewrites the uncompressed size of entry `name` in its central and local headers.
+fn set_declared_size(zip: &mut [u8], name: &str, size: u32) {
+    let u16_at = |b: &[u8], at: usize| usize::from(u16::from_le_bytes([b[at], b[at + 1]]));
+    let u32_at =
+        |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+    let eocd = zip.len() - 22;
+    assert_eq!(
+        &zip[eocd..eocd + 4],
+        b"PK\x05\x06",
+        "no archive comment expected"
+    );
+    let entries = u16_at(zip, eocd + 10);
+    let mut at = u32_at(zip, eocd + 16);
+    for _ in 0..entries {
+        let name_len = u16_at(zip, at + 28);
+        let skip = 46 + name_len + u16_at(zip, at + 30) + u16_at(zip, at + 32);
+        if &zip[at + 46..at + 46 + name_len] == name.as_bytes() {
+            let local = u32_at(zip, at + 42);
+            zip[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+            zip[local + 22..local + 26].copy_from_slice(&size.to_le_bytes());
+            return;
+        }
+        at += skip;
+    }
+    panic!("no entry {name}");
+}
+
+/// Site A's uploads as a zip under `wp-content/uploads/` (P24): the attachment paths
+/// resolve below the `uploads/` segment, so all four media are imported.
+pub async fn zip_source_resolves_uploads_paths(db: &TestDb) {
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("uploads.zip");
+    zip_dir(
+        &corpus("site-a-uploads"),
+        "wp-content/uploads/",
+        &archive,
+        None,
+    );
+    let site = site(db, Arc::new(ZipSource::open(&archive).unwrap())).await;
+    let report = run_until(&site, &corpus("site-a.xml"), "pass2").await;
+    assert_eq!(
+        counts(&report, "media"),
+        Counts {
+            created: 4,
+            ..Counts::default()
+        }
+    );
+    assert!(
+        report.missing_media.is_empty(),
+        "{:?}",
+        report.missing_media
+    );
+    assert_eq!(files_under(&site.media_dir.path().join("media")), 4);
+}
+
+/// An entry that inflates past its declared size is a missing file, and the run goes
+/// on with the other three.
+pub async fn zip_source_entry_bomb_is_missing_not_fatal(db: &TestDb) {
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("uploads.zip");
+    zip_dir(
+        &corpus("site-a-uploads"),
+        "wp-content/uploads/",
+        &archive,
+        Some("2026/10/square-two.png"),
+    );
+    let site = site(db, Arc::new(ZipSource::open(&archive).unwrap())).await;
     let report = run_until(&site, &corpus("site-a.xml"), "pass2").await;
     assert_eq!(
         counts(&report, "media"),
@@ -940,7 +1065,8 @@ pub async fn pass3_fixup_queue_survives_a_crash(db: &TestDb) {
     };
     let err = run(site.ctx.clone(), &corpus("site-a.xml"), opts)
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     let post = by_title(store, "post", "Every core block").await;
     let mut links = Vec::new();
@@ -1521,6 +1647,8 @@ backend_tests!(
     pass2_site_a,
     pass2_media_index_is_kept_in_the_ir,
     pass2_missing_file_is_reported,
+    zip_source_resolves_uploads_paths,
+    zip_source_entry_bomb_is_missing_not_fatal,
     pass3_site_a,
     pass3_site_b,
     pass3_fixup_queue_survives_a_crash,

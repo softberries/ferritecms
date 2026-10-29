@@ -242,7 +242,7 @@ pub async fn resume_skips_parse_and_done_passes(db: &TestDb) {
         step_hook: Some(hook),
         ..ImportOptions::default()
     };
-    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     assert_eq!(*steps.lock().unwrap(), ["parse", "pass1", "pass2"]);
     let runs = db.store().read().imports().list_runs(5).await.unwrap();
@@ -313,7 +313,7 @@ pub async fn dry_run_marks_no_pass(db: &TestDb) {
         ..ImportOptions::default()
     };
     let wxr = corpus("site-a.xml");
-    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err();
+    let err = run(site.ctx.clone(), &wxr, opts).await.unwrap_err().error;
     assert!(matches!(err, ImportError::Stopped), "{err:?}");
     assert_eq!(
         *steps.lock().unwrap(),
@@ -339,9 +339,12 @@ pub async fn a_broken_file_starts_no_run(db: &TestDb) {
     let site = site(db).await;
     let bad = site.work.path().join("bad.xml");
     std::fs::write(&bad, "<rss><channel>").unwrap();
-    let err = run(site.ctx.clone(), &bad, ImportOptions::default())
+    let failed = run(site.ctx.clone(), &bad, ImportOptions::default())
         .await
         .unwrap_err();
+    // No run started, so there is no report either.
+    assert!(failed.report.is_none());
+    let err = failed.error;
     assert!(
         matches!(err, ImportError::Xml { .. } | ImportError::Missing { .. }),
         "{err:?}"
