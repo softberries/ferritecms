@@ -92,6 +92,7 @@ Format in the ruling file: `- Plan ruling Pn: decision — reason — cost if wr
 - The whole load runs in **one write transaction**, so it lands completely or not at all.
 - Self-referencing rows are inserted with the parent column set to NULL. `finish_table` then sets the parents in batches from the values it kept back.
 - Postgres needs no identity override, because the only identity column (`events.seq`) is skipped.
+- **Columns follow the archive (pre-flight ruling):** the catalogue describes the binary's latest schema. The reader requires the source at that schema (otherwise exit 1: "run `ferrite migrate up` first"). The loader writes exactly the columns present in each row. Each must be a catalogue column (an unknown column is refused), with its type taken from the catalogue. An archive at an older schema M therefore loads into a database at M, because migrations are expand-only and drop no columns. Tables absent from the archive stay empty.
 - Reason: FKs are not deferrable on Postgres, and atomicity makes a failed import retryable.
 - Cost if wrong: a very large site holds one long transaction, and SQLite holds the writer for the whole load.
 
@@ -496,7 +497,7 @@ Task 7 reuses `ArchiveWriter` and `ArchiveReader`.
   - `import_site_refuses_tampered_table`;
   - `import_site_refuses_path_traversal` (a hand-built tar);
   - `import_site_truncated_leaves_target_fresh`;
-  - `import_site_into_newer_fresh_target_migrates_down_then_up` (archive at 10, target at 11);
+  - `import_site_into_newer_fresh_target_migrates_down_then_up` (an archive at 11 hand-edited to schema 10: drop `orphaned_at` from the artifacts rows, set `schema_version` 10, recompute the sha256s; target at 11);
   - `import_site_prints_totp_hint`;
   - `db_copy_sqlite_to_postgres` (PG-gated);
   - `export_file_mode_is_0600`.
