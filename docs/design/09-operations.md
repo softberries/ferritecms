@@ -98,6 +98,7 @@ rollback is always driven by the newer binary before swapping back.
   (another node claims them at once) and deregisters it; give the process manager at
   least 15 s before SIGKILL (shutdown is bounded at 14 s; the compose example uses
   `stop_grace_period: 20s`).
+- `site.timezone` is config only: during a rolling restart nodes briefly render dates in different zones, and cached pages are in memory, so a restart clears them. Change it on all nodes in the same deploy.
 - `site.url` must not change during a rolling deploy: a node whose `site.url` differs from
   a live node's refuses to start (P15). Change it with all nodes stopped (or 30 s after the
   last one stopped).
