@@ -50,7 +50,8 @@ pub enum MediaCommand {
     ///
     /// Prints `marked N, unmarked M, deleted rows R (B bytes), deleted unrecorded blobs U
     /// (B bytes), deleted tmp T` (with `--dry-run`, after `dry run: `, counting what would
-    /// happen). Exit code: 0, or 3 when another GC is running, or 1 on an error.
+    /// happen; `, failed F` is appended when some deletes failed, retried by the next pass).
+    /// Exit code: 0, or 3 when another GC is running, or 1 on an error.
     Gc(GcArgs),
     /// Make the image size variants again, in process (after a theme adds sizes).
     ///

@@ -776,13 +776,25 @@ async fn failed_install_leaves_blob_for_gc(api: Api) -> Api {
         .to_owned();
     let hash = ArtifactHash::parse(&sha256(&wasm)).unwrap();
 
-    // The `extensions` lock is held while the install records: `busy`.
+    // The `extensions` lock is held while the install records: `busy`. The test frees
+    // the lock once the blob is staged and the install's lock wait is over, so any
+    // cleanup still waiting for the lock (the removed `discard_staged` waited up to 5 s)
+    // would get it and could delete the blob.
     let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
         .await
         .unwrap();
+    let media = api.api.media.clone();
+    let watched = hash.clone();
+    let releaser = tokio::spawn(async move {
+        while media.head(&watched).await.unwrap().is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(EXTENSIONS_LOCK_WAIT * 2).await;
+        guard.release().await.unwrap();
+    });
     let r = install(&mut c, &api, &manifest, &wasm, &fingerprint).await;
     r.assert_problem(503, "busy");
-    guard.release().await.unwrap();
+    releaser.await.unwrap();
     assert!(api.store.read().plugins().list().await.unwrap().is_empty());
     assert_eq!(api.store.read().artifacts().get(&hash).await.unwrap(), None);
     assert_eq!(

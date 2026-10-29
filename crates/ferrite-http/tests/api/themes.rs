@@ -618,15 +618,26 @@ async fn failed_theme_install_leaves_blob_for_gc(api: Api) -> Api {
     ] {
         let hash = sha256(&bytes);
         let size = bytes.len() as u64;
+        // The lock is freed once the blob is staged and the install's lock wait is over,
+        // so a cleanup still waiting for it (the removed `discard_staged`) would run.
         let guard = lock(api.store.as_ref(), LOCK_EXTENSIONS, EXTENSIONS_LOCK_WAIT)
             .await
             .unwrap();
+        let media = api.api.media.clone();
+        let watched = hash.clone();
+        let releaser = tokio::spawn(async move {
+            while media.head(&watched).await.unwrap().is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(EXTENSIONS_LOCK_WAIT * 2).await;
+            guard.release().await.unwrap();
+        });
         let r = match what {
             "upload" => upload(&mut c, &api, THEMES, bytes).await,
             _ => activate(&mut c, &api, "blog").await,
         };
         r.assert_problem(503, "busy");
-        guard.release().await.unwrap();
+        releaser.await.unwrap();
         assert!(api.store.read().themes().list().await.unwrap().is_empty());
         assert_eq!(api.store.read().artifacts().get(&hash).await.unwrap(), None);
         assert_eq!(

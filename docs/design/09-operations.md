@@ -325,7 +325,8 @@ by a queued or running job or by an import report are kept. `--grace-days N` (1.
 overrides `media.gc_grace_days` (default 7) for this run; `--dry-run` marks and deletes
 nothing and reports what a run would do. Prints `marked N, unmarked M, deleted rows R (B
 bytes), deleted unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: `
-for a dry run). Exit 0 done, 3 another GC is running (the `artifacts.gc` lock, a cluster
+for a dry run; `, failed F` is appended when some blob or `tmp/` deletes failed, which are
+logged and retried by the next pass, the exit code staying 0). Exit 0 done, 3 another GC is running (the `artifacts.gc` lock, a cluster
 node's job or another `media gc`), 1 on an error; a bad flag (`--grace-days 0`) exits 2 as
 clap does.
 

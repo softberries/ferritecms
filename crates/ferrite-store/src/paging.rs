@@ -58,6 +58,12 @@ pub const MAX_EXISTING_HASHES: usize = 1000;
 
 /// SQL predicate on `artifacts` (table name unaliased): no row names the artifact. P10's SQL
 /// part of "referenced", the same text on both backends.
+///
+/// **Every foreign key to `artifacts(hash)` must be listed here** (today `media`,
+/// `plugins`, `themes`). A table with such a key that is missing would let the mark step
+/// mark its rows while `delete_if_orphaned` is refused by the key every time; once 200 of
+/// them sort first, `orphaned_before` returns only them and the GC's step 2 deletes
+/// nothing more (M4-1 Task 6 review). A migration adding a reference adds it here too.
 pub const ARTIFACT_UNREFERENCED_SQL: &str = "NOT EXISTS (SELECT 1 FROM media WHERE artifact_hash = artifacts.hash) \
      AND NOT EXISTS (SELECT 1 FROM media_variants WHERE hash = artifacts.hash) \
      AND NOT EXISTS (SELECT 1 FROM plugins WHERE artifact_hash = artifacts.hash) \

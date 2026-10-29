@@ -31,7 +31,7 @@ use std::time::Duration;
 use anyhow::Context;
 use ferrite_domain::{ArtifactHash, ArtifactKind, JobQuery, JobStatus, MAX_PAGE, Timestamp};
 use ferrite_media::{MediaStore, StoredObject};
-use ferrite_store::{ArtifactRepo, LOCK_GC, MAX_EXISTING_HASHES, Store, StoreError};
+use ferrite_store::{ArtifactRepo, LOCK_GC, MAX_EXISTING_HASHES, Store, StoreError, Tx};
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -64,10 +64,13 @@ pub struct GcReport {
     pub deleted_blobs: u64,
     pub deleted_blob_bytes: u64,
     pub deleted_tmp: u64,
+    /// Blob and `tmp/` deletes that failed (logged; a later pass retries them). A row
+    /// whose blob delete failed still counts in `deleted_rows`.
+    pub failed: u64,
 }
 
 impl fmt::Display for GcReport {
-    /// The P12 output line.
+    /// The P12 output line, plus `, failed F` when some deletes failed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -79,14 +82,19 @@ impl fmt::Display for GcReport {
             self.deleted_blobs,
             self.deleted_blob_bytes,
             self.deleted_tmp
-        )
+        )?;
+        if self.failed > 0 {
+            write!(f, ", failed {}", self.failed)?;
+        }
+        Ok(())
     }
 }
 
 /// Runs one pass; `Ok(None)` when another GC holds the lock (nothing was done).
 ///
-/// A blob that cannot be deleted is logged and left (a later pass finds it again as a
-/// row-less blob); a store or listing error ends the pass with the error.
+/// A blob that cannot be deleted is logged, counted in [`GcReport::failed`] and left (a
+/// later pass finds it again as a row-less blob); a store or listing error ends the pass
+/// with the error, after logging what the pass had done by then.
 pub async fn run(
     store: &dyn Store,
     media: &MediaStore,
@@ -95,11 +103,15 @@ pub async fn run(
     let Some(guard) = store.try_lock(LOCK_GC).await? else {
         return Ok(None);
     };
-    let done = pass(store, media, opts).await;
+    let mut report = GcReport::default();
+    let done = pass(store, media, opts, &mut report).await;
     if let Err(e) = guard.release().await {
         tracing::warn!(error = %e, "cannot release the artifacts GC lock");
     }
-    let report = done?;
+    if let Err(e) = done {
+        tracing::warn!(dry_run = opts.dry_run, done_before_the_error = %report, error = %e, "artifacts GC pass failed");
+        return Err(e);
+    }
     tracing::info!(
         dry_run = opts.dry_run,
         marked = report.marked,
@@ -109,50 +121,46 @@ pub async fn run(
         deleted_blobs = report.deleted_blobs,
         deleted_blob_bytes = report.deleted_blob_bytes,
         deleted_tmp = report.deleted_tmp,
+        failed = report.failed,
         "artifacts GC pass"
     );
     Ok(Some(report))
 }
 
-async fn pass(store: &dyn Store, media: &MediaStore, opts: &GcOptions) -> anyhow::Result<GcReport> {
+async fn pass(
+    store: &dyn Store,
+    media: &MediaStore,
+    opts: &GcOptions,
+    report: &mut GcReport,
+) -> anyhow::Result<()> {
     let protected = protected(store, media).await?;
     let protected_list: Vec<ArtifactHash> = protected.iter().cloned().collect();
     let cutoff = before(opts.now, opts.grace)?;
-    let mut report = GcReport::default();
 
     if opts.dry_run {
         let tx = store.begin().await?;
         let rows = rows(
-            tx.artifacts(),
-            None,
+            Rows::DryRun(tx.as_ref()),
             opts.now,
             cutoff,
             &protected_list,
-            &mut report,
+            report,
         )
         .await;
         tx.rollback().await?;
         rows?;
     } else {
         rows(
-            store.read().artifacts(),
-            Some(media),
+            Rows::Store(store.read().artifacts(), media),
             opts.now,
             cutoff,
             &protected_list,
-            &mut report,
+            report,
         )
         .await?;
     }
-    unrecorded(store, media, opts.dry_run, cutoff, &protected, &mut report).await?;
-    tmp(
-        media,
-        opts.dry_run,
-        before(opts.now, TMP_MAX_AGE)?,
-        &mut report,
-    )
-    .await?;
-    Ok(report)
+    unrecorded(store, media, opts.dry_run, cutoff, &protected, report).await?;
+    tmp(media, opts.dry_run, before(opts.now, TMP_MAX_AGE)?, report).await
 }
 
 /// A grace period of `days` days (`media.gc_grace_days`, `--grace-days`).
@@ -287,40 +295,87 @@ async fn manifest_hashes(media: &MediaStore, hash: &str) -> anyhow::Result<[Arti
     Ok([field("json")?, field("html")?])
 }
 
-/// Steps 1 and 2 on `artifacts` (the store's, or a dry run's transaction's); blobs are
-/// deleted only with `media`.
+/// Where steps 1 and 2 run.
+enum Rows<'a> {
+    /// For real: rows in the store, then their blobs.
+    Store(&'a dyn ArtifactRepo, &'a MediaStore),
+    /// A dry run: inside a transaction the caller rolls back, no blob touched. Each
+    /// tentative delete runs in a savepoint, so a foreign-key refusal (which aborts a
+    /// Postgres transaction) is rolled back alone and the dry run goes on.
+    DryRun(&'a dyn Tx),
+}
+
+impl Rows<'_> {
+    fn artifacts(&self) -> &dyn ArtifactRepo {
+        match self {
+            Rows::Store(artifacts, _) => *artifacts,
+            Rows::DryRun(tx) => tx.artifacts(),
+        }
+    }
+
+    /// `delete_if_orphaned`; a foreign-key refusal (a reference that raced in) is
+    /// `false`: the row stays.
+    async fn delete(
+        &self,
+        hash: &ArtifactHash,
+        cutoff: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> anyhow::Result<bool> {
+        let kept = |e: StoreError| match e {
+            StoreError::ForeignKey { .. } => Ok(false),
+            e => Err(e),
+        };
+        match self {
+            Rows::Store(artifacts, _) => Ok(artifacts
+                .delete_if_orphaned(hash, cutoff, protected)
+                .await
+                .or_else(kept)?),
+            Rows::DryRun(tx) => {
+                let savepoint = tx.begin_nested().await?;
+                match savepoint
+                    .artifacts()
+                    .delete_if_orphaned(hash, cutoff, protected)
+                    .await
+                {
+                    Ok(deleted) => {
+                        savepoint.commit().await?;
+                        Ok(deleted)
+                    }
+                    Err(e) => {
+                        savepoint.rollback().await?;
+                        Ok(kept(e)?)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Steps 1 and 2.
 async fn rows(
-    artifacts: &dyn ArtifactRepo,
-    media: Option<&MediaStore>,
+    target: Rows<'_>,
     now: Timestamp,
     cutoff: Timestamp,
     protected: &[ArtifactHash],
     report: &mut GcReport,
 ) -> anyhow::Result<()> {
-    let counts = artifacts.mark_orphans(now, protected).await?;
+    let counts = target.artifacts().mark_orphans(now, protected).await?;
     report.marked = counts.marked;
     report.unmarked = counts.unmarked;
     loop {
-        let batch = artifacts.orphaned_before(cutoff, MAX_PAGE).await?;
+        let batch = target.artifacts().orphaned_before(cutoff, MAX_PAGE).await?;
         let mut progressed = false;
         for row in &batch {
-            let deleted = match artifacts
-                .delete_if_orphaned(&row.hash, cutoff, protected)
-                .await
-            {
-                Ok(deleted) => deleted,
-                // A reference with a foreign key raced in: the row stays.
-                Err(StoreError::ForeignKey { .. }) => false,
-                Err(e) => return Err(e.into()),
-            };
-            if !deleted {
+            if !target.delete(&row.hash, cutoff, protected).await? {
                 continue;
             }
             progressed = true;
             report.deleted_rows += 1;
             report.deleted_row_bytes += u64::try_from(row.bytes).unwrap_or(0);
-            if let Some(media) = media {
-                delete_blob(media, &row.hash).await;
+            if let Rows::Store(_, media) = &target
+                && !delete_blob(media, &row.hash).await
+            {
+                report.failed += 1;
             }
         }
         // A short batch is the last one; a batch where every row was kept would come
@@ -396,9 +451,29 @@ async fn unrecorded_batch(
         if recorded.contains(&hash) {
             continue;
         }
-        if dry_run || delete_blob(media, &hash).await {
+        if dry_run {
             report.deleted_blobs += 1;
             report.deleted_blob_bytes += size;
+            continue;
+        }
+        // The batch check above is a pre-filter; asking again for this one hash right
+        // before its delete narrows the window in which a writer that re-uploaded the
+        // same bytes and recorded its row could still lose the blob to milliseconds
+        // (03 §6, residual race).
+        if !store
+            .read()
+            .artifacts()
+            .existing(std::slice::from_ref(&hash))
+            .await?
+            .is_empty()
+        {
+            continue;
+        }
+        if delete_blob(media, &hash).await {
+            report.deleted_blobs += 1;
+            report.deleted_blob_bytes += size;
+        } else {
+            report.failed += 1;
         }
     }
     Ok(())
@@ -424,6 +499,7 @@ async fn tmp(
         match media.delete_key(&object.key).await {
             Ok(()) => report.deleted_tmp += 1,
             Err(e) => {
+                report.failed += 1;
                 tracing::warn!(key = %object.key, error = %e, "cannot delete a staging object; a later GC pass retries");
             }
         }
@@ -463,11 +539,14 @@ mod tests {
             deleted_blobs: 5,
             deleted_blob_bytes: 6,
             deleted_tmp: 7,
+            failed: 0,
         };
         assert_eq!(
             r.to_string(),
             "marked 1, unmarked 2, deleted rows 3 (4 bytes), deleted unrecorded blobs 5 (6 bytes), deleted tmp 7"
         );
+        let failed = GcReport { failed: 2, ..r };
+        assert!(failed.to_string().ends_with("deleted tmp 7, failed 2"));
     }
 
     #[test]

@@ -556,17 +556,36 @@ it needs a pass to mark it and one more after the grace period. A pass cut short
 3 600 s timeout) continues the next day; a blob that cannot be deleted is logged and found
 again as a row-less blob.
 
-**Residual race (accepted).** A writer whose put of a blob that already existed was a no-op
-(same bytes), and that inserts its row in the milliseconds between step 2's row delete and
-its blob delete, ends up with a row and no blob. It needs bytes orphaned for longer than the
-grace period to be uploaded again at that instant; uploading the file again fixes it. Job
-payloads are read before the mark, so a job enqueued during a pass is seen by the next one:
-its artifact row was inserted (or unmarked) before the job, and is at most marked, never
-deleted, within the grace period.
+**Residual race (accepted).** Every writer stores the blob before its row, and the store's
+put of bytes that already exist is a no-op. Two windows remain, both milliseconds wide:
+
+- step 2: a writer that inserts its row between the GC's row delete and its blob delete;
+- step 3: a writer that inserts its row between the GC's last `existing` check for that
+  hash (asked again for the single hash right before each delete; the batch check of 1 000
+  is only a pre-filter) and the blob delete.
+
+Either writer ends up with a row and no blob. Both need bytes that were unreferenced (step
+2) or row-less (step 3) for longer than the grace period to be uploaded again at that
+instant; uploading the file again fixes it.
+
+Job payloads are read before the mark, so a job enqueued during a pass is seen by the next
+one: its artifact row was inserted (or unmarked) before the job, and is at most marked, never
+deleted, within the grace period. The scan reads `queued`, then `running` jobs; a running job
+released back to `queued` between the two reads is missed for that pass. For a row that only
+means a mark (cleared next pass); a **row-less** blob such a job names and that is older than
+the grace period would be deleted. No kind does that today (`import.wordpress` inputs and
+`media.variants` originals have rows). `dead` jobs are not scanned (P10: queued and running
+only), although `retry_dead` can revive one within its 30 days: `import.wordpress` deletes
+its inputs when it fails for good, and a `media.variants` original is held by its `media`
+row. A future kind whose dead jobs may be retried must keep rows for the hashes it names.
+
+Blob and `tmp/` deletes that fail are logged, counted (`, failed F` is appended to the
+output line) and retried by later passes; a pass that fails part-way logs what it had done.
 
 **Dry run** (`ferrite media gc --dry-run`) marks nothing and deletes nothing: steps 1 and 2
-run in a transaction that is rolled back, so their counts are exact; steps 3 and 4 only
-count. It prints the same line as a real run after `dry run: `.
+run in a transaction that is rolled back, so their counts are exact (each tentative delete
+in its own savepoint, so a foreign-key refusal on Postgres does not abort the dry run);
+steps 3 and 4 only count. It prints the same line as a real run after `dry run: `.
 
 ## 7. WordPress media import
 

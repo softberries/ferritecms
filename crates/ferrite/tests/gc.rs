@@ -273,6 +273,88 @@ async fn gc_keeps_every_reference_kind(db: Arc<TestDb>) {
     assert!(has_blob(media, &unrecorded).await, "a job's row-less input");
 }
 
+/// P10's fallback: while any report manifest cannot be read (its blob missing, over
+/// 1 KiB, or not `{"v":1,"json":…,"html":…}`), every `import`-kind row is kept, even one
+/// nothing names; other orphans still go. Once the manifest reads, the import orphan goes.
+async fn gc_unreadable_manifest_keeps_every_import_row(db: Arc<TestDb>) {
+    let store = db.store();
+    let m = media();
+    let media = &m.store;
+    let author = fixture_user(store).await;
+    let run_row = new_run(author.id, "https://wp.example");
+    store.read().imports().create_run(&run_row).await.unwrap();
+    let loose = artifact(
+        store,
+        media,
+        "an import file nothing names",
+        ArtifactKind::Import,
+    )
+    .await;
+
+    let missing = "e".repeat(64);
+    let pad = "x".repeat(1100);
+    let oversize =
+        json!({"v": 1, "json": "a".repeat(64), "html": "b".repeat(64), "pad": pad}).to_string();
+    let oversize = artifact(store, media, &oversize, ArtifactKind::Import).await;
+    let wrong_shape = artifact(store, media, "{\"v\":1}", ArtifactKind::Import).await;
+    let mut t = future();
+    for (case, manifest) in [
+        ("missing", missing.as_str()),
+        ("oversize", oversize.hash.as_str()),
+        ("wrong shape", wrong_shape.hash.as_str()),
+    ] {
+        store
+            .read()
+            .imports()
+            .set_report(run_row.id, manifest)
+            .await
+            .unwrap();
+        let other = artifact(
+            store,
+            media,
+            &format!("other orphan {case}"),
+            ArtifactKind::Media,
+        )
+        .await;
+        for _ in 0..2 {
+            t = later(t, Duration::from_secs(1));
+            run(store, media, &opts(t, Duration::ZERO)).await;
+        }
+        let kept = row(store, &loose.hash).await.expect(case);
+        assert_eq!(kept.orphaned_at, None, "{case}");
+        assert!(has_blob(media, &loose.hash).await, "{case}");
+        assert_eq!(
+            row(store, &other.hash).await,
+            None,
+            "{case}: other orphans go"
+        );
+        assert!(!has_blob(media, &other.hash).await, "{case}");
+    }
+
+    // A readable manifest: the fallback is off and the loose import row goes.
+    let json_file = artifact(store, media, "{}", ArtifactKind::Import).await;
+    let html_file = artifact(store, media, "<p></p>", ArtifactKind::Import).await;
+    let good = json!({"v": 1, "json": json_file.hash.as_str(), "html": html_file.hash.as_str()})
+        .to_string();
+    let good = artifact(store, media, &good, ArtifactKind::Import).await;
+    store
+        .read()
+        .imports()
+        .set_report(run_row.id, good.hash.as_str())
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        t = later(t, Duration::from_secs(1));
+        run(store, media, &opts(t, Duration::ZERO)).await;
+    }
+    assert_eq!(row(store, &loose.hash).await, None);
+    assert!(!has_blob(media, &loose.hash).await);
+    for kept in [&json_file, &html_file, &good] {
+        assert!(row(store, &kept.hash).await.is_some());
+        assert!(has_blob(media, &kept.hash).await);
+    }
+}
+
 /// A row nothing names is marked, survives the grace period, then goes: its row first,
 /// then its blob.
 async fn gc_deletes_orphan_row_then_blob_after_grace(db: Arc<TestDb>) {
@@ -443,6 +525,7 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             deleted_blobs: 1,
             deleted_blob_bytes: 5,
             deleted_tmp: 1,
+            failed: 0,
         }
     );
     assert_eq!(
@@ -522,6 +605,7 @@ async fn gc_concurrent_runs_one_busy(db: Arc<TestDb>) {
 
 backend_tests_spawning!(
     gc_keeps_every_reference_kind,
+    gc_unreadable_manifest_keeps_every_import_row,
     gc_deletes_orphan_row_then_blob_after_grace,
     gc_reinsert_clears_mark,
     gc_unrecorded_blob_young_kept_old_deleted,
