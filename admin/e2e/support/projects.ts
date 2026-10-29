@@ -5,15 +5,15 @@
 // Each project is two Playwright projects: `<name>` (every spec but the site-wide ones,
 // in parallel) and its teardown `<name>-site-wide` (the site-wide specs, one worker, once
 // `<name>` has finished, pass or fail). Selecting `<name>` runs both. The site-wide specs
-// change state that other specs read (settings, the active theme, a dead job), so nothing
-// else runs beside them.
+// change state that other specs read (settings, the active theme, a dead job, an import),
+// so nothing else runs beside them.
 
 /** A site's database. */
 export type Backend = "sqlite" | "pg";
 export type Engine = "chromium" | "firefox" | "webkit";
 
 /** The specs that change site-wide state; they run last, one at a time. */
-export const SITE_WIDE_SPECS = /(?:^|[/\\])(?:settings|themes|system)\.spec\.ts$/;
+export const SITE_WIDE_SPECS = /(?:^|[/\\])(?:import|settings|themes|system)\.spec\.ts$/;
 export const SITE_WIDE_SUFFIX = "-site-wide";
 
 export interface SiteProject {
