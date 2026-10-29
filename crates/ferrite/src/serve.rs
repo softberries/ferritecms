@@ -67,6 +67,7 @@ use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
     SwappablePermalinks, SystemService, TaxonomyService, UserService, comments::CommentService,
+    import::ImportService,
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -76,6 +77,7 @@ use ferrite_http::{
     app::hits::{HIT_FLUSH_EVERY, HitCounter},
     build_site,
     extensions::Installer,
+    import_blobs::MediaArtifacts,
     load_route_table,
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
@@ -167,6 +169,10 @@ pub struct NodeOptions {
     /// `ferrite_media::process_image`).
     #[cfg(feature = "test-seams")]
     pub image_processor: Option<jobs::ImageProcessor>,
+    /// Test seam: every `import.wordpress` attempt on this node fails after this many
+    /// batches.
+    #[cfg(feature = "test-seams")]
+    pub import_fail_after_batches: Option<u32>,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -473,6 +479,13 @@ async fn boot(
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks.clone()));
+    // The node's import service (M3-2): enqueues and reads imports, checks the job's
+    // importer and stores run reports in the media store. The `import.wordpress` job
+    // and the API share it.
+    let import = Arc::new(
+        ImportService::new(store.clone(), dyn_permalinks.clone())
+            .with_artifacts(Arc::new(MediaArtifacts::new(media.clone()))),
+    );
     let media_service = Arc::new(MediaService::new(
         store.clone(),
         content.clone(),
@@ -560,6 +573,17 @@ async fn boot(
         None => variants,
     };
     handlers.push(Arc::new(variants));
+    handlers.push(Arc::new(jobs::ImportWordpressHandler {
+        store: store.clone(),
+        import,
+        media: media.clone(),
+        data_dir: config.data_dir.clone(),
+        site_url: config.site.url.as_str().trim_end_matches('/').to_owned(),
+        max_upload,
+        version: binary_version()?.to_string(),
+        #[cfg(feature = "test-seams")]
+        fail_after_batches: opts.import_fail_after_batches,
+    }));
     #[cfg(feature = "test-seams")]
     handlers.extend(opts.extra_handlers);
     // What the job list's `handled` reads (P19).
