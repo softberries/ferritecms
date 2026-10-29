@@ -435,6 +435,7 @@ fn artifact(r: &ferrite_media::ArtifactRef, kind: ArtifactKind) -> anyhow::Resul
         bytes: i64::try_from(r.bytes)?,
         mime: r.mime.clone(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     })
 }
 

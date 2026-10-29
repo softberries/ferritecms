@@ -202,6 +202,7 @@ async fn loader_rejects_tampered_missing_and_ungranted(site: Site) -> Site {
             bytes: 10,
             mime: "application/wasm".into(),
             created_at: ferrite_domain::Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();

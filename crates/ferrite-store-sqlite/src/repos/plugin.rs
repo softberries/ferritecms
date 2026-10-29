@@ -7,9 +7,9 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin, StoreError,
-    ThemeRepo, check_len, check_limit, check_prune_limit, retained_marker, validate_json,
-    validate_text,
+    ArtifactRepo, MAX_ID_FILTER, MarkCounts, MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin,
+    StoreError, ThemeRepo, check_len, check_limit, check_prune_limit, retained_marker,
+    validate_json, validate_text,
 };
 
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -24,19 +24,30 @@ use crate::{
 impl ArtifactRepo for SqliteRepos {
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError> {
         validate_text("artifact mime", &artifact.mime)?;
-        let done = run!(&self.writer, |e| {
-            sqlx::query(
-            "INSERT INTO artifacts (hash, kind, bytes, mime, created_at) VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT DO NOTHING"
-        )
-        .bind(artifact.hash.as_str())
-        .bind(artifact.kind.as_str())
-        .bind(artifact.bytes)
-        .bind(&artifact.mime)
-        .bind(artifact.created_at.as_micros())
-        .execute(e)
-        })?;
-        Ok(done.rows_affected() == 1)
+        // An existing row is reused, so it counts as referenced again: its GC mark goes.
+        atomic!(&self.writer, |conn| async {
+            let done = sqlx::query(
+                "INSERT INTO artifacts (hash, kind, bytes, mime, created_at) \
+                 VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind(artifact.hash.as_str())
+            .bind(artifact.kind.as_str())
+            .bind(artifact.bytes)
+            .bind(&artifact.mime)
+            .bind(artifact.created_at.as_micros())
+            .execute(&mut *conn)
+            .await
+            .map_err(crate::exec::map_db_err)?;
+            if done.rows_affected() == 1 {
+                return Ok(true);
+            }
+            sqlx::query("UPDATE artifacts SET orphaned_at = NULL WHERE hash = ?")
+                .bind(artifact.hash.as_str())
+                .execute(&mut *conn)
+                .await
+                .map_err(crate::exec::map_db_err)?;
+            Ok(false)
+        })
     }
 
     async fn get(&self, hash: &ArtifactHash) -> Result<Option<Artifact>, StoreError> {
@@ -56,6 +67,120 @@ impl ArtifactRepo for SqliteRepos {
         .execute(e))
         .map(|_| ())
     }
+
+    async fn list_page(
+        &self,
+        after: Option<&ArtifactHash>,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError> {
+        let limit = check_limit(limit)?;
+        let after = after.map(ArtifactHash::as_str);
+        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE (?1 IS NULL OR hash > ?1) \
+             ORDER BY hash LIMIT ?2"
+        )))
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::artifact).collect()
+    }
+
+    async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError> {
+        check_len("artifact hashes", hashes.len(), MAX_EXISTING_HASHES)?;
+        let list = hash_array(hashes)?;
+        let rows = run!(&self.reader, |e| sqlx::query(
+            "SELECT hash FROM artifacts WHERE hash IN (SELECT value FROM json_each(?)) \
+             ORDER BY hash"
+        )
+        .bind(list.as_str())
+        .fetch_all(e))?;
+        rows.iter()
+            .map(|r| {
+                let hash: String = r.try_get("hash").map_err(crate::exec::map_db_err)?;
+                ArtifactHash::parse(&hash).map_err(Into::into)
+            })
+            .collect()
+    }
+
+    async fn mark_orphans(
+        &self,
+        now: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<MarkCounts, StoreError> {
+        let list = hash_array(protected)?;
+        atomic!(&self.writer, |conn| async {
+            let unmarked = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE artifacts SET orphaned_at = NULL WHERE orphaned_at IS NOT NULL AND \
+                 (hash IN (SELECT value FROM json_each(?)) OR NOT ({UNREFERENCED}))"
+            )))
+            .bind(list.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(crate::exec::map_db_err)?
+            .rows_affected();
+            let marked = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE artifacts SET orphaned_at = ? WHERE orphaned_at IS NULL AND \
+                 hash NOT IN (SELECT value FROM json_each(?)) AND {UNREFERENCED}"
+            )))
+            .bind(now.as_micros())
+            .bind(list.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(crate::exec::map_db_err)?
+            .rows_affected();
+            Ok(MarkCounts { marked, unmarked })
+        })
+    }
+
+    async fn orphaned_before(
+        &self,
+        before: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError> {
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE orphaned_at < ? \
+             ORDER BY hash LIMIT ?"
+        )))
+        .bind(before.as_micros())
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::artifact).collect()
+    }
+
+    async fn delete_if_orphaned(
+        &self,
+        hash: &ArtifactHash,
+        before: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<bool, StoreError> {
+        let list = hash_array(protected)?;
+        let done = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM artifacts WHERE hash = ? AND orphaned_at < ? AND \
+             hash NOT IN (SELECT value FROM json_each(?)) AND {UNREFERENCED}"
+        )))
+        .bind(hash.as_str())
+        .bind(before.as_micros())
+        .bind(list.as_str())
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
+    }
+}
+
+/// SQL (on `artifacts`): no row names the artifact; P10's SQL part of "referenced".
+const UNREFERENCED: &str = "NOT EXISTS (SELECT 1 FROM media WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM media_variants WHERE hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM plugins WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM themes WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM import_runs WHERE report_hash = artifacts.hash)";
+
+/// Most hashes [`ArtifactRepo::existing`] accepts.
+const MAX_EXISTING_HASHES: usize = 1000;
+
+/// The hashes as one JSON array text, the single parameter the statements unpack.
+fn hash_array(hashes: &[ArtifactHash]) -> Result<String, StoreError> {
+    serde_json::to_string(&hashes.iter().map(ArtifactHash::as_str).collect::<Vec<_>>())
+        .map_err(|e| StoreError::Invalid(e.to_string()))
 }
 
 #[async_trait]

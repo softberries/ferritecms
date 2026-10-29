@@ -279,6 +279,7 @@ async fn stage(
             bytes: i64::try_from(staged.bytes).unwrap_or(i64::MAX),
             mime: staged.mime.clone(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         },
         mime: staged.mime,
         bytes: staged.bytes,

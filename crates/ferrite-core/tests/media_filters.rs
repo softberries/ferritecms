@@ -63,6 +63,7 @@ fn upload(seed: u8, mime: &str, name: &str, title: Option<&str>) -> NewUpload {
             bytes: 1234,
             mime: mime.into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         },
         mime: mime.into(),
         bytes: 1234,

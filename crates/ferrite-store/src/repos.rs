@@ -434,6 +434,47 @@ pub trait ArtifactRepo: Send + Sync {
     async fn get(&self, hash: &ArtifactHash) -> Result<Option<Artifact>, StoreError>;
     /// Deletes an artifact by hash (missing: no-op).
     async fn delete(&self, hash: &ArtifactHash) -> Result<(), StoreError>;
+    /// Up to `limit` (1 through `MAX_PAGE`) artifacts ordered by hash, after `after`.
+    async fn list_page(
+        &self,
+        after: Option<&ArtifactHash>,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError>;
+    /// The given hashes that have a row (at most 1000 hashes, else `Invalid`).
+    async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError>;
+    /// One GC mark pass. Sets `orphaned_at = now` on unmarked rows that nothing
+    /// references (`media.artifact_hash`, `media_variants.hash`, `plugins.artifact_hash`,
+    /// `themes.artifact_hash`, `import_runs.report_hash`) and that are not in
+    /// `protected`; clears the mark on marked rows that are referenced or protected.
+    async fn mark_orphans(
+        &self,
+        now: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<MarkCounts, StoreError>;
+    /// Up to `limit` artifacts marked orphaned before `before`, ordered by hash.
+    async fn orphaned_before(
+        &self,
+        before: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError>;
+    /// Deletes the row when it is marked before `before`, referenced by nothing and not
+    /// in `protected`, in one statement (the references are re-checked there); returns
+    /// whether it was deleted.
+    async fn delete_if_orphaned(
+        &self,
+        hash: &ArtifactHash,
+        before: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<bool, StoreError>;
+}
+
+/// What one [`ArtifactRepo::mark_orphans`] pass changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MarkCounts {
+    /// Rows newly marked orphaned.
+    pub marked: u64,
+    /// Marked rows that are referenced (or protected) again and lost their mark.
+    pub unmarked: u64,
 }
 
 #[async_trait]

@@ -224,6 +224,7 @@ fn staged(file: StagedFile, slot: OwnedSemaphorePermit) -> StagedUpload {
             bytes: i64::try_from(file.bytes).unwrap_or(i64::MAX),
             mime: file.mime.clone(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         },
         mime: file.mime,
         bytes: file.bytes,

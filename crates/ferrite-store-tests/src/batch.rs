@@ -104,6 +104,7 @@ pub async fn batch_loaders_match_single_gets(db: &TestDb) {
         bytes: 10,
         mime: "image/png".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     assert!(repos.artifacts().insert_if_absent(&art).await.unwrap());
     let mut media_ids = Vec::new();

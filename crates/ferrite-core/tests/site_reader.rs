@@ -179,6 +179,7 @@ async fn media(store: &dyn Store, author: &User, status: ContentStatus) -> Conte
                 bytes: 10,
                 mime: "image/png".into(),
                 created_at: at(0),
+                orphaned_at: None,
             })
             .await
             .unwrap();
@@ -1758,6 +1759,7 @@ async fn media_with(
                 bytes: 10,
                 mime: mime.into(),
                 created_at: at(0),
+                orphaned_at: None,
             })
             .await
             .unwrap();

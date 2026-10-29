@@ -121,6 +121,7 @@ fn input(c: char, mime: &str) -> Artifact {
         bytes: 100,
         mime: mime.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

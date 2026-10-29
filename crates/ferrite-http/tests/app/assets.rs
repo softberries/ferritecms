@@ -44,6 +44,7 @@ async fn artifact(app: &App, data: &[u8], kind: ArtifactKind) -> (ArtifactHash, 
             bytes: i64::try_from(r.bytes).unwrap(),
             mime: r.mime.clone(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();

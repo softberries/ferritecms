@@ -22,6 +22,7 @@ async fn plugin_row(store: &Arc<dyn Store>, name: &str, seed: u8, hooks: &[&str]
         bytes: 1,
         mime: PLUGIN_MIME.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let hooks: serde_json::Map<String, Value> =
         hooks.iter().map(|h| ((*h).to_owned(), json!(10))).collect();

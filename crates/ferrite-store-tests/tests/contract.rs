@@ -1,10 +1,10 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
-    comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
-    import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files,
-    migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*, semantics::*,
-    site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
+    batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
+    event::*, idempotency::*, import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs,
+    migration_files, migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*,
+    semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -158,6 +158,12 @@ backend_tests!(
 
 backend_tests!(
     artifact_insert_if_absent,
+    artifact_list_page_is_ordered_and_paged,
+    existing_returns_present_subset,
+    migration_0011_roundtrip,
+    mark_orphans_marks_unreferenced_and_clears_referenced,
+    insert_if_absent_clears_orphan_mark,
+    delete_if_orphaned_respects_before_refs_and_protected,
     media_insert_get_update_variants,
     media_find_by_artifact,
     media_variants_backfill,

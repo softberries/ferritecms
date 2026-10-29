@@ -25,6 +25,7 @@ fn artifact(c: char, kind: ArtifactKind) -> Artifact {
         bytes: 1234,
         mime: "image/png".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 
@@ -478,7 +479,7 @@ pub async fn media_variants_backfill(db: &TestDb) {
         .unwrap();
     assert_eq!(
         store.migrate_down(2, true).await.unwrap(),
-        vec![10, 9, 8, 7, 6, 5, 4, 3]
+        vec![11, 10, 9, 8, 7, 6, 5, 4, 3]
     );
     assert!(
         !db.user_objects()
@@ -488,7 +489,7 @@ pub async fn media_variants_backfill(db: &TestDb) {
     );
     assert_eq!(
         store.migrate_up(None).await.unwrap(),
-        vec![3, 4, 5, 6, 7, 8, 9, 10]
+        vec![3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     let repo = store.read().media();
     let got = repo.find_by_artifact(&hash('b'), 10).await.unwrap();
