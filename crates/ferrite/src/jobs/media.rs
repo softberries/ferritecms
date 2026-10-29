@@ -237,5 +237,6 @@ fn variant_artifact(stored: &ferrite_media::ArtifactRef) -> Result<Artifact, Job
             .map_err(|_| JobError::Permanent("variant size out of range".to_owned()))?,
         mime: stored.mime.clone(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     })
 }

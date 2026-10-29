@@ -805,6 +805,7 @@ async fn failed_install_discards_unreferenced_blob(api: Api) -> Api {
         bytes: wasm.len() as i64,
         mime: "application/x-tar".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     api.store
         .read()

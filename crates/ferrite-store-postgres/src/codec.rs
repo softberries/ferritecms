@@ -209,7 +209,7 @@ pub(crate) fn redirect(row: &PgRow) -> Result<Redirect, StoreError> {
     })
 }
 
-pub(crate) const ARTIFACT_COLUMNS: &str = "hash, kind, bytes, mime, created_at";
+pub(crate) const ARTIFACT_COLUMNS: &str = "hash, kind, bytes, mime, created_at, orphaned_at";
 
 /// Maps a row selected with [`ARTIFACT_COLUMNS`].
 pub(crate) fn artifact(row: &PgRow) -> Result<Artifact, StoreError> {
@@ -224,6 +224,10 @@ pub(crate) fn artifact(row: &PgRow) -> Result<Artifact, StoreError> {
             .try_get::<DateTime<Utc>, _>("created_at")
             .map_err(map_db_err)?
             .into(),
+        orphaned_at: row
+            .try_get::<Option<DateTime<Utc>>, _>("orphaned_at")
+            .map_err(map_db_err)?
+            .map(Into::into),
     })
 }
 

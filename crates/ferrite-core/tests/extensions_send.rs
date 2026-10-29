@@ -26,6 +26,7 @@ async fn extension_service_futures_are_send() {
         bytes: 1,
         mime: "application/wasm".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let theme = InstalledTheme {
         name: "t".into(),

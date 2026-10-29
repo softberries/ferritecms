@@ -376,6 +376,7 @@ fn artifact(seed: u8) -> Artifact {
         bytes: 42,
         mime: "application/wasm".into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     }
 }
 

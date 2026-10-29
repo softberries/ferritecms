@@ -152,6 +152,7 @@ impl Site {
             bytes: i64::try_from(bytes).unwrap(),
             mime: "application/octet-stream".into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         }
     }
 

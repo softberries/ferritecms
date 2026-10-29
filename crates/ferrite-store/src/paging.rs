@@ -3,9 +3,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use ferrite_domain::{
-    Autosave, Comment, CommentStatus, ContentId, ContentItem, ContentOrder, ContentQuery, Cursor,
-    IdempotencyKey, Job, MAX_PAGE, MEDIA_KIND, MediaKind, NewAudit, NewJob, NewNode, RateHit,
-    TermId, Timestamp,
+    ArtifactHash, Autosave, Comment, CommentStatus, ContentId, ContentItem, ContentOrder,
+    ContentQuery, Cursor, IdempotencyKey, Job, MAX_PAGE, MEDIA_KIND, MediaKind, NewAudit, NewJob,
+    NewNode, RateHit, TermId, Timestamp,
 };
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -51,6 +51,24 @@ pub fn check_len(what: &str, len: usize, max: usize) -> Result<(), StoreError> {
         )));
     }
     Ok(())
+}
+
+/// Most hashes `ArtifactRepo::existing` accepts.
+pub const MAX_EXISTING_HASHES: usize = 1000;
+
+/// SQL predicate on `artifacts` (table name unaliased): no row names the artifact. P10's SQL
+/// part of "referenced", the same text on both backends.
+pub const ARTIFACT_UNREFERENCED_SQL: &str = "NOT EXISTS (SELECT 1 FROM media WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM media_variants WHERE hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM plugins WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM themes WHERE artifact_hash = artifacts.hash) \
+     AND NOT EXISTS (SELECT 1 FROM import_runs WHERE report_hash = artifacts.hash)";
+
+/// The hashes as one JSON array text, the single parameter the artifact GC statements
+/// unpack (`json_each` / `jsonb_array_elements_text`).
+pub fn artifact_hash_array(hashes: &[ArtifactHash]) -> Result<String, StoreError> {
+    serde_json::to_string(&hashes.iter().map(ArtifactHash::as_str).collect::<Vec<_>>())
+        .map_err(|e| StoreError::Invalid(e.to_string()))
 }
 
 /// Validates an id list: at most [`MAX_ID_FILTER`] entries.
