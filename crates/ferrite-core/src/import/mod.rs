@@ -68,9 +68,30 @@ const TAKEN_OVER: &str = "import run was taken over";
 /// The constraint that allows one `running` run.
 const RUNNING_UQ: &str = "import_runs_running_uq";
 
+/// The step that reads the WXR into the work file (P28).
+pub const STEP_PARSE: &str = "parse";
+/// Pass 1: users, terms and content types.
+pub const STEP_PASS1: &str = "pass1";
+/// Pass 2: media.
+pub const STEP_PASS2: &str = "pass2";
+/// Pass 3: content.
+pub const STEP_PASS3: &str = "pass3";
+/// Pass 4: comments, menus, options and redirects.
+pub const STEP_PASS4: &str = "pass4";
+/// The fix-up of internal links.
+pub const STEP_FIXUP: &str = "fixup";
+/// The step that builds the report.
+pub const STEP_REPORT: &str = "report";
+
 /// The steps of a run, in order (P28): what [`ImportHandle::set_step`] accepts.
 pub const IMPORT_STEPS: [&str; 7] = [
-    "parse", "pass1", "pass2", "pass3", "pass4", "fixup", "report",
+    STEP_PARSE,
+    STEP_PASS1,
+    STEP_PASS2,
+    STEP_PASS3,
+    STEP_PASS4,
+    STEP_FIXUP,
+    STEP_REPORT,
 ];
 
 /// Where artifact bytes live (the binary's `MediaStore`; `ferrite-core` does not depend
