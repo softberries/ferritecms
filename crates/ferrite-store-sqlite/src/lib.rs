@@ -35,6 +35,8 @@ pub struct SqliteStore {
     /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
+    /// Never pruned (see [`SqliteOptions::keep_snapshot`]).
+    keep_snapshot: Option<PathBuf>,
     /// Named locks (`Store::try_lock`).
     locks: lock::Locks,
     _lock: File,
@@ -79,7 +81,10 @@ impl Store for SqliteStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 

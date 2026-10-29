@@ -77,7 +77,13 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
     let config = load_config(&args.data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let seeded = async {
-        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
         let media = open_media(&config)?;
         let theme = load_theme(
             store.as_ref(),

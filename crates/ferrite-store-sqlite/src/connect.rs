@@ -30,6 +30,10 @@ pub struct SqliteOptions {
     pub lock_dir: Option<PathBuf>,
     /// Where pre-migration snapshots go; default: `<db dir>/backups`.
     pub backups_dir: Option<PathBuf>,
+    /// A pre-migration snapshot the pruning (newest five kept) never deletes: the binary
+    /// passes the one `<data>/upgrade.json` names, which `ferrite rollback
+    /// --restore-snapshot` may still need (M4-2 P30).
+    pub keep_snapshot: Option<PathBuf>,
 }
 
 impl SqliteOptions {
@@ -40,6 +44,7 @@ impl SqliteOptions {
             readers: 4,
             lock_dir: None,
             backups_dir: None,
+            keep_snapshot: None,
         }
     }
 }
@@ -83,6 +88,7 @@ impl SqliteStore {
             writer,
             reader,
             backups_dir: opts.backups_dir.unwrap_or_else(|| db_dir.join("backups")),
+            keep_snapshot: opts.keep_snapshot,
             locks: crate::lock::Locks::default(),
             _lock: lock,
         })

@@ -1,12 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use ferrite_config::{Config, DatabaseConfig, DbKind};
 use ferrite_store::{
-    Backend, Compat, LOCK_MIGRATE, LockGuard, MigrationStatus, Phase, Store, StoreError, lock,
+    Backend, Compat, LOCK_MIGRATE, LockGuard, MigrateReport, MigrationStatus, Phase, Store,
+    StoreError, lock,
 };
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
+
+use crate::upgrade::UpgradeRecord;
 
 /// Whether opening may create a missing database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +33,8 @@ pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<d
             let mut opts = SqliteOptions::new(path);
             opts.lock_dir = Some(config.data_dir.clone());
             opts.backups_dir = Some(config.data_dir.join("backups"));
+            // Pruning never deletes the snapshot a rollback may restore (M4-2 P30).
+            opts.keep_snapshot = crate::upgrade::protected_snapshot(&config.data_dir)?;
             let store = SqliteStore::open(opts)
                 .await
                 .context("cannot open the SQLite database")?;
@@ -213,15 +218,19 @@ pub async fn release_migrate_lock(guard: Box<dyn LockGuard>) {
 }
 
 /// Startup compatibility check (02 §7-§8): applies pending migrations when allowed,
-/// refuses to start when the schema is incompatible with `binary`. Runs under the migrate
-/// lock, so concurrent starts migrate once and none reads a half-migrated schema.
+/// refuses to start when the schema is incompatible with `binary`, then records the start
+/// in `<data_dir>/upgrade.json` and `schema_meta.last_binary_version` (M4-2 P30,
+/// [`crate::upgrade::record`]); returns the record when one was written. Runs under the
+/// migrate lock, so concurrent starts migrate (and record) once and none reads a
+/// half-migrated schema.
 pub async fn startup_check(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,
-) -> anyhow::Result<()> {
+    data_dir: &Path,
+) -> anyhow::Result<Option<UpgradeRecord>> {
     let guard = migrate_lock(store).await?;
-    let result = check_and_migrate(store, binary, db).await;
+    let result = check_and_migrate(store, binary, db, data_dir).await;
     release_migrate_lock(guard).await;
     result
 }
@@ -230,19 +239,22 @@ async fn check_and_migrate(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,
-) -> anyhow::Result<()> {
+    data_dir: &Path,
+) -> anyhow::Result<Option<UpgradeRecord>> {
     let status = store.migration_status(binary).await?;
-    match decide(&status, store.backend(), db, binary)? {
-        Decision::Proceed => {}
+    let report = match decide(&status, store.backend(), db, binary)? {
+        Decision::Proceed => MigrateReport::default(),
         Decision::ProceedNewerSchema { db, bin } => {
             tracing::warn!(db, bin, "running against newer schema");
+            MigrateReport::default()
         }
         Decision::MigrateUp => {
-            let applied = store.migrate_up(None).await?;
-            tracing::info!(?applied, "applied pending migrations");
+            let report = store.migrate_up(None).await?;
+            tracing::info!(applied = ?report.applied, "applied pending migrations");
+            report
         }
-    }
-    Ok(())
+    };
+    crate::upgrade::record(store, data_dir, binary, status.db_version, &report).await
 }
 
 #[cfg(test)]

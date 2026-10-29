@@ -1,4 +1,5 @@
 use std::io::{IsTerminal, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::bail;
@@ -31,8 +32,16 @@ pub async fn run(cmd: MigrateCommand) -> anyhow::Result<ExitCode> {
             data: DataArg { data },
             to,
         } => {
-            let store = open_store(&load_config(&data)?, OpenMode::CreateIfMissing).await?;
-            let applied = up_locked(store.as_ref(), to, MIGRATE_LOCK_WAIT).await?;
+            let config = load_config(&data)?;
+            let store = open_store(&config, OpenMode::CreateIfMissing).await?;
+            let applied = up_recorded(
+                store.as_ref(),
+                to,
+                &config.data_dir,
+                &binary_version()?,
+                MIGRATE_LOCK_WAIT,
+            )
+            .await?;
             if applied.is_empty() {
                 println!("Nothing to apply.");
             } else {
@@ -74,7 +83,29 @@ pub(crate) async fn up_locked(
     let guard = migrate_lock_with(store, wait).await?;
     let applied = store.migrate_up(to).await;
     release_migrate_lock(guard).await;
-    Ok(applied?)
+    Ok(applied?.applied)
+}
+
+/// [`up_locked`] for the site's own database (`ferrite migrate up`, `init`): also records
+/// the change in `<data_dir>/upgrade.json` and `schema_meta.last_binary_version`
+/// ([`crate::upgrade::record`]) under the same lock. Returns the applied versions.
+pub(crate) async fn up_recorded(
+    store: &dyn Store,
+    to: Option<i64>,
+    data_dir: &Path,
+    binary: &semver::Version,
+    wait: Duration,
+) -> anyhow::Result<Vec<i64>> {
+    let guard = migrate_lock_with(store, wait).await?;
+    let result = async {
+        let schema_from = store.migration_status(binary).await?.db_version;
+        let report = store.migrate_up(to).await?;
+        crate::upgrade::record(store, data_dir, binary, schema_from, &report).await?;
+        anyhow::Ok(report.applied)
+    }
+    .await;
+    release_migrate_lock(guard).await;
+    result
 }
 
 /// `migrate_down` under the migrate lock, waiting up to `wait` for it.

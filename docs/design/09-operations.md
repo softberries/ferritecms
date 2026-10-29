@@ -16,6 +16,45 @@ ferrite self-update [--version X] [--channel stable]
 6. New binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
    writes `data/upgrade.json` (`{from, to, schema_from, schema_to, snapshot, at}`).
 
+### `upgrade.json` (as built, M4-2 P30)
+
+```json
+{"v": 1, "from": "0.1.0", "to": "0.2.0", "schema_from": 10, "schema_to": 12,
+ "snapshot": "backups/pre-10-to-12-20261030T120000Z.db", "at": "2026-10-30T12:00:00.123456Z"}
+```
+
+- `from`: `schema_meta.last_binary_version` before this start, `null` when none was stored
+  (a database from before M4-2). `to`: this binary. `schema_from`/`schema_to`: the schema
+  version before and after (equal when only the binary changed). `snapshot`: the SQLite
+  pre-migration snapshot, relative to the data folder, `null` when nothing was migrated
+  and always on Postgres. `at`: RFC 3339, UTC.
+- **Who writes it:** the startup check, i.e. `serve` and every other command that
+  migrates when it starts (`seed`, `user`, `theme`/`plugin` commands, `import
+  wordpress`, `media gc`/`regenerate`), and `ferrite migrate up`. All of them do it
+  under the migrate lock, after the check and any migrations, so concurrent cluster
+  starts write it once.
+- **When:** the stored `last_binary_version` differs from this binary, or migrations were
+  applied. Then `schema_meta.last_binary_version` is set to this binary. A start that
+  changed nothing leaves an existing file alone. A start against a newer schema (an
+  older binary after a rollback swap) also counts as a change and is recorded.
+- **Not written:** for a database that had no schema before (`ferrite init`, a first
+  `serve` or `migrate up` on an empty database): there is nothing to roll back to; the
+  version is still stored, so the next start writes nothing. Not written either on a
+  retry after a start that failed between writing the file and storing the version,
+  when the file already records the same `from` → `to` (it may name the snapshot the
+  retry, with nothing left to migrate, would otherwise drop).
+- **Atomic:** a temp file in the data folder, synced, renamed over the old file, then the
+  folder is synced. Each change replaces the file: rollback goes back one step only.
+- In a cluster each node writes its own data folder's file; `last_binary_version` is
+  shared, so only the first node of a new version writes one.
+- The pruning of pre-migration snapshots (newest five) never deletes the one this file
+  names (02 §7). To know which, opening a SQLite site reads the file: an unreadable
+  `upgrade.json` (not JSON, or another `v`) stops every command that opens the database
+  until it is fixed or moved aside, rather than risk pruning that snapshot.
+- `import-site` and `db copy` migrate their target without writing the file. `restore`
+  does not migrate; the restored database (with the `last_binary_version` it was backed
+  up with) is recorded by its next start like any other.
+
 ### Version skipping
 
 - **Forward**: any jump is allowed (0.1 → 0.5). Migrations are cumulative and run in

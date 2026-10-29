@@ -4,7 +4,10 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey,
     ImportMapKind, Media, Timestamp,
 };
-use ferrite_store::{Compat, Phase, SCHEMA_META_INSTALL_ID, SCHEMA_META_MIN_BINARY, StoreError};
+use ferrite_store::{
+    Backend, Compat, MigrateReport, Phase, SCHEMA_META_INSTALL_ID, SCHEMA_META_LAST_BINARY,
+    SCHEMA_META_MIN_BINARY, StoreError,
+};
 use semver::Version;
 
 use crate::{
@@ -95,7 +98,7 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
             .any(|o| o.contains("sessions") || o.contains("audit_log")),
     );
     assert_eq!(
-        store.migrate_up(None).await.unwrap(),
+        store.migrate_up(None).await.unwrap().applied,
         vec![5, 6, 7, 8, 9, 10, 11]
     );
     assert_eq!(
@@ -107,10 +110,13 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
     assert_eq!(
-        store.migrate_up(None).await.unwrap(),
+        store.migrate_up(None).await.unwrap().applied,
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
-    assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        Vec::<i64>::new()
+    );
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
     assert!(
@@ -156,13 +162,13 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
     );
 
     // Up to a target version stops there.
-    assert_eq!(store.migrate_up(Some(2)).await.unwrap(), vec![2]);
+    assert_eq!(store.migrate_up(Some(2)).await.unwrap().applied, vec![2]);
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::NeedsUp
     );
     assert_eq!(
-        store.migrate_up(None).await.unwrap(),
+        store.migrate_up(None).await.unwrap().applied,
         vec![3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     assert_eq!(
@@ -190,7 +196,10 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
     meta.set(SCHEMA_META_MIN_BINARY, "9.9.9").await.unwrap();
     db.insert_unknown_applied(9999).await;
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), Vec::<i64>::new());
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        Vec::<i64>::new()
+    );
     assert_eq!(
         meta.get(SCHEMA_META_MIN_BINARY).await.unwrap().as_deref(),
         Some("9.9.9")
@@ -377,7 +386,7 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
 
     // Up again re-adds the column (so the down really dropped it) at its default.
     assert_eq!(
-        store.migrate_up(None).await.unwrap(),
+        store.migrate_up(None).await.unwrap().applied,
         vec![6, 7, 8, 9, 10, 11]
     );
     let got = store.read().media().get(item.id).await.unwrap().unwrap();
@@ -449,7 +458,10 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
     assert!(s.pending[0].directives.lossy_down);
     assert_eq!(s.pending[0].directives.phase, Phase::Expand);
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![7, 8, 9, 10, 11]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        vec![7, 8, 9, 10, 11]
+    );
     // The row did not survive; the table takes it again.
     let repos = store.read();
     assert_eq!(
@@ -510,7 +522,10 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
     );
     assert!(s.pending[0].directives.lossy_down);
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![8, 9, 10, 11]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        vec![8, 9, 10, 11]
+    );
     // The slot survived without its SEO member.
     let repos = store.read();
     assert_eq!(
@@ -581,7 +596,10 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
     );
     assert!(s.pending[0].directives.lossy_down);
 
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![9, 10, 11]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        vec![9, 10, 11]
+    );
     // The rows did not survive; the tables take them again.
     let repos = store.read();
     assert_eq!(repos.imports().get_run(run.id).await.unwrap(), None);
@@ -663,7 +681,7 @@ pub async fn migration_0010_roundtrip(db: &TestDb) {
         ("import jobs", phase_0010(db))
     );
     assert!(s.pending[0].directives.lossy_down);
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![10, 11]);
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![10, 11]);
     // The import artifact went with the down; the media artifact and its row stayed.
     // (Read after the up: the artifact queries need 0011's column.)
     let artifacts = store.read().artifacts();
@@ -702,4 +720,38 @@ fn artifact_0010(c: char, kind: ArtifactKind) -> Artifact {
         created_at: Timestamp::from_micros(1_700_000_000_000_000).unwrap(),
         orphaned_at: None,
     }
+}
+
+/// M4-2 P30: `migrate_up` reports what it applied and, on SQLite, the pre-migration
+/// snapshot it wrote (Postgres takes none). `last_binary_version` is an ordinary
+/// `schema_meta` key the migrations' bookkeeping leaves alone.
+pub async fn migrate_up_reports_snapshot(db: &TestDb) {
+    let store = db.store();
+    let meta = store.read().schema_meta();
+    meta.set(SCHEMA_META_LAST_BINARY, "0.0.1").await.unwrap();
+
+    let none = store.migrate_up(None).await.unwrap();
+    assert_eq!(none, MigrateReport::default(), "nothing pending");
+
+    assert_eq!(store.migrate_down(9, true).await.unwrap(), vec![11, 10]);
+    let report = store.migrate_up(None).await.unwrap();
+    assert_eq!(report.applied, vec![10, 11]);
+    match store.backend() {
+        Backend::Sqlite => {
+            let snap = report
+                .snapshot
+                .expect("SQLite writes a pre-migration snapshot");
+            assert!(snap.is_file(), "{}", snap.display());
+            let name = snap.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                name.starts_with("pre-9-to-11-") && name.ends_with(".db"),
+                "{name}"
+            );
+        }
+        Backend::Postgres => assert_eq!(report.snapshot, None),
+    }
+    assert_eq!(
+        meta.get(SCHEMA_META_LAST_BINARY).await.unwrap().as_deref(),
+        Some("0.0.1")
+    );
 }

@@ -145,7 +145,15 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     std::fs::create_dir_all(&backups)
         .with_context(|| format!("cannot create {}", backups.display()))?;
     let store = open_store(&config, OpenMode::CreateIfMissing).await?;
-    let applied = crate::migrate::up_locked(store.as_ref(), None, MIGRATE_LOCK_WAIT).await?;
+    // A new database: stores `last_binary_version`, writes no upgrade.json (P30).
+    let applied = crate::migrate::up_recorded(
+        store.as_ref(),
+        None,
+        &config.data_dir,
+        &crate::binary_version()?,
+        MIGRATE_LOCK_WAIT,
+    )
+    .await?;
     tracing::info!(?applied, "database migrated");
     Ok(())
 }

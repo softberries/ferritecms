@@ -50,8 +50,9 @@ pub enum Export {
     Rows,
     /// Only the rows whose key (one [`ColType::Text`] column) is one of these values.
     /// `schema_meta` exports only `site_id`: the other keys (`created_by_version`,
-    /// `min_binary_version`) belong to the target's own migrations. The reader applies
-    /// the filter, and the loader writes such rows over the target's.
+    /// `min_binary_version`, `last_binary_version`) belong to the target's own migrations
+    /// and binary. The reader applies the filter, and the loader writes such rows over the
+    /// target's.
     OnlyKeys(&'static [&'static str]),
     /// Not exported: the data is transient or derived (P2). The reader refuses it.
     Skip,

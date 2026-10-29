@@ -7,8 +7,8 @@ use std::{
 };
 
 use ferrite_store::{
-    Directives, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID, SCHEMA_META_MIN_BINARY,
-    StoreError, next_min_binary, parse_directives, plan_down,
+    Directives, MigrateReport, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID,
+    SCHEMA_META_MIN_BINARY, StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -137,15 +137,16 @@ impl SqliteStore {
         ))
     }
 
-    pub(crate) async fn up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    pub(crate) async fn up(&self, to: Option<i64>) -> Result<MigrateReport, StoreError> {
         let applied = self.applied_versions().await?;
         let pending: Vec<i64> = embedded_versions()
             .into_iter()
             .filter(|v| !applied.contains(v) && to.is_none_or(|t| *v <= t))
             .collect();
+        let mut snapshot = None;
         if let Some(&target) = pending.iter().max() {
             let from = applied.iter().copied().max().unwrap_or(0);
-            self.pre_migration_snapshot(from, target).await?;
+            snapshot = Some(self.pre_migration_snapshot(from, target).await?);
             match to {
                 Some(t) => MIGRATOR.run_to(t, &self.writer).await,
                 None => MIGRATOR.run(&self.writer).await,
@@ -154,7 +155,10 @@ impl SqliteStore {
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
         self.sync_schema_meta(&[]).await?;
-        Ok(pending)
+        Ok(MigrateReport {
+            applied: pending,
+            snapshot,
+        })
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -247,8 +251,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// `backups/pre-<from>-to-<to>-<UTC yyyymmddThhmmssZ>.db`, keeping the newest five.
-    async fn pre_migration_snapshot(&self, from: i64, to: i64) -> Result<(), StoreError> {
+    /// `backups/pre-<from>-to-<to>-<UTC yyyymmddThhmmssZ>.db`, keeping the newest five
+    /// plus [`SqliteOptions::keep_snapshot`](crate::SqliteOptions::keep_snapshot); returns
+    /// the new snapshot's path.
+    async fn pre_migration_snapshot(&self, from: i64, to: i64) -> Result<PathBuf, StoreError> {
         let dir = &self.backups_dir;
         std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
         let stem = format!(
@@ -264,11 +270,18 @@ impl SqliteStore {
         }
         self.vacuum_into(&dest).await?;
         tracing::info!(path = %dest.display(), "wrote pre-migration snapshot");
-        prune_snapshots(dir)
+        prune_snapshots(dir, self.keep_snapshot.as_deref())?;
+        Ok(dest)
     }
 }
 
-fn prune_snapshots(dir: &Path) -> Result<(), StoreError> {
+/// Deletes all but the newest [`KEEP_SNAPSHOTS`] `pre-*.db` in `dir`, except `keep` (the
+/// snapshot `upgrade.json` names, which a rollback may still restore, M4-2 P30): it counts
+/// among the five when it is one of the newest, and survives as a sixth when it is older.
+fn prune_snapshots(dir: &Path, keep: Option<&Path>) -> Result<(), StoreError> {
+    // Compared canonically: `keep` is built from the data folder, `dir` may be spelled
+    // another way (a relative `--data`, a symlink).
+    let keep = keep.map(|k| std::fs::canonicalize(k).unwrap_or_else(|_| k.to_owned()));
     let mut snaps: Vec<(SystemTime, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| io_err(dir, e))? {
         let entry = entry.map_err(|e| io_err(dir, e))?;
@@ -286,6 +299,11 @@ fn prune_snapshots(dir: &Path) -> Result<(), StoreError> {
     }
     snaps.sort_by(|a, b| b.cmp(a));
     for (_, old) in snaps.into_iter().skip(KEEP_SNAPSHOTS) {
+        if let Some(keep) = &keep
+            && std::fs::canonicalize(&old).is_ok_and(|p| p == *keep)
+        {
+            continue;
+        }
         std::fs::remove_file(&old).map_err(|e| io_err(&old, e))?;
     }
     Ok(())
@@ -377,5 +395,32 @@ mod tests {
         }
         // Six snapshots written, five kept.
         assert_eq!(snapshots(&backups).len(), 5);
+    }
+
+    #[tokio::test]
+    async fn prune_never_deletes_keep_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let kept = backups.join("pre-0-to-1-20200101T000000Z.db");
+        let f = std::fs::File::create(&kept).unwrap();
+        f.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+        let mut opts = SqliteOptions::new(dir.path().join("ferrite.db"));
+        // Spelled through `..` on purpose: compared canonically.
+        opts.keep_snapshot = Some(
+            backups
+                .join("..")
+                .join("backups")
+                .join(kept.file_name().unwrap()),
+        );
+        let store = SqliteStore::open(opts).await.unwrap();
+        for _ in 0..6 {
+            let report = store.migrate_up(None).await.unwrap();
+            assert!(report.snapshot.unwrap().starts_with(&backups));
+            store.migrate_down(0, true).await.unwrap();
+        }
+        let names = snapshots(&backups);
+        assert_eq!(names.len(), 6, "{names:?}");
+        assert!(kept.exists());
     }
 }

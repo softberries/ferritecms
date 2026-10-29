@@ -2,8 +2,8 @@
 //! bookkeeping and checksum verification. No automatic snapshot on Postgres (02 §7).
 
 use ferrite_store::{
-    Directives, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID, SCHEMA_META_MIN_BINARY,
-    StoreError, next_min_binary, parse_directives, plan_down,
+    Directives, MigrateReport, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID,
+    SCHEMA_META_MIN_BINARY, StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -120,7 +120,8 @@ impl PgStore {
         ))
     }
 
-    pub(crate) async fn up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    /// No snapshot on Postgres: the report's `snapshot` is always `None`.
+    pub(crate) async fn up(&self, to: Option<i64>) -> Result<MigrateReport, StoreError> {
         let applied = self.applied_versions().await?;
         let pending: Vec<i64> = embedded_versions()
             .into_iter()
@@ -139,7 +140,10 @@ impl PgStore {
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
         self.sync_schema_meta(&[]).await?;
-        Ok(pending)
+        Ok(MigrateReport {
+            applied: pending,
+            snapshot: None,
+        })
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {

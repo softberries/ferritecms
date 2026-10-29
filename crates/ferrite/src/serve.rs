@@ -284,7 +284,7 @@ async fn join(
         let NodeOptions {} = opts;
         binary_version()?
     };
-    startup_check(store.as_ref(), &version, &config.database).await?;
+    startup_check(store.as_ref(), &version, &config.database, &config.data_dir).await?;
     let schema_version = store
         .migration_status(&version)
         .await

@@ -36,7 +36,9 @@ async fn auto_migrates_an_old_schema() {
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
     s.migrate_down(1, true).await.expect("down");
-    startup_check(&s, &bin, &dbconf(true)).await.expect("check");
+    startup_check(&s, &bin, &dbconf(true), dir.path())
+        .await
+        .expect("check");
     let st = s.migration_status(&bin).await.expect("status");
     assert_eq!(st.verdict, Compat::UpToDate);
 }
@@ -48,7 +50,9 @@ async fn refuses_old_schema_without_auto_migrate() {
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
     s.migrate_down(1, true).await.expect("down");
-    let e = startup_check(&s, &bin, &dbconf(false)).await.unwrap_err();
+    let e = startup_check(&s, &bin, &dbconf(false), dir.path())
+        .await
+        .unwrap_err();
     assert!(format!("{e:#}").contains("ferrite migrate up"));
     let st = s.migration_status(&bin).await.expect("status");
     assert_eq!(st.verdict, Compat::NeedsUp);
@@ -60,7 +64,7 @@ async fn up_to_date_is_ok() {
     let s = store(&dir).await;
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
-    startup_check(&s, &bin, &dbconf(false))
+    startup_check(&s, &bin, &dbconf(false), dir.path())
         .await
         .expect("check");
 }
@@ -81,7 +85,10 @@ async fn startup_check_serialises_on_migrate_lock(db: Arc<TestDb>) {
     let check = {
         let store = store.clone();
         let bin = bin.clone();
-        tokio::spawn(async move { startup_check(store.as_ref(), &bin, &dbconf(true)).await })
+        tokio::spawn(async move {
+            let data = tempfile::tempdir().expect("tempdir");
+            startup_check(store.as_ref(), &bin, &dbconf(true), data.path()).await
+        })
     };
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!check.is_finished(), "startup_check must wait for the lock");
