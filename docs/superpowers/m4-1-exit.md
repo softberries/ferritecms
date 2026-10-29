@@ -21,7 +21,7 @@ observation is recorded as a follow-up (§3). Gates: §2.
 | (b) SQLite → Postgres move: Postgres-backed folder, `import-site` of the SQLite export, `media sync`, `serve`, page renders | §1 (b) | yes: 89 rows, `copied 5 (971995 bytes)`, a second sync `skipped 5`, post and media `200` |
 | (c) `db copy` SQLite → Postgres into a fresh schema (and back to a new SQLite file) | §1 (c) | yes: 89 rows both ways; a second copy into the now non-empty schema refused (exit 1) |
 | (d) `backup` to a repository folder (twice, `--keep 1`) and to a `.tar.zst`, `restore` both into new folders, `serve`, `media gc --dry-run` | §1 (d) | yes: incremental second run (`0 copied, 5 already in the repository`), restored site serves, new install id, the snapshot carries none |
-| (e) Live backup: `serve` with `[backup] schedule = "daily"` runs it at once; three posts written through the API meanwhile; snapshot restored and served | §1 (e) | yes: `scheduled backup done`, the restored site serves and holds the three posts |
+| (e) Live backup: `serve` with `[backup] schedule = "daily"` runs it at once; three posts written through the API before the snapshot; snapshot restored and served | §1 (e) | yes: `scheduled backup done`, the restored site serves and holds the three posts |
 | (f) `media regenerate` on the seeded site | §1 (f) | yes: `regenerated 0, skipped 1` by default, `regenerated 1` with `--all`, unknown `--item` exit 1 |
 | (g) Cluster example: `up --build -d`, upload via node1, read via node2, `down -v` | §1 (g) | yes: upload `201`, node2 `200 image/png` byte-identical; the GC wrote `ferrite-owner.json` to RustFS |
 
@@ -82,7 +82,7 @@ Commands added (flags and exit codes in [09 §8](../design/09-operations.md#8-cl
 API or OpenAPI change (P23).
 
 Docs changed in Task 14: this file; `rulings/m4.md` (the execution rulings R-pf1–R-pf3 and
-R1–R19, as-built notes on P4 and P17); ROADMAP (M4-1 items ticked, stale text fixed, the
+R1–R20, as-built notes on P4 and P17); ROADMAP (M4-1 items ticked, stale text fixed, the
 tz/seed item split, the M4-1 follow-ups); CLAUDE.md (status, crate map, the new commands); design
 01 §1 (crate notes, the config → media dependency), 02 §4 (`orphaned_at`, the migration lists),
 03 §8 and 09 §8 (one `AWS_*` list, also in the `media sync` help), 04 §6 and §7 (the GC and
@@ -322,8 +322,8 @@ worktree's build cache):
   `site.backup|running|1`. On a restored site whose `[backup]` is on, that job is claimed again
   once its lease expires and writes one more snapshot (into the same repository when `to` is
   unchanged, which `restore` already warns about); with the schedule off nothing runs it and the
-  row stays `running`. Clearing the copied `jobs` rows on restore, as export already skips `jobs`
-  (P2), is a ROADMAP follow-up.
+  row stays `running`. Accepted for M4-1 as ruling R20; clearing the copied `jobs` rows on restore,
+  as export already skips `jobs` (P2), is a ROADMAP follow-up.
 
 ## 4. Accepted limits
 

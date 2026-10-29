@@ -7,8 +7,8 @@
 //! Publishing still authorizes `actor`. Nothing but the `ferrite` binary's `seed demo`
 //! may use it; it is `pub` only because that crate is a different one. The seed has the
 //! same effects as before but commits all of them together or none. Dropping the batch,
-//! or [`rollback`](DemoBatch::rollback), discards everything. Nothing here opens another transaction: with SQLite's single
-//! writer that would wait for this one.
+//! or [`rollback`](DemoBatch::rollback), discards everything. Nothing here opens another
+//! transaction: with SQLite's single writer that would wait for this one.
 
 use std::sync::Arc;
 
