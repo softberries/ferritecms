@@ -4,7 +4,8 @@
 use std::{sync::Arc, time::Duration};
 
 use ferrite_domain::{
-    ImportMapKind, ImportMapRow, ImportRun, ImportRunId, ImportRunState, Timestamp, UserId,
+    Artifact, ArtifactHash, ArtifactKind, ImportMapKind, ImportMapRow, ImportRun, ImportRunId,
+    ImportRunState, JobId, Timestamp, UserId,
 };
 use ferrite_store::{Backend, StoreError};
 use serde_json::json;
@@ -29,6 +30,9 @@ pub fn new_run(user: UserId, source: &str) -> ImportRun {
         finished_at: None,
         stats: json!({"items": {"created": 0}}),
         dry_run: false,
+        job_id: None,
+        step: None,
+        report_hash: None,
     }
 }
 
@@ -46,6 +50,192 @@ pub fn map_row(source: &str, kind: ImportMapKind, wp_id: i64) -> ImportMapRow {
 
 fn later(micros: i64) -> Timestamp {
     Timestamp::from_micros(1_700_000_000_123_456 + micros).unwrap()
+}
+
+/// A run created for a job is found by [`run_by_job`](ferrite_store::ImportRepo::run_by_job)
+/// (the newest of that job's runs; none for another job). `set_step` is fenced like a
+/// batch: the wrong token, or a run that is no longer `running`, changes nothing and
+/// returns `false`.
+pub async fn import_run_job_link_and_step(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let admin = fixture_user(store).await;
+    let job = JobId::new();
+
+    let mut first = new_run(admin.id, "https://wp.example");
+    first.job_id = Some(job);
+    imports.create_run(&first).await.unwrap();
+    assert_eq!(
+        imports.get_run(first.id).await.unwrap().as_ref(),
+        Some(&first)
+    );
+    assert_eq!(
+        imports.run_by_job(job).await.unwrap().as_ref(),
+        Some(&first)
+    );
+    assert_eq!(imports.run_by_job(JobId::new()).await.unwrap(), None);
+
+    assert!(!imports.set_step(first.id, &[0; 16], "parse").await.unwrap());
+    assert_eq!(imports.get_run(first.id).await.unwrap().unwrap().step, None);
+    assert!(
+        imports
+            .set_step(first.id, &first.token, "parse")
+            .await
+            .unwrap()
+    );
+    assert!(
+        imports
+            .set_step(first.id, &first.token, "pass1")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        imports
+            .get_run(first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .step
+            .as_deref(),
+        Some("pass1")
+    );
+    assert!(
+        !imports
+            .set_step(ImportRunId::new(), &first.token, "pass1")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        imports.set_step(first.id, &first.token, "a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
+
+    // A retry of the same job abandons the first run and starts a newer one.
+    imports
+        .set_state(first.id, ImportRunState::Abandoned, &json!({}), later(5))
+        .await
+        .unwrap();
+    assert!(
+        !imports
+            .set_step(first.id, &first.token, "pass2")
+            .await
+            .unwrap()
+    );
+    let mut second = new_run(admin.id, "https://wp.example");
+    second.job_id = Some(job);
+    second.started_at = later(10);
+    second.heartbeat_at = later(10);
+    imports.create_run(&second).await.unwrap();
+    assert_eq!(
+        imports.run_by_job(job).await.unwrap().map(|r| r.id),
+        Some(second.id)
+    );
+}
+
+/// `set_report` records the report artifact's hash on any run, finished or not; a
+/// missing run is `NotFound`.
+pub async fn import_run_report_hash(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let admin = fixture_user(store).await;
+    let run = new_run(admin.id, "https://wp.example");
+    imports.create_run(&run).await.unwrap();
+    let hash = "b".repeat(64);
+
+    imports.set_report(run.id, &hash).await.unwrap();
+    assert_eq!(
+        imports
+            .get_run(run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .report_hash
+            .as_deref(),
+        Some(hash.as_str())
+    );
+    imports
+        .set_state(run.id, ImportRunState::Failed, &json!({}), later(5))
+        .await
+        .unwrap();
+    let other = "c".repeat(64);
+    imports.set_report(run.id, &other).await.unwrap();
+    assert_eq!(
+        imports.get_run(run.id).await.unwrap().unwrap().report_hash,
+        Some(other)
+    );
+    assert!(matches!(
+        imports.set_report(ImportRunId::new(), &hash).await,
+        Err(StoreError::NotFound)
+    ));
+    assert!(matches!(
+        imports.set_report(run.id, "a\0b").await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+/// `list_runs_page` is newest first by (`started_at`, `id`); paging with the last row's
+/// pair as the cursor visits every run once, even when they share `started_at`.
+pub async fn import_runs_page_cursor(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let admin = fixture_user(store).await;
+    let mut ids = Vec::new();
+    for n in 0..5 {
+        let mut run = new_run(admin.id, "https://wp.example");
+        run.state = ImportRunState::Done;
+        run.finished_at = Some(later(1));
+        run.source = format!("https://wp{n}.example");
+        imports.create_run(&run).await.unwrap();
+        ids.push(run.id);
+    }
+    let mut older = new_run(admin.id, "https://old.example");
+    older.state = ImportRunState::Done;
+    older.started_at = later(-10);
+    older.finished_at = Some(later(-5));
+    imports.create_run(&older).await.unwrap();
+    // Same `started_at`: the id breaks the tie, highest first.
+    ids.sort_by_key(|id| std::cmp::Reverse(id.as_uuid()));
+    ids.push(older.id);
+
+    let mut seen = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = imports.list_runs_page(2, cursor).await.unwrap();
+        assert!(page.len() <= 2);
+        let Some(last) = page.last() else { break };
+        cursor = Some((last.started_at, last.id.as_uuid()));
+        seen.extend(page.iter().map(|r| r.id));
+    }
+    assert_eq!(seen, ids);
+    assert_eq!(imports.list_runs_page(10, None).await.unwrap().len(), 6);
+    assert!(matches!(
+        imports.list_runs_page(0, None).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+/// An artifact of kind `import` (an uploaded WXR or uploads zip, P23) round-trips.
+pub async fn artifact_kind_import_round_trips(db: &TestDb) {
+    let artifacts = db.store().read().artifacts();
+    let artifact = Artifact {
+        hash: ArtifactHash::parse(&"e".repeat(64)).unwrap(),
+        kind: ArtifactKind::Import,
+        bytes: 4096,
+        mime: "application/xml".into(),
+        created_at: later(0),
+    };
+    assert!(artifacts.insert_if_absent(&artifact).await.unwrap());
+    assert_eq!(
+        artifacts.get(&artifact.hash).await.unwrap().as_ref(),
+        Some(&artifact)
+    );
+    assert_eq!(
+        "import".parse::<ArtifactKind>().unwrap(),
+        ArtifactKind::Import
+    );
 }
 
 /// A run round-trips exactly (the JSON stats and the token included); `running()` finds

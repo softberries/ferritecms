@@ -92,7 +92,7 @@ pub fn expand_lint(up_sql: &str) -> Vec<String> {
             continue;
         }
         let label = words.iter().take(3).copied().collect::<Vec<_>>().join(" ");
-        if words.contains(&"DROP") {
+        if words.contains(&"DROP") && !replaces_constraints(stmt) {
             problems.push(format!("DROP in expand migration: `{label} ...`"));
         }
         if words.contains(&"RENAME") {
@@ -115,6 +115,32 @@ pub fn expand_lint(up_sql: &str) -> Vec<String> {
         }
     }
     problems
+}
+
+/// `ALTER TABLE t DROP CONSTRAINT c, ADD CONSTRAINT c ...`: every dropped constraint is
+/// added back under the same name in the same statement, so the table is never without
+/// it (how a Postgres CHECK is widened, `0010`). Whether the new one is wider is left to
+/// review.
+fn replaces_constraints(stmt: &str) -> bool {
+    let words = words(stmt);
+    if words.first() != Some(&"ALTER") {
+        return false;
+    }
+    let mut dropped = Vec::new();
+    let mut added = Vec::new();
+    for clause in split_clauses(stmt) {
+        let w = self::words(&clause);
+        let at = |kw: &str| w.windows(3).find(|p| p[0] == kw && p[1] == "CONSTRAINT");
+        match (at("DROP"), at("ADD")) {
+            (Some(p), None) if w.iter().filter(|x| **x == "DROP").count() == 1 => {
+                dropped.push(p[2].to_owned());
+            }
+            (None, Some(p)) if !w.contains(&"DROP") => added.push(p[2].to_owned()),
+            (None, None) if !w.contains(&"DROP") => {}
+            _ => return false,
+        }
+    }
+    !dropped.is_empty() && dropped.iter().all(|d| added.contains(d))
 }
 
 fn words(s: &str) -> Vec<&str> {
@@ -485,5 +511,26 @@ mod tests {
                 .is_empty()
         );
         assert!(expand_lint("ALTER TABLE t ADD COLUMN type TEXT;").is_empty());
+        // A constraint dropped and re-added under its name in one statement is a swap.
+        assert!(
+            expand_lint(
+                "ALTER TABLE t DROP CONSTRAINT t_k_check, \
+                 ADD CONSTRAINT t_k_check CHECK (k IN ('a', 'b'));"
+            )
+            .is_empty()
+        );
+        assert!(!expand_lint("ALTER TABLE t DROP CONSTRAINT t_k_check;").is_empty());
+        assert!(
+            !expand_lint("ALTER TABLE t DROP CONSTRAINT a, ADD CONSTRAINT b CHECK (k IN ('a'));")
+                .is_empty()
+        );
+        assert!(
+            !expand_lint(
+                "ALTER TABLE t DROP CONSTRAINT c, DROP COLUMN x, \
+                 ADD CONSTRAINT c CHECK (k IN ('a'));"
+            )
+            .is_empty()
+        );
+        assert!(!expand_lint("DROP TABLE t, ADD CONSTRAINT t CHECK (true);").is_empty());
     }
 }

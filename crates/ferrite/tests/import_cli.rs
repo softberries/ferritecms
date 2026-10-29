@@ -286,6 +286,9 @@ async fn import_busy_exit_3() {
             finished_at: None,
             stats: serde_json::json!({}),
             dry_run: false,
+            job_id: None,
+            step: None,
+            report_hash: None,
         })
         .await
         .unwrap();

@@ -132,6 +132,9 @@ impl ImportService {
             finished_at: None,
             stats: json!({}),
             dry_run,
+            job_id: None,
+            step: None,
+            report_hash: None,
         };
         let created = self.create_run(&run, takeover, now).await;
         match created {
