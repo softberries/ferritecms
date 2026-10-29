@@ -580,6 +580,9 @@ fn build(
     https_only: bool,
     timeout: Duration,
 ) -> Result<reqwest::Client, String> {
+    // reqwest has no provider of its own (M4-2 P28: no aws-lc) and panics when the
+    // process has none; an already installed one is kept.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let builder = reqwest::Client::builder()
         .dns_resolver(CheckedResolver {
             lookup,

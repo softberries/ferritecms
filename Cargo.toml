@@ -44,10 +44,16 @@ html5ever = "=0.40.1"
 scraper = { version = "0.29", default-features = false }
 # Plugin `http` (M2a-2b P17): rustls with the platform verifier; no proxy, cookie or
 # decompression features.
-reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
+# `rustls-no-provider`, not `rustls` (which turns on aws-lc-rs): ring only (M4-2 P28). A
+# client takes the process default provider and panics without one, so every place that
+# builds a client (here or through object_store) installs ring first; `main` does too.
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rust-embed = { version = "8.13", features = ["debug-embed"] }
-object_store = { version = "0.14", features = ["aws"] }
+# `aws-base` + `reqwest` + `ring` is `aws` without aws-lc-rs (M4-2 P28): SigV4 signing on
+# ring, TLS through reqwest on the process default (ring) provider. reqwest's TLS comes from
+# its own `rustls-no-provider` feature, which ferrite-media turns on by depending on it.
+object_store = { version = "0.14", default-features = false, features = ["fs", "aws-base", "reqwest", "ring"] }
 s3s = "0.17"
 s3s-fs = "0.17"
 # `zeroize`: the SHA-256 states inside an HMAC (derived from its key) are wiped on drop
@@ -92,6 +98,12 @@ wasmtime = "50"
 wasmtime-wasi = "50"
 wasmtime-wasi-io = "50"
 wit-bindgen = "0.63"
+
+# Release builds (M4-2 P27): smaller and faster binaries for a slower build.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"

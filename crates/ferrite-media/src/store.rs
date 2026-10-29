@@ -726,6 +726,7 @@ fn hash_of_key(key: &str) -> Option<ArtifactHash> {
 /// The `Err` text is fit for a configuration message.
 pub fn validate_copy_if_not_exists(value: &str) -> Result<(), String> {
     // The parser is private to object_store and runs when the builder is built.
+    install_crypto_provider();
     AmazonS3Builder::new()
         .with_bucket_name("check")
         .with_region("us-east-1")
@@ -743,7 +744,15 @@ fn finish_hash(hasher: Sha256) -> Result<ArtifactHash, MediaError> {
         .map_err(|e| MediaError::Backend(format!("computed hash invalid: {e}")))
 }
 
+/// Installs ring as the process's rustls provider unless one is set already. object_store's
+/// reqwest client is built without a provider of its own (M4-2 P28: no aws-lc) and panics
+/// when the process has none.
+fn install_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
+    install_crypto_provider();
     let mut builder = match (&cfg.access_key_id, &cfg.secret_access_key) {
         (None, None) => AmazonS3Builder::from_env(),
         (Some(id), Some(secret)) => AmazonS3Builder::new()
