@@ -8,7 +8,8 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SchemaContentDto } from "@/api/schema";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
-import { type EditorDocument, useEditorDocument } from "./editor-state";
+import type { Draft } from "./autosave";
+import { autosaveInput, type EditorDocument, useEditorDocument } from "./editor-state";
 
 const ID = "0190f1c0-0000-7000-8000-0000000000aa";
 
@@ -50,9 +51,11 @@ let doc: EditorDocument | null = null;
 function Harness({
   start,
   onUnauthenticated,
+  restore,
 }: {
   start: SchemaContentDto;
   onUnauthenticated?: (e: unknown, draft: unknown) => void;
+  restore?: Draft;
 }) {
   const d = useEditorDocument({
     type: "post",
@@ -60,6 +63,7 @@ function Harness({
     placeholder: "",
     bodyLabel: "Body",
     ...(onUnauthenticated ? { onUnauthenticated } : {}),
+    ...(restore ? { restore: { draft: restore, at: "2026-10-01T10:05:00Z" } } : {}),
   });
   useEffect(() => {
     doc = d;
@@ -419,5 +423,179 @@ describe("autosave_slot", () => {
     await act(() => vi.advanceTimersByTimeAsync(11_000));
     await waitFor(() => expect(log).toEqual(["PUT Half-way", "PUT Typed while waiting"]));
     expect(doc?.dirty).toBe(true);
+  });
+});
+
+describe("seo", () => {
+  const STORED: SchemaContentDto["seo"] = {
+    title: null,
+    description: null,
+    canonical: "https://old.example/a/",
+    robots: ["nofollow"],
+  };
+  const SENT: SchemaContentDto["seo"] = {
+    title: null,
+    description: null,
+    canonical: "https://elsewhere.example/orig/",
+    robots: ["nofollow", "noindex"],
+  };
+
+  const withSeo = (version: number, seo: SchemaContentDto["seo"]): SchemaContentDto => ({
+    ...item(version, "Stored text"),
+    seo,
+  });
+
+  function slotOf(start: SchemaContentDto, seo: Draft["seo"]): Draft {
+    return {
+      base_version: start.version,
+      title: start.title,
+      excerpt: null,
+      body: start.body,
+      fields: {},
+      slug: null,
+      parent_id: null,
+      menu_order: null,
+      terms: null,
+      seo,
+    };
+  }
+
+  test("seo canonical and robots are part of the draft", async () => {
+    const patches: unknown[] = [];
+    stubRoutes({
+      [`/api/v1/content/post/${ID}`]: async (_url, req) => {
+        expect(req.method).toBe("PATCH");
+        const body = (await req.json()) as { seo?: { canonical?: unknown } };
+        patches.push(body);
+        // The server trims the canonical and sorts the directives.
+        return json(withSeo(3 + patches.length, body.seo?.canonical === null ? STORED : SENT));
+      },
+      [`/api/v1/content/post/${ID}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    renderWithRouter(<Harness start={withSeo(3, STORED)} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    const d = () => doc as EditorDocument;
+    // The stored values are where the draft starts.
+    expect(d().meta.seo).toEqual({
+      title: "",
+      description: "",
+      canonical: "https://old.example/a/",
+      robots: ["nofollow"],
+    });
+
+    act(() => {
+      d().setMeta({
+        seo: {
+          ...d().meta.seo,
+          canonical: " https://elsewhere.example/orig/ ",
+          robots: ["noindex", "nofollow"],
+        },
+      });
+    });
+    // The working draft (slot, conflict dialog) carries both.
+    expect(d().draft().seo).toEqual({
+      title: null,
+      description: null,
+      canonical: " https://elsewhere.example/orig/ ",
+      robots: ["nofollow", "noindex"],
+    });
+    // Patch: only the members that changed, the directives sorted.
+    await act(async () => {
+      await d().save();
+    });
+    expect(patches).toEqual([
+      { seo: { canonical: " https://elsewhere.example/orig/ ", robots: ["nofollow", "noindex"] } },
+    ]);
+    // After the save the members sent take the server's values.
+    expect(d().meta.seo).toEqual({
+      title: "",
+      description: "",
+      canonical: "https://elsewhere.example/orig/",
+      robots: ["nofollow", "noindex"],
+    });
+    expect(d().savedMeta.seo).toEqual(d().meta.seo);
+
+    // Rebase (Keep mine, onto a newer copy): the newer copy is the base, the draft stays,
+    // and it now differs from the base by both members.
+    const mine = d().meta.seo;
+    act(() => {
+      d().rebase(withSeo(9, STORED));
+    });
+    expect(d().savedMeta.seo).toEqual({
+      title: "",
+      description: "",
+      canonical: "https://old.example/a/",
+      robots: ["nofollow"],
+    });
+    expect(d().meta.seo).toEqual(mine);
+    expect(d().dirty).toBe(true);
+
+    // A blank canonical and no directives delete both.
+    act(() => {
+      d().setMeta({ seo: { ...d().meta.seo, canonical: "  ", robots: [] } });
+    });
+    await act(async () => {
+      await d().save();
+    });
+    expect(patches.at(-1)).toEqual({ seo: { canonical: null, robots: null } });
+  });
+
+  test("seo canonical and robots come back from the autosave slot", async () => {
+    stubRoutes({
+      [`/api/v1/content/post/${ID}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    const start = withSeo(3, STORED);
+    renderWithRouter(
+      <Harness
+        start={start}
+        restore={slotOf(start, { canonical: "https://slot.example/b/", robots: null })}
+      />,
+    );
+    await waitFor(() => expect(doc).not.toBeNull());
+    // `null` directives: none; a member the slot leaves out keeps the stored one.
+    expect((doc as EditorDocument).meta.seo).toEqual({
+      title: "",
+      description: "",
+      canonical: "https://slot.example/b/",
+      robots: [],
+    });
+  });
+
+  test("an old slot without canonical and robots keeps the stored ones", async () => {
+    stubRoutes({
+      [`/api/v1/content/post/${ID}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    const start = withSeo(3, STORED);
+    renderWithRouter(
+      <Harness
+        start={start}
+        restore={slotOf(start, { title: "From the slot", description: null })}
+      />,
+    );
+    await waitFor(() => expect(doc).not.toBeNull());
+    expect((doc as EditorDocument).meta.seo).toEqual({
+      title: "From the slot",
+      description: "",
+      canonical: "https://old.example/a/",
+      robots: ["nofollow"],
+    });
+  });
+
+  test("a canonical the server would refuse stays out of the slot", () => {
+    const start = withSeo(1, STORED);
+    const input = (canonical: string | null) =>
+      autosaveInput(
+        slotOf(start, { title: "Kept", description: null, canonical, robots: ["noindex"] }),
+      ).seo;
+    // Half typed: the rest of the draft still reaches the slot (a 422 would refuse it all).
+    expect(input("https://exa mple")).toEqual({
+      title: "Kept",
+      description: null,
+      robots: ["noindex"],
+    });
+    expect(input("https:/")).not.toHaveProperty("canonical");
+    expect(input("ftp://example.com/")).not.toHaveProperty("canonical");
+    expect(input(" https://example.com/a ")).toHaveProperty("canonical", " https://example.com/a ");
+    expect(input(null)).toHaveProperty("canonical", null);
   });
 });

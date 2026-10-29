@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { parentRefQuery } from "@/content/parent-ref";
-import { type ConflictField, type ConflictState, seoText } from "./conflict";
+import { type ConflictField, type ConflictState, sortedRobots, seoText } from "./conflict";
 import { fieldChanges, fieldText } from "./revisions/revision-model";
 import { type DiffPart, diffRevision } from "./diff";
 import type { Paused } from "./editor-state";
@@ -181,6 +181,12 @@ function ConflictBody({
   );
 }
 
+/** Robots directives as one line (`nofollow, noindex`); none is `null` ("Empty"). */
+const robotsText = (robots: readonly string[] | null | undefined): string | null => {
+  const list = sortedRobots(robots);
+  return list.length > 0 ? list.join(", ") : null;
+};
+
 const FIELD_LABEL = {
   title: "conflict.fields.title",
   excerpt: "conflict.fields.excerpt",
@@ -256,6 +262,19 @@ function FieldDiff({
             side === "theirs"
               ? theirs.seo.description
               : minePart(mineSeo.description, theirs.seo.description),
+        },
+        {
+          name: t("conflict.seoCanonical"),
+          value:
+            side === "theirs"
+              ? theirs.seo.canonical
+              : minePart(mineSeo.canonical, theirs.seo.canonical),
+        },
+        {
+          name: t("conflict.seoRobots"),
+          value: robotsText(
+            side === "theirs" || mineSeo.robots === undefined ? theirs.seo.robots : mineSeo.robots,
+          ),
         },
       ];
       left = <FieldValues rows={rows("theirs")} plain />;

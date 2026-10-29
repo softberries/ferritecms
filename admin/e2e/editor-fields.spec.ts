@@ -305,19 +305,42 @@ test("seo_fields_reach_the_head", async ({ as, site, siteKey, snap, expectAccess
     await expect(seo.locator("[data-slot=seo-title-count]")).toHaveText(
       `${[...seoTitle].length} / 60`,
     );
+
+    // Canonical URL (M3-2 P33): a half-typed one is named once the field is left.
+    const canonicalInput = seo.getByRole("textbox", { name: "Canonical URL" });
+    await canonicalInput.fill("elsewhere.example/orig");
+    await canonicalInput.blur();
+    await expect(canonicalInput).toHaveAttribute("aria-invalid", "true");
+    const canonical = `https://elsewhere.example/orig-${uid()}/`;
+    await canonicalInput.fill(canonical);
+    await expect(canonicalInput).not.toHaveAttribute("aria-invalid");
+    // The preview shows the canonical address.
+    await expect(preview).toContainText("elsewhere.example › orig-");
+    // Robots: a labelled group of switches.
+    const robots = seo.getByRole("group", { name: "Search engine directives" });
+    await robots.getByRole("switch", { name: "Hide from search results" }).click();
+    await expect(robots.getByRole("switch", { name: "Hide from search results" })).toBeChecked();
+    await expect(seo.locator("[data-slot=seo-noindex-note]")).toBeVisible();
     await snap(page, "editor-seo-preview", showSection(page, "panel-seo"));
+    await snap(page, "editor-seo-canonical-robots", showSection(page, "seo-canonical-field"));
     await expectAccessible(page);
 
     await save(page);
     const stored = (await api.get("post", item.id)) as Stored;
-    // `canonical` and `robots` come from the WordPress import (M3-1 P10); the editor
-    // leaves them as they are (their fields are M3-2).
-    expect(stored.seo).toEqual({ title: seoTitle, description, canonical: null, robots: [] });
+    expect(stored.seo).toEqual({
+      title: seoTitle,
+      description,
+      canonical,
+      robots: ["noindex"],
+    });
     const html = await (await page.request.get(stored.permalink)).text();
     expect(/<title>([^<]*)<\/title>/.exec(html)?.[1]).toBe(seoTitle);
     expect(html).toContain(`<meta name="description" content="${description}"`);
+    expect(html).toContain(`<link rel="canonical" href="${canonical}">`);
+    expect(html).toContain(`<meta property="og:url" content="${canonical}">`);
+    expect(html).toContain(`<meta name="robots" content="noindex">`);
 
-    // Reset to defaults clears both (the page then uses the item's own).
+    // Reset to defaults clears all four (the page then uses the item's own).
     await seo.getByRole("button", { name: "Reset to defaults" }).click();
     await save(page);
     expect(((await api.get("post", item.id)) as Stored).seo).toEqual({
@@ -326,6 +349,10 @@ test("seo_fields_reach_the_head", async ({ as, site, siteKey, snap, expectAccess
       canonical: null,
       robots: [],
     });
+    // The page cache is invalidated through the outbox, so the page may lag a moment.
+    const head = async () => (await page.request.get(stored.permalink)).text();
+    await expect.poll(head).not.toContain('name="robots"');
+    expect(await head()).not.toContain(canonical);
   } finally {
     await page.context().close();
     await api.purge(item);

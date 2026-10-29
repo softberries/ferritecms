@@ -63,14 +63,23 @@ export const seoText = (v: string | null | undefined): string | null => {
   return s === "" ? null : s;
 };
 
-/** Whether the draft's SEO differs from the item's (a draft without SEO leaves it). */
+/** Robots directives as the server stores them: sorted, deduplicated (`null`: none). */
+export const sortedRobots = <T extends string>(v: readonly T[] | null | undefined): T[] =>
+  [...new Set(v ?? [])].sort();
+
+/** Whether the draft's SEO differs from the item's (a draft without SEO leaves it; so
+ * does a member it leaves out). */
 function seoDiffers(theirs: SchemaContentDto, mine: Draft): boolean {
   if (!mine.seo) return false;
   const stored = theirs.seo;
+  const text = (v: string | null | undefined, s: string | null) =>
+    v !== undefined && seoText(v) !== seoText(s);
   return (
-    (mine.seo.title !== undefined && seoText(mine.seo.title) !== seoText(stored.title)) ||
-    (mine.seo.description !== undefined &&
-      seoText(mine.seo.description) !== seoText(stored.description))
+    text(mine.seo.title, stored.title) ||
+    text(mine.seo.description, stored.description) ||
+    text(mine.seo.canonical, stored.canonical) ||
+    (mine.seo.robots !== undefined &&
+      !sameList(sortedRobots(mine.seo.robots), sortedRobots(stored.robots)))
   );
 }
 
