@@ -132,10 +132,11 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
     let dir = current
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent folder", current.display()))?;
+    swap::sweep_stale(&current);
     // The work folder sits beside the binary, so the new binary is renamed within one
     // filesystem; creating it is also the writability check.
     let work = tempfile::Builder::new()
-        .prefix(".ferrite-update-")
+        .prefix(swap::WORK_PREFIX)
         .tempdir_in(dir)
         .map_err(|e| {
             anyhow!(

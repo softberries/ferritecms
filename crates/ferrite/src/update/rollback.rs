@@ -115,8 +115,9 @@ impl Binaries {
         Ok(())
     }
 
-    /// Exchanges the two binaries.
+    /// Exchanges the two binaries (after sweeping a killed run's leftovers).
     fn swap(&self) -> Result<()> {
+        swap::sweep_stale(&self.installed);
         swap::swap_with_prev(&self.installed).with_context(|| {
             "cannot swap the binaries: run rollback as the binary's owner, outside the \
              systemd sandbox"

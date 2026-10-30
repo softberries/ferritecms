@@ -33,7 +33,9 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    with the release key.
 3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
    it is also the writability check: an unwritable folder is refused with the hint to run as
-   the binary's owner, outside the systemd sandbox). Only the archive's `ferrite` file (top
+   the binary's owner, outside the systemd sandbox). Before it is created, what a killed
+   run left there (`.ferrite-update-*` work folders and `.ferrite.tmp-*` copies of the
+   binary, older than a day) is removed; `rollback` does the same before its swap. Only the archive's `ferrite` file (top
    level or one folder down; `./` components are ignored, so `tar -C dir .` archives work;
    at most 512 MiB) is extracted, mode 0755. The new binary's `--version` must
    report the release's version. With `--data DIR` its `migrate status --data DIR` runs too

@@ -159,6 +159,61 @@ fn copy_to_temp(src: &Path, beside: &Path, mode: Option<fs::Permissions>) -> Res
     Ok(temp)
 }
 
+/// Leftovers older than this are swept by [`sweep_stale`].
+const STALE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// The prefix of `self-update`'s work folder beside the binary.
+pub const WORK_PREFIX: &str = ".ferrite-update-";
+
+/// Removes what a killed `self-update` or `rollback` left beside `current` (SIGKILL or a
+/// power loss skips the cleanup): `self-update`'s work folders (`.ferrite-update-*`, up to
+/// the size of a release) and the temp copies of the binary (`.<name>.tmp-*`), when older
+/// than a day, so a run in progress is never touched. Best effort: what cannot be listed
+/// or removed is logged and left.
+pub fn sweep_stale(current: &Path) {
+    let dir = current
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let base = current
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ferrite".to_owned());
+    let temp_prefix = format!(".{base}.tmp-");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let work = name.starts_with(WORK_PREFIX) && meta.is_dir();
+        let temp = name.starts_with(&temp_prefix) && meta.is_file();
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STALE);
+        if !(old && (work || temp)) {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if work {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        match removed {
+            Ok(()) => tracing::info!(path = %path.display(), "removed a stale update leftover"),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "cannot remove a stale update leftover")
+            }
+        }
+    }
+}
+
 /// Flushes the folder entry changes (best effort: not every platform can open a folder).
 fn sync_dir(current: &Path) {
     if let Some(dir) = current.parent().filter(|p| !p.as_os_str().is_empty())
@@ -191,6 +246,48 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    /// Work folders and temp copies older than a day go; younger ones, other names, a
+    /// file with the work folder's prefix and the binaries stay.
+    #[test]
+    fn sweep_stale_removes_old_leftovers_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let current = tmp.path().join("ferrite");
+        write(&current, "bin", 0o755);
+        write(&tmp.path().join("ferrite.prev"), "prev", 0o755);
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 24 * 3600);
+        let age = |p: &Path| File::open(p).unwrap().set_modified(old).unwrap();
+        let stale_work = tmp.path().join(".ferrite-update-abc");
+        fs::create_dir(&stale_work).unwrap();
+        write(&stale_work.join("ferrite"), "half", 0o755);
+        age(&stale_work);
+        let young_work = tmp.path().join(".ferrite-update-def");
+        fs::create_dir(&young_work).unwrap();
+        for (name, stale) in [
+            (".ferrite.tmp-1-0", true),
+            (".ferrite.tmp-2-0", false),
+            (".ferrite-update-file", true),
+            (".other.tmp-1-0", true),
+        ] {
+            let p = tmp.path().join(name);
+            write(&p, "x", 0o644);
+            if stale {
+                age(&p);
+            }
+        }
+        sweep_stale(&current);
+        assert_eq!(
+            entries(tmp.path()),
+            vec![
+                ".ferrite-update-def",
+                ".ferrite-update-file",
+                ".ferrite.tmp-2-0",
+                ".other.tmp-1-0",
+                "ferrite",
+                "ferrite.prev"
+            ]
+        );
     }
 
     #[test]
