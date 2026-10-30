@@ -115,8 +115,9 @@ impl Binaries {
         Ok(())
     }
 
-    /// Exchanges the two binaries.
+    /// Exchanges the two binaries (after sweeping a killed run's leftovers).
     fn swap(&self) -> Result<()> {
+        swap::sweep_stale(&self.installed);
         swap::swap_with_prev(&self.installed).with_context(|| {
             "cannot swap the binaries: run rollback as the binary's owner, outside the \
              systemd sandbox"
@@ -138,6 +139,9 @@ fn current_exe(args: &RollbackArgs) -> Result<PathBuf> {
 
 /// Swaps `ferrite` and `ferrite.prev`; with `--data` only when the binary that becomes
 /// `ferrite` can open the site's schema (exit 3 when it cannot).
+///
+/// An older binary refuses config keys it does not know, so the hints name the keys added
+/// since M4-1.
 async fn binary_rollback(args: &RollbackArgs, bins: &Binaries) -> Result<ExitCode> {
     bins.require_prev()?;
     if let Some(data) = &args.data {
@@ -163,9 +167,9 @@ async fn binary_rollback(args: &RollbackArgs, bins: &Binaries) -> Result<ExitCod
                 return Ok(ExitCode::from(3));
             }
             other => bail!(
-                "could not read the migration status with {} (exit {other:?}; with SQLite \
-                 stop `serve` first, or run without --data to skip the check): see its \
-                 output above; nothing was changed",
+                "could not read the migration status with {} (exit {other:?}): see its \
+                 output above. With SQLite, stop `serve` first. {OLDER_CONFIG_NOTE} Or run \
+                 without --data to skip the check. Nothing was changed",
                 bins.prev.display()
             ),
         }
@@ -177,6 +181,9 @@ async fn binary_rollback(args: &RollbackArgs, bins: &Binaries) -> Result<ExitCod
         bins.installed.display(),
         bins.prev.display()
     );
+    if args.data.is_none() {
+        println!("note: nothing was checked against the site (no --data). {OLDER_CONFIG_NOTE}");
+    }
     print_restart();
     Ok(ExitCode::SUCCESS)
 }
@@ -267,6 +274,11 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     print_restart();
     Ok(ExitCode::SUCCESS)
 }
+
+/// What an older binary may refuse in `ferrite.toml` or the environment.
+const OLDER_CONFIG_NOTE: &str = "An older binary refuses config keys it does not know: \
+    remove those before starting it (for example [server.tls], server.metrics_listen and \
+    their FERRITE_SERVER__* overrides, which older builds lack).";
 
 /// Refuses, before anything changes, when `older --version` is not the record's `from`. A
 /// record without `from` (a database from before M4-2) cannot be checked.
@@ -492,7 +504,9 @@ fn sync_dir(dir: &Path) {
 /// (never over an existing file), then renames a copy of `snapshot` (made first, beside
 /// `db`) into place. The WAL moves first: a WAL left beside another database file could be
 /// applied to it. A `-journal` beside `db` refuses (a hot rollback journal would be rolled
-/// back into the snapshot's pages). On a failure the moved files are put back.
+/// back into the snapshot's pages). On unix the copy gets `db`'s owner, group and mode
+/// first (M4-2 R11: a root-run rollback must leave a database the service user can open).
+/// On a failure the moved files are put back.
 fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()> {
     let journal = with_suffix(db, "-journal");
     if std::fs::symlink_metadata(&journal).is_ok() {
@@ -516,6 +530,22 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
             staged.path.display()
         )
     })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta =
+            std::fs::metadata(db).with_context(|| format!("cannot read {}", db.display()))?;
+        match_owner_and_mode(&staged.path, meta.uid(), meta.gid(), meta.mode()).with_context(
+            || {
+                format!(
+                    "cannot give {} the owner and mode of {} (run as root or as the \
+                     database's owner); nothing was changed",
+                    staged.path.display(),
+                    db.display()
+                )
+            },
+        )?;
+    }
     File::open(&staged.path)
         .and_then(|f| f.sync_all())
         .with_context(|| format!("cannot flush {}", staged.path.display()))?;
@@ -589,6 +619,19 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
         sync_dir(dir);
     }
     Ok(())
+}
+
+/// Gives `path` the owner `uid`:`gid` (a `chown` only when it differs, so a non-root run
+/// on its own files needs none) and the permission bits of `mode`.
+#[cfg(unix)]
+fn match_owner_and_mode(path: &Path, uid: u32, gid: u32, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let current = std::fs::metadata(path)?;
+    if (current.uid(), current.gid()) != (uid, gid) {
+        // Before the mode: a chown may clear set-id bits.
+        std::os::unix::fs::chown(path, Some(uid), Some(gid))?;
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))
 }
 
 /// The staged copy of the snapshot, removed on drop unless renamed into place.
@@ -698,6 +741,45 @@ mod tests {
         assert!(format!("{e:#}").contains("-journal"), "{e:#}");
         assert_eq!(std::fs::read_to_string(&db).unwrap(), "current");
         assert!(!tmp.path().join("backups").exists());
+    }
+
+    /// The staged copy gets the replaced database's mode and owner (M4-2 R11): its own
+    /// owner needs no `chown`; another owner is a `chown` (refused unless root).
+    #[cfg(unix)]
+    #[test]
+    fn staged_copy_takes_the_owner_and_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("staged");
+        std::fs::write(&f, "x").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let me = std::fs::metadata(&f).unwrap();
+        match_owner_and_mode(&f, me.uid(), me.gid(), 0o100_640).unwrap();
+        let after = std::fs::metadata(&f).unwrap();
+        assert_eq!(after.mode() & 0o7777, 0o640);
+        assert_eq!((after.uid(), after.gid()), (me.uid(), me.gid()));
+        if me.uid() != 0 {
+            // Another owner: the chown is attempted, and refused to a non-root user.
+            let e = match_owner_and_mode(&f, 0, 0, 0o100_600).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
+        }
+    }
+
+    /// `replace_db` gives the restored file the current database's mode.
+    #[cfg(unix)]
+    #[test]
+    fn replace_db_keeps_the_mode_of_the_replaced_database() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("ferrite.db");
+        let snap = tmp.path().join("snap.db");
+        std::fs::write(&db, "current").unwrap();
+        std::fs::write(&snap, "snapshot").unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&snap, std::fs::Permissions::from_mode(0o644)).unwrap();
+        replace_db(&db, &snap, &tmp.path().join("backups"), "T").unwrap();
+        assert_eq!(std::fs::read_to_string(&db).unwrap(), "snapshot");
+        assert_eq!(std::fs::metadata(&db).unwrap().mode() & 0o7777, 0o600);
     }
 
     #[test]

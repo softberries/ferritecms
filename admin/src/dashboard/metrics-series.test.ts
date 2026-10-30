@@ -56,8 +56,16 @@ function bucket(
     jobs_done: 0,
     jobs_failed: 0,
     p95_ms: 0,
+    page_latency: Array<number>(12).fill(0),
     ...counts,
   };
+}
+
+/** A page latency histogram: `pages` responses in each `[slot, pages]`. */
+function latency(...slots: Array<[number, number]>): number[] {
+  const h = Array<number>(12).fill(0);
+  for (const [slot, pages] of slots) h[slot] = (h[slot] ?? 0) + pages;
+  return h;
 }
 
 describe("metrics-series", () => {
@@ -79,7 +87,7 @@ describe("metrics-series", () => {
     expect(sharp.to).toBe("2026-10-30T15:00:00.000Z");
   });
 
-  it("sums_counts_and_keeps_the_slowest_p95", () => {
+  it("sums_counts_and_takes_the_p95_of_the_summed_histogram", () => {
     const totals = summarise([
       bucket("2026-10-30T12:00:00Z", {
         requests: 10,
@@ -87,31 +95,50 @@ describe("metrics-series", () => {
         errors_5xx: 1,
         cache_hits: 3,
         cache_misses: 1,
-        p95_ms: 25,
+        p95_ms: 5,
+        page_latency: latency([0, 19]),
       }),
+      // This hour alone is slow (1 of its 5 responses took up to a second)...
       bucket("2026-10-30T13:00:00Z", {
         requests: 5,
         page_views: 2,
         cache_hits: 1,
         cache_misses: 3,
-        p95_ms: 100,
+        p95_ms: 1000,
+        page_latency: latency([7, 1]),
       }),
       bucket("2026-10-30T14:00:00Z"),
     ]);
+    // ...but over the range 19 of 20 took at most 5 ms: the p95 is not the slowest hour's.
     expect(totals).toEqual({
       requests: 15,
       pageViews: 8,
       errors: 1,
       hits: 4,
       misses: 4,
-      p95: 100,
+      p95: 5,
     });
     expect(summarise([bucket("2026-10-30T14:00:00Z")]).p95).toBeNull();
+    // Two slow responses of 20: the p95 is slow.
+    const slow = summarise([
+      bucket("2026-10-30T12:00:00Z", { page_latency: latency([0, 18]) }),
+      bucket("2026-10-30T13:00:00Z", { page_latency: latency([7, 2]) }),
+    ]);
+    expect(slow.p95).toBe(1000);
+    // Anything over 10 s reads as the largest bound.
+    expect(
+      summarise([bucket("2026-10-30T12:00:00Z", { page_latency: latency([11, 1]) })]).p95,
+    ).toBe(10_000);
   });
 
   it("points_leave_gaps_where_nothing_was_measured", () => {
     const rows = points([
-      bucket("2026-10-30T12:00:00Z", { cache_hits: 3, cache_misses: 1, p95_ms: 50 }),
+      bucket("2026-10-30T12:00:00Z", {
+        cache_hits: 3,
+        cache_misses: 1,
+        p95_ms: 50,
+        page_latency: latency([3, 1]),
+      }),
       bucket("2026-10-30T13:00:00Z", { requests: 2 }),
     ]);
     expect(rows[0]).toMatchObject({

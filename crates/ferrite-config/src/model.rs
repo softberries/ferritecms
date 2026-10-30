@@ -23,6 +23,9 @@ pub struct Config {
     pub mail: Option<MailConfig>,
     /// `[backup]`: the scheduled backup (M4-1 P15); off by default.
     pub backup: BackupConfig,
+    /// Valid settings that have no effect (for example `[server.tls]` keys while its
+    /// `mode` is `"off"`); `ferrite config check` prints them as warnings.
+    pub warnings: Vec<crate::ConfigProblem>,
 }
 
 /// How often `serve` runs the `site.backup` job (`backup.schedule`).

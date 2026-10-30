@@ -10,7 +10,8 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
 
 1. **Lookup.** The newest stable release (`GET https://api.github.com/repos/softberries/ferritecms/releases/latest`,
    which skips drafts and prereleases; `--channel stable` is the only channel, so there is no
-   flag for it), or `releases/tags/vX` for `--version X`. A `--version` that is older than or
+   flag for it), or `releases/tags/vX` for `--version X` (which may name a prerelease,
+   `X.Y.Z-rc.N`, see step 2). A `--version` that is older than or
    equal to this binary is refused before any download (exit 1, "use `ferrite rollback`").
    When the newest release is not newer, it prints `… is up to date` and exits 0.
 2. **Download and verify.** The release must carry this target's asset
@@ -24,13 +25,17 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    HTTPS-only (redirects included), capped (1 MiB for the two small files, 1 GiB for the
    asset) and bounded: 30 s to connect, 60 s per read and 10 minutes for the whole download.
    **What the signature binds:** the version and the target, through the asset name that
-   `SHA256SUMS` lists and the new binary's `--version`. The channel is not signed: "stable"
-   (not a draft, not a prerelease) comes from the unsigned API metadata, so a compromised API
-   could offer a signed prerelease as stable. Prerelease builds therefore must not be signed
-   with the release key (or a later format puts the channel in the trusted comment).
+   `SHA256SUMS` lists and the new binary's `--version`. The API's `prerelease` flag is not
+   signed, so the channel is bound through the version instead (M4-2 R10): without
+   `--version`, a release whose version has a semver prerelease part (`X.Y.Z-rc.N`) is
+   refused even when the API calls it stable (`--check` too), and a prerelease installs only
+   when `--version` names exactly that version. Prerelease builds may therefore be signed
+   with the release key.
 3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
    it is also the writability check: an unwritable folder is refused with the hint to run as
-   the binary's owner, outside the systemd sandbox). Only the archive's `ferrite` file (top
+   the binary's owner, outside the systemd sandbox). Before it is created, what a killed
+   run left there (`.ferrite-update-*` work folders and `.ferrite.tmp-*` copies of the
+   binary, older than a day) is removed; `rollback` does the same before its swap. Only the archive's `ferrite` file (top
    level or one folder down; `./` components are ignored, so `tar -C dir .` archives work;
    at most 512 MiB) is extracted, mode 0755. The new binary's `--version` must
    report the release's version. With `--data DIR` its `migrate status --data DIR` runs too
@@ -105,7 +110,8 @@ that carries the new `release.pub`.
 
   A `migrate_up` that fails without moving the schema leaves the file as it was: the
   record that was there is written back, or the provisional one is removed when there
-  was none.
+  was none. When that start had carried an unfinished move's start, the record written
+  back names the snapshot found for it (M4-2 R9).
 - **When it changes:** the stored `last_binary_version` differs from this binary, or
   migrations were applied. Then `last_binary_version` is set to this binary. A start that
   changed nothing leaves an existing file alone.
@@ -131,7 +137,13 @@ that carries the new `release.pub`.
   folder is synced. Write errors name the path. Temp files a crash left behind
   (`.upgrade.json.*.tmp`) older than a day are removed by the next write.
 - **Snapshots:** the pruning of pre-migration snapshots (newest five) never deletes the
-  one this file names (02 §7); opening a SQLite site reads the file to know which.
+  one this file names (02 §7); opening a SQLite site reads the file to know which. A
+  provisional record (`snapshot: null`, `schema_from < schema_to`) protects the newest
+  `backups/pre-<schema_from>-to-<schema_to>-*.db` instead (M4-2 R9): an upgrade that
+  applies some migrations and then fails on every start (a restart loop) takes a new
+  snapshot each time, and must not prune the one from before the move. This lookup by
+  name is for pruning only; `rollback --restore-snapshot` still refuses a record without
+  a snapshot. The systemd unit stops restarting after five failed starts in ten minutes.
 - **An unreadable file** (not JSON, or another `v`, e.g. a newer binary's format after a
   binary rollback):
   - The site still opens, with a warning. Pruning keeps **every** snapshot, since it
@@ -189,7 +201,11 @@ ferrite rollback [--data DIR]      # run with either binary
   binary cannot open the schema, e.g. a contract migration raised `min_binary_version`)
   refuses with **exit 3** and says to run `rollback --schema` with the newer binary first;
   any other result refuses (exit 1; with SQLite the status cannot be read while `serve`
-  holds the folder lock: stop it, or leave out `--data` to skip the check).
+  holds the folder lock: stop it, or leave out `--data` to skip the check). Another cause
+  is the config: an older binary refuses keys it does not know, such as `[server.tls]`
+  and `server.metrics_listen` (and their `FERRITE_SERVER__*` overrides), which builds
+  before M4-2 lack. The refusal says to remove them first; without `--data` the swap
+  prints the same note, since nothing was checked.
 - It does not touch `upgrade.json` or `schema_meta.last_binary_version`. The older binary's
   next start keeps the record and updates the key (§1), so a schema rollback afterwards
   still finds the move.
@@ -232,7 +248,10 @@ not hold here.
      snapshot's modification time, and says that everything written since is lost.
    - It takes `ferrite.lock` (refused while `serve` runs), then asks (`Type 'yes'`);
      without a terminal `--yes` is required.
-   - It copies the snapshot beside the database first. Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
+   - It copies the snapshot beside the database first and, on unix, gives the copy the
+     current database's owner, group and mode (M4-2 R11: a root-run rollback leaves a
+     database the service user can open; a `chown` it may not make refuses before anything
+     moves). Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
      sits beside another database file). Then it renames the copy into place. Each move is
      a hard link plus an unlink, so an existing file is never replaced. A failed move puts
@@ -735,23 +754,25 @@ scrape_configs:
       - targets: ["10.0.0.5:9464", "10.0.0.6:9464"]
 ```
 
-`Metrics::snapshot()` gives the cumulative counters (requests and 5xx errors of every class but `other`, so load-balancer health checks stay out (ruling R3; `/metrics` counts every class), page views,
-cache hits and misses, plugin calls and failures, jobs completed and failed attempts of
+`Metrics::snapshot()` gives the cumulative counters (requests and 5xx errors of every class but `other`, so load-balancer health checks stay out (ruling R3; `/metrics` counts every class), page views
+(`200` answers and `304` revalidations of public HTML pages, M4-2 R8), cache hits and
+misses, plugin calls and failures, jobs completed and failed attempts of
 this node's runner, and the page-class latency buckets) that the per-minute
 `node_metrics` rows are made from.
 
 **As built (M4-2 P35): `node_metrics` and the series.** Every node, solo included, writes
 one row per minute to `node_metrics` (migration `0012_node_metrics`; key `node_id`,
 `minute`; the counts `requests`, `errors_5xx`, `page_views`, `cache_hits`,
-`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and
-`p95_ms`). The writer is a `serve` background task, not a job
+`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and the
+page latency histogram `page_le_5` … `page_le_10000`, `page_over_10000`). The writer is a
+`serve` background task, not a job
 (`crates/ferrite/src/node_metrics.rs`): at every whole UTC minute of the wall clock it
 diffs two registry snapshots and writes the delta under the minute its period started
-in, so the first, partial minute after a boot has a row of its own. `p95_ms` is the upper
-bound (ms) of the latency bucket that holds the 95th percentile of that minute's page
-responses (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 or 10000, the last also for
-anything slower; 0 without page responses). A write adds to an existing (node, minute)
-row (counts added, `p95_ms` the larger), so a write that failed is carried by the next
+in, so the first, partial minute after a boot has a row of its own. The histogram counts
+that minute's page responses per latency bucket (at most 5, 10, 25, 50, 100, 250, 500,
+1000, 2500, 5000 and 10000 ms, then over 10 s; not cumulative), so the histograms of
+several minutes and nodes add up (M4-2 R7). A write adds to an existing (node, minute)
+row (every count added, the histogram's too), so a write that failed is carried by the next
 one (still under its own minute; logged) and a repeated minute never conflicts. So
 after a database outage the traffic of the whole outage shows as one spike in the
 outage's first minute followed by zeros: nothing is lost, it is filed late. A periodic
@@ -768,10 +789,16 @@ the database clock only for the prune.
 `GET /api/v1/system/metrics/series?from&to&step=minute|hour|day[&node=<id>]`
 (`manage_system` + `system:read`): `from` and `to` are RFC 3339; the range is widened to
 whole buckets (aligned to the Unix epoch, so days are UTC days) and returned as
-`{from, to, step, node, buckets: [{start, requests, …, p95_ms}]}`, **dense** (every bucket
-of the range, zeros where no node wrote a row) and ascending. Each bucket sums the
-minutes of every node (or of `node` only) and takes the largest `p95_ms`, which is an
-upper bound, not a merged percentile. A minute series spans at most 24 h, hour and day
+`{from, to, step, node, buckets: [{start, requests, …, p95_ms, page_latency}]}`,
+**dense** (every bucket of the range, zeros where no node wrote a row) and ascending.
+Each bucket sums the minutes of every node (or of `node` only), the histogram per latency
+bucket too (`page_latency`: the 12 counts), and `p95_ms` is computed from that sum: the
+upper bound (ms) of the latency bucket holding the 95th percentile of all the bucket's
+page responses (the first bucket whose running total reaches ceil(0.95 × total); 10000
+also for anything slower; 0 without page responses). It is exact to the bucket over any
+range and across nodes, never the largest of the minutes' values (M4-2 R7); summing
+`page_latency` over several buckets gives a longer range's p95 the same way (the
+dashboard's headline). A minute series spans at most 24 h, hour and day
 series 7 days (`422`, field `step`); `to` not after `from` is `422` (field `to`); a
 malformed value is `400`. (Prometheus remains the source of truth for real monitoring.)
 
@@ -927,7 +954,9 @@ Checks that need the database (site id, live nodes, migrations) are not part of 
 `config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
 work but may cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
 attributes; Ferrite sets none on stored artifacts today, so it costs nothing yet, and it is the
-value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
+value §4a lists for AWS S3), and for settings without effect: each `[server.tls]` key
+(`domains`, `contact`, `directory`, `listen`, `redirect_http`) set while `mode` is `"off"`
+(`warning: server.tls.<key>: ignored: server.tls.mode is "off"`). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
 `serve` would refuse, a local folder included that is not empty and not a repository, and, on
 SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
 

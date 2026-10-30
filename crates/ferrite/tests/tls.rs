@@ -190,6 +190,116 @@ async fn hsts_only_on_tls() {
     node.shutdown().await.unwrap();
 }
 
+/// A request over the TLS listener passes the per-request metrics once (each listener
+/// builds its own router over the node's one registry): one request, one page latency.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tls_request_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = site(
+        dir.path(),
+        &format!("https://{SITE_HOST}"),
+        "listen = \"127.0.0.1:0\"\n",
+    );
+    let (cert, root) = self_signed(SITE_HOST);
+    let node = boot(
+        &config,
+        TlsSeams {
+            cert: Some(cert),
+            ..TlsSeams::default()
+        },
+    )
+    .await;
+    let tls_addr = node.tls_addr.expect("TLS listener");
+    let before = node.metrics.snapshot();
+    let r = https(tls_addr, SITE_HOST, std::slice::from_ref(&root), "/")
+        .await
+        .unwrap();
+    assert_eq!(r.status, 200, "{}", r.head);
+    let delta = node.metrics.snapshot().since(&before);
+    assert_eq!(delta.requests, 1, "{delta:?}");
+    assert_eq!(delta.page_latency.iter().sum::<u64>(), 1, "{delta:?}");
+    assert_eq!(delta.page_views, 1, "{delta:?}");
+    node.shutdown().await.unwrap();
+}
+
+/// A port of its own: bound, its number read, released.
+fn free_local() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A busy `server.metrics_listen`, `server.tls.listen` or `server.tls.redirect_http`
+/// makes `start` fail before anything runs, naming the key, and the listeners it had
+/// bound already (`server.listen`) are released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn busy_port_fails_start_cleanly() {
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken = busy.local_addr().unwrap();
+    for key in [
+        "server.metrics_listen",
+        "server.tls.listen",
+        "server.tls.redirect_http",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let listen = free_local();
+        let at = |k: &str| {
+            if k == key {
+                taken.to_string()
+            } else {
+                "127.0.0.1:0".to_owned()
+            }
+        };
+        let metrics = if key == "server.metrics_listen" {
+            format!("metrics_listen = \"{taken}\"\n")
+        } else {
+            String::new()
+        };
+        let redirect = if key == "server.tls.redirect_http" {
+            format!("redirect_http = \"{taken}\"\n")
+        } else {
+            String::new()
+        };
+        let toml = format!(
+            "[site]\nurl = \"https://{SITE_HOST}\"\n[server]\nlisten = \"127.0.0.1:{listen}\"\n\
+             {metrics}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:ops@{SITE_HOST}\"\n\
+             listen = \"{}\"\n{redirect}",
+            at("server.tls.listen")
+        );
+        std::fs::write(dir.path().join("ferrite.toml"), toml).unwrap();
+        let env = vec![("FERRITE_AUTH__SECRET_KEY".to_owned(), "ab".repeat(32))];
+        let config = ferrite_config::load(dir.path(), env).unwrap();
+        let store = open_store(&config, OpenMode::CreateIfMissing)
+            .await
+            .unwrap();
+        let (cert, _) = self_signed(SITE_HOST);
+        let err = start(
+            &config,
+            store.clone(),
+            NodeOptions {
+                tls: TlsSeams {
+                    cert: Some(cert),
+                    ..TlsSeams::default()
+                },
+                ..NodeOptions::default()
+            },
+        )
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("{key}: start succeeded on a busy port"));
+        let msg = format!("{err:#}");
+        assert!(msg.contains(&format!("({key})")), "{key}: {msg}");
+        assert!(msg.contains(&taken.to_string()), "{key}: {msg}");
+        // The plain listener bound before the failure is closed again.
+        std::net::TcpListener::bind(("127.0.0.1", listen))
+            .unwrap_or_else(|e| panic!("{key}: server.listen still bound: {e}"));
+        store.close().await;
+    }
+    drop(busy);
+}
+
 /// `redirect_http` answers every request with 301 to the https site's origin (a port is
 /// kept, a base path is not prepended) and serves nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

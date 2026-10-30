@@ -299,7 +299,7 @@ pub async fn migration_0012_roundtrip(db: &TestDb) {
     let minute = Timestamp::from_micros(minute_micros).unwrap();
     let until = Timestamp::from_micros(minute_micros + ferrite_domain::MINUTE_MICROS).unwrap();
     let node = ferrite_domain::NodeId::new();
-    let counts = ferrite_domain::MetricCounts::from_counters([7; 9], 25);
+    let counts = ferrite_domain::MetricCounts::from_counters([7; 9], [1; 12]);
     let requests = || async {
         store
             .read()

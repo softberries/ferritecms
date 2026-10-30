@@ -55,7 +55,12 @@ async fn minute_writer_writes_rows(db: Arc<TestDb>) {
     .await;
     let t = totals(store.as_ref(), id).await;
     assert_eq!(t.errors_5xx, 0, "{t:?}");
-    assert!(t.p95_ms > 0, "page latency recorded: {t:?}");
+    assert_eq!(
+        t.page_latency.iter().sum::<u64>(),
+        3,
+        "page latency recorded: {t:?}"
+    );
+    assert!(t.p95_ms() > 0, "{t:?}");
     assert_eq!(
         t.cache_hits + t.cache_misses,
         3,

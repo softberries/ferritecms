@@ -30,7 +30,8 @@ const MAX_BINARY: u64 = 512 << 20;
 #[derive(Debug, Args)]
 pub struct SelfUpdateArgs {
     /// Install this release (`X.Y.Z` or `vX.Y.Z`) instead of the newest stable one. It
-    /// must be newer than this binary: use `ferrite rollback` to go back.
+    /// must be newer than this binary: use `ferrite rollback` to go back. A prerelease
+    /// (`X.Y.Z-rc.N`) is installed only when named here exactly.
     #[arg(long, value_name = "X.Y.Z")]
     pub version: Option<String>,
     /// Only print whether a newer release exists (exit 2 when it does, 0 when not).
@@ -100,8 +101,15 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
                 release.tag_name
             )
         }
-        None if release.prerelease => {
-            bail!("the newest release {} is a prerelease", release.tag_name)
+        // The API's `prerelease` flag is unsigned; the version is bound to the signed
+        // `SHA256SUMS` (the asset name) and to the binary's `--version`, so a prerelease
+        // version is refused here whatever the flag says (M4-2 R10).
+        None if release.prerelease || !version.pre.is_empty() => {
+            bail!(
+                "the newest release {} is a prerelease; the stable channel never installs \
+                 one (name it exactly with --version to install it)",
+                release.tag_name
+            )
         }
         _ => {}
     }
@@ -124,10 +132,11 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
     let dir = current
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent folder", current.display()))?;
+    swap::sweep_stale(&current);
     // The work folder sits beside the binary, so the new binary is renamed within one
     // filesystem; creating it is also the writability check.
     let work = tempfile::Builder::new()
-        .prefix(".ferrite-update-")
+        .prefix(swap::WORK_PREFIX)
         .tempdir_in(dir)
         .map_err(|e| {
             anyhow!(

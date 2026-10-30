@@ -665,3 +665,59 @@ fn unreadable_upgrade_json_keeps_all_snapshots_and_is_moved_aside() {
     assert_eq!(aside.len(), 1, "{aside:?}");
     assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "{");
 }
+
+/// Makes migration `version` fail every time: a trigger aborts its `_sqlx_migrations` row,
+/// so the migration's transaction rolls back and the ones before it stay applied.
+async fn always_fail_migration(data: &Path, version: i64) {
+    use sqlx::{AssertSqlSafe, ConnectOptions, Connection, sqlite::SqliteConnectOptions};
+    let mut conn = SqliteConnectOptions::new()
+        .filename(data.join("ferrite.db"))
+        .connect()
+        .await
+        .unwrap();
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "CREATE TRIGGER test_fail_migration BEFORE INSERT ON _sqlx_migrations \
+         WHEN NEW.version = {version} \
+         BEGIN SELECT RAISE(ABORT, 'test: migration {version} always fails'); END"
+    )))
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    conn.close().await.unwrap();
+}
+
+/// A crash loop on a partly applied upgrade (M4-2 R9): the move applies one migration and
+/// fails on the next, every time, as under systemd's `Restart=on-failure`. Each start
+/// takes another snapshot and prunes to the newest five; the snapshot from before the
+/// move (the only copy at its start schema) must survive, and the record must name it.
+#[tokio::test]
+async fn crash_loop_keeps_the_pre_upgrade_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("site");
+    let l = latest_schema_version();
+    init(&data);
+    migrate_down(&data, l - 2);
+    always_fail_migration(&data, l).await;
+    let backups = data.join("backups");
+    let first_prefix = format!("pre-{}-to-{l}-", l - 2);
+
+    for attempt in 0..7 {
+        let out = ferrite()
+            .args(["migrate", "up", "--data"])
+            .arg(&data)
+            .assert()
+            .failure();
+        let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+        assert!(stderr.contains("always fails"), "{stderr}");
+        let names = pre_snapshots(&backups);
+        assert!(
+            names.iter().any(|n| n.starts_with(&first_prefix)),
+            "attempt {attempt}: the pre-upgrade snapshot was pruned: {names:?}"
+        );
+        assert!(names.len() <= 6, "attempt {attempt}: {names:?}");
+    }
+    let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
+    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert!(snapshot_name(&rec).starts_with(&first_prefix), "{rec:?}");
+    assert!(data.join(rec.snapshot.unwrap()).is_file());
+}

@@ -10,6 +10,11 @@ Description=FerriteCMS
 Documentation=https://github.com/softberries/ferritecms
 After=network-online.target
 Wants=network-online.target
+# A start that keeps failing (a broken upgrade, a bad config) stops after five tries in
+# ten minutes instead of restarting forever: each failed start of an upgrade takes
+# another pre-migration snapshot. `systemctl reset-failed ferrite` clears the limit.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple

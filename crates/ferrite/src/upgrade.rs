@@ -128,13 +128,24 @@ fn sweep_stale_temps(data_dir: &Path) {
 }
 
 /// What the store's snapshot pruning must spare, from `upgrade.json`: the snapshot it
-/// names; nothing when there is no file or it names none; every snapshot when the file
-/// cannot be read (a stray edit, or a newer binary's format after a binary rollback),
-/// with a warning: keeping all is the safe direction, and the site still opens.
+/// names; for a provisional record (a move that has not finished: `snapshot` null,
+/// `schema_from < schema_to`) the snapshot its move took, found by name (M4-2 R9: a crash
+/// loop on a partly applied upgrade takes a new snapshot on every start and must not
+/// prune the one from before the move; this is for pruning only, `rollback
+/// --restore-snapshot` never resolves a snapshot by name); nothing when there is no file
+/// or no such snapshot; every snapshot when the file cannot be read (a stray edit, or a
+/// newer binary's format after a binary rollback), with a warning: keeping all is the
+/// safe direction, and the site still opens.
 pub fn keep_snapshot(data_dir: &Path) -> Option<KeepSnapshot> {
     match load(data_dir) {
         Ok(rec) => rec
-            .and_then(|r| r.snapshot)
+            .and_then(|r| match r.snapshot {
+                Some(s) => Some(s),
+                None if r.schema_from < r.schema_to => {
+                    find_snapshot(data_dir, r.schema_from, r.schema_to)
+                }
+                None => None,
+            })
             .map(|s| KeepSnapshot::Keep(data_dir.join(s))),
         Err(e) => {
             tracing::warn!(
@@ -222,8 +233,8 @@ struct Carry {
 }
 
 /// After a failed `migrate_up`: if the schema did not move, puts back what [`begin`]
-/// replaced (or removes the provisional record). Best effort: the migrate error is what
-/// the caller reports.
+/// replaced (or removes the provisional record), with the snapshot of a carried start
+/// filled in. Best effort: the migrate error is what the caller reports.
 async fn undo_begin(
     store: &dyn Store,
     data_dir: &Path,
@@ -239,7 +250,25 @@ async fn undo_begin(
             return;
         }
     }
-    let result = match &begun.previous {
+    // A carried start keeps the snapshot `begin` found for it (M4-2 R9): the record put
+    // back is the unfinished move it came from, now naming its snapshot, so the next
+    // start's pruning spares it even if that snapshot is no longer findable by name.
+    let previous = begun
+        .previous
+        .map(|prev| match (&prev.snapshot, begun.carry) {
+            (
+                None,
+                Some(Carry {
+                    schema_from,
+                    snapshot: Some(s),
+                }),
+            ) if schema_from == prev.schema_from => UpgradeRecord {
+                snapshot: Some(s),
+                ..prev
+            },
+            _ => prev,
+        });
+    let result = match &previous {
         Some(prev) => write(data_dir, prev),
         None => match std::fs::remove_file(data_dir.join(UPGRADE_FILE)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
@@ -575,6 +604,30 @@ mod tests {
                 dir.path().join("backups/pre-10-to-11-20261030T120000Z.db")
             ))
         );
+    }
+
+    /// A provisional record (an unfinished move) spares the snapshot its move took, found
+    /// by name; a record that changed no schema spares nothing.
+    #[test]
+    fn provisional_record_keeps_its_moves_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = sample("0.2.0");
+        rec.snapshot = None;
+        write(dir.path(), &rec).unwrap();
+        assert_eq!(keep_snapshot(dir.path()), None, "no snapshot yet");
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(backups.join("pre-10-to-11-20261030T120000Z.db"), b"x").unwrap();
+        std::fs::write(backups.join("pre-9-to-11-20261030T130000Z.db"), b"x").unwrap();
+        assert_eq!(
+            keep_snapshot(dir.path()),
+            Some(KeepSnapshot::Keep(
+                dir.path().join("backups/pre-10-to-11-20261030T120000Z.db")
+            ))
+        );
+        rec.schema_from = 11;
+        write(dir.path(), &rec).unwrap();
+        assert_eq!(keep_snapshot(dir.path()), None, "a binary-only record");
     }
 
     #[test]

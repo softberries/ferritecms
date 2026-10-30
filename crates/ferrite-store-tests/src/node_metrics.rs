@@ -1,7 +1,8 @@
 //! Contract tests for the per-node minute metrics and their series (M4-2 P35).
 
 use ferrite_domain::{
-    MINUTE_MICROS, MetricCounts, NODE_METRICS_RETENTION, NodeId, SeriesStep, Timestamp,
+    MINUTE_MICROS, MetricCounts, NODE_METRICS_RETENTION, NodeId, PAGE_LATENCY_SLOTS, SeriesStep,
+    Timestamp,
 };
 use ferrite_store::{MAX_PRUNE_BATCH, StoreError};
 
@@ -14,9 +15,11 @@ fn at(micros: i64) -> Timestamp {
     Timestamp::from_micros(micros).unwrap()
 }
 
-/// Counts `n` in every counter, with `p95_ms`.
-fn counts(n: u64, p95_ms: u32) -> MetricCounts {
-    MetricCounts::from_counters([n; 9], p95_ms)
+/// Counts `n` in every counter, with `n` page responses in latency bucket `slot`.
+fn counts(n: u64, slot: usize) -> MetricCounts {
+    let mut h = [0; PAGE_LATENCY_SLOTS];
+    h[slot] = n;
+    MetricCounts::from_counters([n; 9], h)
 }
 
 /// A whole day, so the minutes below are in one day bucket and in known hours.
@@ -132,7 +135,9 @@ pub async fn node_metrics_insert_and_series_sum_across_nodes(db: &TestDb) {
         m.insert(a, at(-MINUTE_MICROS), &counts(1, 0)).await
     ));
     assert!(invalid(m.insert(a, at(t0), &counts(u64::MAX, 0)).await));
-    assert!(invalid(m.insert(a, at(t0), &counts(1, u32::MAX)).await));
+    let mut too_many = counts(1, 0);
+    too_many.page_latency[3] = u64::MAX;
+    assert!(invalid(m.insert(a, at(t0), &too_many).await));
     assert!(invalid(
         m.series(at(t0), at(t0), SeriesStep::Hour, None)
             .await
@@ -140,39 +145,93 @@ pub async fn node_metrics_insert_and_series_sum_across_nodes(db: &TestDb) {
     ));
 }
 
-/// A bucket's p95 is the largest of its minutes' and nodes', never a sum; a second
-/// write of a minute keeps the larger p95.
-pub async fn series_p95_is_max(db: &TestDb) {
+/// A page latency histogram: `pages` responses in each `(slot, pages)`.
+fn latency(slots: &[(usize, u64)]) -> [u64; PAGE_LATENCY_SLOTS] {
+    let mut h = [0; PAGE_LATENCY_SLOTS];
+    for &(slot, pages) in slots {
+        h[slot] += pages;
+    }
+    h
+}
+
+/// One request per page response, with the given histogram.
+fn pages(slots: &[(usize, u64)]) -> MetricCounts {
+    let h = latency(slots);
+    let n = h.iter().sum();
+    MetricCounts::from_counters([n; 9], h)
+}
+
+/// A bucket's p95 comes from the histogram summed over its minutes and nodes (M4-2 R7),
+/// never the largest of their p95s: 19 fast page responses and 1 slow one, spread over two
+/// nodes and two minutes, have a fast p95 over the hour and over the shared minute; the
+/// minute that holds the slow one alone (fewer than 20 responses) is slow. A second write
+/// of a minute adds to its histogram.
+pub async fn series_p95_from_combined_histogram(db: &TestDb) {
     let m = db.store().read().node_metrics();
     let (a, b) = (NodeId::new(), NodeId::new());
     let t0 = day_start();
-    m.insert(a, at(t0), &counts(1, 25)).await.unwrap();
-    m.insert(a, at(t0), &counts(1, 10)).await.unwrap();
-    m.insert(b, at(t0), &counts(1, 50)).await.unwrap();
-    m.insert(a, at(t0 + MINUTE_MICROS), &counts(1, 250))
-        .await
-        .unwrap();
-    m.insert(b, at(t0 + 2 * MINUTE_MICROS), &counts(1, 0))
+    // Slot 0: at most 5 ms; slot 7: at most 1000 ms.
+    m.insert(a, at(t0), &pages(&[(0, 6)])).await.unwrap();
+    m.insert(a, at(t0), &pages(&[(0, 4)])).await.unwrap();
+    m.insert(b, at(t0), &pages(&[(0, 5)])).await.unwrap();
+    m.insert(b, at(t0 + MINUTE_MICROS), &pages(&[(0, 4), (7, 1)]))
         .await
         .unwrap();
 
-    let minutes = m
-        .series(at(t0), at(t0 + HOUR), SeriesStep::Minute, None)
-        .await
-        .unwrap();
-    let p95: Vec<u32> = minutes.iter().map(|b| b.counts.p95_ms).collect();
-    assert_eq!(p95, [50, 250, 0]);
-    let only_a = m
-        .series(at(t0), at(t0 + MINUTE_MICROS), SeriesStep::Minute, Some(a))
-        .await
-        .unwrap();
-    assert_eq!(only_a[0].counts.p95_ms, 25, "the larger of two writes");
     let hour = m
         .series(at(t0), at(t0 + HOUR), SeriesStep::Hour, None)
         .await
         .unwrap();
     assert_eq!(hour.len(), 1);
-    assert_eq!((hour[0].counts.p95_ms, hour[0].counts.requests), (250, 5));
+    assert_eq!(hour[0].counts.page_latency, latency(&[(0, 19), (7, 1)]));
+    assert_eq!(
+        hour[0].counts.p95_ms(),
+        5,
+        "19 fast + 1 slow: the p95 is fast"
+    );
+    let day = m
+        .series(at(t0), at(t0 + DAY), SeriesStep::Day, None)
+        .await
+        .unwrap();
+    assert_eq!(day[0].counts.p95_ms(), 5);
+
+    let minutes = m
+        .series(at(t0), at(t0 + HOUR), SeriesStep::Minute, None)
+        .await
+        .unwrap();
+    let p95: Vec<u32> = minutes.iter().map(|b| b.counts.p95_ms()).collect();
+    assert_eq!(p95, [5, 1000], "the second minute holds 4 fast and 1 slow");
+    assert_eq!(minutes[0].counts.page_latency, latency(&[(0, 15)]));
+
+    // One node: its own histogram.
+    let only_b = m
+        .series(at(t0), at(t0 + HOUR), SeriesStep::Hour, Some(b))
+        .await
+        .unwrap();
+    assert_eq!(only_b[0].counts.page_latency, latency(&[(0, 9), (7, 1)]));
+    assert_eq!(only_b[0].counts.p95_ms(), 1000);
+
+    // Two slow responses of 20: the p95 is slow, over the hour and every bucket width.
+    m.insert(a, at(t0 + 2 * MINUTE_MICROS), &pages(&[(7, 1)]))
+        .await
+        .unwrap();
+    let hour = m
+        .series(at(t0), at(t0 + HOUR), SeriesStep::Hour, None)
+        .await
+        .unwrap();
+    assert_eq!(hour[0].counts.p95_ms(), 1000);
+
+    // Histogram counts beyond u32 survive the sums.
+    let big = NodeId::new();
+    let huge = pages(&[(11, u64::from(u32::MAX))]);
+    m.insert(big, at(t0 - DAY), &huge).await.unwrap();
+    m.insert(big, at(t0 - DAY), &huge).await.unwrap();
+    let s = m
+        .series(at(t0 - DAY), at(t0), SeriesStep::Day, None)
+        .await
+        .unwrap();
+    assert_eq!(s[0].counts.page_latency[11], 2 * u64::from(u32::MAX));
+    assert_eq!(s[0].counts.p95_ms(), 10_000);
 }
 
 /// The 7-day prune: rows older than the retention go in batches, newer ones stay.

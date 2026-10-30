@@ -56,6 +56,11 @@ root on a systemd Linux host (Debian, Ubuntu, Fedora and the like).
    journalctl -u ferrite -f
    ```
 
+   A start that fails is retried every 5 s (`Restart=on-failure`), at most five times in
+   ten minutes (`StartLimitIntervalSec=600`, `StartLimitBurst=5`); then the unit stays
+   failed, so a broken upgrade does not loop. Fix the cause (`journalctl -u ferrite`),
+   then `systemctl reset-failed ferrite && systemctl start ferrite`.
+
    Local changes (a different `MemoryMax`, environment overrides such as
    `Environment=FERRITE_LOG=debug`) belong in a drop-in, `systemctl edit ferrite`, so a
    newer copy of the unit can replace the file.
@@ -127,7 +132,8 @@ systemctl start ferrite
 Every root command given `--data` opens the site's database: `self-update --data`,
 `rollback --data` and `rollback --schema`. On SQLite it can leave files owned by root in
 the data folder (the database's `-wal` / `-shm` files, a snapshot or a moved database
-under `backups/`). Before starting the service again, check with
+under `backups/`). The database that `rollback --schema --restore-snapshot` puts in place
+keeps the replaced database's owner and mode. Before starting the service again, check with
 `ls -la /var/lib/ferrite /var/lib/ferrite/backups`, and if anything is owned by root, run
 `chown -R ferrite:ferrite /var/lib/ferrite`. Running those commands as
 `sudo -u ferrite` avoids this when the binary's folder is writable to that user (it is

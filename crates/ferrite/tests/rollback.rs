@@ -261,6 +261,9 @@ fn rollback_swaps_and_back() {
         "{}",
         stdout(&out)
     );
+    // Without --data nothing was checked: the note names the config keys an older binary
+    // may refuse.
+    assert!(stdout(&out).contains("[server.tls]"), "{}", stdout(&out));
     assert_eq!(
         names(bins.current.parent().unwrap(), ""),
         ["ferrite", "ferrite.prev"]
@@ -337,7 +340,8 @@ fn rollback_refuses_incompatible_schema_exit_3() {
     assert!(stderr(&out).contains("--schema"), "{}", stderr(&out));
     bins.assert_unswapped();
 
-    // Any other failure of the check refuses too (exit 1).
+    // Any other failure of the check refuses too (exit 1), naming the likely causes: the
+    // folder lock, or config keys the older binary does not know.
     let bins2 = Bins::new(&tmp.path().join("other"), Some(1));
     let out = rollback(&bins2.current)
         .arg("--data")
@@ -345,6 +349,12 @@ fn rollback_refuses_incompatible_schema_exit_3() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("stop `serve`"), "{err}");
+    assert!(
+        err.contains("[server.tls]") && err.contains("server.metrics_listen"),
+        "{err}"
+    );
     bins2.assert_unswapped();
 }
 
@@ -559,6 +569,15 @@ fn rollback_restore_snapshot_moves_current_db_aside() {
     std::fs::write(data.join("ferrite.db-shm"), b"shm bytes").unwrap();
     let snapshot = data.join(rec.snapshot.as_ref().unwrap());
     let snapshot_bytes = std::fs::read(&snapshot).unwrap();
+    // The restored database keeps the current one's mode, not the snapshot's (M4-2 R11;
+    // the owner too, which only root can change).
+    #[cfg(unix)]
+    let db_mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&snapshot, std::fs::Permissions::from_mode(0o644)).unwrap();
+        0o600
+    };
 
     let out = rollback(&bins.current)
         .args(["--schema", "--restore-snapshot", "--yes", "--data"])
@@ -590,6 +609,12 @@ fn rollback_restore_snapshot_moves_current_db_aside() {
     assert!(!data.join("ferrite.db-shm").exists());
     // The snapshot is copied, not moved.
     assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(std::fs::metadata(&db).unwrap().mode() & 0o7777, db_mode);
+    }
 
     assert_eq!(db_version(&data), LOSSY_FROM);
     assert_eq!(meta(&data, "rollback_test_marker"), None);

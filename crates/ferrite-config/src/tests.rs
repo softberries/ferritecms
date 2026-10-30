@@ -1454,9 +1454,35 @@ fn tls_config_parses_and_validates() {
         "https://acme-staging-v02.api.letsencrypt.org/directory"
     );
 
-    // `off` with other keys set is fine (they are checked for shape only).
+    // `off` with other keys set loads (they are checked for shape only), with a warning
+    // per key that has no effect.
     let off = format!("{MIN}[server.tls]\nmode = \"off\"\nlisten = \"0.0.0.0:443\"\n");
-    assert_eq!(run(Some(&off), &[]).1.unwrap().server.tls, TlsConfig::Off);
+    let c = run(Some(&off), &[]).1.unwrap();
+    assert_eq!(c.server.tls, TlsConfig::Off);
+    let warned: Vec<&str> = c.warnings.iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(warned, ["server.tls.listen"]);
+    assert!(
+        c.warnings[0].message.contains("mode is \"off\""),
+        "{:?}",
+        c.warnings
+    );
+    let all = format!(
+        "{MIN}[server.tls]\ncontact = \"mailto:ops@example.com\"\ndomains = [\"example.com\"]\n\
+         directory = \"staging\"\nlisten = \"0.0.0.0:443\"\nredirect_http = \"0.0.0.0:80\"\n"
+    );
+    let c = run(Some(&all), &[]).1.unwrap();
+    let warned: Vec<&str> = c.warnings.iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(
+        warned,
+        [
+            "server.tls.domains",
+            "server.tls.contact",
+            "server.tls.directory",
+            "server.tls.listen",
+            "server.tls.redirect_http"
+        ]
+    );
+    assert!(run(Some(MIN), &[]).1.unwrap().warnings.is_empty());
 
     let problems = |src: &str| -> Vec<(String, String)> {
         let (_d, r) = run(Some(src), &[("FERRITE_AUTH__SECRET_KEY", KEY)]);

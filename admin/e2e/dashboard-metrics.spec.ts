@@ -118,7 +118,7 @@ test("traffic_card_shows_page_hits", async ({ as, site, snap, expectAccessible }
 });
 
 /** A series answer for the requested window, `fill(start, i)` giving each bucket's counts. */
-function fulfilSeries(fill: (start: Date, i: number) => Record<string, number>) {
+function fulfilSeries(fill: (start: Date, i: number) => Record<string, number | number[]>) {
   return (route: Route) => {
     const url = new URL(route.request().url());
     const from = Date.parse(url.searchParams.get("from") ?? "");
@@ -134,6 +134,7 @@ function fulfilSeries(fill: (start: Date, i: number) => Record<string, number>) 
       jobs_done: 0,
       jobs_failed: 0,
       p95_ms: 0,
+      page_latency: Array<number>(12).fill(0),
     };
     const buckets = Array.from({ length: (to - from) / HOUR }, (_, i) => {
       const start = new Date(from + i * HOUR);
@@ -185,6 +186,10 @@ test("screens", async ({ as, snap, expectAccessible }) => {
         cache_hits: Math.round(views * 0.82),
         cache_misses: Math.round(views * 0.18) + 1,
         p95_ms: h >= 19 && h <= 21 ? 250 : h % 5 === 0 ? 100 : 50,
+        // Every page view in the p95's latency bucket (250, 100 or 50 ms).
+        page_latency: Array.from({ length: 12 }, (_, slot) =>
+          slot === (h >= 19 && h <= 21 ? 5 : h % 5 === 0 ? 4 : 3) ? views : 0,
+        ),
       };
     }),
   );

@@ -130,8 +130,8 @@ fn sums(body: &Value, key: &str) -> Vec<u64> {
 }
 
 /// A range without rows is a dense series of zeros; rows of two nodes are summed into
-/// their buckets (the others stay zero), `p95_ms` is the larger, `node` filters, and
-/// the range is widened to whole buckets.
+/// their buckets (the others stay zero), `p95_ms` is the p95 of the summed page latency
+/// histogram (M4-2 R7), `node` filters, and the range is widened to whole buckets.
 async fn series_empty_range(api: Api) -> Api {
     api.user("root", Role::Admin, false).await;
     let mut c = api.logged_in("root").await;
@@ -165,18 +165,30 @@ async fn series_empty_range(api: Api) -> Api {
         ] {
             assert_eq!(b[key], 0, "{key}: {b}");
         }
+        assert_eq!(
+            b["page_latency"],
+            serde_json::json!([0u64; 12].to_vec()),
+            "{b}"
+        );
     }
 
     let m = api.store.read().node_metrics();
     let (a, b) = (NodeId::new(), NodeId::new());
-    let row = |n: u64, p95_ms: u32| MetricCounts::from_counters([n; 9], p95_ms);
-    m.insert(a, at(t0 + 2 * MINUTE_MICROS), &row(3, 25))
+    // `n` in every counter, `pages` page responses in latency bucket `slot`.
+    let row = |n: u64, slot: usize, pages: u64| {
+        let mut latency = [0; 12];
+        latency[slot] = pages;
+        MetricCounts::from_counters([n; 9], latency)
+    };
+    // Minute 2: 19 responses at most 25 ms on node a, 1 at most 100 ms on node b; the
+    // p95 of the 20 is 25 ms (the slower node's alone would say 100).
+    m.insert(a, at(t0 + 2 * MINUTE_MICROS), &row(3, 2, 19))
         .await
         .unwrap();
-    m.insert(b, at(t0 + 2 * MINUTE_MICROS), &row(4, 100))
+    m.insert(b, at(t0 + 2 * MINUTE_MICROS), &row(4, 4, 1))
         .await
         .unwrap();
-    m.insert(b, at(t0 + 5 * MINUTE_MICROS), &row(1, 5))
+    m.insert(b, at(t0 + 5 * MINUTE_MICROS), &row(1, 0, 1))
         .await
         .unwrap();
     let body = c
@@ -184,7 +196,12 @@ async fn series_empty_range(api: Api) -> Api {
         .await
         .json();
     assert_eq!(sums(&body, "requests"), [0, 0, 7, 0, 0, 1, 0, 0, 0, 0]);
-    assert_eq!(sums(&body, "p95_ms"), [0, 0, 100, 0, 0, 5, 0, 0, 0, 0]);
+    assert_eq!(sums(&body, "p95_ms"), [0, 0, 25, 0, 0, 5, 0, 0, 0, 0]);
+    assert_eq!(
+        body["buckets"][2]["page_latency"],
+        serde_json::json!([0, 0, 19, 0, 1, 0, 0, 0, 0, 0, 0, 0]),
+        "{body}"
+    );
     let only_a = c
         .get(
             &api,

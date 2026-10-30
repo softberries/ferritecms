@@ -8,8 +8,9 @@
 //! allocation per request, as the rest of the stack already does). The labels are
 //! `&'static str`s. A response below 200 (none today)
 //! is not counted. **Page views** ([`Metrics::count_page_view`]): the public handler
-//! counts a `200` `GET` of an HTML page that is neither a preview nor a logged-in request
-//! and whose `User-Agent` does not match [`is_bot`]; nothing per visitor is kept.
+//! counts a `GET` of an HTML page answered `200`, or `304` when the browser revalidated
+//! its stored copy (M4-2 R8), that is neither a preview nor a logged-in request and whose
+//! `User-Agent` does not match [`is_bot`]; nothing per visitor is kept.
 //!
 //! **At scrape time** ([`Metrics::render`], Prometheus text format 0.0.4), read from the
 //! sources the registry was given: the page cache (hits and misses since it was built,
@@ -40,12 +41,12 @@ use axum::{
     Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderValue, Method, Response, StatusCode, header},
+    http::{HeaderValue, Response, StatusCode, header},
     middleware::Next,
     routing::get,
 };
 use ferrite_cache::PageCache;
-use ferrite_domain::{MetricCounts, Timestamp};
+use ferrite_domain::{MetricCounts, PAGE_LATENCY_SLOTS, Timestamp};
 use ferrite_plugin_host::{DURATION_BUCKETS_MS, HookStats, PluginHost};
 use ferrite_store::Store;
 
@@ -59,8 +60,9 @@ pub const LATENCY_BUCKETS: [f64; 11] = [
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 ];
 
-/// Buckets of a request latency histogram: [`LATENCY_BUCKETS`] plus the overflow one.
-pub const LATENCY_SLOTS: usize = LATENCY_BUCKETS.len() + 1;
+/// Buckets of a request latency histogram: [`LATENCY_BUCKETS`] plus the overflow one
+/// (the same buckets as the `node_metrics` page latency histogram).
+pub const LATENCY_SLOTS: usize = PAGE_LATENCY_SLOTS;
 
 /// The longest a scrape waits for each store read.
 pub const SCRAPE_DB_TIMEOUT: Duration = Duration::from_secs(2);
@@ -68,7 +70,9 @@ pub const SCRAPE_DB_TIMEOUT: Duration = Duration::from_secs(2);
 /// What part of the site a request is for (the `class` label).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteClass {
-    /// Public pages (GET/HEAD): content, archives, feeds, sitemaps, redirects, 404s.
+    /// The public site: pages (content, archives, feeds, sitemaps, redirects, 404s),
+    /// the theme comment form (`POST /_comment`) and other methods there (405s), so
+    /// their 5xx errors show.
     Page,
     /// `/api/v1`.
     Api,
@@ -80,7 +84,8 @@ pub enum RouteClass {
     Plugin,
     /// `/_preview/…` (first segment `_preview` in any case or encoding).
     Preview,
-    /// Health checks, the comment form, other methods on the public site.
+    /// Health checks (`/healthz`, `/readyz`): load-balancer noise, left out of the
+    /// dashboard's requests (ruling R3).
     Other,
 }
 
@@ -96,8 +101,9 @@ impl RouteClass {
         RouteClass::Other,
     ];
 
-    /// The class of a request for `path` (raw, no query) with `method`.
-    pub fn of(method: &Method, path: &str) -> Self {
+    /// The class of a request for `path` (raw, no query); every method of a path has
+    /// the same class.
+    pub fn of(path: &str) -> Self {
         let under = |prefix: &str| {
             path.strip_prefix(prefix)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
@@ -114,10 +120,8 @@ impl RouteClass {
             RouteClass::Preview
         } else if path == "/healthz" || path == "/readyz" {
             RouteClass::Other
-        } else if method == Method::GET || method == Method::HEAD {
-            RouteClass::Page
         } else {
-            RouteClass::Other
+            RouteClass::Page
         }
     }
 
@@ -228,7 +232,7 @@ impl MetricsSnapshot {
     }
 
     /// These counts as a `node_metrics` row (P35; meant for a delta from
-    /// [`since`](Self::since)), with `p95_ms` from [`page_p95_ms`].
+    /// [`since`](Self::since)), with the page latency histogram (M4-2 R7).
     pub fn counts(&self) -> MetricCounts {
         MetricCounts {
             requests: self.requests,
@@ -240,37 +244,9 @@ impl MetricsSnapshot {
             plugin_failures: self.plugin_failures,
             jobs_done: self.jobs_done,
             jobs_failed: self.jobs_failed,
-            p95_ms: page_p95_ms(&self.page_latency),
+            page_latency: self.page_latency,
         }
     }
-}
-
-/// [`LATENCY_BUCKETS`] in milliseconds.
-pub const LATENCY_BOUNDS_MS: [u32; LATENCY_BUCKETS.len()] =
-    [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000];
-
-/// The upper bound (ms) of the latency bucket holding the 95th percentile of `counts`
-/// (per-bucket counts as in [`MetricsSnapshot::page_latency`]): the first bucket at
-/// which the running total reaches `ceil(0.95 × total)`. 0 without responses; the
-/// overflow bucket (over 10 s) reports the largest bound, 10 000.
-pub fn page_p95_ms(counts: &[u64; LATENCY_SLOTS]) -> u32 {
-    let total: u64 = counts.iter().fold(0, |a, n| a.saturating_add(*n));
-    if total == 0 {
-        return 0;
-    }
-    // ceil(0.95 × total) without overflow.
-    let rank = total - total / 20;
-    let mut seen = 0u64;
-    for (i, n) in counts.iter().enumerate() {
-        seen = seen.saturating_add(*n);
-        if seen >= rank {
-            return LATENCY_BOUNDS_MS
-                .get(i)
-                .copied()
-                .unwrap_or(LATENCY_BOUNDS_MS[LATENCY_BOUNDS_MS.len() - 1]);
-        }
-    }
-    LATENCY_BOUNDS_MS[LATENCY_BOUNDS_MS.len() - 1]
 }
 
 /// Completed jobs and failed attempts, read at snapshot time (the job runner's counters).
@@ -721,7 +697,7 @@ pub(crate) async fn track(
     req: Request,
     next: Next,
 ) -> Response<Body> {
-    let class = RouteClass::of(req.method(), req.uri().path());
+    let class = RouteClass::of(req.uri().path());
     let started = Instant::now();
     let res = next.run(req).await;
     metrics.record(class, res.status(), started.elapsed());
@@ -751,35 +727,14 @@ async fn scrape(State(metrics): State<Arc<Metrics>>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Method;
+    use ferrite_domain::PAGE_LATENCY_BOUNDS_MS;
 
     #[test]
     fn bounds_in_ms_match_the_buckets() {
-        for (ms, s) in LATENCY_BOUNDS_MS.iter().zip(LATENCY_BUCKETS) {
+        for (ms, s) in PAGE_LATENCY_BOUNDS_MS.iter().zip(LATENCY_BUCKETS) {
             assert!((f64::from(*ms) / 1000.0 - s).abs() < 1e-9, "{ms} {s}");
         }
-    }
-
-    #[test]
-    fn p95_is_the_bound_of_the_bucket_holding_it() {
-        let mut c = [0u64; LATENCY_SLOTS];
-        assert_eq!(page_p95_ms(&c), 0, "no responses");
-        c[0] = 1;
-        assert_eq!(page_p95_ms(&c), 5);
-        // 19 fast, 1 slow: rank 19 is still fast.
-        c[0] = 19;
-        c[7] = 1;
-        assert_eq!(page_p95_ms(&c), 5);
-        // 18 fast, 2 slow: rank 19 is slow.
-        c[0] = 18;
-        c[7] = 2;
-        assert_eq!(page_p95_ms(&c), 1000);
-        // Everything over 10 s: the largest bound.
-        let mut slow = [0u64; LATENCY_SLOTS];
-        slow[LATENCY_SLOTS - 1] = 3;
-        assert_eq!(page_p95_ms(&slow), 10_000);
-        let huge = [u64::MAX; LATENCY_SLOTS];
-        // The total saturates (no overflow panic); the first bucket already reaches it.
-        assert_eq!(page_p95_ms(&huge), 5);
     }
 
     #[test]
@@ -800,7 +755,7 @@ mod tests {
         };
         assert_eq!(
             s.counts(),
-            MetricCounts::from_counters([1, 2, 3, 4, 5, 6, 7, 8, 9], 50)
+            MetricCounts::from_counters([1, 2, 3, 4, 5, 6, 7, 8, 9], latency)
         );
     }
 
@@ -827,11 +782,12 @@ mod tests {
             (&get, "/%5FPreview/x", RouteClass::Preview),
             (&get, "/healthz", RouteClass::Other),
             (&get, "/readyz", RouteClass::Other),
-            (&Method::POST, "/_comment", RouteClass::Other),
-            (&Method::POST, "/", RouteClass::Other),
+            (&Method::POST, "/healthz", RouteClass::Other),
+            (&Method::POST, "/_comment", RouteClass::Page),
+            (&Method::POST, "/", RouteClass::Page),
             (&Method::HEAD, "/", RouteClass::Page),
         ] {
-            assert_eq!(RouteClass::of(method, path), class, "{method} {path}");
+            assert_eq!(RouteClass::of(path), class, "{method} {path}");
         }
     }
 

@@ -530,8 +530,9 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
   - `ferrite_build_info{version,target}` 1;
   - `ferrite_http_requests_total{class,status}`: `class` is
     `page|api|admin|media|plugin|preview|other` (`/api/v1`, `/admin`, `/_media` and
-    `/_theme`, `/_p`, `/_preview`; health checks, the comment form and other methods
-    are `other`; everything else GET/HEAD is `page`), `status` is `2xx|3xx|4xx|5xx`
+    `/_theme`, `/_p`, `/_preview`; the health checks `/healthz` and `/readyz` are
+    `other`; everything else, any method, is `page`: the comment form `POST /_comment`
+    and 405s on the public site too, so their 5xx errors show), `status` is `2xx|3xx|4xx|5xx`
     (every series is present, zeros included);
   - `ferrite_http_request_duration_seconds{class}` (time to the response headers),
     buckets .005 .01 .025 .05 .1 .25 .5 1 2.5 5 10;
@@ -547,8 +548,9 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
   - `ferrite_db_pool_connections{state="idle|used"}` (this node's pools; SQLite: reader
     plus writer; dedicated `LISTEN`/lock connections are not pooled);
   - `ferrite_nodes` (live nodes: heartbeat within 30 s of the database clock);
-  - `ferrite_page_views_total`: `200` `GET`s of public HTML pages that are not previews
-    or logged-in requests and whose `User-Agent` does not match
+  - `ferrite_page_views_total`: `GET`s of public HTML pages answered `200`, or `304`
+    when a browser revalidated its stored copy (a returning reader, M4-2 R8), that are
+    not previews or logged-in requests and whose `User-Agent` does not match
     `bot|crawler|spider|slurp|preview` (case-insensitive); nothing per visitor is kept.
 
   A store read that fails or takes over 2 s leaves its family out of that scrape. Job

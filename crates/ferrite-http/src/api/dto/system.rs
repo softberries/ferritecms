@@ -462,11 +462,12 @@ impl From<SeriesStep> for SeriesStepDto {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SeriesBucketDto {
     pub start: DateTime<Utc>,
-    /// Responses of every route class but `other` (health checks, the comment form).
+    /// Responses of every route class but `other` (health checks).
     pub requests: u64,
     /// Those of `requests` with a 5xx status.
     pub errors_5xx: u64,
-    /// `200` HTML page views (no bots, previews or logged-in requests).
+    /// HTML page views: `200` answers and `304` revalidations of public pages (no bots,
+    /// previews or logged-in requests).
     pub page_views: u64,
     /// Page cache lookups that found a page.
     pub cache_hits: u64,
@@ -480,10 +481,16 @@ pub struct SeriesBucketDto {
     pub jobs_done: u64,
     /// Job attempts that failed (retried or dead).
     pub jobs_failed: u64,
-    /// The upper bound (ms) of the latency bucket holding the page p95: the largest of
-    /// the bucket's minutes and nodes; 0 without page responses. Bounds: 5, 10, 25, 50,
-    /// 100, 250, 500, 1000, 2500, 5000 and 10000 (also for anything slower).
+    /// The upper bound (ms) of the latency bucket holding the 95th percentile of the
+    /// bucket's page responses (every minute's and node's together, from the summed
+    /// `page_latency`); 0 without page responses. Bounds: 5, 10, 25, 50, 100, 250, 500,
+    /// 1000, 2500, 5000 and 10000 (also for anything slower).
     pub p95_ms: u32,
+    /// Page responses per latency bucket, 12 counts (not cumulative): at most 5, 10, 25,
+    /// 50, 100, 250, 500, 1000, 2500, 5000 and 10000 ms, then over 10 s. Summed over
+    /// several buckets they give the p95 of a longer range.
+    #[schema(min_items = 12, max_items = 12)]
+    pub page_latency: Vec<u64>,
 }
 
 impl From<SeriesBucket> for SeriesBucketDto {
@@ -500,7 +507,8 @@ impl From<SeriesBucket> for SeriesBucketDto {
             plugin_failures: c.plugin_failures,
             jobs_done: c.jobs_done,
             jobs_failed: c.jobs_failed,
-            p95_ms: c.p95_ms,
+            p95_ms: c.p95_ms(),
+            page_latency: c.page_latency.to_vec(),
         }
     }
 }
