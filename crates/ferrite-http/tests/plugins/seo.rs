@@ -630,7 +630,7 @@ async fn tags_already_in_the_head_are_not_repeated(site: Site) -> Site {
 
     // A post page (`BlogPosting` present) and the home page (`WebSite` present).
     for (item, path) in [(Some(id), "/dup/"), (None, "/")] {
-        let req = PluginRequest::public(path, "en", item);
+        let req = PluginRequest::public(path, "pl-PL", item);
         let mut trace = RenderTrace::default();
         let FilterValue::Head(out) = ferrite_http::run_filter(
             &site.host,

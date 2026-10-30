@@ -61,7 +61,7 @@ Reason: 05 §11 says changing a record is a new major world. M4-3 is about examp
 
   The plugin adds only what core does not, and never a second copy of a tag core emitted. It checks the incoming head first.
 - It adds:
-  - `og:site_name` (site title) and `og:locale` (request locale, `-` → `_`);
+  - `og:site_name` (site title) and `og:locale` (request locale, `-` → `_`, omitted for a bare language such as `en`);
   - Twitter cards: `twitter:card` is `summary_large_image` when an `og:image` is present, else `summary`. `twitter:title` and `twitter:description` copy core's OG values, and `twitter:site` comes from a setting.
   - On a single item (`request-info.post`, read with `content::get_post`): `article:published_time`, `article:author` (display name), `article:section` (the first `category` term) and one `article:tag` per `tag` term (core's tag taxonomy). These are added only for kind `post`.
   - JSON-LD:
