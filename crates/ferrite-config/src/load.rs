@@ -52,7 +52,7 @@ pub fn load(
     apply_env(&mut cx, &mut table, env);
 
     let site = parse_site(&mut cx, &mut table);
-    let server = parse_server(&mut cx, &mut table);
+    let server = parse_server(&mut cx, &mut table, site.as_ref().map(|s| &s.url));
     let database = parse_database(&mut cx, &mut table);
     let (media, uploads) = parse_media(&mut cx, &mut table);
     let cluster = parse_cluster(&mut cx, &mut table);
@@ -64,6 +64,15 @@ pub fn load(
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
+    // ACME's challenge state lives in one process (09 §5): solo only; use the LB.
+    if matches!(server.tls, TlsConfig::Acme(_))
+        && effective_mode(cluster.mode, database.url.expose(), &media) == ClusterMode::Cluster
+    {
+        cx.push(
+            "server.tls.mode",
+            "\"acme\" works in solo mode only; in cluster mode terminate TLS at the load balancer",
+        );
+    }
     // A given but invalid key is already a problem; only a missing one is reported here.
     if !key_given
         && effective_mode(cluster.mode, database.url.expose(), &media) == ClusterMode::Cluster
@@ -230,7 +239,7 @@ fn non_empty(cx: &mut Cx, t: &mut Table, base: &str, key: &str, default: &str) -
     }
 }
 
-fn parse_server(cx: &mut Cx, root: &mut Table) -> ServerConfig {
+fn parse_server(cx: &mut Cx, root: &mut Table, site_url: Option<&url::Url>) -> ServerConfig {
     let mut t = section(cx, root, "server");
     let listen = match cx.string(&mut t, "server", "listen") {
         Some(s) => match s.parse::<SocketAddr>() {
@@ -305,11 +314,214 @@ fn parse_server(cx: &mut Cx, root: &mut Table) -> ServerConfig {
         },
         None => None,
     };
+    let tls = match cx.section(&mut t, "server", "tls") {
+        Some(tls) => parse_tls(cx, tls, listen, metrics_listen, site_url),
+        None => TlsConfig::Off,
+    };
     cx.unknown(t, "server");
     ServerConfig {
         listen,
         trusted_proxies,
         metrics_listen,
+        tls,
+    }
+}
+
+/// `[server.tls]` (M4-2 P33). Every key is shape-checked; `acme` also needs an https
+/// `site.url` (`None` when it is itself invalid: not reported twice) whose host is among
+/// the domains, and a `mailto:` contact. The cluster refusal is in [`load`].
+fn parse_tls(
+    cx: &mut Cx,
+    mut t: Table,
+    listen: SocketAddr,
+    metrics_listen: Option<SocketAddr>,
+    site_url: Option<&url::Url>,
+) -> TlsConfig {
+    const BASE: &str = "server.tls";
+    let acme = match cx.string(&mut t, BASE, "mode").as_deref() {
+        None | Some("off") => false,
+        Some("acme") => true,
+        Some(_) => {
+            cx.push("server.tls.mode", "must be \"off\" or \"acme\"");
+            false
+        }
+    };
+    let domains = match t.remove("domains") {
+        None => None,
+        Some(v) => {
+            let items: Option<Vec<String>> = match v {
+                Value::Array(a) => a
+                    .into_iter()
+                    .map(|i| match i {
+                        Value::String(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect(),
+                // Env convenience: comma separated.
+                Value::String(s) => Some(s.split(',').map(|d| d.trim().to_owned()).collect()),
+                _ => None,
+            };
+            match items {
+                None => {
+                    cx.push("server.tls.domains", "expected an array of DNS names");
+                    Some(Vec::new())
+                }
+                Some(items) => {
+                    let mut out = Vec::new();
+                    for (i, item) in items.iter().enumerate() {
+                        let d = item.trim().to_ascii_lowercase();
+                        if is_dns_name(&d) {
+                            out.push(d);
+                        } else {
+                            cx.push(
+                                &format!("server.tls.domains[{i}]"),
+                                "must be a DNS name such as \"example.com\" (no IP address or wildcard)",
+                            );
+                        }
+                    }
+                    if items.is_empty() {
+                        cx.push("server.tls.domains", "must not be empty");
+                    }
+                    Some(out)
+                }
+            }
+        }
+    };
+    let contact = cx.string(&mut t, BASE, "contact");
+    if let Some(c) = &contact
+        && !is_mailto(c)
+    {
+        cx.push(
+            "server.tls.contact",
+            "must be a mailto: URI such as \"mailto:ops@example.com\"",
+        );
+    }
+    let directory = match cx.string(&mut t, BASE, "directory").as_deref() {
+        None | Some("production") => AcmeDirectory::Production,
+        Some("staging") => AcmeDirectory::Staging,
+        Some(s) => match url::Url::parse(s) {
+            Ok(u) if u.scheme() == "https" && u.has_host() => AcmeDirectory::Url(u),
+            _ => {
+                cx.push(
+                    "server.tls.directory",
+                    "must be \"production\", \"staging\" or an https:// ACME directory URL",
+                );
+                AcmeDirectory::Production
+            }
+        },
+    };
+    let addr = |cx: &mut Cx, t: &mut Table, key: &str| match cx.string(t, BASE, key) {
+        None => None,
+        Some(s) => match s.parse::<SocketAddr>() {
+            Ok(a) => Some(a),
+            Err(_) => {
+                cx.push(
+                    &join(BASE, key),
+                    "must be a socket address such as \"0.0.0.0:443\"",
+                );
+                None
+            }
+        },
+    };
+    let tls_listen = addr(cx, &mut t, "listen").unwrap_or(DEFAULT_TLS_LISTEN);
+    let redirect_http = addr(cx, &mut t, "redirect_http");
+    cx.unknown(t, BASE);
+    if !acme {
+        return TlsConfig::Off;
+    }
+
+    if contact.is_none() {
+        cx.push(
+            "server.tls.contact",
+            "required with mode = \"acme\" (a mailto: URI such as \"mailto:ops@example.com\")",
+        );
+    }
+    let host = site_url.and_then(|u| match u.host() {
+        Some(url::Host::Domain(d)) => Some(d.to_ascii_lowercase()),
+        _ => None,
+    });
+    if let Some(u) = site_url
+        && u.scheme() != "https"
+    {
+        cx.push(
+            "server.tls.mode",
+            "\"acme\" needs an https:// site.url (the site is served over TLS)",
+        );
+    }
+    let domains = match (domains, &host) {
+        (Some(domains), Some(host)) => {
+            if !domains.is_empty() && !domains.contains(host) {
+                cx.push(
+                    "server.tls.domains",
+                    format!("must include the host of site.url, {host}"),
+                );
+            }
+            domains
+        }
+        (None, Some(host)) => vec![host.clone()],
+        // The certificate could never cover a site.url whose host is an IP address.
+        (domains, None) => {
+            if site_url.is_some() {
+                cx.push(
+                    "server.tls.domains",
+                    "the host of site.url is not a DNS name; ACME certifies DNS names only",
+                );
+            }
+            domains.unwrap_or_default()
+        }
+    };
+    let taken = |a: SocketAddr, b: Option<SocketAddr>| b.is_some_and(|b| clashes(a, b));
+    if clashes(tls_listen, listen) || taken(tls_listen, metrics_listen) {
+        cx.push(
+            "server.tls.listen",
+            "must not share a socket with server.listen (which keeps serving plain HTTP) or server.metrics_listen",
+        );
+    }
+    if let Some(r) = redirect_http
+        && (clashes(r, tls_listen) || clashes(r, listen) || taken(r, metrics_listen))
+    {
+        cx.push(
+            "server.tls.redirect_http",
+            "must not share a socket with server.tls.listen, server.listen or server.metrics_listen",
+        );
+    }
+    TlsConfig::Acme(AcmeTls {
+        domains,
+        contact: contact.unwrap_or_default(),
+        directory,
+        listen: tls_listen,
+        redirect_http,
+    })
+}
+
+/// A DNS name ACME can certify: LDH labels of 1 to 63 characters, at most 253 in all,
+/// not an IP address, no wildcard.
+fn is_dns_name(d: &str) -> bool {
+    !d.is_empty()
+        && d.len() <= 253
+        && d.parse::<std::net::IpAddr>().is_err()
+        && d.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// `mailto:local@domain` with no spaces.
+fn is_mailto(c: &str) -> bool {
+    let Some(addr) = c.strip_prefix("mailto:") else {
+        return false;
+    };
+    match addr.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && !domain.is_empty()
+                && !domain.contains('@')
+                && !addr.chars().any(char::is_whitespace)
+        }
+        None => false,
     }
 }
 
@@ -1099,6 +1311,7 @@ pub fn render_default_toml(
     out.push_str("[server]\nlisten = \"127.0.0.1:8080\"\ntrusted_proxies = []\n");
     out.push_str("# Serve GET /metrics (Prometheus text, no auth) on this separate address; off when unset.\n");
     out.push_str("# metrics_listen = \"127.0.0.1:9464\"\n\n");
+    out.push_str(TLS_TEMPLATE);
     out.push_str("[database]\n");
     out.push_str(&format!(
         "url = {}\n",
@@ -1182,6 +1395,9 @@ pub fn render_default_toml(
     out.push_str(BACKUP_TEMPLATE);
     out
 }
+
+/// The `[server.tls]` section of the `ferrite init` template (commented out: off).
+const TLS_TEMPLATE: &str = "# [server.tls]\n# Built-in HTTPS with certificates from Let's Encrypt (solo mode only; TLS-ALPN-01, so\n# the TLS port must be reachable from the internet). site.url must be https://.\n# server.listen keeps serving plain HTTP: keep it on 127.0.0.1 for the healthcheck.\n# mode = \"acme\"\n# contact = \"mailto:ops@example.com\"\n# Default: the host of site.url.\n# domains = [\"example.com\"]\n# \"production\", \"staging\" or an https:// ACME directory URL.\n# directory = \"production\"\n# listen = \"0.0.0.0:443\"\n# A plain HTTP listener that only redirects (301) to the https site.\n# redirect_http = \"0.0.0.0:80\"\n\n";
 
 /// The `[backup]` section of the `ferrite init` template (commented out: off).
 const BACKUP_TEMPLATE: &str = "# [backup]\n# Scheduled backups while `serve` runs: \"off\", \"daily\" or \"weekly\". SQLite: a\n# snapshot into a backup repository (`ferrite restore` reads it); Postgres: an export\n# archive in <to>/exports/ (`ferrite import-site` reads it).\n# schedule = \"daily\"\n# A folder outside the data folder (relative paths are relative to it) or\n# s3://bucket[/prefix] (credentials from the AWS_* environment).\n# to = \"../backups\"\n# Snapshots or archives kept (1..=1000).\n# keep = 7\n# with_media = true\n";

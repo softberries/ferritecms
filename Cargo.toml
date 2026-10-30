@@ -48,7 +48,13 @@ scraper = { version = "0.29", default-features = false }
 # client takes the process default provider and panics without one, so every place that
 # builds a client (here or through object_store) installs ring first; `main` does too.
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
-rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
+# `tls12` explicitly: the built-in TLS listener (M4-2 P33) serves TLS 1.2 clients too,
+# not only because another crate happens to turn it on.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+# Built-in ACME TLS for solo sites (M4-2 P33): TLS-ALPN-01 on the TLS listener. `ring` only
+# (its default `aws-lc-rs` would link aws-lc, P28); the ACME client's roots are webpki-roots,
+# passed in through `new_with_client_config`, so its `webpki-roots` feature is not needed.
+rustls-acme = { version = "=0.15.4", default-features = false, features = ["ring"] }
 rust-embed = { version = "8.13", features = ["debug-embed"] }
 # `aws-base` + `reqwest` + `ring` is `aws` without aws-lc-rs (M4-2 P28): SigV4 signing on
 # ring, TLS through reqwest on the process default (ring) provider. reqwest's TLS comes from

@@ -781,7 +781,7 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off backup=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off"
     );
     // `server.metrics_listen` (P34) is reported as its address.
     let out = stdout({
@@ -792,6 +792,16 @@ fn config_check_reports_effective_settings() {
         c
     });
     assert!(out.contains(" metrics=127.0.0.1:9464 "), "{out}");
+    // `[server.tls]` (P33) is reported as its mode.
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_SERVER__TLS__MODE", "acme")
+            .env("FERRITE_SERVER__TLS__CONTACT", "mailto:ops@example.com");
+        c
+    });
+    assert!(out.contains(" tls=acme "), "{out}");
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
@@ -815,7 +825,7 @@ fn config_check_prints_backup() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off backup=weekly"
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly"
     );
     // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
     let out = stdout({
@@ -925,7 +935,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off backup=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off"
     );
 }
 
