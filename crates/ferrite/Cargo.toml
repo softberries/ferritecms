@@ -38,7 +38,7 @@ image.workspace = true
 minisign-verify = { version = "=0.3.0", default-features = false }
 object_store.workspace = true
 reqwest.workspace = true
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+rustls.workspace = true
 rustls-acme.workspace = true
 tokio-rustls.workspace = true
 webpki-roots.workspace = true

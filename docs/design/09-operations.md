@@ -657,13 +657,28 @@ more, not as lost ones.
     whatever its method or `Host`, with `301` to the same path and query on `site.url`'s
     origin, and serves nothing else. `serve` prints `Listening on https://<addr>` too; at
     shutdown all listeners drain together (§8 `serve`).
+  - **First setup, rate limits and restores.** Try `directory = "staging"` first: its
+    certificates are not trusted by browsers, but its limits are much higher, so a wrong
+    DNS record, firewall or port mapping costs nothing. Let's Encrypt production allows
+    (its rate-limits page, checked 2026-10-30) 5 authorization failures per identifier per
+    account an hour, 5 certificates for the exact same set of names every 7 days, 50
+    certificates per registered domain every 7 days and 300 new orders per account every 3
+    hours; the client retries a failure after 1, 2, 4, 8 … s (doubling up to 2^16 s, about 18 h), so a broken setup reaches the
+    failure limit within a minute and then waits it out. Switching back to `production`
+    orders afresh (the cache files are per directory). `<data>/tls/` is not in backups,
+    and a changed `contact` or `domains` starts a new account or order, so every restore
+    or such change orders a new certificate and counts against the 5-per-7-days duplicate
+    limit: restoring or re-creating a site more than a few times a week can leave it
+    without a certificate until the window passes (copy `<data>/tls/` along by hand to
+    avoid that).
   - **Ports below 1024** need `CAP_NET_BIND_SERVICE` (systemd `AmbientCapabilities=`) or
     a port mapping (Docker `-p 443:8443` with `listen = "0.0.0.0:8443"`).
   - **Verified** by `crates/ferrite/tests/tls.rs`: HSTS only on TLS, the redirect
     listener, the file modes, and `acme_against_pebble_serves_https` (with
     `FERRITE_TEST_PEBBLE=1`; it runs `ghcr.io/letsencrypt/pebble` pinned by digest in
     Docker with real TLS-ALPN-01 validation back to the node as `host.docker.internal`,
-    which needs Docker Desktop or an equivalent host alias). Not verified: Let's Encrypt
+    the test adds it with `--add-host=host.docker.internal:host-gateway` for Linux
+    Docker). Not verified: Let's Encrypt
     itself, renewal at expiry.
 
 ## 6. Metrics & logs

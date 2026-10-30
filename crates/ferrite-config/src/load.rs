@@ -458,16 +458,16 @@ fn parse_tls(
             }
             domains
         }
-        (Some(domains), None) => domains,
         (None, Some(host)) => vec![host.clone()],
-        (None, None) => {
+        // The certificate could never cover a site.url whose host is an IP address.
+        (domains, None) => {
             if site_url.is_some() {
                 cx.push(
                     "server.tls.domains",
                     "the host of site.url is not a DNS name; ACME certifies DNS names only",
                 );
             }
-            Vec::new()
+            domains.unwrap_or_default()
         }
     };
     let taken = |a: SocketAddr, b: Option<SocketAddr>| b.is_some_and(|b| clashes(a, b));

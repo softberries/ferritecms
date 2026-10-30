@@ -190,13 +190,14 @@ async fn hsts_only_on_tls() {
     node.shutdown().await.unwrap();
 }
 
-/// `redirect_http` answers every request with 301 to the https site and serves nothing.
+/// `redirect_http` answers every request with 301 to the https site's origin (a port is
+/// kept, a base path is not prepended) and serves nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn redirect_listener_only_redirects() {
     let dir = tempfile::tempdir().unwrap();
     let config = site(
         dir.path(),
-        &format!("https://{SITE_HOST}"),
+        &format!("https://{SITE_HOST}:8443/base/"),
         "listen = \"127.0.0.1:0\"\nredirect_http = \"127.0.0.1:0\"\n",
     );
     let (cert, _) = self_signed(SITE_HOST);
@@ -222,7 +223,7 @@ async fn redirect_listener_only_redirects() {
         assert_eq!(r.status, 301, "{method} {path}: {}", r.head);
         assert_eq!(
             r.header("location"),
-            Some(format!("https://{SITE_HOST}{path}").as_str()),
+            Some(format!("https://{SITE_HOST}:8443{path}").as_str()),
             "{method} {path}"
         );
         assert_eq!(r.header("strict-transport-security"), None);
@@ -277,6 +278,13 @@ async fn tls_files_are_0600() {
     TlsCache::new(dir.clone()).prepare().unwrap();
     assert_eq!(mode(&files[0]), 0o600);
     assert_eq!(mode(&dir), 0o700);
+    // A folder removed while the node runs is made again 0700 by the next write.
+    std::fs::remove_dir_all(&dir).unwrap();
+    cache.store_cert(&domains, url, b"again").await.unwrap();
+    assert_eq!(mode(&dir), 0o700);
+    for e in std::fs::read_dir(&dir).unwrap() {
+        assert_eq!(mode(&e.unwrap().path()), 0o600);
+    }
 }
 
 /// The Pebble container this test started, removed (by its name) on drop.
@@ -318,7 +326,7 @@ fn pem_certs(pem: &str) -> Vec<CertificateDer<'static>> {
 
 /// A real ACME run: Pebble (in Docker) issues the certificate after validating
 /// TLS-ALPN-01 against the node's TLS listener, reached from the container as
-/// `host.docker.internal` (Docker Desktop), so the domain is that name. The served
+/// `host.docker.internal` (Docker Desktop, or `--add-host … host-gateway` on Linux), so the domain is that name. The served
 /// certificate chains to Pebble's root, responses carry HSTS, and `<data>/tls/` holds
 /// the account key and certificate as 0600 files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -344,8 +352,12 @@ async fn acme_against_pebble_serves_https() {
     docker(&[
         "run",
         "-d",
+        // Gone even when this process is killed before the drop.
+        "--rm",
         "--name",
         &pebble.name,
+        // Docker Desktop defines the name; Linux Docker (20.10+) needs it added.
+        "--add-host=host.docker.internal:host-gateway",
         "-p",
         "127.0.0.1:0:14000",
         "-p",

@@ -308,11 +308,10 @@ impl TlsCache {
 
     /// Creates the folder if missing and tightens it (0700) and every file in it (0600).
     pub fn prepare(&self) -> io::Result<()> {
-        std::fs::create_dir_all(&self.dir)?;
+        create_private_dir(&self.dir)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
             for entry in std::fs::read_dir(&self.dir)? {
                 let entry = entry?;
                 if entry.file_type()?.is_file() {
@@ -358,10 +357,13 @@ impl TlsCache {
 }
 
 /// Writes `dir/name` as a 0600 file: a temporary file first (created 0600), synced,
-/// then renamed over the old one.
+/// then renamed over the old one, then the folder synced. A folder removed while the
+/// node runs is made again 0700 (not with the umask's mode).
 fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
-    std::fs::create_dir_all(dir)?;
+    if !dir.is_dir() {
+        create_private_dir(dir)?;
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -373,12 +375,34 @@ fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
         f.sync_all()
     })();
     match written.and_then(|()| std::fs::rename(&tmp, dir.join(name))) {
-        Ok(()) => Ok(()),
+        // The rename is durable only once the folder is synced: a power loss would
+        // otherwise lose a fresh certificate and cost a new order.
+        Ok(()) => sync_dir(dir),
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
             Err(e)
         }
     }
+}
+
+/// `dir` (and missing parents) created, then set to 0700.
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// fsync of a folder's entries; a no-op where a folder cannot be opened as a file.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 #[async_trait]

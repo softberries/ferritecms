@@ -1498,6 +1498,12 @@ fn tls_config_parses_and_validates() {
          contact = \"mailto:a@example.com\"\n",
     );
     has(&ps, "server.tls.domains", "DNS name");
+    // Explicit domains do not help: the certificate would never cover site.url.
+    let ps = problems(
+        "[site]\nurl = \"https://203.0.113.5\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\ndomains = [\"example.com\"]\n",
+    );
+    has(&ps, "server.tls.domains", "DNS name");
     // The site's host must be among the domains.
     let ps = problems(&format!(
         "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
@@ -1523,6 +1529,48 @@ fn tls_config_parses_and_validates() {
     ));
     has(&ps, "server.tls.listen", "server.listen");
     has(&ps, "server.tls.redirect_http", "server.tls.listen");
+    // An unspecified address clashes with a specific one on the same port, both ways.
+    let ps = problems(&format!(
+        "{MIN}[server]\nlisten = \"127.0.0.1:443\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nredirect_http = \"127.0.0.1:0\"\n"
+    ));
+    has(&ps, "server.tls.listen", "server.listen");
+    assert!(
+        !ps.iter().any(|(p, _)| p == "server.tls.redirect_http"),
+        "{ps:?}"
+    );
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         listen = \"127.0.0.1:8443\"\nredirect_http = \"0.0.0.0:8443\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.tls.listen");
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         redirect_http = \"0.0.0.0:8080\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.listen");
+    // Neither may take server.metrics_listen's socket.
+    let ps = problems(&format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"0.0.0.0:9464\"\n"
+    ));
+    has(&ps, "server.tls.listen", "server.metrics_listen");
+    let ps = problems(&format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nredirect_http = \"127.0.0.1:9464\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.metrics_listen");
+    // Distinct sockets are fine (port 0 never clashes).
+    let ok = format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"0.0.0.0:443\"\nredirect_http = \"0.0.0.0:80\"\n"
+    );
+    assert!(run(Some(&ok), &[]).1.is_ok());
+    let zero = format!(
+        "{MIN}[server]\nlisten = \"127.0.0.1:0\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"127.0.0.1:0\"\nredirect_http = \"127.0.0.1:0\"\n"
+    );
+    assert!(run(Some(&zero), &[]).1.is_ok());
 
     // Cluster mode (explicit, or auto resolving to it) refuses acme.
     let cluster = format!(

@@ -779,7 +779,7 @@ async fn boot(
             .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
             .into_future();
             let redirect = redirect.map(|(l, _)| {
-                let origin = state.config.site_url.clone();
+                let origin = config.site.url.origin().ascii_serialization();
                 axum::serve(l, ferrite_http::tls::redirect_app(&origin))
                     .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
                     .into_future()
