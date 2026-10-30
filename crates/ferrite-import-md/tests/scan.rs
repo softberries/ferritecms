@@ -228,6 +228,27 @@ fn a_symlinked_index_is_a_skipped_index() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_index_is_a_skipped_index() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "guides/one.md", b"# One\n");
+    let status = std::process::Command::new("mkfifo")
+        .arg(dir.path().join("guides/index.md"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let s = scan(dir.path()).unwrap();
+    assert!(doc(&s.docs, "guides").index_skipped);
+    assert_eq!(
+        s.problems
+            .iter()
+            .map(|p| (p.kind(), p.file()))
+            .collect::<Vec<_>>(),
+        [("unreadable", "guides/index.md")]
+    );
+}
+
 #[test]
 fn deep_tree_lists_parents_first() {
     let dir = tempfile::tempdir().unwrap();

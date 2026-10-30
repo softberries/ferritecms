@@ -680,6 +680,11 @@ impl Walker {
                     return Err(MdError::TooManyFiles { limit: MAX_FILES });
                 }
                 out.push(Entry::Md(name.to_owned()));
+            } else if is_md {
+                // A FIFO, socket or device named `*.md` is never opened; reported, so
+                // an index name among them counts as a skipped index.
+                let e = std::io::Error::other("not a regular file");
+                self.unreadable(join(rel, name), &e);
             }
         }
         Ok(Some(out))
@@ -734,12 +739,12 @@ impl Walker {
     }
 }
 
-/// The slug and order a file stem or folder name gives: `NN-name` is `name` and `NN`.
 /// Whether a file name is a folder's index: `index.md` or `README.md`, any case.
 pub(crate) fn is_index_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("readme.md")
 }
 
+/// The slug and order a file stem or folder name gives: `NN-name` is `name` and `NN`.
 fn slug_order(name: &str) -> (String, i32) {
     match split_number(name) {
         Some((n, rest)) => (slugify(rest), n),
