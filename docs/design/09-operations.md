@@ -10,7 +10,8 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
 
 1. **Lookup.** The newest stable release (`GET https://api.github.com/repos/softberries/ferritecms/releases/latest`,
    which skips drafts and prereleases; `--channel stable` is the only channel, so there is no
-   flag for it), or `releases/tags/vX` for `--version X`. A `--version` that is older than or
+   flag for it), or `releases/tags/vX` for `--version X` (which may name a prerelease,
+   `X.Y.Z-rc.N`, see step 2). A `--version` that is older than or
    equal to this binary is refused before any download (exit 1, "use `ferrite rollback`").
    When the newest release is not newer, it prints `… is up to date` and exits 0.
 2. **Download and verify.** The release must carry this target's asset
@@ -24,10 +25,12 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    HTTPS-only (redirects included), capped (1 MiB for the two small files, 1 GiB for the
    asset) and bounded: 30 s to connect, 60 s per read and 10 minutes for the whole download.
    **What the signature binds:** the version and the target, through the asset name that
-   `SHA256SUMS` lists and the new binary's `--version`. The channel is not signed: "stable"
-   (not a draft, not a prerelease) comes from the unsigned API metadata, so a compromised API
-   could offer a signed prerelease as stable. Prerelease builds therefore must not be signed
-   with the release key (or a later format puts the channel in the trusted comment).
+   `SHA256SUMS` lists and the new binary's `--version`. The API's `prerelease` flag is not
+   signed, so the channel is bound through the version instead (M4-2 R10): without
+   `--version`, a release whose version has a semver prerelease part (`X.Y.Z-rc.N`) is
+   refused even when the API calls it stable (`--check` too), and a prerelease installs only
+   when `--version` names exactly that version. Prerelease builds may therefore be signed
+   with the release key.
 3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
    it is also the writability check: an unwritable folder is refused with the hint to run as
    the binary's owner, outside the systemd sandbox). Only the archive's `ferrite` file (top

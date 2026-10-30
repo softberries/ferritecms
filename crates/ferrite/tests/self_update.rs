@@ -415,6 +415,34 @@ fn self_update_refuses_older_version() {
     }
 }
 
+/// The stable channel never installs a prerelease, whatever the (unsigned) API says
+/// (M4-2 R10): a signed `-rc` release offered as the latest with `prerelease: false` is
+/// refused, with and without `--check`; `--version` naming it exactly installs it.
+#[test]
+fn self_update_refuses_prerelease_unless_named() {
+    let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
+    let rc = "9.9.9-rc.1";
+    server.publish(rc, &release(&keys, rc));
+    for check in [false, true] {
+        let mut cmd = self_update(&server, &keys, &install);
+        cmd.arg(if check { "--check" } else { "--yes" });
+        let out = run(cmd);
+        assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("prerelease"),
+            "{}",
+            text(&out)
+        );
+        install.assert_untouched(&out);
+    }
+
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.args(["--yes", "--version", rc]);
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(std::fs::read(&install.exe).unwrap(), script(rc));
+}
+
 #[test]
 fn self_update_check_exit_2() {
     let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
