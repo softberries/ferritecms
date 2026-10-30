@@ -453,11 +453,15 @@ M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [
 
 ### M4-3 — examples and docs
 
-What the M4 list above already named and M4-1/M4-2 did not build.
+What the M4 list above already named and M4-1/M4-2 did not build. Split in two (M4 P41):
+M4-3a (the example plugins, their release asset and `ferrite doctor`) is done:
+[`m4-3a-exit.md`](superpowers/m4-3a-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)
+("M4-3a plan rulings", "M4-3a execution rulings"). M4-3b (the themes and the docs site) is next.
 
-- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
-- [ ] Docs site (built with FerriteCMS itself).
-- [ ] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (planned in 09 §8; `config check` covers the configuration today). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+- [x] Example plugins: SEO, privacy-friendly analytics, contact form (M4-3a P42–P47: `plugins/examples/{seo,analytics,contact-form}` with a README each, SDK helpers, one host change for `options.get("site.url"|"site.title")` (X1), core percent-encoding of `request.served` paths (X5), analytics' two storage tiers under the 10 MiB KV quota (`detail_days`, X7, from the final review); shipped as the release asset `ferrite-plugins-<version>.tar.gz` made by `.github/scripts/package-plugins.sh`; 05 §10 and §12, 09 §7).
+- [ ] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b, P41).
+- [ ] Docs site (built with FerriteCMS itself; M4-3b).
+- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order, exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
 
 ### M4-4 — follow-ups
 
@@ -537,7 +541,23 @@ The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
   - [ ] The minute writer takes its baseline after the job runner starts, so jobs finished in that window are never in a row (B-Minor7); a scrape in flight at shutdown can outlast the 1 s background stop and log a warning (B-Minor8).
   - [ ] Dashboard (Task 9, parked): the 7-day axis misses a tick when the window's first bucket starts at local midnight; an E2E seam for the minute tick (the spec waits for real minutes); the Site traffic group's placement.
   - [ ] Flaky tests: `plugins::content_read_never_returns_drafts::cluster` (seen once, Task 1); `node.rs` timeouts at a load average near 146 (Task 5; green on a quiet machine).
-  - [ ] Release scripts: a dry run's artifacts embed the placeholder key, so they can be self-update-tested only with a `test-seams` build; `.github/scripts/sums.sh` needs `EXPECTED` (default 6) for a partial set.
+  - [ ] Release scripts: a dry run's artifacts embed the placeholder key, so they can be self-update-tested only with a `test-seams` build; `.github/scripts/sums.sh` needs `EXPECTED` (default 6, 7 since M4-3a) for a partial set.
+- [ ] Deferred from M4-3a ([`m4-3a-exit.md`](superpowers/m4-3a-exit.md) "Not verified" and "Open follow-ups"; rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)):
+  - [ ] Watch the first real runs of the release `plugins` job and the CI `packaging` steps that build and check the plugins asset (packed locally on macOS only; `sums.sh` now expects 7 assets).
+  - [ ] Everything in M4-3a ran on macOS only: watch the first Linux CI run of `crates/ferrite/tests/doctor.rs` (the `faccessat2` path and its `EPERM` fallback, mode checks under Linux), and `docker run` the built image through `ferrite doctor` (the real `COPY --chmod=0750` `/data`, BuildKit). Read-only mounts and ACLs are not tested (mode bits only).
+  - [ ] Final review: the systemd doctor command in 09 §8 (`sudo -u ferrite env $(systemctl show ferrite --property=Environment --value) …`) and the cluster example's `chown 65532` + `chmod 600` were written from the docs, not run; `backup_target_on_s3_never_prints_its_keys` cannot show the scrub at work (the test server's HEAD answer has no body).
+  - [ ] Doctor (Task 7 review): a wrong S3 bucket against a real provider is untested (s3s-fs creates a missing bucket on the first put, so a wrong key and a dead endpoint stand in; the same `media.check()` error path).
+  - [ ] Analytics (Task 3): that the feed, sitemap, `robots.txt`, search results and logged-in views are counted as views is read from `app/handler.rs`, not run live.
+  - [ ] Analytics (final review): a compaction writes the compacted blob, then deletes the full one; the host does not report a failed delete, so the next batch would add that day's counts a second time (approximate counts, R19).
+  - [ ] Untested: the contact form and doctor's `smtp.connect` against a real SMTP provider (a local sink only, plain SMTP); doctor's `tls.acme_directory` success path (TLS off, `--offline` and a directory that does not answer are exercised); the `release.latest` "newer stable release" answer against a real published release (no release exists yet).
+  - [ ] Release archives are not byte-reproducible: neither `package-plugins.sh` nor `package.sh` normalises file order, mtime or owner (GNU tar `--sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner`; bsdtar needs a file list) (Task 5 Minor 1).
+  - [ ] The plugins asset has no wrapping folder, so unpacking it into a non-empty directory scatters `seo/`, `analytics/` and `contact-form/` (the P47 layout; a `ferrite-plugins-<version>/` wrapper would change P47, the READMEs and the CI check together) (Task 5 Minor 3).
+  - [ ] The manifest-version rule is checked twice, by the CI step (Python `tomllib`) and by `package-plugins.sh` (awk); a manifest format change must update both (Task 5 Minor 5).
+  - [ ] SDK (Task 1): `form` tests have no lowercase-hex case (`%c5%82`) and no multibyte sequence split across pairs (`a=%C5&b=%82`); `ferrite-sdk/src/lib.rs` is 424 lines, past the ~400 split guide (move `Head` to `head.rs`); `plain_link_has_no_type` is a trivial test (Task 1 Minor 5; its reviewer said keep it). The `options` whitespace Minor is fixed (the final review's exact JSON decoding).
+  - [ ] SEO (Task 2 M9): a search page (`/?s=…`) gets the home page's `WebSite` JSON-LD, because a plugin's request path carries no query.
+  - [ ] Analytics (Task 3): no end-to-end test sends a raw `\` or `"` path through the router to the plugin (the X5 encoder and the plugin are tested apart).
+  - [ ] Contact form (Task 4): the `email` field keeps Unicode format (Cf) characters (it is shown escaped and never reaches the subject; `valid_email` could refuse them); an inbox blob whose version line is over 1 KiB (`MAX_VERSION_LINE`, a hypothetical future format) is read as corrupt and replaced rather than left alone.
+  - [ ] Doctor (Task 7): `doctor/media.rs` `s3()` keeps an unreachable `MediaSection::Local` arm (pass the S3 fields in instead); the X3 `immutable` read can see a stale page if `serve` starts and checkpoints during doctor's few reads (a wrong finding or a `SQLITE_CORRUPT` line, never a write; accepted).
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
@@ -570,7 +590,10 @@ The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
 - Built-in forms, i18n/multilingual content, full-text search UI.
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
-- An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19).
+- An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
+- Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
+- SEO example, later (M4 P43): IndexNow pings, `robots.txt` and sitemap changes (core owns both), content analysis.
+- `ferrite doctor`, later (M4 P48, P53): `--json` output, a clock check against an HTTP `Date` header, detecting that it runs as another user than the service, and whether the binary's update path is writable for `self-update`.
 - Comments, later items (M2a-2b P29): comments on pages and custom types (a per-type flag), per-item closing, comment action hooks for plugins (e.g. anti-spam) and admin notification mails.
 - More upload types through a `media.extra_types` setting (M2a-2b P29; documents are accepted since R1), and `tel:` links through a URL-scheme setting (P21).
 - Passkeys (WebAuthn, `webauthn-rs`): deferred past M2 (M2a P3; the newest `webauthn-rs` was a pre-release and the ceremony needs the SPA). There is no `passkeys` table yet.

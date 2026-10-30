@@ -38,7 +38,7 @@ pub async fn run(args: HealthcheckArgs) -> anyhow::Result<ExitCode> {
 }
 
 /// GETs `url` over HTTP/1.0 and returns the response status code.
-async fn probe(url: &str) -> anyhow::Result<u16> {
+pub(crate) async fn probe(url: &str) -> anyhow::Result<u16> {
     let url = url::Url::parse(url).context("invalid --url")?;
     anyhow::ensure!(url.scheme() == "http", "--url must be an http:// URL");
     // `host_str` keeps IPv6 brackets (`[::1]`): right for the Host header, not for connect.

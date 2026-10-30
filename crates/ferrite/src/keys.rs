@@ -63,17 +63,38 @@ fn read_key(path: &Path) -> anyhow::Result<Option<SiteKey>> {
     let mut text = String::new();
     file.read_to_string(&mut text)
         .with_context(|| format!("cannot read {}", path.display()))?;
+    parse_key_text(path, &text).map(Some)
+}
+
+/// The key in a `secret.key` file's text (the value never appears in an error).
+fn parse_key_text(path: &Path, text: &str) -> anyhow::Result<SiteKey> {
     let hex = text
         .strip_suffix("\r\n")
         .or_else(|| text.strip_suffix('\n'))
-        .unwrap_or(&text);
+        .unwrap_or(text);
     match SiteKey::from_hex(hex) {
-        Ok(key) => Ok(Some(key)),
+        Ok(key) => Ok(key),
         Err(_) => bail!(
             "{} is malformed: expected 64 hex characters (32 bytes)",
             path.display()
         ),
     }
+}
+
+/// `ferrite doctor`: whether `path` holds a well-formed key, `Ok(false)` when there is no
+/// such file. Reads only: it never creates the key and does not log the mode warning.
+pub(crate) fn validate_key_file(path: &Path) -> anyhow::Result<bool> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        // Not UTF-8: not a key either (the content is not echoed).
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => bail!(
+            "{} is malformed: expected 64 hex characters (32 bytes)",
+            path.display()
+        ),
+        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    };
+    parse_key_text(path, &text).map(|_| true)
 }
 
 /// Creates the file atomically: the key is written to a uniquely named temp file (0600)

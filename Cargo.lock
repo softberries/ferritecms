@@ -1599,6 +1599,7 @@ dependencies = [
  "object_store",
  "rcgen",
  "reqwest",
+ "rustix",
  "rustls",
  "rustls-acme",
  "s3s",

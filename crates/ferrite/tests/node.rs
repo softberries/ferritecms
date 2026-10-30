@@ -42,6 +42,9 @@ mod test_support;
 #[path = "node/actions.rs"]
 mod actions;
 
+#[path = "node/analytics.rs"]
+mod analytics;
+
 #[path = "node/served.rs"]
 mod served;
 

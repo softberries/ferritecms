@@ -230,6 +230,37 @@ fn download_deadline(args: &SelfUpdateArgs) -> Duration {
     DOWNLOAD_DEADLINE
 }
 
+/// The newest release as `ferrite doctor`'s `release.latest` sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Latest {
+    /// The newest stable release is newer than this binary.
+    Newer(semver::Version),
+    /// This binary is the newest stable release, or newer.
+    UpToDate(semver::Version),
+    /// The newest release is a prerelease, which the stable channel never installs.
+    Prerelease(String),
+}
+
+/// Looks up the newest release the way `self-update --check` does, and nothing more: no
+/// download, no release key, nothing written. `test_base` is the test seam's API root
+/// (plain HTTP allowed); `None` is the GitHub API, HTTPS only.
+pub(crate) async fn latest_release(test_base: Option<&str>) -> Result<Latest> {
+    let (base, https_only) = match test_base {
+        Some(base) => (base.to_owned(), false),
+        None => (release::DEFAULT_API.to_owned(), true),
+    };
+    let release = Client::new(&base, https_only)?.lookup(None).await?;
+    let version = release.version()?;
+    if release.prerelease || !version.pre.is_empty() {
+        return Ok(Latest::Prerelease(release.tag_name));
+    }
+    if version > binary_version()? {
+        Ok(Latest::Newer(version))
+    } else {
+        Ok(Latest::UpToDate(version))
+    }
+}
+
 /// The GitHub API root and whether only HTTPS is allowed.
 fn api_base(args: &SelfUpdateArgs) -> (String, bool) {
     #[cfg(feature = "test-seams")]

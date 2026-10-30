@@ -172,3 +172,57 @@ async fn read_limited(mut resp: reqwest::Response, url: &str, limit: u64) -> Res
     }
     Ok(body)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The release carries seven assets plus `SHA256SUMS` and its signature (M4-3a P47): the
+    /// six target tarballs and `ferrite-plugins-<version>.tar.gz`. Self-update picks its
+    /// asset by the exact name of its target, so the plugins asset is never taken, and its
+    /// line in `SHA256SUMS` does not disturb the lookup of the binary's.
+    #[test]
+    fn target_assets_are_picked_beside_the_plugins_asset() {
+        const TARGETS: [&str; 6] = [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+        ];
+        let version = semver::Version::new(0, 1, 0);
+        let plugins = format!("ferrite-plugins-{version}.tar.gz");
+        let mut names: Vec<String> = TARGETS.iter().map(|t| asset_name(&version, t)).collect();
+        names.push(plugins.clone());
+        let mut sums = String::new();
+        for (i, name) in names.iter().enumerate() {
+            sums.push_str(&format!("{:064x}  {name}\n", i + 1));
+        }
+        names.push("SHA256SUMS".to_owned());
+        names.push("SHA256SUMS.minisig".to_owned());
+        let release = Release {
+            tag_name: format!("v{version}"),
+            draft: false,
+            prerelease: false,
+            assets: names
+                .iter()
+                .map(|name| Asset {
+                    name: name.clone(),
+                    browser_download_url: format!("https://example.test/{name}"),
+                })
+                .collect(),
+        };
+
+        for (i, target) in TARGETS.iter().enumerate() {
+            let want = asset_name(&version, target);
+            assert_ne!(want, plugins);
+            assert_eq!(release.asset(&want).unwrap().name, want);
+            assert_eq!(
+                super::super::verify::listed_sha256(sums.as_bytes(), &want).unwrap(),
+                format!("{:064x}", i + 1)
+            );
+        }
+        assert_eq!(release.asset(&plugins).unwrap().name, plugins);
+    }
+}

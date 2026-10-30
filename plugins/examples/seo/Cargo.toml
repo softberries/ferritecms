@@ -1,0 +1,12 @@
+[package]
+name = "seo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ferrite-sdk = { path = "../../../crates/ferrite-sdk" }
+serde_json = { version = "=1.0.154", default-features = false, features = ["std"] }
