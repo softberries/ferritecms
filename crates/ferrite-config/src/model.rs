@@ -95,8 +95,73 @@ pub struct SiteConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
+    /// Plain HTTP. With TLS on it keeps serving; bind it to loopback (healthcheck).
     pub listen: SocketAddr,
     pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// `[server.tls]` (M4-2 P33).
+    pub tls: TlsConfig,
+}
+
+/// `[server.tls] mode`: TLS terminated by the binary itself (solo only), or not.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TlsConfig {
+    /// No TLS listener (the default: a reverse proxy terminates TLS).
+    #[default]
+    Off,
+    /// Certificates from an ACME CA (TLS-ALPN-01 on the TLS listener).
+    Acme(AcmeTls),
+}
+
+impl TlsConfig {
+    /// The `mode` value.
+    pub fn mode(&self) -> &'static str {
+        match self {
+            TlsConfig::Off => "off",
+            TlsConfig::Acme(_) => "acme",
+        }
+    }
+}
+
+/// Default of `server.tls.listen`.
+pub const DEFAULT_TLS_LISTEN: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 443);
+
+/// `[server.tls]` with `mode = "acme"` (M4-2 P33), validated: `site.url` is https and
+/// its host is in `domains`, the mode is solo, the listeners differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcmeTls {
+    /// The certificate's DNS names (default: the host of `site.url`), lowercase.
+    pub domains: Vec<String>,
+    /// The ACME account contact, a `mailto:` URI.
+    pub contact: String,
+    pub directory: AcmeDirectory,
+    /// The HTTPS listener (default [`DEFAULT_TLS_LISTEN`]).
+    pub listen: SocketAddr,
+    /// An optional plain HTTP listener that only answers `301` to the https site.
+    pub redirect_http: Option<SocketAddr>,
+}
+
+/// `server.tls.directory`: the ACME CA.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AcmeDirectory {
+    /// Let's Encrypt (the default).
+    #[default]
+    Production,
+    /// Let's Encrypt's staging CA (untrusted certificates, higher rate limits).
+    Staging,
+    /// Any other ACME directory, an `https://` URL.
+    Url(url::Url),
+}
+
+impl AcmeDirectory {
+    /// The directory URL.
+    pub fn url(&self) -> &str {
+        match self {
+            AcmeDirectory::Production => "https://acme-v02.api.letsencrypt.org/directory",
+            AcmeDirectory::Staging => "https://acme-staging-v02.api.letsencrypt.org/directory",
+            AcmeDirectory::Url(u) => u.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
