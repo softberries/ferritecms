@@ -119,19 +119,22 @@ by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
 `mail`, `viewers::allow`, `route::html`, `Head` additions; helpers used by module path).
 Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/{ci,release}.yml` and
 `.github/scripts/` (package, package-plugins, sums, verify-sig, newest, compat). Starter
-themes: `themes/blog`, `themes/docs` (embedded; `docs`: page-tree sidebar, TOC, pager). Plugins: `plugins/examples/` (own workspace,
-built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
+themes (embedded): `themes/blog`, `themes/docs` (page-tree sidebar, TOC, pager) and
+`themes/business` (hero, feature cards, contact form). Plugins: `plugins/examples/` (own
+workspace, built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
 each), the rest test fixtures. Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the `business`
-theme and the docs site (M4-3b), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the docs site
+(M4-3b), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
 per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
 needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
 `cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
 it also creates the site key `<data>/secret.key`), then optionally
-`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content), then an account:
+`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content; `--profile business`
+writes a small-business site with a static front page for the `business` theme, then
+`theme activate business --data /tmp/site`), then an account:
 `cargo run -p ferrite -- user create --data /tmp/site --login me --email me@example.com`
 (prints a one-time password that must be changed at the first login; `--password-stdin`
 reads one from stdin instead; seed's own `admin` has no password until

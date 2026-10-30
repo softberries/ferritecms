@@ -1,0 +1,8 @@
+{#- Site search (`/?s=`). Expects `form_id`, unique on the page. -#}
+<form class="search-form" role="search" method="get" action="/">
+  <label for="{{ form_id }}">Search this site</label>
+  <div class="search-form__row">
+    <input type="search" id="{{ form_id }}" name="s" value="{{ request.s or '' }}" required>
+    <button type="submit">Search</button>
+  </div>
+</form>

@@ -1,0 +1,23 @@
+{#- Child pages as feature cards. Expects `nodes` (page_tree nodes: title, url, excerpt,
+    featured) and `post` (the parent). The image is decorative (alt=""): the linked
+    title right below names the same page. -#}
+<section class="features" aria-label="{{ post.title }}: pages">
+  <div class="wrap">
+    <ul class="features__list" role="list">
+      {%- for node in nodes %}
+      <li class="feature">
+        {%- set img = image(node.featured, "card") %}
+        {%- if img %}
+        <div class="feature__media">
+          <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw"{% endif %} loading="lazy" decoding="async">
+        </div>
+        {%- endif %}
+        <h2 class="feature__title"><a href="{{ node.url }}">{{ node.title }}</a></h2>
+        {%- if node.excerpt %}
+        <p class="feature__excerpt">{{ node.excerpt }}</p>
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ul>
+  </div>
+</section>

@@ -691,5 +691,34 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   button that reports through a visually hidden `role="status"` text. No syntax
   highlighting (Later).
 
-`business`: M4-3b (P60). WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
+
+**`business`** (built, M4-3b P60; `themes/business`, MIT, plain CSS, no script, no image
+or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/business.rs`):
+
+- `front-page.html` shows, in order: a hero (the front page's featured image through
+  `image(.., "hero")` with `srcset`, `sizes="100vw"` and `fetchpriority="high"`, then a
+  panel with its title, excerpt and the CTA button), the page's body, its children from
+  `page_tree(post).children` as feature cards (`card` image, title, excerpt, in menu
+  order) and, with `show_news`, a "Latest news" strip from `query(type="post",
+  limit=3)` linking to `/post/`. Without a static front page it lists posts.
+- `page-contact.html` (the page with the slug `contact`): the body, then, with
+  `contact_form`, the contact-form plugin's form exactly as its README gives it (posting
+  to `plugin_route("contact-form", "/submit")`, `return` = `request.path`, the `website`
+  honeypot hidden off screen and `aria-hidden`). Without the plugin the form posts to a 404,
+  so the setting defaults to off.
+- Other templates: `base`, `index`, `page` (also shows its child pages as cards),
+  `single` (no comment thread), `archive` (type, term, author and date headings), `search`,
+  `404`, `500`. The header shows the CTA except on the (200) page it links to, so the
+  shared 404 body never depends on the path.
+- Settings: `accent_color` (`#0f766e`), `cta_label` ("Get in touch"), `cta_url`
+  (`/contact/`; a URL naming a scheme other than http(s), `mailto:` or `tel:` shows no
+  button, the scheme being the text before the first `:` when no `/`, `?` or `#` comes
+  first, so `/book/?at=10:00` is kept), `show_news` (true), `contact_form` (false).
+  Images: `hero` 1600×700 and `card` 640×400, both cropped. Menus: `primary`, `footer`.
+- CSS fallbacks: `forced-colors` (the current page in the nav is underlined, panels get
+  a border), the default accent's mixes where `color-mix()` is missing, and the card
+  links keep their own focus ring where `:has()` is missing.
+- Contrast, computed for the default accent with the WCAG formula, is listed at the top
+  of its `style.css` (every text pair at least 4.5:1 in both schemes). `ferrite seed demo
+  --profile business` writes content shaped for it (09 §8). WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
 themes are not set up yet.

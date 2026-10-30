@@ -1,0 +1,27 @@
+# A small-business starter theme (06 §8, M4-3b P60). Plain MiniJinja templates and CSS,
+# no script, no image or font files.
+[theme]
+name        = "business"
+version     = "0.1.0"
+author      = "FerriteCMS"
+license     = "MIT"
+homepage    = "https://github.com/softberries/ferritecms"
+description = "A front page with a hero, feature cards and news, and a contact page for the contact-form plugin. Light and dark modes."
+
+[menus]
+primary = "Primary navigation"
+footer  = "Footer"
+
+[images]
+card = { width = 640, height = 400, crop = true }
+hero = { width = 1600, height = 700, crop = true }
+
+[settings]
+# Buttons and the hero panel use the accent mixed with black; link text in dark mode
+# mixes it with white. A mid-tone accent keeps every text above 4.5:1; a very pale or
+# very dark one may not.
+accent_color = { type = "color", default = "#0f766e", label = "Accent colour (mid-tones keep text readable in light and dark mode)" }
+cta_label    = { type = "text", default = "Get in touch", label = "Call-to-action button text" }
+cta_url      = { type = "text", default = "/contact/", label = "Call-to-action link (a path such as /contact/, or a full URL)" }
+show_news    = { type = "bool", default = true, label = "Show the latest news on the front page" }
+contact_form = { type = "bool", default = false, label = "Show the contact-form plugin's form on the page with the slug contact (install and enable the plugin first)" }
