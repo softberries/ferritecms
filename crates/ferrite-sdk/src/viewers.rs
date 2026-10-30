@@ -5,7 +5,7 @@
 /// `setting` is a list of user ids separated by commas or whitespace. Blank entries are
 /// ignored, ids compare exactly (case-sensitive, no prefix match), and an empty or absent
 /// setting, or an absent or empty user, allows nobody.
-pub fn viewers_allow(setting: Option<&str>, user: Option<&str>) -> bool {
+pub fn allow(setting: Option<&str>, user: Option<&str>) -> bool {
     let (Some(setting), Some(user)) = (setting, user) else {
         return false;
     };
@@ -17,7 +17,7 @@ pub fn viewers_allow(setting: Option<&str>, user: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::viewers_allow;
+    use super::allow as viewers_allow;
 
     #[test]
     fn comma_and_whitespace_separate_ids() {

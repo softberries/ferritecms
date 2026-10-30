@@ -16,13 +16,14 @@ kv           = true
 mail         = "admins"
 options.read = ["site.title"]
 
-# The form page and the inbox have the default limit (10 requests a minute per client).
+# The form page has the default limit (10 requests a minute per client). The inbox has
+# 30 a minute, as the analytics stats page has: a viewer pages through up to ten pages.
 # `/submit` accepts posts from any origin: the plugin's own page is sandboxed, so a browser
 # sends `Origin: null` with its form, and such a request is always served anonymously.
 [routes]
 "/"       = { methods = ["GET"] }
 "/submit" = { methods = ["POST"], cross_origin = true, rate_limit = "10/h" }
-"/inbox"  = { methods = ["GET"] }
+"/inbox"  = { methods = ["GET"], rate_limit = "30/min" }
 
 [settings]
 viewers         = { type = "textarea", label = "Viewers: ids of the users who may open the inbox page (separated by commas or new lines; empty means nobody)" }

@@ -52,9 +52,23 @@ cp plugins/examples/analytics/ferrite-plugin.toml analytics-plugin/
 cp plugins/target/wasm32-wasip2/release/analytics.wasm analytics-plugin/
 ```
 
-With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its
-`analytics/` folder where the commands below say `analytics-plugin`. Then, with `serve` stopped
-if the site uses SQLite:
+With the release asset, check it before you unpack it, as for the binary (design 09 §1): the
+release's `SHA256SUMS` lists the asset and is signed with the release key
+(`crates/ferrite/release.pub` at that tag).
+
+```sh
+VERSION=X.Y.Z
+BASE=https://github.com/softberries/ferritecms/releases/download/v$VERSION
+curl -LO $BASE/ferrite-plugins-$VERSION.tar.gz
+curl -LO $BASE/SHA256SUMS
+curl -LO $BASE/SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -p release.pub
+sha256sum --check --ignore-missing SHA256SUMS   # macOS: shasum -a 256 --check --ignore-missing SHA256SUMS
+tar xzf ferrite-plugins-$VERSION.tar.gz
+```
+
+Then use its `analytics/` folder where the commands below say `analytics-plugin`. With `serve`
+stopped if the site uses SQLite:
 
 ```sh
 ferrite plugin check   --data /path/to/site --dir analytics-plugin   # prints the permission report
@@ -101,13 +115,24 @@ top 20 referrer hosts. Days are UTC days and the period ends **today**, by the w
 the node that serves the page. Paths and hosts are HTML-escaped and shown cut to 200
 characters.
 
+Core sends paths percent-encoded (`/caf%C3%A9/`), and that is how they are stored and
+compared. The page shows a path decoded (`/café/`) when the decoded bytes are UTF-8 without
+control characters, and as stored otherwise (`/x/%FF/`); either way it is escaped.
+
 The page decodes stored data inside the sandbox, which has a fixed budget of work per request.
 The totals and the chart always cover the whole period. The path and referrer lists are built
 from the newest day with data (always, however big its blob) and then up to three more days,
 as long as their blobs add up to 150 000 bytes. A site whose days are full, with 500 paths and
 200 referrers, gets four days of lists; a quiet site gets four too, because of the day limit.
-The page says when the lists cover fewer days than the period. Choose a shorter period to
-include every day in the lists.
+Days older than `detail_days` have no lists at all (see "Storage"). The page says when the
+lists cover fewer days than the period, and why. Choose a shorter period to include more days
+in the lists.
+
+The page lists which days have a blob (one listing per month of the period and per tier, at
+most eight operations) and reads only those. A listed day whose read fails (the host answers a
+failed read as a missing key) is left out of the figures, and the page says how many were;
+when no day of the period can be read, the page says the statistics could not be read rather
+than "No data yet".
 
 ## Settings
 
@@ -118,17 +143,22 @@ Set them on the plugin's page in the admin's Plugins screen, or with
 |---|---|---|---|
 | `viewers` | textarea | empty (nobody) | ids of the users who may open the stats page |
 | `retention_days` | number | 90 | days of data kept, 1 to 366 (a value outside that is clamped, one that is not a number is 90) |
+| `detail_days` | number | 30 | days that keep their path and referrer lists, 1 to 60 (clamped likewise; never more than `retention_days`); older days keep their totals only |
 | `exclude_paths` | text | `/admin,/_p` | comma-separated path prefixes that are not counted |
 
 `exclude_paths` entries must start with `/`; others are ignored. A prefix covers the path itself
 and everything below it: `/admin` covers `/admin` and `/admin/users`, not `/administrator`. A
 trailing `/` is ignored, `/` alone excludes everything, and an empty setting excludes nothing.
-Paths are compared as received, percent-encoded. Core does not send events for `/admin` or
-`/_p/`, so the default is a safety net.
+Paths are compared as received, percent-encoded, so an entry for a path with characters
+outside ASCII letters, digits and `-._~!$&'()*+,;=:@/` must be typed encoded, with uppercase
+hex: `/blog/%C5%BC%C3%B3%C5%82w` for `/blog/żółw` (a browser's address bar shows the encoded
+form when you copy the URL). An entry typed as `/blog/żółw` never matches. Core does not send
+events for `/admin` or `/_p/`, so the default is a safety net.
 
 ## What is stored
 
-One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is no other key:
+One JSON blob per UTC day. A day of the last `detail_days` is kept whole under the plugin's KV
+key `day:YYYY-MM-DD`:
 
 ```json
 {"v":1,"views":120,"bots":14,"other":3,
@@ -137,25 +167,42 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
  "referrers":{"news.example.org":9}}
 ```
 
+An older day is compacted to its counts, under `totals:YYYY-MM-DD`; there is no other key:
+
+```json
+{"v":1,"views":120,"bots":14,"other":3,"status":{"2xx":131,"4xx":6}}
+```
+
 - The day is the event's own UTC time, so a batch that spans midnight updates two blobs. An
   event whose time cannot be read is skipped, and so is one dated more than a day ahead of
   today (a node whose clock runs fast): it must not push the history out. The plugin writes the
   counts before the maps, and the page relies on that to read older days cheaply.
 - `paths` holds at most 500 keys and `referrers` at most 200. Past that, a key that is not
   already there is counted under `"(other)"`, which is not a path or a host.
-- A path is stored cut to its first 200 bytes and a referrer host to 100 (core allows 512 and
-  253). The page shows 200 characters anyway, paths that differ only after the cut share one
-  count, and the length of a key a visitor can choose is bounded. Core sends the path
-  percent-encoded, so nothing in it needs a JSON escape, and a blob is at most about 130 KB
-  (500 paths of 200 bytes, 200 hosts of 100, with counts of many digits).
+- A path is stored cut to its first 200 bytes, and then before a `%` or `%X` that the cut left
+  at its end, so a key never ends in half an escape; a referrer host is cut to 100 bytes (core
+  allows 512 and 253). The page shows 200 characters anyway, paths that differ only after the
+  cut share one count, and the length of a key a visitor can choose is bounded. Core sends the
+  path percent-encoded, so nothing in it needs a JSON escape, and a blob is at most about
+  137 KB (500 paths of 200 bytes, 200 hosts of 100, every count at its 20-digit maximum).
 - **Retention** keeps the newest `retention_days` days, counted back from today (the wall
   clock): with 3, on 1 January the data for 30 and 31 December and 1 January is kept and 29
-  December goes. An event for a day older than that is not stored. After each batch the
-  plugin lists the day keys, oldest first, and deletes the expired ones. A call may make 100 KV
-  operations; counting uses a handful, the rest go to deleting, so a large backlog (a lowered
-  retention) clears over a few batches.
+  December goes. An event for a day older than that is not stored.
+- **Compaction** keeps the lists of the newest `detail_days` days; an older day keeps only
+  its counts (see "Storage").
+- **Every batch prunes and compacts first, then counts.** It lists the full days, oldest first,
+  deletes the expired ones and compacts up to eight of those past `detail_days`, then lists the
+  compacted days and deletes the expired ones. A call may make 100 KV operations; this keeps
+  what the counting needs (three per day counted), so a large backlog (a lowered retention or
+  detail window) clears over a few batches. A compaction reads only the counts at the head of
+  the blob, so it costs operations, not fuel. A count that arrives for a day already compacted
+  (a node whose clock is behind) goes into a new full blob of that day, which the next batch
+  adds to the compacted one.
 - A blob written by a newer version of the plugin (`"v"` above 1) is left alone, and that
-  day's events are not counted. A blob that is not JSON is replaced.
+  day's events are not counted. A blob that is not JSON is replaced. A full blob past
+  `detail_days` that is not in the layout this plugin writes (over 4 KB without its counts
+  first) is deleted when its turn to be compacted comes, and logged; a compacted blob over
+  1 KiB is not this plugin's and is not read.
 - **Limits per batch.** A batch that touches more than three days counts only the newest
   three (a batch holds seconds of one node's events, so two at midnight is the normal most).
   It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
@@ -171,6 +218,34 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
 - Retention follows the wall clock of the node that runs the job, so a node whose clock is
   days fast prunes that many of the oldest days early.
 
+## Storage
+
+A plugin may keep **10 MiB** of values in its key/value store (the host's quota, design 05 §3).
+Past it the host refuses the write, the batch fails, and failures count towards the plugin's
+auto-disable. So the plugin keeps two tiers and bounds what they can hold:
+
+| Tier | Days | Largest blob |
+|---|---|---|
+| full (`day:`): counts, paths, referrers | the newest `detail_days` (at most 60) | 137 098 bytes: 500 paths of 200 bytes and 200 hosts of 100, `(other)` in both, every count 20 digits |
+| compacted (`totals:`): counts only | the rest of `retention_days` (at most 366 in all) | 212 bytes |
+
+The worst case, both settings at their maximum: 60 × 137 098 + 366 × 212 = 8 303 472 bytes,
+7.92 MiB. Up to four more full blobs can exist for a moment (tomorrow's, from a node a little
+ahead, and up to three days one batch counts below the window before the next batch compacts
+them): 64 × 137 098 + 366 × 212 = 8 851 864 bytes, 8.44 MiB, still under the quota with
+1.56 MiB to spare. The plugin's unit test `the_worst_case_footprint_fits_the_quota` builds
+these blobs and checks the sum stays under 9 MiB. Real days are much smaller: a quiet site's
+full day is a few hundred bytes.
+
+If the quota is reached anyway (another version's data, say), the plugin still recovers:
+every batch deletes expired days and compacts before it counts, and a compaction whose small
+write is refused deletes the full blob first and writes again. Lowering `retention_days` or
+`detail_days` frees space at the next batch, even when that batch's own count is refused.
+
+**Write amplification.** A batch rewrites each day it counts whole: up to about 137 KB of
+store writes for a busy day, once per batch (a few seconds of events of one node). That is the
+cost of one blob per day; an atomic `kv.incr` would need a new world version.
+
 ## The counts are approximate
 
 Fine for a trend, not for billing. This is the same caveat as the `counter` example:
@@ -183,10 +258,16 @@ Fine for a trend, not for billing. This is the same caveat as the `counter` exam
   read the same blob, and one of them is lost.
 - **Failed reads.** The host answers `None` for a missing key and for a store read that
   failed, and an empty list for a listing that failed. The plugin checks a missing blob with
-  a listing before it writes a first one over the day, which catches a failed read. It cannot
-  tell if the listing fails too, so a day whose read and listing both fail while the write
-  succeeds is overwritten with the current batch alone. That needs two calls in a row to fail
-  and a third to work; it is a known gap of the 0.1 `kv` interface.
+  a listing before it writes a first one over the day (and before it writes a compacted blob),
+  which catches a failed read. It cannot tell if the listing fails too, so a day whose read
+  and listing both fail while the write succeeds is overwritten with the current batch alone.
+  That needs two calls in a row to fail and a third to work; it is a known gap of the 0.1 `kv`
+  interface. The stats page reads only listed days, so a failed read there is reported, not
+  shown as an empty day; a listing that fails makes the page say the statistics could not be
+  read.
+- **Compaction.** A compaction writes the compacted blob, then deletes the full one. A delete
+  that fails is not reported to the plugin, so the next batch would add that day's counts to
+  the compacted blob a second time.
 - **Lost events.** Events buffered on a node are lost when it crashes (up to 10 seconds'
   worth), when its buffer is full (10 000 events), when a batch cannot be queued, or when the
   plugin is not loaded on that node at flush time.
@@ -214,17 +295,19 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
   capped at 500 and 200 keys and cut to 200 and 100 bytes, and the stats page sums at most
   four days of them. Decoding a day costs fuel in proportion to its entries and bytes, which
   is why the lists cover only the newest days (above) and why a batch decodes at most 150 000
-  bytes. At the default fuel limit of 50 million, the most expensive batches measured need 26
-  to 30 million (1000 events with 508-byte paths and 253-byte hosts, spread over a midnight or
+  bytes. At the default fuel limit of 50 million, the most expensive batches measured need 27
+  to 28 million (1000 events with 508-byte paths and 253-byte hosts, spread over a midnight or
   over three days and counted onto a day that already holds a full blob, or only adding to
-  its keys): about 1.7 to 1.9 times headroom. Core percent-encodes the path before it cuts it,
-  so a `\` or `"` in a request path (which core accepts and answers 404) costs no more than
-  any other byte; left raw, 1000 such 404s needed more than 80 million.
+  its keys, with the most pruning and compaction a batch does): about 1.8 times headroom. The
+  events are read in place (nothing is copied until a key is new to a map), which brought
+  these from 29 to 30 million down. Core percent-encodes the path before it cuts it, so a `\`
+  or `"` in a request path (which core accepts and answers 404) costs no more than any other
+  byte; left raw, 1000 such 404s needed more than 80 million.
 
 ## Uninstall and data
 
 `ferrite plugin remove analytics --data /path/to/site` (or the admin) removes the plugin; its
-settings and the day blobs are kept for 30 days, so a reinstall in that time finds them, and
+settings and the day blobs (both tiers) are kept for 30 days, so a reinstall in that time finds them, and
 `--purge` deletes them at once. Nothing else is stored.
 
 The plugin data belongs to the name `analytics`: install an update or a reinstall only from a

@@ -1,6 +1,9 @@
-//! UTC calendar days, from event timestamps and storage keys, without a date library.
+//! UTC calendar days, from event timestamps and storage keys, on the SDK's calendar
+//! arithmetic ([`ferrite_sdk::time`]).
 //!
 //! "Today" is the wall clock's UTC day ([`Day::today`]).
+
+use ferrite_sdk::time::{civil_from_days, days_from_civil, unix_now};
 
 /// A calendar day, counted from 1970-01-01. Ordering is chronological.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,12 +69,15 @@ impl Day {
         format!("{y:04}-{m:02}-{d:02}")
     }
 
+    /// `YYYY-MM`, the month of the day: a key prefix that lists one month of days.
+    pub fn month(self) -> String {
+        let (y, m, _) = self.ymd();
+        format!("{y:04}-{m:02}")
+    }
+
     /// The current UTC day, from the wall clock.
     pub fn today() -> Self {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        Self::from_unix_secs(secs)
+        Self::from_unix_secs(unix_now())
     }
 
     fn from_unix_secs(secs: u64) -> Self {
@@ -98,35 +104,6 @@ fn number(digits: &[u8]) -> Option<u32> {
     digits.iter().try_fold(0u32, |n, c| {
         c.is_ascii_digit().then(|| n * 10 + u32::from(c - b'0'))
     })
-}
-
-/// Days since 1970-01-01 of a proleptic Gregorian date (Hinnant's `days_from_civil`).
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let yoe = year - era * 400;
-    let month = i64::from(month);
-    let doy = (153 * ((month + 9) % 12) + 2) / 5 + i64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The date `days` after 1970-01-01 (Hinnant's `civil_from_days`).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    // Both are in 1..=31 by construction.
-    (
-        yoe + era * 400 + i64::from(month <= 2),
-        month as u32,
-        day as u32,
-    )
 }
 
 #[cfg(test)]
@@ -203,6 +180,17 @@ mod tests {
         ] {
             assert_eq!(ok(ts), None, "{ts}");
         }
+    }
+
+    #[test]
+    fn months_are_key_prefixes() {
+        assert_eq!(day("2026-10-30").month(), "2026-10");
+        assert_eq!(day("2027-01-01").month(), "2027-01");
+        assert!(
+            day("2026-03-09")
+                .key()
+                .starts_with(&day("2026-03-09").month())
+        );
     }
 
     #[test]

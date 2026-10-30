@@ -15,11 +15,6 @@ pub fn html(status: u16, body: &str) -> RouteResponse {
     with_type(status, "text/html; charset=utf-8", body)
 }
 
-/// A plain-text response (`Content-Type: text/plain; charset=utf-8`).
-pub fn text(status: u16, body: &str) -> RouteResponse {
-    with_type(status, "text/plain; charset=utf-8", body)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,19 +31,5 @@ mod tests {
             )]
         );
         assert_eq!(r.body, b"<p>no</p>");
-    }
-
-    #[test]
-    fn text_sets_type_status_and_body() {
-        let r = text(200, "ok");
-        assert_eq!(r.status, 200);
-        assert_eq!(
-            r.headers,
-            vec![(
-                "Content-Type".to_owned(),
-                "text/plain; charset=utf-8".to_owned()
-            )]
-        );
-        assert_eq!(r.body, b"ok");
     }
 }

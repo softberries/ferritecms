@@ -15,7 +15,7 @@
 //! JSON-LD is built with `serde_json`, so a title holding quotes or `</script>` stays
 //! valid JSON; the host escapes `<`, `>` and `&` again before it renders the block.
 
-use ferrite_sdk::{Ctx, Head, Post, Result, options};
+use ferrite_sdk::{Ctx, Head, Post, Result, options, settings};
 use serde_json::{Value, json};
 
 const RSS: &str = "application/rss+xml";
@@ -39,17 +39,17 @@ fn head(mut head: Head, ctx: &Ctx) -> Result<Head> {
         head.og("og:locale", &locale);
     }
 
-    twitter(&mut head, ctx);
+    twitter(&mut head);
     if let Some(post) = &post {
         article(&mut head, post);
     }
 
-    let org = organization(ctx, site_title.as_deref());
+    let org = organization(site_title.as_deref());
     if let Some(site_url) = &site_url {
         if request.path == "/" && !has_json_ld(&head, "WebSite") {
             head.json_ld(&website(site_url, site_title.as_deref()).to_string());
         }
-        if setting_bool(ctx, "feed_link", true) && !has_rss_link(&head) {
+        if setting_bool("feed_link", true) && !has_rss_link(&head) {
             head.link_typed("alternate", &format!("{site_url}/feed/"), RSS);
         }
     }
@@ -74,7 +74,7 @@ fn head(mut head: Head, ctx: &Ctx) -> Result<Head> {
         ("google-site-verification", "google_verification"),
         ("msvalidate.01", "bing_verification"),
     ] {
-        if let Some(token) = setting_text(ctx, key)
+        if let Some(token) = setting_text(key)
             && !head.has_meta_name(name)
         {
             head.meta(name, &token);
@@ -85,7 +85,7 @@ fn head(mut head: Head, ctx: &Ctx) -> Result<Head> {
 
 /// `twitter:card` (large when core found an image), the title and description copied
 /// from Open Graph, and `twitter:site` from the setting.
-fn twitter(head: &mut Head, ctx: &Ctx) {
+fn twitter(head: &mut Head) {
     if !has_twitter(head, "twitter:card") {
         let card = if head.has_meta_property("og:image") {
             "summary_large_image"
@@ -104,7 +104,7 @@ fn twitter(head: &mut Head, ctx: &Ctx) {
             head.meta(name, &value);
         }
     }
-    if let Some(handle) = setting_text(ctx, "twitter_site") {
+    if let Some(handle) = setting_text("twitter_site") {
         let handle = handle.trim_start_matches('@');
         if !handle.is_empty() && !has_twitter(head, "twitter:site") {
             head.meta("twitter:site", &format!("@{handle}"));
@@ -203,10 +203,10 @@ fn blog_posting(
 
 /// The publisher: `organization_name`, else the site title; the logo only from an
 /// `https` URL. No name, no publisher.
-fn organization(ctx: &Ctx, site_title: Option<&str>) -> Option<Value> {
-    let name = setting_text(ctx, "organization_name").or_else(|| site_title.map(str::to_owned))?;
+fn organization(site_title: Option<&str>) -> Option<Value> {
+    let name = setting_text("organization_name").or_else(|| site_title.map(str::to_owned))?;
     let mut org = json!({"@type": "Organization", "name": name});
-    if let Some(logo) = setting_text(ctx, "organization_logo")
+    if let Some(logo) = setting_text("organization_logo")
         && logo.starts_with("https://")
     {
         org["logo"] = json!({"@type": "ImageObject", "url": logo});
@@ -258,17 +258,14 @@ fn has_rss_link(head: &Head) -> bool {
 }
 
 /// A text setting, trimmed; `None` when unset or blank.
-fn setting_text(ctx: &Ctx, key: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(&ctx.setting(key)?).ok()?;
-    let text = value.as_str()?.trim();
+fn setting_text(key: &str) -> Option<String> {
+    let text = settings::text(key)?;
+    let text = text.trim();
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-fn setting_bool(ctx: &Ctx, key: &str, default: bool) -> bool {
-    ctx.setting(key)
-        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
+fn setting_bool(key: &str, default: bool) -> bool {
+    settings::bool(key).unwrap_or(default)
 }
 
 ferrite_sdk::export_plugin! {
