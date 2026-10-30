@@ -115,6 +115,8 @@ pub const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 /// Most [`HelperBridge`] calls one render may make.
 pub const MAX_BRIDGE_CALLS: u32 = 20;
 const DEFAULT_RELATED: u32 = 3;
+/// Most `page_tree()` values (one per kind and current node) one render keeps.
+const MAX_TREE_VALUES: usize = 16;
 const DEFAULT_QUERY_LIMIT: u32 = 10;
 /// Options every render reads through `site`. `site.url` is not one: it comes from the
 /// config, which no write changes at runtime.
@@ -426,7 +428,8 @@ struct ScopeState {
     /// `page_tree()` reads by kind (memo key `tree:<kind>`, P57).
     trees: HashMap<String, Option<Arc<ContentTree>>>,
     /// `page_tree()` values by kind and current node, so a template calling it in a loop
-    /// builds each one once.
+    /// builds each one once; at most [`MAX_TREE_VALUES`] entries, later ones are built
+    /// on every call.
     tree_values: HashMap<(String, Option<ContentId>), Value>,
     /// Media already in the context, for `image()` without a bridge call.
     media: HashMap<ContentId, MediaPublic>,
@@ -709,7 +712,10 @@ fn page_tree(scope: &Scope, post: Option<Value>, kwargs: Kwargs) -> Result<Value
         return Ok(v.clone());
     }
     let v = tree_value(&tree, key.1);
-    scope.lock().tree_values.insert(key, v.clone());
+    let mut st = scope.lock();
+    if st.tree_values.len() < MAX_TREE_VALUES {
+        st.tree_values.insert(key, v.clone());
+    }
     Ok(v)
 }
 

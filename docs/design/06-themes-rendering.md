@@ -365,7 +365,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
 | `page_tree(post=none, kind=none)` | the public items of one type as a tree (M4-3b P56, P57; below) | `archive:<kind>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
@@ -441,7 +441,8 @@ tree and marks `post` as current; with `kind` it reads that type's tree (with `p
 `post` is still marked). With neither, or with a `kind` that is not a type name
 (`[a-z][a-z0-9_-]{0,31}`), it is `none` and costs no call. Otherwise it is one bridge call
 per kind and render, memoised (key `tree:<kind>`) and counted against `MAX_BRIDGE_CALLS`;
-once the budget is spent it is `none`.
+once the budget is spent it is `none`. The built value is also kept per kind and current
+node, for up to 16 of them per render (a template drawing more is correct, just slower).
 
 **What is in it.** `SiteReader::tree(kind)` lists the type's public items with exactly the
 sitemap's visibility and paths (`published_at <= now`, the same ancestor and primary-term
@@ -449,17 +450,19 @@ loading, the same permalink rules; the sitemap and the tree share one walk), in 
 200 rows ordered by `menu_order` then id. Media, an unknown type and a type without public
 items give `none`. At most **1 000 nodes** (`MAX_TREE_NODES`); past that `truncated` is
 true and the nodes are the first 1 000 by `menu_order`, so a theme should say the list is
-cut short. The only dependency key is `archive:<kind>`, which every content write in the
+cut short. The dependency keys are `archive:<kind>`, which every content write in the
 type emits, so publishing, moving, reordering or trashing an item refreshes every cached
-page that drew the tree.
+page that drew the tree, and `post:<media>` for every featured image id the read checked,
+public or not, so publishing or unpublishing that media refreshes it too.
 
 **The value** is `{items, current, ancestors, children, prev, next, truncated}`:
 
 - every node is `{id, title, url, depth, current, open, excerpt, featured, children}`:
   `depth` starts at 0, `current` is true on the current node only, `open` on the current
   node and its ancestors, `excerpt` is the stored excerpt (empty when none was written; no
-  body fallback), `featured` is the stored `fields.featured_image` media id or `none`,
-  unchecked: pass it to `image()`, which returns `none` for media that is not public;
+  body fallback), `featured` is the `fields.featured_image` media id when it names a
+  public media item, else `none` (checked in bulk, one `get_many` per 200 ids, as the
+  public view of an item keeps `featured_image`, R8): pass it to `image()`;
 - `items` holds the root nodes, each with all its descendants nested in `children`;
 - `ancestors` runs root first and excludes `current`; `children` are `current`'s children,
   each with one level of its own `children` (`current.children` is the same list);

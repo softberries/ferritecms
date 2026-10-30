@@ -62,7 +62,9 @@ pub trait HelperBridge: Send + Sync {
     }
     /// The public items of `kind` as a flat tree (`SiteReader::tree`, M4-3b P56): the
     /// sitemap's items and paths, at most `MAX_TREE_NODES`; `None` for media or a type
-    /// without public items. Keys: `archive:<kind>`. The default has no data.
+    /// without public items. A node's `featured` is set only for a public media item.
+    /// Keys: `archive:<kind>`, plus `post:<media>` for every featured id checked. The
+    /// default has no data.
     fn tree(&self, _kind: &str) -> Bridged<Option<ContentTree>> {
         (None, DepKeys::default())
     }

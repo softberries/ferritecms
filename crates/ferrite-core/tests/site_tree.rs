@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
     DepKeys, PermalinkRules, SiteReader,
-    events::archive_key,
+    events::{archive_key, post_key},
     site::{ListOrder, MAX_TREE_NODES},
 };
 use ferrite_domain::{
@@ -176,33 +176,66 @@ pub async fn tree_matches_the_sitemap(db: &TestDb) {
     assert_eq!(node(a2).menu_order, 3);
 }
 
-/// R-b1: a node carries the stored excerpt and the featured media id as stored (no
-/// visibility check: `image()` hides non-public media).
+/// R-b1: a node carries the stored excerpt and the featured media id, the id only
+/// while it names a public media item (R8); every featured id checked is a dependency.
 pub async fn tree_nodes_carry_excerpt_and_featured(db: &TestDb) {
     let store = db.store();
     let ana = author(store).await;
-    let media = ContentId::new();
+    let shown = one(store, &ana, row("media", "shown", 0)).await;
+    let mut draft_media = row("media", "draft-media", 0);
+    draft_media.status = ContentStatus::Draft;
+    let draft_media = one(store, &ana, draft_media).await;
+    let a_post = one(store, &ana, row("post", "a-post", 0)).await;
+    let missing = ContentId::new();
+    let featured = |id: ContentId| json!({"featured_image": id.to_string()});
+
     let mut r1 = row("page", "with", 0);
     r1.excerpt = "Stored excerpt";
-    r1.fields = json!({"featured_image": media.to_string()});
+    r1.fields = featured(shown);
     let with = one(store, &ana, r1).await;
     let mut r2 = row("page", "bad", 1);
     r2.fields = json!({"featured_image": "not-a-uuid"});
     let bad = one(store, &ana, r2).await;
     let plain = one(store, &ana, row("page", "plain", 2)).await;
+    let mut r3 = row("page", "drafted", 3);
+    r3.fields = featured(draft_media);
+    let drafted = one(store, &ana, r3).await;
+    let mut r4 = row("page", "not-media", 4);
+    r4.fields = featured(a_post);
+    let not_media = one(store, &ana, r4).await;
+    let mut r5 = row("page", "gone", 5);
+    r5.fields = featured(missing);
+    let gone = one(store, &ana, r5).await;
 
-    let tree = reader(db.shared_store())
-        .tree("page")
-        .await
-        .unwrap()
-        .value
-        .unwrap();
+    let r = reader(db.shared_store());
+    let read = r.tree("page").await.unwrap();
+    let tree = read.value.unwrap();
     let node = |id| tree.nodes.iter().find(|n| n.id == id).unwrap();
     assert_eq!(node(with).excerpt, "Stored excerpt");
-    assert_eq!(node(with).featured, Some(media));
+    assert_eq!(node(with).featured, Some(shown));
     assert_eq!(node(bad).featured, None);
     assert_eq!(node(plain).featured, None);
     assert_eq!(node(plain).excerpt, "");
+    assert_eq!(node(drafted).featured, None, "draft media is not shown");
+    assert_eq!(node(not_media).featured, None, "a post is not media");
+    assert_eq!(node(gone).featured, None);
+    for id in [shown, draft_media, a_post, missing] {
+        assert!(read.deps.contains(&post_key(id)), "{id}");
+    }
+    assert!(read.deps.contains(&archive_key("page")));
+
+    // Publishing the media shows it.
+    let tx = store.begin().await.unwrap();
+    let mut m = tx.content().get(draft_media).await.unwrap().unwrap();
+    m.status = ContentStatus::Published;
+    m.published_at = Some(at(-HOUR));
+    tx.content().update(&m).await.unwrap();
+    tx.commit().await.unwrap();
+    let read = r.tree("page").await.unwrap();
+    let tree = read.value.unwrap();
+    let node = |id| tree.nodes.iter().find(|n| n.id == id).unwrap();
+    assert_eq!(node(drafted).featured, Some(draft_media));
+    assert!(read.deps.contains(&post_key(draft_media)));
 }
 
 pub async fn tree_of_media_or_unknown_is_none(db: &TestDb) {

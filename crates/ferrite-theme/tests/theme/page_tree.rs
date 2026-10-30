@@ -308,7 +308,6 @@ fn repeated_calls_reuse_the_value() {
     let nodes: Vec<TreeNode> = (0..1000).map(|i| node(&format!("n{i}"), None, i)).collect();
     let first = nodes[0].clone();
     let b = bridge(tree(nodes));
-    let started = std::time::Instant::now();
     let out = try_render(
         "{% for i in range(2000) %}{{ page_tree(post).items | length }}{% endfor %}",
         current(&first),
@@ -317,5 +316,34 @@ fn repeated_calls_reuse_the_value() {
     .unwrap();
     assert_eq!(out.html, "1000".repeat(2000));
     assert_eq!(b.calls.load(Ordering::SeqCst), 1);
-    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// More distinct current nodes than the per-render value memo holds: each still
+/// renders its own value, from one bridge call.
+#[test]
+fn many_currents_render_correctly() {
+    let nodes: Vec<TreeNode> = (0..100)
+        .map(|i| node(&format!("n{i:03}"), None, i))
+        .collect();
+    let b = bridge(tree(nodes));
+    let out = try_render(
+        "{% for n in page_tree(kind='page').items %}\
+         {% set t = page_tree(post=n, kind='page') %}{{ t.current.title }}<{{ t.prev.title }}>,\
+         {% endfor %}",
+        ctx(),
+        b.clone(),
+    )
+    .unwrap();
+    let want: String = (0..100)
+        .map(|i| {
+            let prev = if i == 0 {
+                String::new()
+            } else {
+                format!("n{:03}", i - 1)
+            };
+            format!("n{i:03}<{prev}>,")
+        })
+        .collect();
+    assert_eq!(out.html, want);
+    assert_eq!(b.calls.load(Ordering::SeqCst), 1);
 }

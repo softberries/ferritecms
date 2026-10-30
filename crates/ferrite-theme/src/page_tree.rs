@@ -4,7 +4,7 @@
 //! * **Shape:** `{items, current, ancestors, children, prev, next, truncated}`. Every
 //!   node is `{id, title, url, depth, current, open, excerpt, featured, children}`
 //!   (`depth` from 0, `open` on the current node and its ancestors, `featured` the
-//!   stored media id or none).
+//!   id of a public media item or none, as `SiteReader::tree` checked it).
 //! * **Nesting:** `items` holds the roots, each with all its descendants. The other
 //!   entries hold nodes with an empty `children`, except `children` (and
 //!   `current.children`, the same list), whose nodes keep one level of their own
