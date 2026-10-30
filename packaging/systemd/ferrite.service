@@ -1,0 +1,56 @@
+# FerriteCMS as a systemd service (solo profile; design 09 §7, M4-2 P37).
+# Install steps: packaging/systemd/README.md.
+#
+# The binary (/usr/local/bin/ferrite) is root-owned and read-only to this unit, so
+# `ferrite self-update` and `ferrite rollback` run as root outside it, followed by
+# `systemctl restart ferrite`.
+
+[Unit]
+Description=FerriteCMS
+Documentation=https://github.com/softberries/ferritecms
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ferrite
+Group=ferrite
+ExecStart=/usr/local/bin/ferrite serve --data /var/lib/ferrite
+Restart=on-failure
+RestartSec=5
+# `serve` drains in-flight requests on SIGTERM.
+TimeoutStopSec=30
+UMask=0027
+
+# Limits (MemoryMax is a starting point: tune it to the site and its plugins).
+MemoryMax=1G
+LimitNOFILE=65536
+
+# Binding to 443 and 80 for the built-in ACME (09 §5) without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Hardening. The data folder is the only writable path.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ferrite
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# No MemoryDenyWriteExecute: the plugin runtime (wasmtime) compiles WebAssembly to
+# machine code at run time and needs writable-then-executable memory.
+
+[Install]
+WantedBy=multi-user.target
