@@ -550,6 +550,62 @@ fn rollback_renames_upgrade_json() {
     assert_eq!(std::fs::read(data.join(&renamed[0])).unwrap(), raw);
 }
 
+/// After a schema rollback the database belongs to the older binary again, so
+/// `last_binary_version` names it: a re-upgrade that runs before the older binary ever
+/// started (say `self-update` straight after the rollback) records `from: <older>`, and
+/// its own `rollback --schema` accepts `ferrite.prev` (the M4-2 exit's two-binary run
+/// found the record naming the newer binary instead).
+#[test]
+fn rollback_schema_stores_the_older_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bins = Bins::new(tmp.path(), Some(0));
+    let from = latest_schema_version() - 1;
+    let (data, _) = upgraded_site(tmp.path(), from);
+
+    rollback(&bins.current)
+        .args(["--schema", "--data"])
+        .arg(&data)
+        .assert()
+        .success();
+    assert_eq!(meta(&data, SCHEMA_META_LAST_BINARY).as_deref(), Some(OLD));
+
+    migrate_up(&data);
+    let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
+    assert_eq!(rec.from.as_deref(), Some(OLD));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (from, latest_schema_version())
+    );
+}
+
+/// A record from before M4-2 (`from: null`) cannot check the older binary, but a schema
+/// rollback still stores the version it reports, so the next record names it.
+#[test]
+fn rollback_schema_without_from_stores_the_reported_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bins = Bins::with_old(tmp.path(), Some(0), "0.0.7");
+    let from = latest_schema_version() - 1;
+    let (data, mut rec) = upgraded_site(tmp.path(), from);
+    rec.from = None;
+    upgrade::write(&data, &rec).unwrap();
+
+    let out = rollback(&bins.current)
+        .args(["--schema", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).contains("not checked"), "{}", stdout(&out));
+    assert_eq!(
+        meta(&data, SCHEMA_META_LAST_BINARY).as_deref(),
+        Some("0.0.7")
+    );
+
+    migrate_up(&data);
+    let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
+    assert_eq!(rec.from.as_deref(), Some("0.0.7"));
+}
+
 // ---- --restore-snapshot ----
 
 /// The snapshot replaces the database; the current database and its `-wal`/`-shm` move to
