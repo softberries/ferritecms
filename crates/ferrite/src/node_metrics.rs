@@ -12,27 +12,55 @@
 //! once more, bounded by [`FINAL_FLUSH`]; the shutdown's own bound cuts it if the database
 //! is slow.
 //!
-//! **Failures.** A write that fails (or takes over [`WRITE_TIMEOUT`]) is logged and its
-//! delta kept: the next write carries it, still under the failed period's minute. A write
-//! adds to an existing row of the same (node, minute) (`NodeMetricsRepo::insert`), so a
-//! retried or repeated minute never conflicts or double-counts what was not written.
+//! **Failures.** A periodic write that fails is logged and its delta kept: the next write
+//! carries it, still under the failed period's minute. A periodic write has no timeout of
+//! its own (a slow write only delays the next one): a statement abandoned by a timeout
+//! could still commit, and the kept delta would then be added twice, since a write adds to
+//! an existing row of the same (node, minute) (`NodeMetricsRepo::insert`). Only the final
+//! flush is bounded; losing that partial minute is the lesser evil there.
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{MINUTE_MICROS, NodeId, Timestamp};
+use async_trait::async_trait;
+use ferrite_domain::{MINUTE_MICROS, MetricCounts, NodeId, Timestamp};
 use ferrite_http::metrics::{Metrics, MetricsSnapshot};
-use ferrite_store::Store;
+use ferrite_store::{Store, StoreError};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// The longest one periodic write may take.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest the final flush at shutdown may take.
 pub const FINAL_FLUSH: Duration = Duration::from_millis(500);
 
+/// Where the writer's rows go: the store's `node_metrics` (tests substitute a sink).
+#[async_trait]
+pub trait MinuteSink: Send + Sync {
+    /// Adds `counts` to `node`'s row of `minute`.
+    async fn insert(
+        &self,
+        node: NodeId,
+        minute: Timestamp,
+        counts: &MetricCounts,
+    ) -> Result<(), StoreError>;
+}
+
+#[async_trait]
+impl MinuteSink for Arc<dyn Store> {
+    async fn insert(
+        &self,
+        node: NodeId,
+        minute: Timestamp,
+        counts: &MetricCounts,
+    ) -> Result<(), StoreError> {
+        self.read()
+            .node_metrics()
+            .insert(node, minute, counts)
+            .await
+    }
+}
+
 /// The writer of one node.
 pub struct MinuteWriter {
-    store: Arc<dyn Store>,
+    sink: Arc<dyn MinuteSink>,
     node: NodeId,
     metrics: Arc<Metrics>,
     /// `None`: at every whole minute of the wall clock (production); `Some(d)` (test
@@ -44,13 +72,13 @@ pub struct MinuteWriter {
 impl MinuteWriter {
     /// A writer of `node`'s rows from `metrics`, at the times `every` gives (the field docs).
     pub fn new(
-        store: Arc<dyn Store>,
+        sink: Arc<dyn MinuteSink>,
         node: NodeId,
         metrics: Arc<Metrics>,
         every: Option<Duration>,
     ) -> Self {
         Self {
-            store,
+            sink,
             node,
             metrics,
             every,
@@ -74,40 +102,42 @@ impl MinuteWriter {
                 () = tokio::time::sleep(wait) => {}
             }
             let now = self.metrics.snapshot();
-            if self.write(&now, &last, period_start, WRITE_TIMEOUT).await {
+            if self.write(&now, &last, period_start, None).await {
                 last = now;
                 period_start = Timestamp::now();
             }
         }
         let now = self.metrics.snapshot();
-        self.write(&now, &last, period_start, FINAL_FLUSH).await;
+        self.write(&now, &last, period_start, Some(FINAL_FLUSH))
+            .await;
     }
 
-    /// Writes `now - last` under the minute of `period_start`; whether it was written.
+    /// Writes `now - last` under the minute of `period_start`, within `limit` when given;
+    /// whether it was written.
     async fn write(
         &self,
         now: &MetricsSnapshot,
         last: &MetricsSnapshot,
         period_start: Timestamp,
-        limit: Duration,
+        limit: Option<Duration>,
     ) -> bool {
         let counts = now.since(last).counts();
         let minute = minute_of(period_start);
-        let insert = self
-            .store
-            .read()
-            .node_metrics()
-            .insert(self.node, minute, &counts);
-        match tokio::time::timeout(limit, insert).await {
-            Ok(Ok(())) => true,
-            Ok(Err(e)) => {
+        let insert = self.sink.insert(self.node, minute, &counts);
+        let done = match limit {
+            Some(limit) => match tokio::time::timeout(limit, insert).await {
+                Ok(done) => done,
+                Err(_) => {
+                    tracing::warn!("the final flush of the node's minute metrics timed out");
+                    return false;
+                }
+            },
+            None => insert.await,
+        };
+        match done {
+            Ok(()) => true,
+            Err(e) => {
                 tracing::warn!(error = %e, "cannot write the node's minute metrics; kept for the next write");
-                false
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "writing the node's minute metrics timed out; kept for the next write"
-                );
                 false
             }
         }
@@ -130,6 +160,8 @@ fn until_next_minute(t: Timestamp) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     fn at(micros: i64) -> Timestamp {
@@ -146,5 +178,69 @@ mod tests {
             until_next_minute(at(m + 59_500_000)),
             Duration::from_millis(500)
         );
+    }
+
+    /// Records every attempt (minute, page views, accepted); refuses the first.
+    #[derive(Default)]
+    struct FailOnce {
+        calls: Mutex<Vec<(Timestamp, u64, bool)>>,
+    }
+
+    #[async_trait]
+    impl MinuteSink for FailOnce {
+        async fn insert(
+            &self,
+            _node: NodeId,
+            minute: Timestamp,
+            counts: &MetricCounts,
+        ) -> Result<(), StoreError> {
+            let mut calls = self.calls.lock().unwrap();
+            let ok = !calls.is_empty();
+            calls.push((minute, counts.page_views, ok));
+            if ok {
+                Ok(())
+            } else {
+                Err(StoreError::Database("down".into()))
+            }
+        }
+    }
+
+    /// A failed write keeps its delta and its period: the next write carries both
+    /// (under the failed period's minute); after a success the next period starts anew,
+    /// and the final flush writes the rest.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_write_is_carried_by_the_next() {
+        let sink = Arc::new(FailOnce::default());
+        let metrics = Arc::new(Metrics::new("0.0.0", "test"));
+        let stop = CancellationToken::new();
+        let start = minute_of(Timestamp::now());
+        let task = MinuteWriter::new(
+            sink.clone(),
+            NodeId::new(),
+            metrics.clone(),
+            Some(Duration::from_secs(1)),
+        )
+        .spawn(stop.clone());
+        // The writer takes its first snapshot.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        metrics.count_page_view();
+        metrics.count_page_view();
+        // Tick at 1 s: refused.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        metrics.count_page_view();
+        // Tick at 2 s: the carried 2 plus 1.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        metrics.count_page_view();
+        stop.cancel();
+        task.await.unwrap();
+
+        let calls = sink.calls.lock().unwrap().clone();
+        let views: Vec<(u64, bool)> = calls.iter().map(|c| (c.1, c.2)).collect();
+        assert_eq!(views, [(2, false), (3, true), (1, true)], "{calls:?}");
+        // The paused clock does not move the wall clock far: the carried write is under
+        // the failed period's minute (the start's, unless the wall clock just crossed a
+        // minute).
+        assert_eq!(calls[0].0, calls[1].0, "carried under the old minute");
+        assert!(calls[0].0 >= start);
     }
 }

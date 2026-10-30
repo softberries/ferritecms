@@ -8559,7 +8559,7 @@ export interface operations {
                 /** @description End of the range (RFC 3339), exclusive; rounded up to a bucket end. After `from`. */
                 to: string;
                 /** @description `minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days). */
-                step: string;
+                step: components["schemas"]["SeriesStepDto"];
                 /** @description Only this node's rows (UUID); every node's, summed, when absent. */
                 node?: string;
             };

@@ -700,7 +700,11 @@ bound (ms) of the latency bucket that holds the 95th percentile of that minute's
 responses (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 or 10000, the last also for
 anything slower; 0 without page responses). A write adds to an existing (node, minute)
 row (counts added, `p95_ms` the larger), so a write that failed is carried by the next
-one (still under its own minute; logged) and a repeated minute never conflicts. At
+one (still under its own minute; logged) and a repeated minute never conflicts. So
+after a database outage the traffic of the whole outage shows as one spike in the
+outage's first minute followed by zeros: nothing is lost, it is filed late. A periodic
+write has no timeout of its own (an abandoned statement could still commit and the
+kept delta would count twice); only the final flush is bounded. At
 shutdown, after the request drain and the job runner, the partial minute is flushed once
 more (at most 500 ms, inside the 1 s background stop). Rows have no foreign key to
 `nodes`: a stopped node's figures stay for their 7 days. `node_metrics.prune` (hourly,

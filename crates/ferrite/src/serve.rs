@@ -720,9 +720,13 @@ async fn boot(
     let metrics_every: Option<Duration> = None;
     #[cfg(feature = "test-seams")]
     let metrics_every = opts.metrics_tick.or(metrics_every);
-    let minute_writer =
-        MinuteWriter::new(store.clone(), registry.id(), metrics.clone(), metrics_every)
-            .spawn(background.clone());
+    let minute_writer = MinuteWriter::new(
+        Arc::new(store.clone()),
+        registry.id(),
+        metrics.clone(),
+        metrics_every,
+    )
+    .spawn(background.clone());
     // Served until the background tasks stop, so the drain can still be scraped.
     let metrics_server = metrics_listener.map(|listener| {
         let app = metrics_router(metrics.clone());

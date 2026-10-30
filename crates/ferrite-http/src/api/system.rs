@@ -48,8 +48,8 @@ use super::{
     dto::system::{
         AuditDto, AuditList, CacheStatsDto, JobCountsDto, JobDto, JobList, MailStatusDto,
         MailTestDto, MetricsSeriesDto, MetricsSummaryDto, NodeCountsDto, NodeDto, NodeList,
-        PluginTotalsDto, SchemaStatusDto, SchemaVerdict, SystemStatusDto, ThemeStatusDto,
-        ThisNodeDto,
+        PluginTotalsDto, SchemaStatusDto, SchemaVerdict, SeriesStepDto, SystemStatusDto,
+        ThemeStatusDto, ThisNodeDto,
     },
     extract::{ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, invalid_cursor, invalid_param},
     plugins::{is_live, live_nodes},
@@ -439,6 +439,7 @@ pub struct SeriesParams {
     /// End of the range (RFC 3339), exclusive; rounded up to a bucket end. After `from`.
     pub to: String,
     /// `minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days).
+    #[param(value_type = SeriesStepDto)]
     pub step: String,
     /// Only this node's rows (UUID); every node's, summed, when absent.
     pub node: Option<String>,

@@ -206,7 +206,7 @@ pub trait NodeMetricsRepo: Send + Sync {
     /// the row is created if absent; otherwise its counts are added to and `p95_ms`
     /// becomes the larger of the two. A writer that flushes the same minute twice (a
     /// shutdown flush, a write retried after a failure) so never conflicts or loses a
-    /// count. `Invalid`: `minute` not a whole minute, a count above `i64::MAX`, or
+    /// count. `Invalid`: `minute` before 1970 or not a whole minute, a count above `i64::MAX`, or
     /// `p95_ms` above `i32::MAX`.
     async fn insert(
         &self,

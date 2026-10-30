@@ -6777,7 +6777,7 @@
             "description": "`minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days).",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SeriesStepDto"
             }
           },
           {

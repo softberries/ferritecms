@@ -127,6 +127,10 @@ pub async fn node_metrics_insert_and_series_sum_across_nodes(db: &TestDb) {
     // Validation.
     let invalid = |r: Result<_, StoreError>| matches!(r, Err(StoreError::Invalid(_)));
     assert!(invalid(m.insert(a, at(t0 + 1), &counts(1, 0)).await));
+    // Before 1970 the backends would bucket differently: refused on both.
+    assert!(invalid(
+        m.insert(a, at(-MINUTE_MICROS), &counts(1, 0)).await
+    ));
     assert!(invalid(m.insert(a, at(t0), &counts(u64::MAX, 0)).await));
     assert!(invalid(m.insert(a, at(t0), &counts(1, u32::MAX)).await));
     assert!(invalid(

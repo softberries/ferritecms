@@ -80,7 +80,7 @@ impl NodeMetricsRepo for SqliteRepos {
         node: Option<NodeId>,
     ) -> Result<Vec<SeriesBucket>, StoreError> {
         check_series_range(from, to)?;
-        // Minutes are never before 1970 (written from the clock), so integer division
+        // Minutes are never before 1970 (`check_node_metrics` refuses them), so integer division
         // floors.
         let sql = if node.is_some() {
             SERIES_BY_NODE_SQL

@@ -5,12 +5,19 @@ use ferrite_domain::{MINUTE_MICROS, MetricCounts, SeriesBucket, Timestamp};
 use crate::StoreError;
 
 /// The bound values of one `node_metrics` row: the nine counts in column order and
-/// `p95_ms`. `Invalid`: `minute` not a whole minute, a count above `i64::MAX`, or `p95_ms`
+/// `p95_ms`. `Invalid`: `minute` before 1970 or not a whole minute, a count above `i64::MAX`, or `p95_ms`
 /// above `i32::MAX`.
 pub fn check_node_metrics(
     minute: Timestamp,
     counts: &MetricCounts,
 ) -> Result<([i64; 9], i32), StoreError> {
+    // Before 1970 SQLite's integer division and Postgres' `date_bin` would bucket
+    // differently; the writer never writes such a minute.
+    if minute.as_micros() < 0 {
+        return Err(StoreError::Invalid(
+            "node metrics minute must not be before 1970".into(),
+        ));
+    }
     if minute.as_micros().rem_euclid(MINUTE_MICROS) != 0 {
         return Err(StoreError::Invalid(
             "node metrics minute must be a whole minute".into(),
@@ -69,6 +76,10 @@ mod tests {
         let (c, p) = check_node_metrics(at(MINUTE_MICROS * 5), &counts).unwrap();
         assert_eq!((c, p), ([1, 2, 3, 4, 5, 6, 7, 8, 9], 25));
         assert!(check_node_metrics(at(MINUTE_MICROS * 5 + 1), &counts).is_err());
+        assert!(
+            check_node_metrics(at(-MINUTE_MICROS), &counts).is_err(),
+            "before 1970"
+        );
         let big = MetricCounts {
             jobs_failed: u64::MAX,
             ..MetricCounts::default()

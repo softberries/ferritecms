@@ -295,25 +295,42 @@ pub async fn migration_0012_roundtrip(db: &TestDb) {
     let has =
         |objects: &[String], name: &str| objects.iter().any(|o| o.ends_with(&format!(":{name}")));
     assert!(has(&db.user_objects().await, "node_metrics"));
-    let minute = Timestamp::from_micros(ferrite_domain::MINUTE_MICROS * 1000).unwrap();
+    let minute_micros = ferrite_domain::MINUTE_MICROS * 1000;
+    let minute = Timestamp::from_micros(minute_micros).unwrap();
+    let until = Timestamp::from_micros(minute_micros + ferrite_domain::MINUTE_MICROS).unwrap();
     let node = ferrite_domain::NodeId::new();
-    let counts = ferrite_domain::MetricCounts::default();
+    let counts = ferrite_domain::MetricCounts::from_counters([7; 9], 25);
+    let requests = || async {
+        store
+            .read()
+            .node_metrics()
+            .series(minute, until, ferrite_domain::SeriesStep::Minute, None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|b| b.counts.requests)
+            .sum::<u64>()
+    };
     store
         .read()
         .node_metrics()
         .insert(node, minute, &counts)
         .await
         .unwrap();
+    assert_eq!(requests().await, 7);
     // Not lossy: no allow_lossy needed.
     assert_eq!(store.migrate_down(11, false).await.unwrap(), vec![12]);
     assert!(!has(&db.user_objects().await, "node_metrics"));
     assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![12]);
+    // The down dropped the row: the table is empty again and takes new rows.
+    assert_eq!(requests().await, 0, "the down drops the rows");
     store
         .read()
         .node_metrics()
         .insert(node, minute, &counts)
         .await
         .unwrap();
+    assert_eq!(requests().await, 7);
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate
