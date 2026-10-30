@@ -32,9 +32,12 @@ ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 ferrite-theme = { path = "../ferrite-theme" }
 chrono.workspace = true
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 futures.workspace = true
 image.workspace = true
+minisign-verify = { version = "=0.3.0", default-features = false }
 object_store.workspace = true
+reqwest.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 semver.workspace = true
 serde.workspace = true
@@ -43,7 +46,7 @@ sha2.workspace = true
 sqlx.workspace = true
 tar.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["net", "signal"] }
+tokio = { workspace = true, features = ["net", "process", "signal"] }
 toml.workspace = true
 tokio-util = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
@@ -57,6 +60,7 @@ ferrite = { path = ".", features = ["test-seams"] }
 assert_cmd = "2.2.2"
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 hyper-util.workspace = true
+minisign = { version = "=0.10.0", default-features = false }
 s3s.workspace = true
 s3s-fs.workspace = true
 serde_json.workspace = true
