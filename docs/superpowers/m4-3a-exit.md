@@ -583,7 +583,7 @@ contact form's worst cases still pass at half the default limit (its suite).
 
 | Item | Why | Covered instead by |
 |---|---|---|
-| The systemd doctor command (`systemctl show … --property=Environment --value` in `env`) | macOS host, no systemd | systemd's documented `show` output (space-separated assignments); 09 §8 states the quoting limit |
+| The systemd doctor command (`systemctl show … --property=Environment --value` in `env`) | macOS host, no systemd | systemd's source (`config_parse_environ`: `Environment=` is a quote-aware list, drop-ins merged into one); that `show --value` prints the list space-separated, quoting an entry that holds a space, was not checked on a host; 09 §8 states the quoting limit |
 | The cluster example's `chown 65532` + `chmod 600` instruction | no Docker run | the image's user (65532, Dockerfile) and the bind-mount behaviour on Linux |
 | Compaction with two nodes running batches at once | one node per test | the read-modify-write caveat (R19) covers it; a delete that fails silently can count a day twice (README) |
 | A real S3 error body that names the access key reaching `backup.target` | the test server's HEAD answer has no body | the shared helper is the one `media.store`'s test exercises with a body |
