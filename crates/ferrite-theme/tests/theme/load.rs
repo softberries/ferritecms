@@ -225,3 +225,32 @@ fn theme_and_renderer_are_shareable_across_threads() {
     assert_send_sync::<Theme>();
     assert_send_sync::<ferrite_theme::Renderer>();
 }
+
+/// Sum of the file sizes in a `pack` bundle (ustar: a 512-byte header per file with the
+/// size in octal at bytes 124..136, then the data padded to 512 bytes).
+fn bundle_file_bytes(tar: &[u8]) -> u64 {
+    let mut total = 0;
+    let mut at = 0;
+    while at + 512 <= tar.len() && tar[at..at + 512].iter().any(|b| *b != 0) {
+        let field = std::str::from_utf8(&tar[at + 124..at + 136]).unwrap();
+        let size =
+            u64::from_str_radix(field.trim_matches(|c: char| c == '\0' || c == ' '), 8).unwrap();
+        total += size;
+        at += 512 + usize::try_from(size.div_ceil(512) * 512).unwrap();
+    }
+    total
+}
+
+/// P65: the starter themes ship inside every binary, so each stays under 150 000 bytes
+/// of files (no images, no font files). Covers every embedded theme by name.
+#[test]
+fn embedded_themes_stay_small() {
+    let names = Theme::embedded_names();
+    assert!(names.contains(&"blog".to_owned()), "{names:?}");
+    for name in names {
+        let bundle = ferrite_theme::pack_embedded(&name).unwrap();
+        let bytes = bundle_file_bytes(&bundle);
+        assert!(bytes > 0, "{name}");
+        assert!(bytes < 150_000, "theme {name} embeds {bytes} bytes");
+    }
+}

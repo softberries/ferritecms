@@ -1,0 +1,14 @@
+{#- One item as a documentation page: breadcrumbs, title, body, "updated" date and the
+    previous/next pager. Shared by page, single and index. -#}
+{%- set show_updated = site.settings.show_updated is not defined or site.settings.show_updated %}
+<article class="docs-article">
+  {% include "partials/breadcrumbs.html" %}
+  <h1 class="docs-title">{{ post.title }}</h1>
+  <div class="prose">
+    {{ post.body | safe }}
+  </div>
+  {%- if show_updated and post.updated %}
+  <p class="docs-updated">Updated <time datetime="{{ post.updated }}">{{ post.updated | date("%-d %B %Y") }}</time></p>
+  {%- endif %}
+  {% include "partials/pager.html" %}
+</article>

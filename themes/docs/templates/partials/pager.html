@@ -1,0 +1,18 @@
+{#- Previous and next page in the tree's reading order (depth-first, as mdBook and
+    Docusaurus do). -#}
+{%- if tree and (tree.prev or tree.next) %}
+<nav class="docs-pager" aria-label="Previous and next page">
+  {%- if tree.prev %}
+  <a class="docs-pager__link docs-pager__link--prev" rel="prev" href="{{ tree.prev.url }}">
+    <span class="docs-pager__label">Previous</span>
+    <span class="docs-pager__title">{{ tree.prev.title }}</span>
+  </a>
+  {%- endif %}
+  {%- if tree.next %}
+  <a class="docs-pager__link docs-pager__link--next" rel="next" href="{{ tree.next.url }}">
+    <span class="docs-pager__label">Next</span>
+    <span class="docs-pager__title">{{ tree.next.title }}</span>
+  </a>
+  {%- endif %}
+</nav>
+{%- endif %}

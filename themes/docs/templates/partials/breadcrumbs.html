@@ -1,0 +1,12 @@
+{#- The current page's ancestors, root first, then its own title unlinked. Shown only
+    for a page below the top level of the tree. -#}
+{%- if tree and tree.current and tree.ancestors %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <ol>
+    {%- for a in tree.ancestors %}
+    <li><a href="{{ a.url }}">{{ a.title }}</a></li>
+    {%- endfor %}
+    <li><span aria-current="page">{{ tree.current.title }}</span></li>
+  </ol>
+</nav>
+{%- endif %}
