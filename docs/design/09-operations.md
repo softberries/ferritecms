@@ -199,7 +199,11 @@ ferrite rollback [--data DIR]      # run with either binary
   binary cannot open the schema, e.g. a contract migration raised `min_binary_version`)
   refuses with **exit 3** and says to run `rollback --schema` with the newer binary first;
   any other result refuses (exit 1; with SQLite the status cannot be read while `serve`
-  holds the folder lock: stop it, or leave out `--data` to skip the check).
+  holds the folder lock: stop it, or leave out `--data` to skip the check). Another cause
+  is the config: an older binary refuses keys it does not know, such as `[server.tls]`
+  and `server.metrics_listen` (and their `FERRITE_SERVER__*` overrides), which builds
+  before M4-2 lack. The refusal says to remove them first; without `--data` the swap
+  prints the same note, since nothing was checked.
 - It does not touch `upgrade.json` or `schema_meta.last_binary_version`. The older binary's
   next start keeps the record and updates the key (§1), so a schema rollback afterwards
   still finds the move.
@@ -242,7 +246,10 @@ not hold here.
      snapshot's modification time, and says that everything written since is lost.
    - It takes `ferrite.lock` (refused while `serve` runs), then asks (`Type 'yes'`);
      without a terminal `--yes` is required.
-   - It copies the snapshot beside the database first. Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
+   - It copies the snapshot beside the database first and, on unix, gives the copy the
+     current database's owner, group and mode (M4-2 R11: a root-run rollback leaves a
+     database the service user can open; a `chown` it may not make refuses before anything
+     moves). Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
      sits beside another database file). Then it renames the copy into place. Each move is
      a hard link plus an unlink, so an existing file is never replaced. A failed move puts

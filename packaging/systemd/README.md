@@ -132,7 +132,8 @@ systemctl start ferrite
 Every root command given `--data` opens the site's database: `self-update --data`,
 `rollback --data` and `rollback --schema`. On SQLite it can leave files owned by root in
 the data folder (the database's `-wal` / `-shm` files, a snapshot or a moved database
-under `backups/`). Before starting the service again, check with
+under `backups/`). The database that `rollback --schema --restore-snapshot` puts in place
+keeps the replaced database's owner and mode. Before starting the service again, check with
 `ls -la /var/lib/ferrite /var/lib/ferrite/backups`, and if anything is owned by root, run
 `chown -R ferrite:ferrite /var/lib/ferrite`. Running those commands as
 `sudo -u ferrite` avoids this when the binary's folder is writable to that user (it is
