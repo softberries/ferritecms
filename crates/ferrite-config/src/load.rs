@@ -287,10 +287,10 @@ fn parse_server(cx: &mut Cx, root: &mut Table) -> ServerConfig {
     // rather than as a bind error (port 0 asks for a free port each time, so no clash).
     let metrics_listen = match cx.string(&mut t, "server", "metrics_listen") {
         Some(s) => match s.parse::<SocketAddr>() {
-            Ok(a) if a == listen && a.port() != 0 => {
+            Ok(a) if clashes(a, listen) => {
                 cx.push(
                     "server.metrics_listen",
-                    "must differ from server.listen (metrics are never on the public listener)",
+                    "must not share server.listen's port on the same or an unspecified (0.0.0.0, ::) address: metrics are never on the public listener",
                 );
                 None
             }
@@ -317,6 +317,17 @@ fn parse_net(s: &str) -> Option<IpNet> {
     s.parse::<IpNet>()
         .ok()
         .or_else(|| s.parse::<std::net::IpAddr>().ok().map(IpNet::from))
+}
+
+/// Whether `metrics` and `listen` would take the same socket: the same non-zero port on
+/// the same address, or on any address when either is unspecified (`0.0.0.0`, `::`),
+/// which binds every interface.
+fn clashes(metrics: SocketAddr, listen: SocketAddr) -> bool {
+    metrics.port() != 0
+        && metrics.port() == listen.port()
+        && (metrics.ip() == listen.ip()
+            || metrics.ip().is_unspecified()
+            || listen.ip().is_unspecified())
 }
 
 fn default_listen() -> SocketAddr {

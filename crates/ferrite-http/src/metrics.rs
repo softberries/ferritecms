@@ -3,8 +3,10 @@
 //! **Per request** (the `track` layer of every site response): one counter of
 //! `ferrite_http_requests_total{class,status}` and one bucket of
 //! `ferrite_http_request_duration_seconds{class}`, both plain atomics in fixed arrays
-//! indexed by [`RouteClass`] and the status class, so the request path takes no lock and
-//! allocates nothing. The labels are `&'static str`s. A response below 200 (none today)
+//! indexed by [`RouteClass`] and the status class, so the counting takes no lock and
+//! allocates nothing (the axum `from_fn` layer that calls it boxes the inner future, one
+//! allocation per request, as the rest of the stack already does). The labels are
+//! `&'static str`s. A response below 200 (none today)
 //! is not counted. **Page views** ([`Metrics::count_page_view`]): the public handler
 //! counts a `200` `GET` of an HTML page that is neither a preview nor a logged-in request
 //! and whose `User-Agent` does not match [`is_bot`]; nothing per visitor is kept.
@@ -142,11 +144,15 @@ const STATUSES: [&str; 4] = ["2xx", "3xx", "4xx", "5xx"];
 
 /// Whether `ua` looks like a bot for page views: it contains `bot`, `crawler`,
 /// `spider`, `slurp` or `preview` in any ASCII case.
+/// Allocates nothing.
 pub fn is_bot(ua: &str) -> bool {
-    let lower = ua.to_ascii_lowercase();
+    let ua = ua.as_bytes();
     ["bot", "crawler", "spider", "slurp", "preview"]
         .iter()
-        .any(|w| lower.contains(w))
+        .any(|w| {
+            ua.windows(w.len())
+                .any(|window| window.eq_ignore_ascii_case(w.as_bytes()))
+        })
 }
 
 /// A fixed-bucket latency histogram: per-bucket counts (not cumulative over `le`) and
@@ -179,9 +185,11 @@ impl Histogram {
 /// give that minute's figures ([`since`](Self::since)).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
-    /// Responses of every class.
+    /// Responses of every class but [`RouteClass::Other`] (health checks, the comment
+    /// form, other methods: load-balancer probes would swamp a quiet site's figures;
+    /// ruling R3). `/metrics` still counts every class.
     pub requests: u64,
-    /// Responses of every class with a 5xx status.
+    /// Those of [`requests`](Self::requests) with a 5xx status.
     pub errors_5xx: u64,
     pub page_views: u64,
     /// Page cache lookups that found a valid page, and those that did not.
@@ -304,8 +312,11 @@ impl Metrics {
     pub fn snapshot(&self) -> MetricsSnapshot {
         let mut requests = 0;
         let mut errors_5xx = 0;
-        for class in &self.requests {
-            for (i, n) in class.iter().enumerate() {
+        for class in RouteClass::ALL
+            .into_iter()
+            .filter(|c| *c != RouteClass::Other)
+        {
+            for (i, n) in self.requests[class.index()].iter().enumerate() {
                 let n = n.load(Ordering::Relaxed);
                 requests += n;
                 if STATUSES[i] == "5xx" {
@@ -735,10 +746,18 @@ mod tests {
             "Baiduspider",
             "Yahoo! Slurp",
             "Slack link PREVIEW",
+            "BOT",
+            "x-bOt-y",
         ] {
             assert!(is_bot(ua), "{ua}");
         }
-        for ua in ["Mozilla/5.0 Firefox/131.0", "curl/8.4.0", ""] {
+        for ua in [
+            "Mozilla/5.0 Firefox/131.0",
+            "curl/8.4.0",
+            "",
+            "bo",
+            "Zażółć",
+        ] {
             assert!(!is_bot(ua), "{ua}");
         }
     }
@@ -757,6 +776,9 @@ mod tests {
         );
         m.record(RouteClass::Api, StatusCode::INTERNAL_SERVER_ERROR, ms(1));
         m.record(RouteClass::Api, StatusCode::SWITCHING_PROTOCOLS, ms(1));
+        // Health checks and other `other` requests stay out of the snapshot (R3).
+        m.record(RouteClass::Other, StatusCode::OK, ms(1));
+        m.record(RouteClass::Other, StatusCode::SERVICE_UNAVAILABLE, ms(1));
         let s = m.snapshot();
         assert_eq!((s.requests, s.errors_5xx), (5, 2));
         assert_eq!(s.page_latency, [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);

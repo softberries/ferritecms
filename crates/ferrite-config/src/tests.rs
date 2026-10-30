@@ -1334,18 +1334,25 @@ fn metrics_listen_is_off_by_default_and_parsed() {
         "metrics_listen = \"nope\"\n",
         "metrics_listen = 9464\n",
         "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        // The same port where either side is every interface.
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"0.0.0.0:8080\"\n",
+        "listen = \"[::]:8080\"\nmetrics_listen = \"10.0.0.5:8080\"\n",
     ] {
         let (_d, r) = run(Some(&format!("{MIN}[server]\n{bad}")), &[]);
         assert_eq!(paths(&r.unwrap_err()), ["server.metrics_listen"], "{bad}");
     }
-    // Port 0 on both (tests): two different free ports, so not a clash.
-    let (_d, r) = run(
-        Some(&format!(
-            "{MIN}[server]\nlisten = \"127.0.0.1:0\"\nmetrics_listen = \"127.0.0.1:0\"\n"
-        )),
-        &[],
-    );
-    assert!(r.is_ok());
+    // Not a clash: port 0 on both (tests: two different free ports), the same port on
+    // two specific addresses, a different port beside a wildcard.
+    for ok in [
+        "listen = \"127.0.0.1:0\"\nmetrics_listen = \"127.0.0.1:0\"\n",
+        "listen = \"0.0.0.0:0\"\nmetrics_listen = \"0.0.0.0:0\"\n",
+        "listen = \"10.0.0.5:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:9464\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{ok}")), &[]);
+        assert!(r.is_ok(), "{ok}: {r:?}");
+    }
 }
 
 #[test]

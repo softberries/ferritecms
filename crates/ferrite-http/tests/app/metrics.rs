@@ -26,6 +26,7 @@ app_tests!(
     requests_counted_by_class_and_status,
     page_views_skip_bots_previews_logged_in,
     plugin_hook_labels_bounded,
+    handler_panic_500_is_counted,
 );
 
 /// This app with a fresh state that counts into a registry reading the state's page
@@ -377,12 +378,13 @@ async fn requests_counted_by_class_and_status(app: App) -> App {
         );
     }
     let snap = metrics.snapshot();
-    assert_eq!(snap.requests, 11);
+    // The snapshot leaves out the two `other` requests (R3); `/metrics` counts them.
+    assert_eq!(snap.requests, 9);
     assert_eq!(snap.errors_5xx, 0);
     // Four page requests: their latencies are in the page histogram.
     assert_eq!(snap.page_latency.iter().sum::<u64>(), 4);
     let delta = snap.since(&before);
-    assert_eq!(delta.requests, 11);
+    assert_eq!(delta.requests, 9);
     app
 }
 
@@ -418,14 +420,28 @@ async fn page_views_skip_bots_previews_logged_in(app: App) -> App {
     let cookie = app.session(&app.ada_user).await;
     let r = app.send(browser("/hello/", BROWSER, Some(&cookie))).await;
     assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(views(), 3, "logged in");
+    // Previews, each on its own. Without a session: the shared 404 (never a view).
+    // With one: a 200 HTML page, still no view. A 200 preview always needs a session,
+    // so no preview can be told apart from a logged-in request by status alone: the
+    // handler answers previews before the page-view check (`handle`), and this asserts
+    // the outcome.
+    let preview = format!("/_preview/{}", draft.id);
+    let r = app.send(browser(&preview, BROWSER, None)).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{r:?}");
     let r = app
-        .send(browser(
-            &format!("/_preview/{}", draft.id),
-            BROWSER,
-            Some(&cookie),
-        ))
+        .send(browser(&format!("/_preview/{}", post.id), BROWSER, None))
         .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{r:?}");
+    assert_eq!(views(), 3, "anonymous previews");
+    let r = app.send(browser(&preview, BROWSER, Some(&cookie))).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert_eq!(
+        r.header("content-type"),
+        Some("text/html; charset=utf-8"),
+        "{r:?}"
+    );
+    assert_eq!(views(), 3, "preview");
     let r = app.send(browser("/no-such-page/", BROWSER, None)).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     let r = app.send(browser("/hello", BROWSER, None)).await;
@@ -506,5 +522,41 @@ async fn plugin_hook_labels_bounded(app: App) -> App {
     }
     let snap = metrics.snapshot();
     assert_eq!((snap.plugin_calls, snap.plugin_failures), (3, 0));
+    app
+}
+
+/// Admin assets whose lookup panics: a handler panic inside the real site stack.
+struct PanickingAdmin;
+
+impl ferrite_http::admin::AdminAssets for PanickingAdmin {
+    fn get(&self, _path: &str) -> Option<ferrite_http::admin::AdminFile> {
+        panic!("admin assets broke")
+    }
+}
+
+/// A panicking handler's built-in 500 is counted: the metrics layer is outside
+/// catch-panic.
+async fn handler_panic_500_is_counted(app: App) -> App {
+    let app = app
+        .rebuilt(App::config(), |s: AppState| {
+            let metrics = Metrics::new("9.9.9", "test-target");
+            s.with_admin_assets(Arc::new(PanickingAdmin))
+                .with_metrics(Arc::new(metrics))
+        })
+        .await;
+    let metrics = app.state.metrics().expect("metrics").clone();
+    let r = app.send(browser("/admin/", BROWSER, None)).await;
+    assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR, "{r:?}");
+    let samples = parse(&metrics.render().await);
+    assert_eq!(
+        value(
+            &samples,
+            "ferrite_http_requests_total",
+            &[("class", "admin"), ("status", "5xx")]
+        ),
+        Some(1.0)
+    );
+    let snap = metrics.snapshot();
+    assert_eq!((snap.requests, snap.errors_5xx), (1, 1));
     app
 }

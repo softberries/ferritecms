@@ -276,7 +276,7 @@ timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. 
 [server]
 listen     = "127.0.0.1:8080"          # default; a socket address
 trusted_proxies = []                   # CIDRs or bare IPs
-# metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must differ from listen
+# metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must not share listen's port (same or 0.0.0.0/:: address)
 # tls = ...                            # planned (M4: ACME); rejected as an unknown key today
 
 [database]
