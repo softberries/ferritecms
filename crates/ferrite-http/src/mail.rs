@@ -49,6 +49,20 @@ impl SmtpMailer {
             .map_err(|_| MailError("mail.from is not a valid mailbox".to_owned()))?;
         Ok(Self { transport, from })
     }
+
+    /// Connects as a send would (TCP, the TLS handshake for `smtps://` or STARTTLS, EHLO,
+    /// AUTH with the URL's credentials), sends `NOOP` and quits; no mail is sent
+    /// (`ferrite doctor`'s `smtp.connect`). Each step has [`SMTP_TIMEOUT`]. The error, like
+    /// a send's, holds no URL, credentials or server-supplied text.
+    pub async fn test_connection(&self) -> Result<(), MailError> {
+        match self.transport.test_connection().await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(MailError(
+                "SMTP connection failed: the server did not answer NOOP".to_owned(),
+            )),
+            Err(e) => Err(MailError(describe("connection", &e))),
+        }
+    }
 }
 
 fn address(addr: &str) -> Result<Address, MailError> {
@@ -56,8 +70,9 @@ fn address(addr: &str) -> Result<Address, MailError> {
         .map_err(|_| MailError("invalid e-mail address".to_owned()))
 }
 
-/// A short description of a failed send, without server-supplied text.
-fn describe(e: &lettre::transport::smtp::Error) -> String {
+/// A short description of a failed `what` (send, connection), without server-supplied
+/// text.
+fn describe(what: &str, e: &lettre::transport::smtp::Error) -> String {
     let code = e.status().map(|c| format!(" ({c})")).unwrap_or_default();
     let kind = if e.is_timeout() {
         "timed out"
@@ -68,7 +83,7 @@ fn describe(e: &lettre::transport::smtp::Error) -> String {
     } else {
         "connection or protocol error"
     };
-    format!("SMTP send failed: {kind}{code}")
+    format!("SMTP {what} failed: {kind}{code}")
 }
 
 #[async_trait::async_trait]
@@ -107,6 +122,31 @@ impl Mailer for SmtpMailer {
             .send(message)
             .await
             .map(drop)
-            .map_err(|e| MailError(describe(&e)))
+            .map_err(|e| MailError(describe("send", &e)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferrite_domain::Secret;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_connection_to_a_closed_port_fails_without_the_url() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map(|a| a.port())
+            .expect("a free port");
+        let mailer = SmtpMailer::new(&MailConfig {
+            smtp_url: Secret::new(format!("smtp://mailuser:hunter2@127.0.0.1:{port}")),
+            from: "ops@example.com".to_owned(),
+        })
+        .expect("a valid loopback URL");
+        let err = mailer.test_connection().await.expect_err("nothing listens");
+        assert!(err.0.starts_with("SMTP connection failed"), "{}", err.0);
+        for leak in ["hunter2", "mailuser", "127.0.0.1"] {
+            assert!(!err.0.contains(leak), "{}", err.0);
+        }
     }
 }

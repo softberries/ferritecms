@@ -4,6 +4,7 @@ mod archive;
 pub mod backup;
 mod cli;
 mod config_cmd;
+pub mod doctor;
 mod export_cmd;
 mod ext_cmd;
 pub mod extensions;

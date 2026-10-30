@@ -101,6 +101,35 @@ impl Repo {
     /// empty folder or prefix becomes a repository (the marker is written); otherwise the
     /// marker must exist. A non-empty location without the marker is always refused.
     pub async fn open(loc: &RepoLocation, create: bool) -> anyhow::Result<Repo> {
+        let repo = Repo::build(loc, create)?;
+        repo.check_marker(create).await?;
+        Ok(repo)
+    }
+
+    /// `ferrite doctor` (M4-3a P49): what the repository at `loc` holds, creating and writing
+    /// nothing. `None` when the location is empty (no repository yet); otherwise the complete
+    /// snapshots, or with `exports` the export archives (the repository of a Postgres site's
+    /// scheduled backup), oldest first. A non-empty location without the marker, a marker
+    /// of a newer format and any listing failure are errors.
+    pub(crate) async fn survey(
+        loc: &RepoLocation,
+        exports: bool,
+    ) -> anyhow::Result<Option<Vec<String>>> {
+        let repo = Repo::build(loc, false)?;
+        if !repo.exists(MARKER).await? && repo.is_empty().await? {
+            return Ok(None);
+        }
+        repo.check_marker(false).await?;
+        Ok(Some(if exports {
+            repo.exports().await?
+        } else {
+            repo.snapshots().await?
+        }))
+    }
+
+    /// The repository handle for `loc`, without looking at the marker. With `create`, a
+    /// missing local folder is created.
+    fn build(loc: &RepoLocation, create: bool) -> anyhow::Result<Repo> {
         let (url, local, display) = match loc {
             RepoLocation::Dir(dir) => {
                 if !create && !dir.is_dir() {
@@ -118,16 +147,14 @@ impl Repo {
             }
             RepoLocation::S3(url) => (url.clone(), None, url.clone()),
         };
-        let blobs = parse_media_url(&url, true)?;
-        let repo = Repo {
+        let blobs = parse_media_url(&url, create)?;
+        Ok(Repo {
             store: blobs.object_store(),
             prefix: blobs.prefix().to_owned(),
             local,
             blobs,
             display,
-        };
-        repo.check_marker(create).await?;
-        Ok(repo)
+        })
     }
 
     async fn check_marker(&self, create: bool) -> anyhow::Result<()> {

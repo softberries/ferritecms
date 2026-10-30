@@ -101,6 +101,110 @@ pub async fn open_store_url(
     Ok(Arc::new(store))
 }
 
+/// A read-only view of a SQLite database, only for `ferrite doctor` (M4-3a P49/P50, X3):
+/// one connection that takes no data-folder lock, opens no writer, runs no migration and
+/// creates no file, so it works while `serve` holds the store and never stops one from
+/// starting. Being read-only it never checkpoints the WAL; SQLite still updates the
+/// shared-memory index in `-shm` as every reader of a WAL database does.
+///
+/// A read-only open of a WAL database creates a missing `-wal` or `-shm` and leaves it, so:
+/// with no `-wal` (every committed page is in the database file, and a running node always
+/// has one) it opens `immutable`, which touches neither; with a `-wal` but no `-shm` it
+/// refuses with [`MissingWalIndex`] rather than create the index.
+pub(crate) struct SqliteReadOnly {
+    conn: tokio::sync::Mutex<sqlx::SqliteConnection>,
+    immutable: bool,
+}
+
+/// `<db>-wal` exists without `<db>-shm`: a read-only open would create the WAL index
+/// (owned by whoever runs doctor), so [`SqliteReadOnly::open`] does not open the database.
+#[derive(Debug)]
+pub(crate) struct MissingWalIndex(pub(crate) std::path::PathBuf);
+
+impl std::fmt::Display for MissingWalIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} has a -wal file but no -shm (the WAL index is missing): not opened, since \
+             reading it would create the index and doctor creates no file; starting `serve` \
+             as its own user recovers it",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for MissingWalIndex {}
+
+impl SqliteReadOnly {
+    /// Opens the database at `path`, which must exist; [`MissingWalIndex`] when its `-wal`
+    /// exists without its `-shm`.
+    pub(crate) async fn open(path: &Path) -> anyhow::Result<Self> {
+        use sqlx::ConnectOptions;
+        if !path.is_file() {
+            bail!(
+                "database not found at {}; run `ferrite init` first",
+                path.display()
+            );
+        }
+        let side = |suffix: &str| {
+            let mut name = path.as_os_str().to_owned();
+            name.push(suffix);
+            std::path::PathBuf::from(name).exists()
+        };
+        let immutable = !side("-wal");
+        if !immutable && !side("-shm") {
+            return Err(MissingWalIndex(path.to_path_buf()).into());
+        }
+        let conn = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .create_if_missing(false)
+            .immutable(immutable)
+            .busy_timeout(Duration::from_secs(5))
+            .connect()
+            .await
+            .context("cannot open the SQLite database read-only")?;
+        Ok(Self {
+            conn: tokio::sync::Mutex::new(conn),
+            immutable,
+        })
+    }
+
+    /// Whether it was opened `immutable` (no `-wal` existed).
+    pub(crate) fn immutable(&self) -> bool {
+        self.immutable
+    }
+
+    /// What [`Store::migration_status`] reports, by the same reads
+    /// ([`ferrite_store_sqlite::status_from`]).
+    pub(crate) async fn migration_status(
+        &self,
+        binary: &semver::Version,
+    ) -> anyhow::Result<MigrationStatus> {
+        let mut conn = self.conn.lock().await;
+        Ok(ferrite_store_sqlite::status_from(&mut conn, binary).await?)
+    }
+
+    /// A `schema_meta` value (`None` without the table or the key).
+    pub(crate) async fn schema_meta(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let mut conn = self.conn.lock().await;
+        let table: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta')",
+        )
+        .fetch_one(&mut *conn)
+        .await?;
+        if !table {
+            return Ok(None);
+        }
+        Ok(
+            sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+                .bind(key)
+                .fetch_optional(&mut *conn)
+                .await?,
+        )
+    }
+}
+
 /// What the startup check wants done (02 §8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -377,5 +481,50 @@ mod tests {
         let e = err_text(decide(&s, Backend::Sqlite, &dbconf(true, false), &bin()));
         assert!(e.contains("requires ferrite >= 0.5.0"), "{e}");
         assert!(e.contains("ferrite migrate down --to 4"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn read_only_view_matches_the_store_while_it_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferrite.db");
+        let store = SqliteStore::open(SqliteOptions::new(&path)).await.unwrap();
+        store.migrate_up(None).await.unwrap();
+        store
+            .read()
+            .schema_meta()
+            .set("min_binary_version", "0.0.1")
+            .await
+            .unwrap();
+        // The store holds the folder lock; the view needs none.
+        let view = SqliteReadOnly::open(&path).await.unwrap();
+        assert!(!view.immutable(), "the store's WAL files exist");
+        let binary = semver::Version::new(0, 1, 0);
+        assert_eq!(
+            view.migration_status(&binary).await.unwrap(),
+            store.migration_status(&binary).await.unwrap()
+        );
+        for key in ["site_id", "install_id", "nope"] {
+            assert_eq!(
+                view.schema_meta(key).await.unwrap(),
+                store.read().schema_meta().get(key).await.unwrap(),
+                "{key}"
+            );
+        }
+        // A write through the view is refused.
+        let mut conn = view.conn.lock().await;
+        let err = sqlx::query("INSERT INTO schema_meta (key, value) VALUES ('x', 'y')")
+            .execute(&mut *conn)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_only_view_needs_an_existing_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferrite.db");
+        let err = SqliteReadOnly::open(&path).await.err().unwrap();
+        assert!(format!("{err:#}").contains("not found"), "{err:#}");
+        assert!(!path.exists());
     }
 }

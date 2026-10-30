@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 # FerriteCMS image (design 09 §7): one static-ish binary on distroless, non-root.
+# Needs BuildKit (the default builder since Docker 23): `COPY --chmod` below.
 #
 #   docker build -t ferrite .
 #   docker run -v ferrite-data:/data ferrite init --data /data --url http://localhost:8080
@@ -34,8 +35,11 @@ RUN cargo build --release --locked -p ferrite \
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=builder /src/target/release/ferrite /ferrite
-# An empty /data owned by the nonroot user (65532), so a fresh volume is writable.
-COPY --from=builder --chown=65532:65532 /data-empty /data
+# An empty /data owned by the nonroot user (65532), so a fresh volume is writable; mode 0750
+# like the folder `ferrite init` creates (`ferrite doctor` warns about world bits). COPY does
+# not keep the source folder's mode (a built test image had 0755 from `mkdir -m 0750`), so
+# `--chmod` sets it.
+COPY --from=builder --chown=65532:65532 --chmod=0750 /data-empty /data
 VOLUME /data
 EXPOSE 8080
 ENTRYPOINT ["/ferrite"]

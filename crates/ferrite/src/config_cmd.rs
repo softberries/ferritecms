@@ -1,5 +1,6 @@
 //! `ferrite config check`: validate `ferrite.toml` + `FERRITE_*` without opening anything.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Subcommand;
@@ -20,44 +21,74 @@ pub enum ConfigCommand {
 
 pub fn run(cmd: ConfigCommand) -> anyhow::Result<ExitCode> {
     match cmd {
-        ConfigCommand::Check(args) => match ferrite_config::load(&args.data, utf8_env()?) {
-            Ok(config) => {
-                // The repository checks `serve` runs before it starts (no database needed).
-                if let Err(e) = crate::jobs::backup_location(&config) {
-                    let e = ConfigError {
-                        problems: vec![ConfigProblem {
-                            path: "backup.to".to_owned(),
-                            message: format!("{e:#}"),
-                        }],
-                    };
-                    eprintln!("{}", problems(&e));
-                    return Ok(ExitCode::FAILURE);
-                }
-                // A scheduled SQLite backup must be restorable (B-I2).
-                if config.backup.schedule != ferrite_config::BackupSchedule::Off
-                    && let Err(e) = crate::backup::check_backup_database(&config)
-                {
-                    let e = ConfigError {
-                        problems: vec![ConfigProblem {
-                            path: "database.url".to_owned(),
-                            message: format!("{e:#}"),
-                        }],
-                    };
-                    eprintln!("{}", problems(&e));
-                    return Ok(ExitCode::FAILURE);
-                }
-                for warning in warnings(&config) {
+        ConfigCommand::Check(args) => match check(&args.data, utf8_env()?) {
+            Checked::Ok { config, warnings } => {
+                for warning in warnings {
                     eprintln!("warning: {warning}");
                 }
                 println!("{}", summary(&config));
                 Ok(ExitCode::SUCCESS)
             }
-            Err(e) => {
+            Checked::Refused { problem, .. } => {
+                let e = ConfigError {
+                    problems: vec![problem],
+                };
+                eprintln!("{}", problems(&e));
+                Ok(ExitCode::FAILURE)
+            }
+            Checked::Invalid(e) => {
                 eprintln!("{}", problems(&e));
                 Ok(ExitCode::FAILURE)
             }
         },
     }
+}
+
+/// What loading and checking `ferrite.toml` + `FERRITE_*` found; shared by `config check`
+/// and `ferrite doctor`.
+pub(crate) enum Checked {
+    /// Loaded, and the offline repository checks passed; `warnings` are settings that work
+    /// but cost something (or do nothing).
+    Ok {
+        config: Config,
+        warnings: Vec<String>,
+    },
+    /// Loaded, but one of the checks `serve` runs before it starts refused it.
+    Refused {
+        config: Config,
+        problem: ConfigProblem,
+    },
+    /// Did not load: every problem found.
+    Invalid(ConfigError),
+}
+
+/// Loads the configuration exactly as `serve` does, then runs the offline checks `serve`
+/// runs before it starts. Touches no database, media store or network.
+pub(crate) fn check(data_dir: &Path, env: Vec<(String, String)>) -> Checked {
+    let config = match ferrite_config::load(data_dir, env) {
+        Ok(config) => config,
+        Err(e) => return Checked::Invalid(e),
+    };
+    // The repository checks `serve` runs before it starts (no database needed).
+    if let Err(e) = crate::jobs::backup_location(&config) {
+        let problem = ConfigProblem {
+            path: "backup.to".to_owned(),
+            message: format!("{e:#}"),
+        };
+        return Checked::Refused { config, problem };
+    }
+    // A scheduled SQLite backup must be restorable (B-I2).
+    if config.backup.schedule != ferrite_config::BackupSchedule::Off
+        && let Err(e) = crate::backup::check_backup_database(&config)
+    {
+        let problem = ConfigProblem {
+            path: "database.url".to_owned(),
+            message: format!("{e:#}"),
+        };
+        return Checked::Refused { config, problem };
+    }
+    let warnings = warnings(&config);
+    Checked::Ok { config, warnings }
 }
 
 /// Settings that work but cost something; printed to stderr, the exit code stays 0.
@@ -84,6 +115,11 @@ fn warnings(config: &Config) -> Vec<String> {
 }
 
 fn summary(config: &Config) -> String {
+    format!("ok: {}", summary_fields(config))
+}
+
+/// `mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`.
+pub(crate) fn summary_fields(config: &Config) -> String {
     let mode = match config.effective_cluster_mode() {
         ClusterMode::Cluster => "cluster",
         // `effective_cluster_mode` never returns Auto.
@@ -107,7 +143,7 @@ fn summary(config: &Config) -> String {
         .metrics_listen
         .map_or_else(|| "off".to_owned(), |at| at.to_string());
     format!(
-        "ok: mode={mode} database={database} media={media} workers={} mail={mail} metrics={metrics} tls={} backup={}",
+        "mode={mode} database={database} media={media} workers={} mail={mail} metrics={metrics} tls={} backup={}",
         config.cluster.workers,
         config.server.tls.mode(),
         config.backup.schedule.as_str()
