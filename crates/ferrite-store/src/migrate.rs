@@ -11,6 +11,22 @@ pub const SCHEMA_META_MIN_BINARY: &str = "min_binary_version";
 /// from a media store only while the store's owner marker names it.
 pub const SCHEMA_META_INSTALL_ID: &str = "install_id";
 
+/// `schema_meta` key holding the version of the binary that last started on this database
+/// (M4-2 P30). The binary writes it after its startup check and after `ferrite migrate up`;
+/// a change of it, or applied migrations, is recorded in `<data>/upgrade.json`. The
+/// migrations' own bookkeeping never touches it.
+pub const SCHEMA_META_LAST_BINARY: &str = "last_binary_version";
+
+/// What one [`Store::migrate_up`](crate::Store::migrate_up) did (M4-2 P30).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MigrateReport {
+    /// The versions applied, oldest first (empty when nothing was pending).
+    pub applied: Vec<i64>,
+    /// SQLite's pre-migration snapshot (`backups/pre-<from>-to-<to>-<ts>.db`), written
+    /// only when something was applied; always `None` on Postgres, which takes none.
+    pub snapshot: Option<std::path::PathBuf>,
+}
+
 /// Migration phase (expand/contract, 02 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {

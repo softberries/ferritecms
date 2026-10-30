@@ -135,7 +135,13 @@ pub async fn run(cmd: UserCommand) -> anyhow::Result<()> {
     let config = load_config(&data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let done = async {
-        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
         execute(store.clone(), action).await
     }
     .await;

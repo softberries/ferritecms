@@ -29,8 +29,9 @@ pub use lock::{
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{
-    Compat, Directives, MigrationStatus, PendingMigration, Phase, SCHEMA_META_INSTALL_ID,
-    SCHEMA_META_MIN_BINARY, expand_lint, next_min_binary, parse_directives, plan_down, verdict,
+    Compat, Directives, MigrateReport, MigrationStatus, PendingMigration, Phase,
+    SCHEMA_META_INSTALL_ID, SCHEMA_META_LAST_BINARY, SCHEMA_META_MIN_BINARY, expand_lint,
+    next_min_binary, parse_directives, plan_down, verdict,
 };
 pub use notify::{Channel, Notice, Subscription};
 pub use paging::{

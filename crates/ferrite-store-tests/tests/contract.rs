@@ -20,6 +20,7 @@ backend_tests!(
     migration_0008_roundtrip,
     migration_0009_roundtrip,
     migration_0010_roundtrip,
+    migrate_up_reports_snapshot,
 );
 
 backend_tests!(

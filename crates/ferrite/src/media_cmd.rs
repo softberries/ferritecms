@@ -135,7 +135,13 @@ async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data.data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let done = async {
-        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
         let media = open_media(&config)?;
         let opts = GcOptions {
             grace: gc::grace_days(args.grace_days.unwrap_or(config.uploads.gc_grace_days)),
@@ -245,7 +251,13 @@ async fn regenerate(args: RegenerateArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let done = async {
-        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
         let media = open_media(&config)?;
         let theme = load_theme(
             store.as_ref(),

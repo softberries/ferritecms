@@ -103,8 +103,9 @@ pub trait Store: Send + Sync + 'static {
         &self,
         binary: &semver::Version,
     ) -> Result<MigrationStatus, StoreError>;
-    /// Applies pending migrations up to `to` (all if `None`); returns applied versions.
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError>;
+    /// Applies pending migrations up to `to` (all if `None`); reports the applied versions
+    /// and, on SQLite, the pre-migration snapshot taken first (M4-2 P30).
+    async fn migrate_up(&self, to: Option<i64>) -> Result<crate::MigrateReport, StoreError>;
     /// Reverts migrations down to version `to`; lossy downs need `allow_lossy`.
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
     /// Checks that applied migration checksums match the embedded ones.

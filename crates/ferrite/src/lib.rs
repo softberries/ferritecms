@@ -27,6 +27,7 @@ mod site_copy;
 #[path = "../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;
 pub mod update;
+pub mod upgrade;
 mod user_cmd;
 
 pub use cli::{Cli, Command, MigrateCommand, run};

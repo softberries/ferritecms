@@ -459,7 +459,7 @@ pub async fn migration_0011_roundtrip(db: &TestDb) {
             .any(|o| o.contains("artifacts_orphaned_at_idx"))
     };
     assert!(!has_index(&db.user_objects().await));
-    assert_eq!(store.migrate_up(None).await.unwrap(), vec![11]);
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![11]);
     assert_eq!(orphaned_at(db, 'a').await, None);
     assert!(has_index(&db.user_objects().await));
 }

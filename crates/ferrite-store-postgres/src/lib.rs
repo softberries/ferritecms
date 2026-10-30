@@ -106,7 +106,10 @@ impl Store for PgStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 

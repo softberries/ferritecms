@@ -20,7 +20,7 @@ use ferrite_store::{
 };
 use sqlx::SqlitePool;
 
-pub use connect::SqliteOptions;
+pub use connect::{KeepSnapshot, SqliteOptions};
 use exec::map_db_err;
 pub use migrate::latest_schema_version;
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
@@ -35,6 +35,8 @@ pub struct SqliteStore {
     /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
+    /// Never pruned (see [`SqliteOptions::keep_snapshot`]).
+    keep_snapshot: Option<KeepSnapshot>,
     /// Named locks (`Store::try_lock`).
     locks: lock::Locks,
     _lock: File,
@@ -91,7 +93,10 @@ impl Store for SqliteStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 

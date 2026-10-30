@@ -97,7 +97,13 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let done = async {
-        startup_check(store.as_ref(), &binary_version()?, &config.database).await?;
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
         let media = Arc::new(open_media(&config)?);
         let permalinks = Arc::new(SwappablePermalinks::new(
             permalink_rules(store.as_ref()).await?,
