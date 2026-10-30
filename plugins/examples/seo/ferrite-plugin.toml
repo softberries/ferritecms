@@ -1,0 +1,26 @@
+[plugin]
+name        = "seo"
+version     = "0.1.0"
+publisher   = "ferritecms.dev"
+description = "Open Graph site name and locale, Twitter cards, article tags, JSON-LD and verification metas"
+world       = "ferrite:plugin/plugin@0.1.0"
+license     = "MIT"
+
+# Adds to core's head what core does not emit, and never repeats a tag core (or an
+# earlier plugin) already put there. `site.url` is requested for sites that expose it;
+# the plugin falls back to core's canonical link.
+[capabilities]
+content.read = ["post"]
+options.read = ["site.title", "site.url"]
+render.head  = true
+
+[hooks]
+"render.head" = 20
+
+[settings]
+twitter_site        = { type = "text", label = "Twitter/X handle (twitter:site)" }
+organization_name   = { type = "text", label = "Organization name (JSON-LD publisher; default: the site title)" }
+organization_logo   = { type = "text", label = "Organization logo URL (https, JSON-LD publisher)" }
+google_verification = { type = "text", label = "Google Search Console verification token" }
+bing_verification   = { type = "text", label = "Bing Webmaster Tools verification token" }
+feed_link           = { type = "bool", label = "Add the RSS discovery link", default = true }

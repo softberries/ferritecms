@@ -9,6 +9,7 @@ mod egress;
 mod install;
 mod mail;
 mod reload;
+mod seo;
 mod settings;
 
 use common::{HOUR, SITE_URL, Site};
