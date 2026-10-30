@@ -63,7 +63,7 @@ Reason: 05 §11 says changing a record is a new major world. M4-3 is about examp
 - It adds:
   - `og:site_name` (site title) and `og:locale` (request locale, `-` → `_`);
   - Twitter cards: `twitter:card` is `summary_large_image` when an `og:image` is present, else `summary`. `twitter:title` and `twitter:description` copy core's OG values, and `twitter:site` comes from a setting.
-  - On a single item (`request-info.post`, read with `content::get_post`): `article:published_time`, `article:author` (display name), `article:section` (the first `category` term) and one `article:tag` per `post_tag` term. These are added only for kind `post`.
+  - On a single item (`request-info.post`, read with `content::get_post`): `article:published_time`, `article:author` (display name), `article:section` (the first `category` term) and one `article:tag` per `tag` term (core's tag taxonomy). These are added only for kind `post`.
   - JSON-LD:
     - `WebSite` with a `SearchAction` (`<site.url>/?s={search_term_string}`) on path `/`;
     - `BlogPosting` on a `post` page: `headline`, `datePublished`, `url`, `author.name`, `image` (from `og:image`) and `publisher` (an `Organization`). The organization's name comes from the `organization_name` setting, else the site title, and its `logo` from the `organization_logo` setting (an `https` URL).
@@ -140,7 +140,7 @@ Cost if wrong: one more release asset.
 
 **P48: the `ferrite doctor` contract.**
 - Usage: `ferrite doctor --data DIR [--offline]`.
-- Output: one line per check, `<status>  <check-id>  <detail>`, with the status left-padded to 5 characters (`ok`, `info`, `warn`, `error`, `skip`), in a fixed check order. Then a summary line: `doctor: N ok, N warn, N error, N skip`.
+- Output: one line per check, `<status>  <check-id>  <detail>`, with the status left-aligned and padded to 5 characters (`ok`, `info`, `warn`, `error`, `skip`), in a fixed check order. Then a summary line: `doctor: N ok, N warn, N error, N skip`.
 - Exit codes:
   - **3** when `db.schema` reports the database incompatible (newer than this binary allows), as `migrate status` does;
   - else **1** if any check is an error;
