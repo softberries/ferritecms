@@ -108,10 +108,10 @@ pub(super) fn unavailable(config: Option<&Config>) -> &'static str {
 }
 
 /// `db.connect`: opens the database read-only and reports backend, latency and (Postgres)
-/// the server version. `node_running`: the SQLite lock is held.
+/// the server version. `lock`: the SQLite data-folder lock's state.
 pub(super) async fn connect(
     config: Option<&Config>,
-    node_running: bool,
+    lock: Option<super::fs::Lock>,
 ) -> (Finding, Option<Database>) {
     const ID: &str = "db.connect";
     let Some(config) = config else {
@@ -134,8 +134,8 @@ pub(super) async fn connect(
                     None,
                 );
             }
-            let how = if node_running {
-                "read-only, beside the running node"
+            let how = if lock == Some(super::fs::Lock::Held) {
+                "read-only, beside the process that holds ferrite.lock"
             } else if db.immutable() {
                 "read-only (no -wal file: opened immutable)"
             } else {

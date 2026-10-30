@@ -5,7 +5,8 @@
 //! The exit code is 3 when the database schema is newer than this binary allows, else 1
 //! when a check is an error, else 2 when one is a warning, else 0 ([`Report::exit_code`]).
 //!
-//! Doctor never writes (P49): it creates and changes no file, folder, key or schema. It
+//! Doctor never writes (P49), except the S3 media probe's own object under `tmp/`: it
+//! creates and changes no file, folder, key or schema. It
 //! does not call `keys::site_key`, `gc::install_id` or `TlsCache::prepare`, and does not
 //! open a local media root that does not exist. Permissions are asked of the kernel
 //! (`access(2)`), not tried by writing a probe. Nothing prints a secret: database and SMTP
@@ -27,11 +28,47 @@ mod net;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::Args;
 use ferrite_config::Config;
 
 use crate::config_cmd::{self, Checked};
+
+/// P51's bound on every network check (S3, SMTP, the ACME directory, the node's endpoints,
+/// the release lookup): one check waits at most this long.
+pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `text` with every S3 credential doctor could have used replaced by `***`: the
+/// configured media keys and `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
+/// `AWS_SESSION_TOKEN` from this process's environment (the backup target and an S3 store
+/// without configured keys take those). An S3 server's error body can name the access key
+/// id, and object_store puts that body into its error.
+pub(super) fn scrub_s3_keys(text: String, config: Option<&Config>) -> String {
+    let configured = match config.map(|c| &c.media) {
+        Some(ferrite_config::MediaSection::S3 {
+            access_key_id,
+            secret_access_key,
+            ..
+        }) => vec![
+            access_key_id.clone(),
+            secret_access_key.as_ref().map(|s| s.expose().to_owned()),
+        ],
+        _ => Vec::new(),
+    };
+    let from_env = [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ]
+    .map(|name| std::env::var(name).ok());
+    configured
+        .into_iter()
+        .chain(from_env)
+        .flatten()
+        .filter(|k| !k.is_empty())
+        .fold(text, |text, key| text.replace(key.as_str(), "***"))
+}
 
 /// How a check came out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +81,10 @@ pub enum Status {
     Warn,
     /// Broken; exit code 1.
     Error,
-    /// Not run: offline, a node is running, the configuration did not load, or not wired
-    /// in yet.
+    /// Not run: `--offline` (a network check), the configuration or the database or the
+    /// media store did not load or open (a check that needs it), a SQLite site (the clock
+    /// and node-registry checks), or no node runs, or doctor cannot tell whether one does
+    /// (`net.listen`).
     Skip,
 }
 
@@ -210,9 +249,9 @@ async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     findings.push(fs::database_files(data, config));
     findings.push(fs::backups_dir(data, config));
     findings.push(fs::themes_dir(data, config));
-    let (lock_state, lock_held) = fs::lock_state(data, config);
+    let (lock_state, lock) = fs::lock_state(data, config);
     findings.push(lock_state);
-    let (connect, database) = db::connect(config, lock_held).await;
+    let (connect, database) = db::connect(config, lock).await;
     findings.push(connect);
     let database = database.as_ref();
     let (schema, incompatible) = db::schema(database, config).await;
@@ -230,7 +269,7 @@ async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     findings.push(net::smtp(config, offline).await);
     findings.push(fs::tls_dir(data, config));
     findings.push(net::acme_directory(config, offline).await);
-    findings.push(net::listen(config, running_node(config, lock_held, &registry)).await);
+    findings.push(net::listen(config, running_node(config, lock, &registry)).await);
     findings.push(backup::target(data, config, offline).await);
     findings.push(net::release(offline, release_api).await);
 
@@ -240,22 +279,28 @@ async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     }
 }
 
-/// Whether a node runs for this data folder (P50): SQLite, the lock is held; Postgres, a
-/// live node row carries this configuration's `cluster.node_name` (without one, doctor
+/// Whether a node runs for this data folder (P50): SQLite, the lock is held (by a node,
+/// or by another command such as `backup`, which `net.listen` then finds silent); Postgres,
+/// a live node row carries this configuration's `cluster.node_name` (without one, doctor
 /// cannot tell which row would be this folder's).
 fn running_node(
     config: Option<&Config>,
-    lock_held: bool,
+    lock: Option<fs::Lock>,
     registry: &cluster::Registry,
 ) -> net::Node {
     let Some(config) = config else {
         return net::Node::NotRunning(fs::NO_CONFIG);
     };
     match config.database_kind() {
-        ferrite_config::DbKind::Sqlite { .. } if lock_held => net::Node::Running,
-        ferrite_config::DbKind::Sqlite { .. } => {
-            net::Node::NotRunning("no node is running on this data folder")
-        }
+        ferrite_config::DbKind::Sqlite { .. } => match lock {
+            Some(fs::Lock::Held) => net::Node::Running,
+            Some(fs::Lock::Unknown(_)) => {
+                net::Node::NotRunning("cannot tell whether a node is running (see db.lock_state)")
+            }
+            Some(fs::Lock::Free) | None => {
+                net::Node::NotRunning("no node is running on this data folder")
+            }
+        },
         ferrite_config::DbKind::Postgres { .. } => {
             let configured = config.cluster.node_name.as_deref();
             if configured.is_none_or(|n| n.trim().is_empty()) {

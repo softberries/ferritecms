@@ -4,16 +4,12 @@
 //! only talks to this machine's running node. The SMTP URL and its user never appear.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::time::Duration;
 
 use ferrite_config::{AcmeDirectory, Config, TlsConfig};
 
-use super::Finding;
 use super::fs::NO_CONFIG;
+use super::{Finding, NETWORK_TIMEOUT};
 use crate::update::Latest;
-
-/// The bound on each network check (P51).
-const NET_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `smtp.connect`: with `[mail]`, a connection as a send makes it (TLS, EHLO, AUTH) and a
 /// `NOOP`, no mail sent; a failure is a warning (mail failing does not stop the site).
@@ -33,12 +29,12 @@ pub(super) async fn smtp(config: Option<&Config>, offline: bool) -> Finding {
         Ok(mailer) => mailer,
         Err(e) => return Finding::warn(ID, format!("{target}: {e}")),
     };
-    match tokio::time::timeout(NET_TIMEOUT, mailer.test_connection()).await {
+    match tokio::time::timeout(NETWORK_TIMEOUT, mailer.test_connection()).await {
         Ok(Ok(())) => Finding::ok(ID, format!("{target}: the server accepted a session")),
         Ok(Err(e)) => Finding::warn(ID, format!("{target}: {e}")),
         Err(_) => Finding::warn(
             ID,
-            format!("{target}: no answer within {} s", NET_TIMEOUT.as_secs()),
+            format!("{target}: no answer within {} s", NETWORK_TIMEOUT.as_secs()),
         ),
     }
 }
@@ -79,7 +75,7 @@ pub(super) async fn acme_directory(config: Option<&Config>, offline: bool) -> Fi
     if offline {
         return Finding::skip(ID, format!("{url} ({which}): not fetched (--offline)"));
     }
-    match tokio::time::timeout(NET_TIMEOUT, fetch_directory(url)).await {
+    match tokio::time::timeout(NETWORK_TIMEOUT, fetch_directory(url)).await {
         Ok(Ok(())) => Finding::ok(ID, format!("{url} ({which}) answered")),
         Ok(Err(e)) => Finding::warn(
             ID,
@@ -90,7 +86,7 @@ pub(super) async fn acme_directory(config: Option<&Config>, offline: bool) -> Fi
             format!(
                 "{url} ({which}): no answer within {} s; certificates cannot be issued or \
                  renewed",
-                NET_TIMEOUT.as_secs()
+                NETWORK_TIMEOUT.as_secs()
             ),
         ),
     }
@@ -156,7 +152,7 @@ pub(super) async fn listen(config: Option<&Config>, node: Node) -> Finding {
     let mut seen = Vec::new();
     for path in ["/healthz", "/readyz"] {
         let url = format!("{base}{path}");
-        match tokio::time::timeout(NET_TIMEOUT, crate::healthcheck::probe(&url)).await {
+        match tokio::time::timeout(NETWORK_TIMEOUT, crate::healthcheck::probe(&url)).await {
             Ok(Ok(200)) => seen.push(format!("{path} 200")),
             Ok(Ok(status)) if path == "/readyz" => {
                 return Finding::error(
@@ -183,7 +179,7 @@ pub(super) async fn listen(config: Option<&Config>, node: Node) -> Finding {
             Err(_) => {
                 return Finding::warn(
                     ID,
-                    format!("{url}: no answer within {} s", NET_TIMEOUT.as_secs()),
+                    format!("{url}: no answer within {} s", NETWORK_TIMEOUT.as_secs()),
                 );
             }
         }
@@ -191,7 +187,7 @@ pub(super) async fn listen(config: Option<&Config>, node: Node) -> Finding {
     let mut detail = format!("{base}: {}", seen.join(", "));
     if let Some(metrics) = config.server.metrics_listen {
         let url = format!("http://{}/metrics", reachable(metrics));
-        match tokio::time::timeout(NET_TIMEOUT, crate::healthcheck::probe(&url)).await {
+        match tokio::time::timeout(NETWORK_TIMEOUT, crate::healthcheck::probe(&url)).await {
             Ok(Ok(200)) => detail.push_str(&format!("; {url} 200")),
             Ok(Ok(status)) => {
                 return Finding::warn(ID, format!("{detail}; {url} answered {status}"));
@@ -202,7 +198,7 @@ pub(super) async fn listen(config: Option<&Config>, node: Node) -> Finding {
                     ID,
                     format!(
                         "{detail}; {url}: no answer within {} s",
-                        NET_TIMEOUT.as_secs()
+                        NETWORK_TIMEOUT.as_secs()
                     ),
                 );
             }
@@ -233,7 +229,7 @@ pub(super) async fn release(offline: bool, test_base: Option<&str>) -> Finding {
         return Finding::skip(ID, "the release lookup is not made (--offline)");
     }
     let current = env!("CARGO_PKG_VERSION");
-    match tokio::time::timeout(NET_TIMEOUT, crate::update::latest_release(test_base)).await {
+    match tokio::time::timeout(NETWORK_TIMEOUT, crate::update::latest_release(test_base)).await {
         Ok(Ok(Latest::Newer(v))) => Finding::warn(
             ID,
             format!(
@@ -254,7 +250,7 @@ pub(super) async fn release(offline: bool, test_base: Option<&str>) -> Finding {
             ID,
             format!(
                 "the release lookup did not answer within {} s",
-                NET_TIMEOUT.as_secs()
+                NETWORK_TIMEOUT.as_secs()
             ),
         ),
     }

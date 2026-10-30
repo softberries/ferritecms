@@ -853,6 +853,28 @@ fn backup_target_without_write_access_is_flagged() {
     assert_eq!(out.code, 1);
 }
 
+/// Final review B-5: a `[backup] to` that is not a folder is an error with a schedule and
+/// a warning without one, as every other unusable local target is (09 §8).
+#[test]
+fn backup_target_that_is_a_file_follows_the_schedule() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let file = outside.path().join("not-a-folder");
+    std::fs::write(&file, b"x").unwrap();
+    write_backup_config(tmp.path(), file.to_str().unwrap(), "off");
+    let out = offline(tmp.path());
+    assert_eq!(out.status("backup.target"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("backup.target").contains("not a folder"),
+        "{}",
+        out.stdout
+    );
+    write_backup_config(tmp.path(), file.to_str().unwrap(), "daily");
+    let out = offline(tmp.path());
+    assert_eq!(out.status("backup.target"), "error", "{}", out.stdout);
+}
+
 #[test]
 fn secrets_in_the_config_never_appear() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -1139,6 +1161,37 @@ fn lock_state_sees_a_held_lock_and_releases_its_own() {
     );
     let again = std::fs::File::open(&lock_path).unwrap();
     again.try_lock().expect("doctor left no lock behind");
+}
+
+/// Final review B-3: a lock file doctor cannot open is "cannot tell" in `db.lock_state`,
+/// and `net.listen` says the same instead of "no node is running".
+#[test]
+fn a_lock_doctor_cannot_try_is_not_reported_as_no_node() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let lock = tmp.path().join("ferrite.lock");
+    chmod(&lock, 0);
+    let out = offline(tmp.path());
+    chmod(&lock, 0o600);
+    if is_root() {
+        return;
+    }
+    assert!(
+        out.detail("db.lock_state").contains("cannot tell"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.status("net.listen"), "skip", "{}", out.stdout);
+    assert!(
+        out.detail("net.listen").contains("cannot tell"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        !out.detail("net.listen").contains("no node"),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]
@@ -1610,6 +1663,35 @@ fn media_store_probes_s3_and_never_prints_its_keys() {
     let out = offline_env(tmp.path(), &s3_env(&s3, "doctor-test"));
     assert_eq!(out.status("media.store"), "skip", "{}", out.stdout);
     assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
+}
+
+/// Final review B-1: `backup.target` scrubs the `AWS_*` keys from an S3 error, as
+/// `media.store` does (object_store can put a server's error body, which can name the
+/// access key id, into its error).
+#[test]
+fn backup_target_on_s3_never_prints_its_keys() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    write_backup_config(tmp.path(), "s3://doctor-backup/site", "daily");
+    let s3 = s3_server();
+    let env = [
+        ("AWS_ACCESS_KEY_ID", "test-access".to_owned()),
+        ("AWS_SECRET_ACCESS_KEY", "env-hunter2-key".to_owned()),
+        ("AWS_REGION", "us-east-1".to_owned()),
+        ("AWS_ENDPOINT_URL", s3.endpoint.clone()),
+        ("AWS_ALLOW_HTTP", "true".to_owned()),
+    ];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("backup.target"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("backup.target").contains("AWS_*"),
+        "{}",
+        out.stdout
+    );
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("test-access"), "{text}");
+    }
 }
 
 #[test]

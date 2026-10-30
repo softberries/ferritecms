@@ -11,18 +11,14 @@
 //!   configured ones and `AWS_*` from the environment, are never printed.
 
 use std::path::Path;
-use std::time::Duration;
 
 use ferrite_config::{Config, MediaSection};
 use ferrite_media::MediaStore;
 use ferrite_store::SCHEMA_META_INSTALL_ID;
 
-use super::Finding;
 use super::db::{Database, unavailable};
 use super::fs::{NO_CONFIG, can_write_in};
-
-/// How long the probe, or reading the owner marker, may take (P51).
-const MEDIA_TIMEOUT: Duration = Duration::from_secs(5);
+use super::{Finding, NETWORK_TIMEOUT, scrub_s3_keys};
 /// The detail of `media.owner` when the store was not opened.
 const NO_STORE: &str = "the media store was not checked (see media.store)";
 
@@ -84,14 +80,13 @@ fn local(config: &Config, root: &Path) -> (Finding, Option<MediaStore>) {
 
 /// An S3 store: the write, read and delete probe (not with `--offline`).
 async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
-    let (place, keys): (String, Vec<String>) = match &config.media {
+    let place: String = match &config.media {
         MediaSection::Local { root, .. } => return local(config, root),
         MediaSection::S3 {
             bucket,
             region,
             endpoint,
             access_key_id,
-            secret_access_key,
             prefix,
             ..
         } => {
@@ -116,28 +111,16 @@ async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
                     None,
                 );
             }
-            // Scrubbed from any error text (a server's error body can name the access key
-            // id): the configured keys and those the store would take from the environment.
-            let keys = [
-                access_key_id.clone(),
-                secret_access_key.as_ref().map(|s| s.expose().to_owned()),
-                std::env::var("AWS_ACCESS_KEY_ID").ok(),
-                std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
-                std::env::var("AWS_SESSION_TOKEN").ok(),
-            ];
-            (place, keys.into_iter().flatten().collect())
+            place
         }
     };
-    let clean = |e: String| {
-        keys.iter()
-            .filter(|k| !k.is_empty())
-            .fold(e, |e, k| e.replace(k.as_str(), "***"))
-    };
+    // A server's error body can name the access key id.
+    let clean = |e: String| scrub_s3_keys(e, Some(config));
     let media = match crate::site::open_media(config) {
         Ok(media) => media,
         Err(e) => return (Finding::error(ID, clean(format!("{place}: {e:#}"))), None),
     };
-    match tokio::time::timeout(MEDIA_TIMEOUT, media.check()).await {
+    match tokio::time::timeout(NETWORK_TIMEOUT, media.check()).await {
         Ok(Ok(())) => (
             Finding::ok(ID, format!("{place}: write, read and delete probe passed")),
             Some(media),
@@ -151,7 +134,7 @@ async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
                 ID,
                 format!(
                     "{place}: the probe did not finish within {} s",
-                    MEDIA_TIMEOUT.as_secs()
+                    NETWORK_TIMEOUT.as_secs()
                 ),
             ),
             None,
@@ -195,13 +178,17 @@ pub(super) async fn owner(
         Ok(install) => install.filter(|s| !s.is_empty()),
         Err(e) => return Finding::warn(ID, format!("cannot read install_id: {e}")),
     };
-    let marker = match tokio::time::timeout(MEDIA_TIMEOUT, media.read_owner()).await {
+    let marker = match tokio::time::timeout(NETWORK_TIMEOUT, media.read_owner()).await {
         Ok(Ok(marker)) => marker,
         Ok(Err(e)) => {
             return Finding::warn(
                 ID,
-                format!(
-                    "the owner marker cannot be read: {e} (the GC deletes nothing until it can)"
+                scrub_s3_keys(
+                    format!(
+                        "the owner marker cannot be read: {e} (the GC deletes nothing until \
+                         it can)"
+                    ),
+                    config,
                 ),
             );
         }
@@ -210,7 +197,7 @@ pub(super) async fn owner(
                 ID,
                 format!(
                     "reading the owner marker did not finish within {} s",
-                    MEDIA_TIMEOUT.as_secs()
+                    NETWORK_TIMEOUT.as_secs()
                 ),
             );
         }

@@ -72,7 +72,8 @@ struct Applied {
     checksum: Vec<u8>,
 }
 
-async fn table_exists_on(conn: &mut SqliteConnection, name: &str) -> Result<bool, StoreError> {
+/// Whether the table `name` exists, on `conn` (any connection, read-only included).
+pub async fn table_exists(conn: &mut SqliteConnection, name: &str) -> Result<bool, StoreError> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
     )
@@ -84,7 +85,7 @@ async fn table_exists_on(conn: &mut SqliteConnection, name: &str) -> Result<bool
 
 /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
 async fn applied_on(conn: &mut SqliteConnection) -> Result<Vec<Applied>, StoreError> {
-    if !table_exists_on(conn, "_sqlx_migrations").await? {
+    if !table_exists(conn, "_sqlx_migrations").await? {
         return Ok(Vec::new());
     }
     let rows: Vec<(i64, Vec<u8>, bool)> =
@@ -105,7 +106,7 @@ async fn applied_on(conn: &mut SqliteConnection) -> Result<Vec<Applied>, StoreEr
 
 /// `schema_meta.min_binary_version`, if the table and key exist.
 async fn min_binary_on(conn: &mut SqliteConnection) -> Result<Option<Version>, StoreError> {
-    if !table_exists_on(conn, "schema_meta").await? {
+    if !table_exists(conn, "schema_meta").await? {
         return Ok(None);
     }
     let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
@@ -143,7 +144,7 @@ pub async fn status_from(
 impl SqliteStore {
     async fn table_exists(&self, name: &str) -> Result<bool, StoreError> {
         let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
-        table_exists_on(&mut conn, name).await
+        table_exists(&mut conn, name).await
     }
 
     /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
