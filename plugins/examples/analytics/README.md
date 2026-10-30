@@ -157,7 +157,8 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
 - A blob written by a newer version of the plugin (`"v"` above 1) is left alone, and that
   day's events are not counted. A blob that is not JSON is replaced.
 - **Limits per batch.** A batch that touches more than three days counts only the newest
-  three (a batch holds seconds of one node's events, so two at midnight is the normal most). It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
+  three (a batch holds seconds of one node's events, so two at midnight is the normal most).
+  It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
   touched day always, an older one only if it fits, so a batch across midnight on two full
   days counts the newest and skips the older (logged, its events are lost). The 1 MiB a call
   may write is never the limit that binds; fuel is.

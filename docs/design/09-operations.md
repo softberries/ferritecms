@@ -923,9 +923,9 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     (`.github/scripts/verify-sig.sh`). `sign-dry-run` does the same with a throwaway key.
   - `release` (environment `release`): a draft GitHub Release (a draft left by a failed
     run of the same tag is reused; an already published one stops the run), the nine
-    assets (seven tarballs, `SHA256SUMS` and its signature) uploaded and counted, then published, marked "latest" only when `latest`
-    (so a backport never becomes the release `self-update` installs; prereleases are
-    marked as such).
+    assets (seven tarballs, `SHA256SUMS` and its signature) uploaded and counted, then
+    published, marked "latest" only when `latest` (so a backport never becomes the release
+    `self-update` installs; prereleases are marked as such).
   - `image` and `image-tags` (environment `release`, `packages: write`): the image built
     natively per platform (`linux/amd64` on `ubuntu-24.04`, `linux/arm64` on
     `ubuntu-24.04-arm`, no QEMU; R5), pushed by digest with the OCI labels `source`
@@ -1085,8 +1085,9 @@ neither file; with a `-wal` but no `-shm` (a copy that dropped it) it is not ope
 recovers it) and the checks that need the database are `skip`. On Postgres doctor first
 checks over a bare connection that the configured schema exists and only then opens the
 store, whose open would create it. Nothing prints a secret: a database or SMTP URL (or its
-user), an S3 key (configured or from `AWS_*`) and `secret.key` never appear. `info` means informational or not applicable to this site
-(Postgres has no `ferrite.lock`, a solo site no cluster); `skip` means the check did not
+user), an S3 key (configured or from `AWS_*`) and `secret.key` never appear. `info` means
+informational or not applicable to this site (Postgres has no `ferrite.lock`, a solo site no
+cluster); `skip` means the check did not
 run (`--offline`, a configuration that did not load, a database or media store that did
 not open, no running node, or a SQLite site for the clock and cluster checks). Run it as
 the user that runs `serve`: a check passes or fails for the user that runs doctor.

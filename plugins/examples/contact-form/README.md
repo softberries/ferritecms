@@ -130,8 +130,8 @@ Unicode line and paragraph separators become a space, and Unicode format charact
 Cf: bidirectional overrides such as U+202E, the zero-width space, the soft hyphen) are
 removed, so a name or subject cannot be made to display as something else. The zero-width
 non-joiner and joiner (U+200C, U+200D) stay: Persian and Indic names and emoji sequences need
-them, and they cannot reorder text. Each field is trimmed. The message keeps its line breaks, as LF (CR LF and a lone CR become LF), its tabs and
-its format characters (it is only ever shown escaped), and loses any other control character.
+them, and they cannot reorder text. Each field is trimmed. The message keeps its line breaks,
+as LF (CR LF and a lone CR become LF), its tabs and its format characters (it is only ever shown escaped), and loses any other control character.
 Repeated keys count their first value; unknown fields are ignored.
 
 ## The mail
