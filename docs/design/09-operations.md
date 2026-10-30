@@ -161,7 +161,14 @@ that carries the new `release.pub`.
 
 ## 2. Rollback (priority #1 per D3)
 
-There are two cases, both supported:
+```
+ferrite rollback [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]
+```
+
+As built in M4-2 (`crates/ferrite/src/update/rollback.rs`; ruling P32). There are two
+cases, both supported. Rollback goes back **one step**: to the binary kept as
+`ferrite.prev` and the move `upgrade.json` records (§1). It restarts nothing; like
+`self-update` it prints the restart command.
 
 ### a) Expand-only upgrade (the normal case)
 
@@ -169,10 +176,23 @@ Because of expand/contract ([02 §8](02-storage.md#8-upgrade-compatibility-expan
 the previous binary runs against the new schema. Rolling back the binary is enough:
 
 ```
-ferrite rollback            # run with either binary
+ferrite rollback [--data DIR]      # run with either binary
 ```
 
-- Swaps `ferrite.prev` ↔ `ferrite` and restarts. No schema change. Instant.
+- It needs `ferrite.prev` beside the binary (symlinks resolved; `self-update` keeps it);
+  without one it refuses (exit 1).
+- Run as `ferrite` or as `ferrite.prev`, it swaps the two (`update::swap::swap_with_prev`:
+  both are copied to temp files in the folder and renamed into place, so neither path is
+  ever missing). Running it again re-upgrades.
+- With `--data DIR` it first runs the binary that will become `ferrite` with
+  `migrate status --data DIR` and shows the output. Exit 0 or 2 goes on; exit 3 (that
+  binary cannot open the schema, e.g. a contract migration raised `min_binary_version`)
+  refuses with **exit 3** and says to run `rollback --schema` with the newer binary first;
+  any other result refuses (exit 1; with SQLite the status cannot be read while `serve`
+  holds the folder lock: stop it, or leave out `--data` to skip the check).
+- It does not touch `upgrade.json` or `schema_meta.last_binary_version`. The older binary's
+  next start keeps the record and updates the key (§1), so a schema rollback afterwards
+  still finds the move.
 
 ### b) Schema must go back too
 
@@ -180,20 +200,60 @@ Needed when the upgrade included a contract migration, or the operator wants the
 old schema:
 
 ```
-ferrite rollback --schema   # must be run with the NEWER binary (it holds the down migrations)
+ferrite rollback --schema --data DIR [--allow-lossy | --restore-snapshot [--yes]]
 ```
 
-1. Read `data/upgrade.json`.
-2. Run `down` migrations to `schema_from` (refuses lossy steps unless `--allow-lossy`;
-   instead offers `--restore-snapshot`).
-3. `--restore-snapshot`: stop-the-world restore of the pre-upgrade SQLite snapshot
-   (current DB moved to `backups/rolled-back-<ts>.db`, never deleted automatically).
-   Content written since the upgrade is lost in this mode — the tool says so and asks
-   for confirmation.
-4. Swap binaries, restart.
+The **down migrations ship with the newer binary**, so `--schema` must run as the binary
+`upgrade.json` names as `to`. A binary rollback can run first; then `to` is
+`ferrite.prev` and the record still says `to: <newer>`. Any other binary is refused
+(exit 1, naming the version and `ferrite.prev`). The "run with either binary" of (a) does
+not hold here.
 
-The important ordering point: **down migrations ship with the newer binary**, so schema
-rollback is always driven by the newer binary before swapping back.
+1. **Read `upgrade.json`** strictly (`upgrade::load`). No file, an unreadable one or another
+   format version refuses (exit 1); for a schema rollback without a record use
+   `ferrite migrate down --to N`. When run as `ferrite` (no binary rollback yet) it needs
+   `ferrite.prev` before changing anything. The binary that will run afterwards
+   (`ferrite.prev`, or `ferrite` after a binary rollback) must report the record's `from`
+   on `--version`; otherwise it refuses before any change (a record with `from: null`
+   is not checked).
+2. **Down migrations** (the default): it opens the store (with SQLite this takes the
+   data-folder lock, so `serve` must be stopped) and, under the migrate lock, runs
+   `migrate_down(schema_from, allow_lossy)`. A schema already at or below `schema_from`
+   has nothing to revert. A lossy step without `--allow-lossy` refuses before any step
+   runs, names `--allow-lossy` and `--restore-snapshot` (on Postgres: PITR), and changes
+   nothing. The install id stays.
+3. **`--restore-snapshot`** (SQLite only) puts the pre-upgrade snapshot back instead of
+   running down migrations:
+   - Only the path the record names is used, never one found by name. A record with
+     `snapshot: null` (nothing migrated, an unfinished upgrade, always on Postgres)
+     refuses. On Postgres it refuses with a pointer to the provider's point-in-time
+     recovery (PITR).
+   - The snapshot must be a SQLite file. The tool shows the upgrade time (`at`) and the
+     snapshot's modification time, and says that everything written since is lost.
+   - It takes `ferrite.lock` (refused while `serve` runs), then asks (`Type 'yes'`);
+     without a terminal `--yes` is required.
+   - It copies the snapshot beside the database first. Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
+     `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
+     sits beside another database file). Then it renames the copy into place. Each move is
+     a hard link plus an unlink, so an existing file is never replaced. A failed move puts
+     the moved files back; when that fails too, the error names where the database is.
+     Nothing is deleted; the snapshot itself stays. The folders are synced afterwards.
+   - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
+     SQLite would roll it back into the snapshot.
+   - The database must be on the data folder's filesystem (the moves into `backups/` are
+     links). A `database.url` pointing to another filesystem refuses with a message to
+     move the files aside and copy the snapshot by hand.
+   - The restored database is the same install: its `install_id` is the one the snapshot
+     was taken with.
+4. **Record**: once the database step succeeded, `upgrade.json` is renamed to
+   `upgrade-rolled-back-<ts>.json` (never deleted).
+5. **Swap**: run as `ferrite`, it then swaps the binaries as in (a). Run as `ferrite.prev`
+   (after a binary rollback), they are already swapped and stay so. When the swap fails
+   after the database step, the error says so: run `ferrite rollback` to swap them.
+
+Exit codes: 0 rolled back, 3 the previous binary cannot open this schema (binary
+rollback with `--data`), 1 any other error. Refusals before the database step change
+nothing.
 
 ## 3. Upgrade & rollback (cluster / Postgres)
 
@@ -751,6 +811,7 @@ ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
 ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
+ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ```
 
 **`ferrite self-update`** (`crates/ferrite/src/update/`; §1): replaces the running binary
@@ -765,6 +826,21 @@ refusal leaves the binary untouched. Test seams (`test-seams` builds only): a hi
 `--base-url` replaces the GitHub API root (plain HTTP allowed), a hidden
 `--test-current-exe PATH` the running binary's path, a hidden `--test-download-deadline-ms`
 the 10-minute download bound, and `FERRITE_TEST_RELEASE_PUBKEY` the embedded key.
+
+**`ferrite rollback`** (`crates/ferrite/src/update/rollback.rs`; §2): without `--schema`
+swaps `ferrite` and `ferrite.prev` (either binary may run it; again re-upgrades); `--data
+DIR` first runs the kept binary's `migrate status` and refuses with exit 3 when it cannot
+open the schema. `--schema` (needs `--data`, runs only as the binary `upgrade.json` names as
+`to`) runs the down migrations to the record's `schema_from` under the migrate lock (SQLite:
+`serve` stopped); `--allow-lossy` allows lossy steps. `--restore-snapshot` (with `--schema`,
+SQLite only, not with `--allow-lossy`) restores the snapshot the record names, after
+confirmation (`--yes` without a terminal), moving `ferrite.db[-wal|-shm]` to
+`backups/rolled-back-<ts>.db[-wal|-shm]`. A rollback that used the record renames it to
+`upgrade-rolled-back-<ts>.json`. Exit 0 rolled back, 3 the previous binary cannot open this
+schema, 1 any other error (no `ferrite.prev`, no or unreadable `upgrade.json`, the wrong
+binary, a lossy step without `--allow-lossy`, Postgres or no recorded snapshot with
+`--restore-snapshot`, no confirmation, the folder locked). Test seam (`test-seams` builds
+only): a hidden `--test-current-exe PATH`.
 
 **`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
 WXR file as the active admin `--as` names (default: the first active admin). Writes
@@ -1150,6 +1226,5 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
-ferrite rollback [--schema] [--restore-snapshot]                # M4-2
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```
