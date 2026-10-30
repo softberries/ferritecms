@@ -1178,3 +1178,14 @@ Test plugins added in M2a-2a (not hostile, `plugins/examples/`): `router` (route
 M2a-2b adds `fetcher` (`http = ["api.example.test"]`, route `GET /get?u=<url>` answering
 `ok <status> <body>` or `err <message>`; optional `m`, `h`, `b` and `n` parameters set the
 method, headers, a body and several fetches per call).
+M4-3a adds the shipped example `analytics` (`plugins/examples/analytics`, a `request.served`
+subscriber, one route and a viewer list, `README.md`), the first example that stores a lot:
+one JSON blob per UTC day in KV. Two things it showed about the limits. A call's 100 KV
+operations and 1 MiB of writes are enough for a batch only if the plugin counts them (it
+reads and writes each touched day once, caps a batch at eight days and spends what is left on
+the prune). And fuel is counted in guest instructions, not bytes read from the host: decoding
+a day blob of 500 paths into a `BTreeMap` cost many times the default 50 million for 90 days,
+because every insert compares whole strings that share long prefixes. The plugin counts in a
+hash map and decodes only the newest ~200 KB of blobs in full (the older days give totals
+alone, read from the front of the blob without parsing the maps); the worst case measured
+needs at most about half the default fuel. No limit above the default is requested.
