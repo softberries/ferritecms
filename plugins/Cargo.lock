@@ -45,6 +45,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "contact-form"
+version = "0.1.0"
+dependencies = [
+ "ferrite-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "counter"
 version = "0.1.0"
 dependencies = [

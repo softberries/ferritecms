@@ -16,6 +16,7 @@ members = [
     "examples/fetcher",
     "examples/seo",
     "examples/analytics",
+    "examples/contact-form",
     "examples/hostile/undeclared-import",
     "examples/hostile/sockets",
     "examples/hostile/loop",
