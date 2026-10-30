@@ -212,6 +212,16 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     if swap_after {
         bins.require_prev()?;
     }
+    // The binary that runs after the rollback must be the one the record names as `from`.
+    check_older(
+        if swap_after {
+            &bins.prev
+        } else {
+            &bins.installed
+        },
+        &rec,
+    )
+    .await?;
     let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
     if args.restore_snapshot {
@@ -223,8 +233,11 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     // The database step used the record: set it aside so the older binary's start sees no
     // stale move.
     let renamed = data_dir.join(format!("upgrade-rolled-back-{ts}.json"));
-    match std::fs::rename(data_dir.join(UPGRADE_FILE), &renamed) {
-        Ok(()) => println!("{UPGRADE_FILE} renamed to {}", renamed.display()),
+    match move_no_clobber(&data_dir.join(UPGRADE_FILE), &renamed) {
+        Ok(()) => {
+            sync_dir(data_dir);
+            println!("{UPGRADE_FILE} renamed to {}", renamed.display());
+        }
         Err(e) => eprintln!(
             "warning: cannot rename {UPGRADE_FILE} to {} ({e}); rename it by hand",
             renamed.display()
@@ -253,6 +266,34 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     }
     print_restart();
     Ok(ExitCode::SUCCESS)
+}
+
+/// Refuses, before anything changes, when `older --version` is not the record's `from`. A
+/// record without `from` (a database from before M4-2) cannot be checked.
+async fn check_older(older: &Path, rec: &UpgradeRecord) -> Result<()> {
+    let Some(from) = rec.from.as_deref() else {
+        println!(
+            "note: {UPGRADE_FILE} does not record the previous version, so {} is not checked",
+            older.display()
+        );
+        return Ok(());
+    };
+    let (code, out) = probe(older, &[OsStr::new("--version")]).await?;
+    let reported = out
+        .split_whitespace()
+        .last()
+        .and_then(|v| semver::Version::parse(v).ok());
+    if code != Some(0) || reported.is_none() || reported != semver::Version::parse(from).ok() {
+        bail!(
+            "{} reports {:?} (exit {code:?}), but {UPGRADE_FILE} records the upgrade from \
+             {from}: the schema goes back for ferrite {from}, so put that binary at {} and \
+             retry; nothing was changed",
+            older.display(),
+            out.trim(),
+            older.display()
+        );
+    }
+    Ok(())
 }
 
 /// Down migrations to `rec.schema_from` under the migrate lock (SQLite: opening takes the
@@ -428,11 +469,40 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Moves `db`'s `-wal`, `-shm` and then `db` itself to `backups/rolled-back-<ts>.db…`, then
-/// renames a copy of `snapshot` (made first, beside `db`) into place. The WAL moves first:
-/// a WAL left beside another database file could be applied to it. On a failure the moved
-/// files are put back.
+/// Moves `src` to `dst` without ever replacing an existing `dst`: a hard link (which
+/// fails with `AlreadyExists` when `dst` exists) and then the removal of `src`.
+fn move_no_clobber(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(src, dst)?;
+    if let Err(e) = std::fs::remove_file(src) {
+        // Leave only the original name.
+        let _ = std::fs::remove_file(dst);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Flushes a folder's entries (best effort: not every platform can open a folder).
+fn sync_dir(dir: &Path) {
+    if let Ok(f) = File::open(dir) {
+        let _ = f.sync_all();
+    }
+}
+
+/// Moves `db`'s `-wal`, `-shm` and then `db` itself to `backups/rolled-back-<ts>.db…`
+/// (never over an existing file), then renames a copy of `snapshot` (made first, beside
+/// `db`) into place. The WAL moves first: a WAL left beside another database file could be
+/// applied to it. A `-journal` beside `db` refuses (a hot rollback journal would be rolled
+/// back into the snapshot's pages). On a failure the moved files are put back.
 fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()> {
+    let journal = with_suffix(db, "-journal");
+    if std::fs::symlink_metadata(&journal).is_ok() {
+        bail!(
+            "{} exists (the rollback journal of an interrupted write): run `ferrite migrate \
+             status` once with the binary that wrote it so SQLite recovers it, then retry; \
+             nothing was changed",
+            journal.display()
+        );
+    }
     std::fs::create_dir_all(backups)
         .with_context(|| format!("cannot create {}", backups.display()))?;
     let mut staged = Staged {
@@ -451,15 +521,27 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
         .with_context(|| format!("cannot flush {}", staged.path.display()))?;
 
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // Puts the moved files back and says what state that left.
     let undo = |moved: &[(PathBuf, PathBuf)]| {
+        let mut ok = true;
         for (src, dst) in moved.iter().rev() {
-            if let Err(e) = std::fs::rename(dst, src) {
+            if let Err(e) = move_no_clobber(dst, src) {
+                ok = false;
                 eprintln!(
                     "error: cannot move {} back to {}: {e}; move it by hand",
                     dst.display(),
                     src.display()
                 );
             }
+        }
+        if ok {
+            "nothing was changed".to_owned()
+        } else {
+            format!(
+                "putting the files back failed too: the database that was current is in {} \
+                 (see the errors above)",
+                backups.display()
+            )
         }
     };
     for suffix in ["-wal", "-shm", ""] {
@@ -468,19 +550,22 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
             continue;
         }
         let dst = backups.join(format!("rolled-back-{ts}.db{suffix}"));
-        let result = if std::fs::symlink_metadata(&dst).is_ok() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "the target exists",
-            ))
-        } else {
-            std::fs::rename(&src, &dst)
-        };
-        if let Err(e) = result {
-            undo(&moved);
+        if let Err(e) = move_no_clobber(&src, &dst) {
+            let state = undo(&moved);
+            if e.kind() == std::io::ErrorKind::CrossesDevices {
+                bail!(
+                    "cannot move {} to {}: they are on different filesystems, and \
+                     --restore-snapshot needs the database on the data folder's filesystem \
+                     (otherwise move the database files aside and copy {} into place by hand, \
+                     with the site stopped); {state}",
+                    src.display(),
+                    dst.display(),
+                    snapshot.display()
+                );
+            }
             return Err(e).with_context(|| {
                 format!(
-                    "cannot move {} to {}; nothing was changed",
+                    "cannot move {} to {}; {state}",
                     src.display(),
                     dst.display()
                 )
@@ -489,20 +574,19 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
         moved.push((src, dst));
     }
     if let Err(e) = std::fs::rename(&staged.path, db) {
-        undo(&moved);
+        let state = undo(&moved);
         return Err(e).with_context(|| {
             format!(
-                "cannot rename {} to {}; nothing was changed",
+                "cannot rename {} to {}; {state}",
                 staged.path.display(),
                 db.display()
             )
         });
     }
     staged.done = true;
-    if let Some(dir) = db.parent()
-        && let Ok(f) = File::open(dir)
-    {
-        let _ = f.sync_all();
+    sync_dir(backups);
+    if let Some(dir) = db.parent() {
+        sync_dir(dir);
     }
     Ok(())
 }
@@ -573,15 +657,47 @@ mod tests {
         );
     }
 
+    /// Pins the store's real refusal (`plan_down`), not a copy of its text.
     #[test]
     fn lossy_refusal_is_recognised() {
-        let e = anyhow::Error::new(ferrite_store::StoreError::Migration(
-            "migration 10 has a lossy down (data removed by its up cannot be restored); pass \
-             allow_lossy to proceed"
-                .into(),
-        ));
-        assert!(is_lossy_refusal(&e));
-        assert!(!is_lossy_refusal(&anyhow::anyhow!("other")));
+        let lossy =
+            ferrite_store::parse_directives("-- ferrite:lossy-down\nDROP TABLE x;").unwrap();
+        let plain = ferrite_store::parse_directives("SELECT 1;").unwrap();
+        let err =
+            ferrite_store::plan_down(&[1, 2], &[(1, plain), (2, lossy)], 0, false).unwrap_err();
+        assert!(is_lossy_refusal(&anyhow::Error::new(err)));
+        let unknown = ferrite_store::plan_down(&[1, 9], &[], 0, true).unwrap_err();
+        assert!(!is_lossy_refusal(&anyhow::Error::new(unknown)));
+    }
+
+    #[test]
+    fn move_no_clobber_refuses_an_existing_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        let e = move_no_clobber(&a, &b).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b");
+        std::fs::remove_file(&b).unwrap();
+        move_no_clobber(&a, &b).unwrap();
+        assert!(!a.exists());
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "a");
+    }
+
+    #[test]
+    fn replace_db_refuses_a_rollback_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("ferrite.db");
+        let snap = tmp.path().join("snap.db");
+        std::fs::write(&db, "current").unwrap();
+        std::fs::write(with_suffix(&db, "-journal"), "hot").unwrap();
+        std::fs::write(&snap, "snapshot").unwrap();
+        let e = replace_db(&db, &snap, &tmp.path().join("backups"), "T").unwrap_err();
+        assert!(format!("{e:#}").contains("-journal"), "{e:#}");
+        assert_eq!(std::fs::read_to_string(&db).unwrap(), "current");
+        assert!(!tmp.path().join("backups").exists());
     }
 
     #[test]

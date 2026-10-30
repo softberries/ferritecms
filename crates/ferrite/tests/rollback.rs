@@ -73,12 +73,17 @@ struct Bins {
 
 impl Bins {
     fn new(root: &Path, prev_status: Option<u8>) -> Self {
+        Self::with_old(root, prev_status, OLD)
+    }
+
+    /// [`Bins::new`] whose older binary reports `old` for `--version`.
+    fn with_old(root: &Path, prev_status: Option<u8>, old: &str) -> Self {
         let dir = root.join("bin");
         std::fs::create_dir_all(&dir).unwrap();
         let current = dir.join("ferrite");
         let prev = dir.join("ferrite.prev");
         let new_body = script("9.0.0", 0);
-        let old_body = script(OLD, prev_status.unwrap_or(0));
+        let old_body = script(old, prev_status.unwrap_or(0));
         put_script(&current, &new_body);
         if prev_status.is_some() {
             put_script(&prev, &old_body);
@@ -169,22 +174,12 @@ fn db_version(data: &Path) -> i64 {
         .unwrap()
 }
 
-/// A solo-style store on `data` (it takes the folder lock while it lives). A failed open
-/// is retried a few times (with the error shown): a store this test just closed may still
-/// be letting go of the file on a loaded machine.
+/// A solo-style store on `data` (it takes the folder lock while it lives). Callers close
+/// and drop it before the next process or store opens the folder.
 async fn sqlite_in(data: &Path) -> SqliteStore {
     let mut opts = SqliteOptions::new(data.join("ferrite.db"));
     opts.lock_dir = Some(data.to_owned());
     opts.backups_dir = Some(data.join("backups"));
-    for _ in 0..10 {
-        match SqliteStore::open(opts.clone()).await {
-            Ok(store) => return store,
-            Err(e) => {
-                eprintln!("opening {} failed, retrying: {e}", data.display());
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-        }
-    }
     SqliteStore::open(opts).await.expect("open")
 }
 
@@ -193,6 +188,7 @@ fn meta(data: &Path, key: &str) -> Option<String> {
         let store = sqlite_in(data).await;
         let v = store.read().schema_meta().get(key).await.unwrap();
         store.close().await;
+        drop(store);
         v
     })
 }
@@ -201,8 +197,10 @@ fn set_meta(data: &Path, key: &str, value: &str) {
     rt().block_on(async {
         let store = sqlite_in(data).await;
         store.read().schema_meta().set(key, value).await.unwrap();
-        // Closed before returning, so no late close removes a `-wal` planted afterwards.
+        // Closed (the WAL checkpointed) and dropped (the folder lock released) before
+        // returning, so no late close removes a `-wal` planted afterwards.
         store.close().await;
+        drop(store);
     });
 }
 
@@ -294,6 +292,17 @@ fn rollback_swaps_and_back() {
     let out = rollback(&bins.prev).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     bins.assert_unswapped();
+
+    // Run through a symlink (as /usr/local/bin/ferrite -> /opt/ferrite/ferrite): the real
+    // files beside the target are swapped (self-update resolves the same way), and the link
+    // is left alone.
+    let link = tmp.path().join("ferrite-link");
+    std::os::unix::fs::symlink(&bins.current, &link).unwrap();
+    let out = rollback(&link).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    bins.assert_swapped();
+    assert_eq!(std::fs::read_link(&link).unwrap(), bins.current);
+    assert!(!tmp.path().join("ferrite-link.prev").exists());
 }
 
 #[test]
@@ -448,6 +457,38 @@ fn rollback_schema_requires_newer_binary() {
     assert!(stderr(&out).contains("9.9.9"), "{}", stderr(&out));
     assert_eq!(db_version(&data), latest_schema_version());
     bins.assert_unswapped();
+
+    // Run as `ferrite` with no `ferrite.prev` beside it: refused before anything changes.
+    rec.to = binary_version().unwrap().to_string();
+    upgrade::write(&data, &rec).unwrap();
+    let lone = Bins::new(&tmp.path().join("lone"), None);
+    let out = rollback(&lone.current)
+        .args(["--schema", "--allow-lossy", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("no previous binary"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(db_version(&data), latest_schema_version());
+    assert_eq!(upgrade::load(&data).unwrap().as_ref(), Some(&rec));
+
+    // A `ferrite.prev` that is not the record's `from` is refused before anything changes.
+    let other = Bins::with_old(&tmp.path().join("other"), Some(0), "0.0.2");
+    let out = rollback(&other.current)
+        .args(["--schema", "--allow-lossy", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains("0.0.2") && err.contains(OLD), "{err}");
+    assert_eq!(db_version(&data), latest_schema_version());
+    assert_eq!(upgrade::load(&data).unwrap().as_ref(), Some(&rec));
+    other.assert_unswapped();
 
     // An unreadable record (a newer format) refuses.
     let mut v = serde_json::to_value(&rec).unwrap();
@@ -669,8 +710,8 @@ fn upgraded_pg_site(root: &Path, pg: &PgSchema, schema_from: i64) -> (PathBuf, U
 fn rollback_schema_downs_on_postgres() {
     let Some(pg) = PgSchema::new() else { return };
     let tmp = tempfile::tempdir().unwrap();
-    let bins = Bins::new(tmp.path(), Some(0));
-    let (data, _) = upgraded_pg_site(tmp.path(), &pg, LOSSY_FROM);
+    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, LOSSY_FROM);
+    let bins = Bins::with_old(tmp.path(), Some(0), rec.from.as_deref().unwrap());
 
     let out = rollback(&bins.current)
         .args(["--schema", "--data"])
@@ -696,8 +737,8 @@ fn rollback_schema_downs_on_postgres() {
 fn rollback_restore_snapshot_refused_on_postgres() {
     let Some(pg) = PgSchema::new() else { return };
     let tmp = tempfile::tempdir().unwrap();
-    let bins = Bins::new(tmp.path(), Some(0));
     let (data, rec) = upgraded_pg_site(tmp.path(), &pg, latest_schema_version() - 1);
+    let bins = Bins::with_old(tmp.path(), Some(0), rec.from.as_deref().unwrap());
 
     let out = rollback(&bins.current)
         .args(["--schema", "--restore-snapshot", "--yes", "--data"])

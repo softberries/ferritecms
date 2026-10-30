@@ -212,7 +212,10 @@ not hold here.
 1. **Read `upgrade.json`** strictly (`upgrade::load`). No file, an unreadable one or another
    format version refuses (exit 1); for a schema rollback without a record use
    `ferrite migrate down --to N`. When run as `ferrite` (no binary rollback yet) it needs
-   `ferrite.prev` before changing anything.
+   `ferrite.prev` before changing anything. The binary that will run afterwards
+   (`ferrite.prev`, or `ferrite` after a binary rollback) must report the record's `from`
+   on `--version`; otherwise it refuses before any change (a record with `from: null`
+   is not checked).
 2. **Down migrations** (the default): it opens the store (with SQLite this takes the
    data-folder lock, so `serve` must be stopped) and, under the migrate lock, runs
    `migrate_down(schema_from, allow_lossy)`. A schema already at or below `schema_from`
@@ -231,8 +234,15 @@ not hold here.
      without a terminal `--yes` is required.
    - It copies the snapshot beside the database first. Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
-     sits beside another database file). Then it renames the copy into place. A failed
-     move puts the moved files back. Nothing is deleted; the snapshot itself stays.
+     sits beside another database file). Then it renames the copy into place. Each move is
+     a hard link plus an unlink, so an existing file is never replaced. A failed move puts
+     the moved files back; when that fails too, the error names where the database is.
+     Nothing is deleted; the snapshot itself stays. The folders are synced afterwards.
+   - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
+     SQLite would roll it back into the snapshot.
+   - The database must be on the data folder's filesystem (the moves into `backups/` are
+     links). A `database.url` pointing to another filesystem refuses with a message to
+     move the files aside and copy the snapshot by hand.
    - The restored database is the same install: its `install_id` is the one the snapshot
      was taken with.
 4. **Record**: once the database step succeeded, `upgrade.json` is renamed to
