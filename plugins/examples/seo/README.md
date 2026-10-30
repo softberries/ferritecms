@@ -54,7 +54,8 @@ cp plugins/examples/seo/ferrite-plugin.toml seo-plugin/
 cp plugins/target/wasm32-wasip2/release/seo.wasm seo-plugin/
 ```
 
-Then, with `serve` stopped if the site uses SQLite:
+With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its `seo/`
+folder where the commands below say `seo-plugin`. Then, with `serve` stopped if the site uses SQLite:
 
 ```sh
 ferrite plugin check   --data /path/to/site --dir seo-plugin   # prints the permission report

@@ -3,7 +3,8 @@ name: Release
 # The release process (M4-2 P25–P27, P37, P38):
 # - a `vX.Y.Z` tag push builds every target, writes SHA256SUMS, signs it with the release
 #   key, publishes a GitHub Release (a draft until every asset is uploaded) and the image
-#   ghcr.io/<owner>/<repo> (linux/amd64 + linux/arm64, tags X.Y.Z, X.Y and latest);
+#   ghcr.io/<owner>/<repo> (linux/amd64 + linux/arm64, tags X.Y.Z, X.Y and latest); the
+#   seven tarballs are the six targets and the example plugins (M4-3a P47);
 # - a manual run (`workflow_dispatch`) is a dry run by default: the same builds, signed
 #   with a throwaway key made in the job, uploaded as workflow artifacts only. A manual
 #   run on a tag with `dry_run: false` publishes like the tag push (re-running a release).
@@ -201,11 +202,41 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  # The seventh asset (M4-3a P47): the example plugins seo, analytics and contact-form as
+  # `ferrite-plugins-<version>.tar.gz`. The wasm is target-independent, so one build on one
+  # runner serves every platform. package-plugins.sh refuses when a plugin manifest's
+  # version is not the workspace version; the manifests are bumped by hand with it (09 §7),
+  # and the CI `packaging` job checks that before a tag exists.
+  plugins:
+    needs: [meta]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          targets: wasm32-wasip2
+      - run: cargo build --release --locked --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form
+      - run: .github/scripts/package-plugins.sh "$VERSION" dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-plugins
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   # SHA256SUMS (sha256sum format) over every asset and its minisign signature (P26),
   # made with the release key of the `release` environment. Only one of the two sign jobs
   # runs; both upload the artifact `release`.
   sign:
-    needs: [meta, build]
+    needs: [meta, build, plugins]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     environment: release
@@ -251,7 +282,7 @@ jobs:
 
   # A dry run signs with a throwaway key made here (its .pub goes into the artifact).
   sign-dry-run:
-    needs: [meta, build]
+    needs: [meta, build, plugins]
     if: needs.meta.outputs.publish != 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -320,9 +351,10 @@ jobs:
         run: |
           gh release upload "$TAG" --clobber dist/ferrite-*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.minisig
           count=$(gh release view "$TAG" --json assets --jq '.assets | length')
-          if [ "$count" -ne 8 ]; then
+          # Seven tarballs (six targets and the plugins), SHA256SUMS and its signature.
+          if [ "$count" -ne 9 ]; then
             gh release view "$TAG" --json assets --jq '.assets[].name'
-            echo "::error::expected 8 assets on $TAG, found $count"
+            echo "::error::expected 9 assets on $TAG, found $count"
             exit 1
           fi
       # Only the newest stable version becomes GitHub's latest release (newest.sh).

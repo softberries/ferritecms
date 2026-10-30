@@ -901,14 +901,29 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     (`latest`) and of its `X.Y` line (`minor_latest`); a publishing run refuses while
     `crates/ferrite/release.pub` is the placeholder.
   - `admin`, then `build` (the matrix above).
-  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the six assets
+  - `plugins` (M4-3a P47): the seventh asset, `ferrite-plugins-<version>.tar.gz`. One
+    build on `ubuntu-24.04` (`cargo build --release --locked --target wasm32-wasip2
+    --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form`; the wasm does
+    not depend on the platform) packed by `.github/scripts/package-plugins.sh VERSION
+    OUT_DIR` into the folders `seo/`, `analytics/` and `contact-form/` at the top level,
+    each with `ferrite-plugin.toml`, `<name>.wasm` and `README.md` (the folder is the
+    `--dir` of `ferrite plugin check|install`). The script fails when a wasm or a file is
+    missing or a manifest's `version` is not `VERSION`. The plugin version is the workspace
+    version, and `release.yml` does not rewrite the manifests: releasing a new version means
+    bumping the `version` of the three `plugins/examples/{seo,analytics,contact-form}/
+    ferrite-plugin.toml` together with the workspace version (the CI check below catches a
+    forgotten one before the tag exists). The plugins are not embedded in the binary,
+    because every plugin install needs an approval (05 §2). `ferrite self-update` is
+    unaffected: it picks `ferrite-<version>-<target>.tar.gz` by exact name, and the other
+    assets only take lines in `SHA256SUMS`.
+  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the seven assets
     (`.github/scripts/sums.sh` refuses any other count), signed with minisign
     (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and
     `MINISIGN_PASSWORD`, then checked against the committed key
     (`.github/scripts/verify-sig.sh`). `sign-dry-run` does the same with a throwaway key.
   - `release` (environment `release`): a draft GitHub Release (a draft left by a failed
-    run of the same tag is reused; an already published one stops the run), the eight
-    assets uploaded and counted, then published, marked "latest" only when `latest`
+    run of the same tag is reused; an already published one stops the run), the nine
+    assets (seven tarballs, `SHA256SUMS` and its signature) uploaded and counted, then published, marked "latest" only when `latest`
     (so a backport never becomes the release `self-update` installs; prereleases are
     marked as such).
   - `image` and `image-tags` (environment `release`, `packages: write`): the image built
@@ -927,7 +942,10 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
 - **CI checks** (`ci.yml`): job `packaging` greps `Cargo.lock` for `aws-lc` (stricter
   than `cargo tree`: dev dependencies too, P28), runs `systemd-analyze verify` and
   `systemd-analyze security --offline=true` on the unit, and `shellcheck` on
-  `.github/scripts/*.sh`; job `compat` is the backward-compatibility check (02 §8).
+  `.github/scripts/*.sh`; since M4-3a it also checks that the `version` of the three
+  shipped plugins' manifests equals the workspace version, builds the three plugins and runs
+  `package-plugins.sh` on the result (the asset must unpack to folders holding the manifest
+  and exactly one `.wasm`); job `compat` is the backward-compatibility check (02 §8).
 - **Docker image (as built, M1.5; admin stage M2b-1; digests M4-2):** `Dockerfile` at the
   repository root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g
   pnpm@10.28.2`, `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA;
