@@ -628,9 +628,36 @@ cache hits and misses, plugin calls and failures, jobs completed and failed atte
 this node's runner, and the page-class latency buckets) that the per-minute
 `node_metrics` rows are made from.
 
-**Planned (M4-2).** Each node writes a 1-minute summary row (`node_metrics`, retained 7
-days) so the dashboard can show cluster-wide figures and time series. (Prometheus
-remains the source of truth for real monitoring.)
+**As built (M4-2 P35): `node_metrics` and the series.** Every node, solo included, writes
+one row per minute to `node_metrics` (migration `0012_node_metrics`; key `node_id`,
+`minute`; the counts `requests`, `errors_5xx`, `page_views`, `cache_hits`,
+`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and
+`p95_ms`). The writer is a `serve` background task, not a job
+(`crates/ferrite/src/node_metrics.rs`): at every whole UTC minute of the wall clock it
+diffs two registry snapshots and writes the delta under the minute its period started
+in, so the first, partial minute after a boot has a row of its own. `p95_ms` is the upper
+bound (ms) of the latency bucket that holds the 95th percentile of that minute's page
+responses (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 or 10000, the last also for
+anything slower; 0 without page responses). A write adds to an existing (node, minute)
+row (counts added, `p95_ms` the larger), so a write that failed is carried by the next
+one (still under its own minute; logged) and a repeated minute never conflicts. At
+shutdown, after the request drain and the job runner, the partial minute is flushed once
+more (at most 500 ms, inside the 1 s background stop). Rows have no foreign key to
+`nodes`: a stopped node's figures stay for their 7 days. `node_metrics.prune` (hourly,
+with the other built-in prunes, in batches of 10 000) deletes rows older than 7 days on
+the database clock; about 10 000 rows per node per week. The table is not exported
+(transient, like `jobs` and `nodes`). Node clocks are trusted for the minute (NTP);
+the database clock only for the prune.
+
+`GET /api/v1/system/metrics/series?from&to&step=minute|hour|day[&node=<id>]`
+(`manage_system` + `system:read`): `from` and `to` are RFC 3339; the range is widened to
+whole buckets (aligned to the Unix epoch, so days are UTC days) and returned as
+`{from, to, step, node, buckets: [{start, requests, …, p95_ms}]}`, **dense** (every bucket
+of the range, zeros where no node wrote a row) and ascending. Each bucket sums the
+minutes of every node (or of `node` only) and takes the largest `p95_ms`, which is an
+upper bound, not a merged percentile. A minute series spans at most 24 h, hour and day
+series 7 days (`422`, field `step`); `to` not after `from` is `422` (field `to`); a
+malformed value is `400`. (Prometheus remains the source of truth for real monitoring.)
 
 ## 7. Packaging
 

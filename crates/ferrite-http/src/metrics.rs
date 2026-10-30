@@ -45,7 +45,7 @@ use axum::{
     routing::get,
 };
 use ferrite_cache::PageCache;
-use ferrite_domain::Timestamp;
+use ferrite_domain::{MetricCounts, Timestamp};
 use ferrite_plugin_host::{DURATION_BUCKETS_MS, HookStats, PluginHost};
 use ferrite_store::Store;
 
@@ -226,6 +226,51 @@ impl MetricsSnapshot {
             }),
         }
     }
+
+    /// These counts as a `node_metrics` row (P35; meant for a delta from
+    /// [`since`](Self::since)), with `p95_ms` from [`page_p95_ms`].
+    pub fn counts(&self) -> MetricCounts {
+        MetricCounts {
+            requests: self.requests,
+            errors_5xx: self.errors_5xx,
+            page_views: self.page_views,
+            cache_hits: self.cache_hits,
+            cache_misses: self.cache_misses,
+            plugin_calls: self.plugin_calls,
+            plugin_failures: self.plugin_failures,
+            jobs_done: self.jobs_done,
+            jobs_failed: self.jobs_failed,
+            p95_ms: page_p95_ms(&self.page_latency),
+        }
+    }
+}
+
+/// [`LATENCY_BUCKETS`] in milliseconds.
+pub const LATENCY_BOUNDS_MS: [u32; LATENCY_BUCKETS.len()] =
+    [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000];
+
+/// The upper bound (ms) of the latency bucket holding the 95th percentile of `counts`
+/// (per-bucket counts as in [`MetricsSnapshot::page_latency`]): the first bucket at
+/// which the running total reaches `ceil(0.95 × total)`. 0 without responses; the
+/// overflow bucket (over 10 s) reports the largest bound, 10 000.
+pub fn page_p95_ms(counts: &[u64; LATENCY_SLOTS]) -> u32 {
+    let total: u64 = counts.iter().fold(0, |a, n| a.saturating_add(*n));
+    if total == 0 {
+        return 0;
+    }
+    // ceil(0.95 × total) without overflow.
+    let rank = total - total / 20;
+    let mut seen = 0u64;
+    for (i, n) in counts.iter().enumerate() {
+        seen = seen.saturating_add(*n);
+        if seen >= rank {
+            return LATENCY_BOUNDS_MS
+                .get(i)
+                .copied()
+                .unwrap_or(LATENCY_BOUNDS_MS[LATENCY_BOUNDS_MS.len() - 1]);
+        }
+    }
+    LATENCY_BOUNDS_MS[LATENCY_BOUNDS_MS.len() - 1]
 }
 
 /// Completed jobs and failed attempts, read at snapshot time (the job runner's counters).
@@ -706,6 +751,57 @@ async fn scrape(State(metrics): State<Arc<Metrics>>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_in_ms_match_the_buckets() {
+        for (ms, s) in LATENCY_BOUNDS_MS.iter().zip(LATENCY_BUCKETS) {
+            assert!((f64::from(*ms) / 1000.0 - s).abs() < 1e-9, "{ms} {s}");
+        }
+    }
+
+    #[test]
+    fn p95_is_the_bound_of_the_bucket_holding_it() {
+        let mut c = [0u64; LATENCY_SLOTS];
+        assert_eq!(page_p95_ms(&c), 0, "no responses");
+        c[0] = 1;
+        assert_eq!(page_p95_ms(&c), 5);
+        // 19 fast, 1 slow: rank 19 is still fast.
+        c[0] = 19;
+        c[7] = 1;
+        assert_eq!(page_p95_ms(&c), 5);
+        // 18 fast, 2 slow: rank 19 is slow.
+        c[0] = 18;
+        c[7] = 2;
+        assert_eq!(page_p95_ms(&c), 1000);
+        // Everything over 10 s: the largest bound.
+        let mut slow = [0u64; LATENCY_SLOTS];
+        slow[LATENCY_SLOTS - 1] = 3;
+        assert_eq!(page_p95_ms(&slow), 10_000);
+        let huge = [u64::MAX; LATENCY_SLOTS];
+        assert_eq!(page_p95_ms(&huge), 10_000, "saturates without overflow");
+    }
+
+    #[test]
+    fn snapshot_counts_carry_every_field() {
+        let mut latency = [0u64; LATENCY_SLOTS];
+        latency[3] = 4;
+        let s = MetricsSnapshot {
+            requests: 1,
+            errors_5xx: 2,
+            page_views: 3,
+            cache_hits: 4,
+            cache_misses: 5,
+            plugin_calls: 6,
+            plugin_failures: 7,
+            jobs_done: 8,
+            jobs_failed: 9,
+            page_latency: latency,
+        };
+        assert_eq!(
+            s.counts(),
+            MetricCounts::from_counters([1, 2, 3, 4, 5, 6, 7, 8, 9], 50)
+        );
+    }
 
     #[test]
     fn classes() {

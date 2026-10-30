@@ -21,7 +21,11 @@
 //!   due now with its attempts reset; audited `job.retry`. Anything but a dead job is
 //!   `422` (field `status`).
 //! * `GET /system/metrics/summary`: the answering node's renders, page cache and plugin
-//!   call totals since it started, and the site's job counts (P20; time series are M4).
+//!   call totals since it started, and the site's job counts (P20).
+//! * `GET /system/metrics/series?from&to&step=minute|hour|day[&node]`: the nodes'
+//!   per-minute figures (`node_metrics`, M4-2 P35) summed into dense, epoch-aligned
+//!   buckets with the page p95 the largest; minute series span at most 24 h, hour and
+//!   day series 7 days (`422`, field `step`).
 //! * `POST /system/mail/test` (`system:write`): one test mail to the actor's own address
 //!   through the node's queue (P49); 3 per 10 minutes per user; audited `mail.test`.
 
@@ -33,7 +37,7 @@ use std::{
 use axum::{Json, extract::State, http::StatusCode};
 use ferrite_core::Actor;
 use ferrite_domain::{
-    AuditQuery, JobId, JobQuery, JobStatus, MAX_PAGE, Node, NodeId, Timestamp, UserId,
+    AuditQuery, JobId, JobQuery, JobStatus, MAX_PAGE, Node, NodeId, SeriesStep, Timestamp, UserId,
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -43,8 +47,9 @@ use super::{
     ApiState, Authed,
     dto::system::{
         AuditDto, AuditList, CacheStatsDto, JobCountsDto, JobDto, JobList, MailStatusDto,
-        MailTestDto, MetricsSummaryDto, NodeCountsDto, NodeDto, NodeList, PluginTotalsDto,
-        SchemaStatusDto, SchemaVerdict, SystemStatusDto, ThemeStatusDto, ThisNodeDto,
+        MailTestDto, MetricsSeriesDto, MetricsSummaryDto, NodeCountsDto, NodeDto, NodeList,
+        PluginTotalsDto, SchemaStatusDto, SchemaVerdict, SystemStatusDto, ThemeStatusDto,
+        ThisNodeDto,
     },
     extract::{ApiPath, ApiQuery, DEFAULT_LIMIT, check_limit, invalid_cursor, invalid_param},
     plugins::{is_live, live_nodes},
@@ -423,6 +428,79 @@ pub async fn metrics_summary(
         plugins: PluginTotalsDto { calls, failures },
         jobs: job_counts(&counts),
     }))
+}
+
+/// The query of `GET /system/metrics/series`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SeriesParams {
+    /// Start of the range (RFC 3339), inclusive; rounded down to a bucket start.
+    pub from: String,
+    /// End of the range (RFC 3339), exclusive; rounded up to a bucket end. After `from`.
+    pub to: String,
+    /// `minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days).
+    pub step: String,
+    /// Only this node's rows (UUID); every node's, summed, when absent.
+    pub node: Option<String>,
+}
+
+/// `value` of query parameter `field` as an RFC 3339 instant.
+fn instant(field: &'static str, value: &str) -> Result<Timestamp, Problem> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|t| Timestamp::from(t.with_timezone(&chrono::Utc)))
+        .map_err(|_| {
+            invalid_param(
+                field,
+                format!("{field} must be an RFC 3339 date and time"),
+                "RFC 3339, e.g. 2026-10-30T12:00:00Z",
+            )
+        })
+}
+
+#[utoipa::path(
+    get,
+    path = "/system/metrics/series",
+    tag = "system",
+    operation_id = "get_metrics_series",
+    security(("session" = []), ("bearer" = [])),
+    params(SeriesParams),
+    responses(
+        (status = 200, description = "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (`p95_ms` the largest), zeros where no node wrote a row", body = MetricsSeriesDto),
+        (status = 400, description = "`validation` (`from`, `to`, `step`, `node` malformed) or `malformed-query` (a parameter missing)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `to` not after `from` (`errors[0].field` = `to`), or a span over the step's limit (`step`: minute 24 h, hour and day 7 days)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn metrics_series(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiQuery(params): ApiQuery<SeriesParams>,
+) -> Result<Json<MetricsSeriesDto>, Problem> {
+    let from = instant("from", &params.from)?;
+    let to = instant("to", &params.to)?;
+    let step = params.step.parse::<SeriesStep>().map_err(|_| {
+        invalid_param(
+            "step",
+            format!("unknown step {:?}", params.step),
+            "minute, hour or day",
+        )
+    })?;
+    let node = params
+        .node
+        .as_deref()
+        .map(|n| {
+            Uuid::parse_str(n)
+                .map(NodeId::from_uuid)
+                .map_err(|_| invalid_param("node", "node must be a node id", "a UUID"))
+        })
+        .transpose()?;
+    // Checks `manage_system` + `system:read`, then the range.
+    let series = api
+        .system
+        .metrics_series(&who.actor, from, to, step, node)
+        .await?;
+    Ok(Json(MetricsSeriesDto::from(series)))
 }
 
 #[utoipa::path(

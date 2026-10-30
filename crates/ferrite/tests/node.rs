@@ -48,6 +48,9 @@ mod served;
 #[path = "node/media.rs"]
 mod media;
 
+#[path = "node/node_metrics.rs"]
+mod node_metrics;
+
 const SITE_URL: &str = "http://127.0.0.1:8080";
 /// How fast a change must reach the node (solo: 250 ms poll; cluster: a notice).
 const CONVERGE: Duration = Duration::from_secs(1);

@@ -22,6 +22,7 @@ mod import;
 mod job;
 mod menu;
 mod node;
+mod node_metrics;
 mod plugin;
 mod plugin_failure;
 
@@ -36,10 +37,10 @@ mod user;
 use async_trait::async_trait;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
-    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo, NodeRepo,
-    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo,
-    ThemeRepo, Tx, UserRepo,
+    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
+    NodeMetricsRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
+    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use sqlx::SqlitePool;
 
@@ -149,6 +150,9 @@ impl Repos for SqliteRepos {
     fn imports(&self) -> &dyn ImportRepo {
         self
     }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -231,4 +235,5 @@ delegate_repos!(
     idempotency: IdempotencyRepo,
     autosaves: AutosaveRepo,
     imports: ImportRepo,
+    node_metrics: NodeMetricsRepo,
 );

@@ -17,6 +17,7 @@ mod media_cmd;
 mod media_url;
 mod migrate;
 mod node;
+mod node_metrics;
 mod open;
 pub mod reload;
 mod seed;

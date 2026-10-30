@@ -30,6 +30,7 @@ pub mod lock;
 pub mod menu;
 pub mod migrations;
 pub mod node;
+pub mod node_metrics;
 pub mod notify;
 pub mod plugin;
 pub mod plugin_failure;

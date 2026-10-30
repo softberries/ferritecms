@@ -32,8 +32,9 @@
 //!    actions, `media.variants` bounded by `media.image_workers`, and the caller's
 //!    handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s, `artifacts.gc` daily, `site.backup` daily or weekly
-//!    when `[backup]` is on) and the heartbeat (`nodes.meta` carries the
-//!    theme, plugin and permalink state; the reloader beats after every reload);
+//!    when `[backup]` is on), the heartbeat (`nodes.meta` carries the
+//!    theme, plugin and permalink state; the reloader beats after every reload) and the
+//!    `node_metrics` writer (one row per whole minute from the registry's deltas, P35);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
 //!     services and the site key are set up in step 7, so a missing or bad key stops
 //!     startup); [`run`] prints `Listening on http://<addr>` on stdout. With
@@ -47,8 +48,9 @@
 //! running jobs get 9 s (P10) to finish, after which the runner releases the rest
 //! without using an attempt (the runner is abandoned after 12 s, R6). Then the
 //! background tasks stop (the failure flusher writes once more, the `request.served`
-//! buffer is flushed into jobs once more, for the next runner to claim, and the buffered
-//! redirect hits are written once more, before the pools close), mail sends still
+//! buffer is flushed into jobs once more, for the next runner to claim, the buffered
+//! redirect hits are written once more, and the partial minute's `node_metrics` row,
+//! before the pools close), mail sends still
 //! running (`[mail]`) are cancelled, and the node leaves the registry, together within
 //! 1 s; [`run`] closes the database pools (up to 2 s, cut so that the steps so far end
 //! within 13 s of the signal), and `main` shuts the runtime
@@ -106,6 +108,7 @@ use crate::{
     jobs::{self, MediaVariantsHandler},
     keys, load_config,
     node::{NodeStatus, node_mode},
+    node_metrics::MinuteWriter,
     open::{OpenMode, open_store, startup_check},
     reload::{ReloadContext, Reloader},
     site::{load_theme, media_backend_name, open_media, permalink_rules},
@@ -164,6 +167,10 @@ pub struct NodeOptions {
     /// 10 s).
     #[cfg(feature = "test-seams")]
     pub served_flush: Option<Duration>,
+    /// Test seam: the `node_metrics` writer writes every this long from the start
+    /// instead of at every whole minute (P35).
+    #[cfg(feature = "test-seams")]
+    pub metrics_tick: Option<Duration>,
     /// Test seam: whether the invalidation loop and the job runner use `LISTEN`
     /// wake-ups (default: in cluster mode). `Some(false)` leaves the node on polling only.
     #[cfg(feature = "test-seams")]
@@ -254,7 +261,8 @@ pub struct RunningNode {
     runner: JoinHandle<()>,
     background: CancellationToken,
     /// Reloader, invalidation loop, failure flusher, `request.served` flusher, redirect
-    /// hits flusher, scheduler, heartbeat, and the metrics listener when configured.
+    /// hits flusher, scheduler, heartbeat, `node_metrics` writer, and the metrics
+    /// listener when configured.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
     /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
     mail: Option<Arc<MailQueue>>,
@@ -708,6 +716,13 @@ async fn boot(
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
     let heartbeat = registry.spawn_heartbeat(status.meta_fn(), background.clone());
+    // One `node_metrics` row per minute (P35); flushed once more at shutdown.
+    let metrics_every: Option<Duration> = None;
+    #[cfg(feature = "test-seams")]
+    let metrics_every = opts.metrics_tick.or(metrics_every);
+    let minute_writer =
+        MinuteWriter::new(store.clone(), registry.id(), metrics.clone(), metrics_every)
+            .spawn(background.clone());
     // Served until the background tasks stop, so the drain can still be scraped.
     let metrics_server = metrics_listener.map(|listener| {
         let app = metrics_router(metrics.clone());
@@ -746,6 +761,7 @@ async fn boot(
         ("redirect hits flusher", hits_flusher),
         ("scheduler", scheduler),
         ("heartbeat", heartbeat),
+        ("node metrics writer", minute_writer),
     ];
     tasks.extend(metrics_server.map(|task| ("metrics listener", task)));
     Ok(RunningNode {

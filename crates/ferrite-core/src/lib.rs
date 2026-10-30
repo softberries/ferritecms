@@ -65,7 +65,7 @@ pub use site::{
     PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic,
     UserPublic,
 };
-pub use system::SystemService;
+pub use system::{MetricsSeries, SystemService};
 pub use taxonomy::TaxonomyService;
 pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
 pub use users::{

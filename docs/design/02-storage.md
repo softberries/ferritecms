@@ -462,6 +462,7 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
 | `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1; since M3-2 the Postgres claim is a `UNION ALL` of the due branch on this index and the expired-lease branch on `jobs_lease_idx`, P31) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (no ORDER BY index: SQLite's planner does not use one for the claim after ANALYZE; since `0006` the SQLite claim is a `UNION ALL` of the due branch on `jobs_due_idx` and the expired-lease branch on `jobs_lease_idx`, each named with `INDEXED BY`, sorted by `priority DESC, run_at, id` and limited across the union; the pre-check and the reaper name their index the same way, and the prune names `jobs_finished_idx`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)`, `jobs_created_idx (created_at, id)` and `jobs_kind_created_idx (kind, created_at, id)` (the admin jobs list by status, by kind or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` per `UNION ALL` branch in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
 | `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `last_binary_version` (M4-2 P30: the binary that last started here; written by the startup check and `migrate up`, see 09 §1), `site_id`, `install_id` (M4-1 R16: this database's own id, written by the migrations when absent, never exported, left out of backup snapshots, renewed by `ferrite restore`; delete the row to make a clone a new install; key/value, so no migration) |
+| `node_metrics` *(since `0012_node_metrics`)* | `node_id` (no FK), `minute` (a whole UTC minute), `requests`, `errors_5xx`, `page_views`, `cache_hits`, `cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed` (bigint), `p95_ms` (int); PK (`node_id`, `minute`) `node_metrics_pkey`; index `node_metrics_minute_idx (minute)` | One row per node and minute (M4-2 P35, 09 §6; `NodeMetricsRepo`: `insert` adds to an existing row with `p95_ms` the larger, `series` sums per minute/hour/day bucket, `prune` in batches); pruned after 7 days by `node_metrics.prune`; not exported; the `0012` down drops it (not declared lossy: transient) |
 
 ### Search
 
@@ -577,6 +578,8 @@ crates/ferrite-store-sqlite/migrations/
                                     #   `import` artifacts, run job_id/step/report_hash
     0011_artifact_gc.up.sql         # M4-1, phase expand, not lossy: artifacts.orphaned_at
     0011_artifact_gc.down.sql       #   and its partial index (P11, R3)
+    0012_node_metrics.up.sql        # M4-2, phase expand, not lossy: node_metrics (P35)
+    0012_node_metrics.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -824,7 +827,7 @@ token hashes, sealed TOTP secrets and sealed plugin/theme settings. The keys of 
 sorted, so the same data gives the same bytes on both backends.
 
 **What is exported:** every table except the transient or derived ones: `sessions`,
-`rate_limits`, `events`, `nodes`, `idempotency_keys`, `plugin_failures`, `jobs` (all of
+`rate_limits`, `events`, `nodes`, `idempotency_keys`, `plugin_failures`, `node_metrics`, `jobs` (all of
 them: queued plugin actions and variant jobs are lost; `ferrite media regenerate`
 remakes missing variants) and `search_docs` (SQLite's `search_fts*` and
 `_sqlx_migrations` are not catalogue tables). Of `schema_meta` only `site_id` travels;

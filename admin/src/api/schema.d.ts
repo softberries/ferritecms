@@ -980,6 +980,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/metrics/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_metrics_series"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/metrics/summary": {
         parameters: {
             query?: never;
@@ -2354,9 +2370,29 @@ export interface components {
             /** @description The FerriteCMS version serving the request. */
             version: string;
         };
+        /** @description `GET /system/metrics/series`: every bucket of the range, ascending (dense). */
+        MetricsSeriesDto: {
+            buckets: components["schemas"]["SeriesBucketDto"][];
+            /**
+             * Format: date-time
+             * @description The requested `from` rounded down to a bucket start (UTC, epoch-aligned).
+             */
+            from: string;
+            /**
+             * Format: uuid
+             * @description The node filter, if one was given.
+             */
+            node?: string | null;
+            step: components["schemas"]["SeriesStepDto"];
+            /**
+             * Format: date-time
+             * @description The requested `to` rounded up to a bucket end (exclusive).
+             */
+            to: string;
+        };
         /**
          * @description `GET /system/metrics/summary`: a snapshot of the answering node (its counters since
-         *     it started) plus the site's job counts; time series are M4 (P20).
+         *     it started) plus the site's job counts (P20); time series: `MetricsSeriesDto`.
          */
         MetricsSummaryDto: {
             /** @description Jobs per status, every node's. */
@@ -2869,6 +2905,71 @@ export interface components {
             robots?: components["schemas"]["RobotsDto"][] | null;
             title?: string | null;
         };
+        /**
+         * @description One bucket of `GET /system/metrics/series`: the minutes starting in
+         *     `[start, start + step)`, summed over the nodes (zeros where none wrote a row).
+         */
+        SeriesBucketDto: {
+            /**
+             * Format: int64
+             * @description Page cache lookups that found a page.
+             */
+            cache_hits: number;
+            /**
+             * Format: int64
+             * @description Page cache lookups that did not.
+             */
+            cache_misses: number;
+            /**
+             * Format: int64
+             * @description Those of `requests` with a 5xx status.
+             */
+            errors_5xx: number;
+            /**
+             * Format: int64
+             * @description Jobs completed.
+             */
+            jobs_done: number;
+            /**
+             * Format: int64
+             * @description Job attempts that failed (retried or dead).
+             */
+            jobs_failed: number;
+            /**
+             * Format: int32
+             * @description The upper bound (ms) of the latency bucket holding the page p95: the largest of
+             *     the bucket's minutes and nodes; 0 without page responses. Bounds: 5, 10, 25, 50,
+             *     100, 250, 500, 1000, 2500, 5000 and 10000 (also for anything slower).
+             */
+            p95_ms: number;
+            /**
+             * Format: int64
+             * @description `200` HTML page views (no bots, previews or logged-in requests).
+             */
+            page_views: number;
+            /**
+             * Format: int64
+             * @description Plugin calls that ran.
+             */
+            plugin_calls: number;
+            /**
+             * Format: int64
+             * @description Plugin calls that failed.
+             */
+            plugin_failures: number;
+            /**
+             * Format: int64
+             * @description Responses of every route class but `other` (health checks, the comment form).
+             */
+            requests: number;
+            /** Format: date-time */
+            start: string;
+        };
+        /**
+         * @description The bucket width of a metrics series.
+         * @enum {string}
+         */
+        SeriesStepDto: "minute" | "hour" | "day";
         /**
          * @description One of the user's sessions (`GET /auth/sessions`). No user agent or address is
          *     shown: sessions are told apart by time.
@@ -3432,6 +3533,7 @@ export type SchemaMenuList = components['schemas']['MenuList'];
 export type SchemaMenuLocationDto = components['schemas']['MenuLocationDto'];
 export type SchemaMenuSummary = components['schemas']['MenuSummary'];
 export type SchemaMetaDto = components['schemas']['MetaDto'];
+export type SchemaMetricsSeriesDto = components['schemas']['MetricsSeriesDto'];
 export type SchemaMetricsSummaryDto = components['schemas']['MetricsSummaryDto'];
 export type SchemaNodeCountsDto = components['schemas']['NodeCountsDto'];
 export type SchemaNodeDto = components['schemas']['NodeDto'];
@@ -3474,6 +3576,8 @@ export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
 export type SchemaSeoDto = components['schemas']['SeoDto'];
 export type SchemaSeoPatchDto = components['schemas']['SeoPatchDto'];
+export type SchemaSeriesBucketDto = components['schemas']['SeriesBucketDto'];
+export type SchemaSeriesStepDto = components['schemas']['SeriesStepDto'];
 export type SchemaSessionDto = components['schemas']['SessionDto'];
 export type SchemaSessionList = components['schemas']['SessionList'];
 export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
@@ -8438,6 +8542,71 @@ export interface operations {
             };
             /** @description `busy`: the node's mail queue is full or shutting down */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_metrics_series: {
+        parameters: {
+            query: {
+                /** @description Start of the range (RFC 3339), inclusive; rounded down to a bucket start. */
+                from: string;
+                /** @description End of the range (RFC 3339), exclusive; rounded up to a bucket end. After `from`. */
+                to: string;
+                /** @description `minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days). */
+                step: string;
+                /** @description Only this node's rows (UUID); every node's, summed, when absent. */
+                node?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (`p95_ms` the largest), zeros where no node wrote a row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsSeriesDto"];
+                };
+            };
+            /** @description `validation` (`from`, `to`, `step`, `node` malformed) or `malformed-query` (a parameter missing) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_system`, `system:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `to` not after `from` (`errors[0].field` = `to`), or a span over the step's limit (`step`: minute 24 h, hour and day 7 days) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

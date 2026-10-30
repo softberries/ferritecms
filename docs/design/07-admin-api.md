@@ -145,7 +145,7 @@ uses them is M2b (the import screen M3-2).
 | Themes | `GET /themes`, `POST /themes` (raw ustar bundle, `?activate=true`), `POST /themes/{name}/activate`, `GET/PATCH /themes/{name}/settings` (no delete, M2a-2 P30); manifest facts in `ThemeDto` (M2b-3) | M2a-2a, M2b-3 | reads `manage_themes` + `extensions:read` (`require_reader`); writes `manage_themes` + `extensions:write` |
 | Plugins | `GET /plugins`, `GET /plugins/{name}`, `POST /plugins/inspect` (multipart upload → permission report, nothing installed), `POST /plugins` (install with `approve` = the report's fingerprint), `POST /plugins/{name}/enable`, `POST /plugins/{name}/disable`, `DELETE /plugins/{name}` (`?purge=true`), `GET/PATCH /plugins/{name}/settings`; `GET /plugins/retained`, `POST /plugins/{name}/purge` (M2b-3 P47) | M2a-2a, M2b-3 | reads `manage_plugins` + `extensions:read` (`require_reader`, so editors see no plugin list); writes `manage_plugins` + `extensions:write` |
 | Plugin metrics | `GET /plugins/{name}/metrics` (24 h of failures per hook and hour, every node's; the answering node's per-hook call stats; 05 §8) | M2a-2b (built) | `manage_plugins` + `extensions:read` |
-| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?actor&action&target_kind&target_id&limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary`, `POST /system/mail/test` (see **System** below) | M2a-2b (built); audit filters, `mail`, typed node `meta` and the test mail M2b-3 | `manage_system` (admins) + `system:read`; retry and test mail `system:write` |
+| System | `GET /system/status` (versions, mode, backends, schema, the active theme and the nodes serving a fallback, job counts, node counts), `GET /system/nodes`, `GET /system/audit?actor&action&target_kind&target_id&limit&cursor`, `GET /system/jobs?status&kind&limit&cursor`, `POST /system/jobs/{id}/retry`, `GET /system/metrics/summary`, `GET /system/metrics/series?from&to&step&node`, `POST /system/mail/test` (see **System** below) | M2a-2b (built); audit filters, `mail`, typed node `meta` and the test mail M2b-3; the series M4-2 (built, P35) | `manage_system` (admins) + `system:read`; retry and test mail `system:write` |
 | Import | `POST /import/wordpress` (`multipart/form-data`: `wxr` ≤ 512 MiB, optional `uploads` zip ≤ 4 GiB, optional `options` JSON ≤ 4 KiB; `Idempotency-Key`; `202` with `ImportJobDto` and `Location`; `409` while an import is queued or running, checked before the body is read and again when the job is queued; `413` over a cap), `GET /import/jobs/{job_id}` (the job and its newest run; what the admin polls), `GET /import/runs?limit&cursor` (newest first), `GET /import/runs/{id}`, `GET /import/runs/{id}/report.json` and `…/report.html` (sandboxed HTML, `Cache-Control: private, no-store`); design 08 §1 | M3-2 (built; P23, P25, P26-1 as built: design 07's former `GET /import/{job}` is these routes) | `import` (admins) + `import:read` to read, `import:write` to start |
 
 **Versions and `If-Match` (P11).** Only content has a `version`: `PATCH`, `DELETE`, the
@@ -440,6 +440,14 @@ the version, the mode or the migration state); the unauthenticated liveness prob
 - `GET /system/metrics/summary`: the answering node's `renders`, `page_cache` (`entries`,
   `bytes`, `hits`, `misses`), `plugins` (`calls`, `failures`) since it started, and the
   site's `jobs` per status (P20; 09 §6).
+- `GET /system/metrics/series?from&to&step=minute|hour|day[&node]` (M4-2 P35): the
+  nodes' per-minute `node_metrics` rows summed into dense, epoch-aligned buckets
+  (`{from, to, step, node, buckets: [{start, requests, errors_5xx, page_views,
+  cache_hits, cache_misses, plugin_calls, plugin_failures, jobs_done, jobs_failed,
+  p95_ms}]}`; `p95_ms` the largest of the bucket's minutes and nodes). `from`/`to` are
+  RFC 3339 (`400`, fields `from`/`to`; `step` and `node` likewise); a minute series spans
+  at most 24 h, hour and day series 7 days (`422`, field `step`); `to` must be after
+  `from` (`422`, field `to`). 09 §6.
 - `POST /system/mail/test` (`manage_system` + `system:write`; M2b-3 P49) queues one mail to
   the caller's own address and answers `202 { "to" }`. Without `[mail]` it is `422`
   (`errors[0].field = "mail"`); an account without a usable address `422` (`email`); 3
