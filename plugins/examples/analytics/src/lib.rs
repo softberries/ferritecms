@@ -59,11 +59,14 @@ const DAY_PREFIX: &str = "day:";
 const MAX_OPS: u32 = 100;
 /// Stored bytes one batch decodes and re-encodes. The newest touched day always counts;
 /// an older one that would take the total past this is skipped (its events are lost). A
-/// blob the plugin writes is at most about 130 KB, and decoding costs fuel in proportion.
+/// blob the plugin writes is at most about 130 KB (paths cut to 200 bytes, hosts to 100,
+/// core sends them percent-encoded), and decoding costs fuel in proportion.
 const BATCH_DECODE_BYTES: usize = 150_000;
-/// Most days one batch writes: a read and a write each, leaving most of the 100 operations
-/// for the prune.
-const MAX_DAYS: usize = 8;
+/// Most days one batch writes. A batch holds a few seconds of one node's events, so it spans
+/// two days at midnight; three leave room for a clock that steps. Each day is a read, a check
+/// that a missing blob is missing, and a write, leaving most of the 100 operations for the
+/// prune.
+const MAX_DAYS: usize = 3;
 /// What `list-keys` returns at most.
 const LIST_LIMIT: u32 = 100;
 
@@ -306,7 +309,8 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
             by_day.len()
         ));
     }
-    // Newest first, so that if the write budget runs out it is the oldest day that loses.
+    // Newest first, so that if the KV operations or the decode budget run out it is the
+    // oldest day that loses.
     // The first host error ends the loop: every further write would only add to what a
     // retry of the job counts twice.
     let mut meter = Meter::new(ctx.kv());

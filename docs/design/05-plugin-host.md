@@ -387,8 +387,13 @@ As built:
   first segment percent-decodes to `_preview` in any case (also the 404 variants),
   plugin routes (`/_p/`) and the API (separate axum routes).
 - **Event:** `{"path", "status", "ts", "referrer_host", "ua_class", "cache"}`. `path` is
-  the raw percent-encoded path without the query, cut to 512 bytes (F36; a decoded
-  path could hold a NUL and make the whole job payload invalid). `referrer_host` is the
+  the percent-encoded path without the query, cut to 512 bytes (F36; a decoded
+  path could hold a NUL and make the whole job payload invalid). Every byte outside the
+  RFC 3986 path set (`pchar` and `/`) is percent-encoded as `%XX` (uppercase) before the
+  cut: the request target may carry a raw `"`, `\`, space, control or non-ASCII byte, and
+  the JSON payload would double a `\` or `"` and make a guest pay for it (M4-3a X5; 1000
+  events of 508 backslashes trapped the `analytics` example at the default fuel). An
+  existing `%XX` is kept, and the cut never splits one. `referrer_host` is the
   lowercased ASCII host of a single absolute `Referer` (≤ 253 bytes), else `null`.
   `ua_class`: `bot` if the user agent contains `bot`, `crawl`, `spider` or `slurp`
   (ASCII case-insensitive), else `browser` if it starts with `Mozilla/`, else `other`.
@@ -1182,24 +1187,27 @@ M4-3a adds the shipped example `analytics` (`plugins/examples/analytics`, a `req
 subscriber, one route and a viewer list, `README.md`), the first example that stores a lot:
 one JSON blob per UTC day in KV. Three things it showed about the limits. A call's 100 KV
 operations are enough for a batch only if the plugin counts them (it reads and writes each
-touched day once, caps a batch at eight days and spends what is left on the prune). "Today"
+touched day once, caps a batch at three days and spends what is left on the prune). "Today"
 comes from the wall clock, which every plugin may read (`wasi:clocks`, §5): taking it from
 the newest event instead lets one event from a fast clock prune the history. And fuel, not
 the 1 MiB a call may write, is what limits a batch: it is counted in guest instructions, and
 reading a day blob and the events costs in proportion to the entries and bytes. A `BTreeMap`
 of paths was many times slower than the default 50 million allows for 90 days, so the plugin
 counts in a `HashMap` (randomly seeded from the linked `wasi:random`); it stores a path cut to
-200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 125 KB; a
+200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 130 KB; a
 batch decodes and re-encodes at most 150 000 bytes of blobs (the newest touched day always, an
 older one only if it fits, else it is skipped and logged); and the stats page decodes the newest
 day in full plus at most three more within 150 000 bytes, the older days giving their totals
 alone, read from the front of the blob.
 
 Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit), as the range
-between a limit that traps and one that passes, against the default 50 million: 1000 events
-with 508-byte paths and 253-byte hosts counted onto a full day, 23 to 26 million (the worst
-case; about 2x headroom); the same across midnight onto two full days, 20 to 23 million (the
-older day skipped); the page over 90 full days or over the largest blob, 11 to 14 million; the
-90-day page over 33 KB blobs, 15 to 18 million, and over short distinct keys, 12 to 15
-million; 1000 ordinary events onto two 33 KB days, 14 to 17 million. No limit above the
-default is requested.
+between a limit that traps and one that passes, against the default 50 million. The most
+expensive batches, 1000 events with 508-byte paths and 253-byte hosts: onto one full day, 23
+to 26 million; across midnight onto a full older day with the newest day new, 26 to 30; over
+three days with a full oldest day, 26 to 30; only adding to the keys of a full day, 26 to 30
+(about 1.7 to 1.9x headroom at worst). Across midnight with both days full the older one is
+skipped, 20 to 23. 1000 backslash or quote paths needed 80 to 90 million as the raw path
+reached the payload (the 404s alone) and 16 to 20 million once core percent-encodes it (X5).
+The page over 90 full days or over the largest blob, 11 to 14 million; over 90 days of 33 KB
+blobs, 15 to 18, and of short distinct keys, 12 to 15; 1000 ordinary events onto two 33 KB
+days, 14 to 17. No limit above the default is requested.

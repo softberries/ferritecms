@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use ferrite_http::StoreHostServices;
+use ferrite_http::{CacheOutcome, ServedEvent, StoreHostServices};
 use ferrite_plugin_host::{
     ActionEvent, Grant, HostConfig, HostServices, KindOk, Manifest, PluginHost, Post, RouteRequest,
     RouteResponse, SettingSpec,
@@ -35,9 +35,13 @@ profile_tests!(
     a_batch_of_many_days_stays_within_the_call_budget,
     long_paths_and_hosts_are_stored_clipped,
     a_thousand_long_views_on_one_maximal_blob,
+    a_midnight_batch_with_a_new_newest_day_and_a_maximal_older_one,
+    a_thousand_views_that_only_increment_a_maximal_blob,
+    a_batch_over_three_days_with_a_maximal_oldest,
     an_older_day_over_the_decode_budget_is_skipped,
     the_largest_blob_after_truncation_fits_the_stats_page,
     a_failed_read_never_overwrites_a_stored_day,
+    a_thousand_hostile_paths_stay_inside_the_default_fuel,
     stored_blobs_that_are_corrupt_or_newer_are_handled,
     a_malformed_payload_is_ignored,
 );
@@ -848,13 +852,13 @@ async fn prune_uses_the_rest_of_the_call_budget(site: Site) -> Site {
     site
 }
 
-/// Ten days in one batch (a delayed or replayed job): the newest eight are counted and
-/// the call stays within its 100 KV operations, so it does not fail.
+/// Ten days in one batch (a clock that stepped): the newest three are counted and the call
+/// stays within its 100 KV operations, so it does not fail.
 async fn a_batch_of_many_days_stays_within_the_call_budget(site: Site) -> Site {
     let site = site_with_analytics(site).await;
     let events: Vec<Value> = (1..=10).rev().map(|n| view(ago(n), "/")).collect();
     feed(&site, events).await;
-    let want: Vec<&str> = (1..=8).rev().map(ago).collect();
+    let want: Vec<&str> = (1..=3).rev().map(ago).collect();
     assert_eq!(days(&site).await, want);
     site
 }
@@ -971,7 +975,7 @@ async fn stats_page_reads_short_distinct_keys_over_ninety_days(site: Site) -> Si
 }
 
 /// The newest day with data is always decoded with its lists, however big its blob. The
-/// plugin now writes at most about 125 KB a day, so this one is a blob from before the
+/// plugin now writes at most about 130 KB a day, so this one is a blob from before the
 /// path cut (or a foreign one): 500 paths of 350 bytes and 200 hosts of 253, over 200 KB,
 /// which is over the byte budget on its own.
 async fn the_newest_day_is_always_decoded_in_full(site: Site) -> Site {
@@ -1085,7 +1089,7 @@ async fn long_paths_and_hosts_are_stored_clipped(site: Site) -> Site {
             ),
             event(d1(), "09:00:01.000000", &other, 200, None, "browser"),
             event(d1(), "09:00:02.000000", &wide, 200, None, "browser"),
-            // The site's own host is compared in full, before any cut.
+            // The site's own host is not counted as a referrer.
             event(
                 d1(),
                 "09:00:03.000000",
@@ -1281,5 +1285,114 @@ async fn a_failed_read_never_overwrites_a_stored_day(site: Site) -> Site {
     // With the read working, the same day is counted onto what is stored.
     feed(&site, vec![view(d1(), "/")]).await;
     assert_eq!(day(&site, d1()).await.unwrap()["views"], 6);
+    site
+}
+
+/// An event built the way core builds it: `ServedEvent::new` over the raw request path
+/// (which may hold a raw `\` or `"`), serialised as the job payload carries it.
+fn core_event(raw_path: &str, status: u16) -> Value {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::USER_AGENT,
+        "Mozilla/5.0".parse().unwrap(),
+    );
+    serde_json::to_value(ServedEvent::new(
+        raw_path,
+        &headers,
+        status,
+        CacheOutcome::Miss,
+    ))
+    .unwrap()
+}
+
+/// 1000 requests, answered 404, for `/` followed by 507 backslashes or quotes, and 1000
+/// answered 200 for such paths that differ early: core percent-encodes the path (X5), so
+/// the payload holds no JSON escapes and the batch costs what any long path costs. At the
+/// default fuel; before the encoding, the 404s alone needed 80 to 90 M and trapped.
+async fn a_thousand_hostile_paths_stay_inside_the_default_fuel(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    for ch in ['\\', '"'] {
+        let tail = ch.to_string().repeat(503);
+        let gone: Vec<Value> = (0..1000)
+            .map(|_| core_event(&format!("/{}", ch.to_string().repeat(507)), 404))
+            .collect();
+        assert!(
+            !gone[0].to_string().contains(&format!("\\{ch}")),
+            "core's event holds no escaped {ch}: {}",
+            gone[0]
+        );
+        feed(&site, gone).await;
+        let views: Vec<Value> = (0..1000)
+            .map(|i| core_event(&format!("/{i:03}{tail}"), 200))
+            .collect();
+        feed(&site, views).await;
+    }
+    let blob = day(&site, ago(0)).await.unwrap();
+    assert_eq!(blob["status"], json!({"2xx": 2000, "4xx": 2000}));
+    assert_eq!(blob["views"], 2000);
+    let paths = blob["paths"].as_object().unwrap();
+    assert!(
+        paths
+            .keys()
+            .all(|k| k.len() <= 200 && !k.contains(['\\', '"']))
+    );
+    site
+}
+
+/// The long-path views of `long_view` at paths that, once cut, are exactly the keys of
+/// `maximal_blob`: they only add to existing counts.
+fn repeat_view(day: &str, i: usize) -> Value {
+    let k = i % CAP_PATHS;
+    let path = format!("/{k:03}{}", "p".repeat(504));
+    let host = format!("{:03}{}", k % CAP_REFERRERS, "h".repeat(250));
+    event(day, "12:00:00.000000", &path, 200, Some(&host), "browser")
+}
+
+/// Midnight: 500 long views for a day that has no blob yet (the newest) and 500 for the
+/// day before, which holds a maximal blob. Both days are counted (only blobs that exist
+/// count against the decode budget). The most this batch costs, at the default fuel.
+async fn a_midnight_batch_with_a_new_newest_day_and_a_maximal_older_one(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", d1()), &maximal_blob()).await;
+    let events = (0..1000)
+        .map(|i| long_view(if i % 2 == 0 { d1() } else { d2() }, i))
+        .collect();
+    feed(&site, events).await;
+    assert_eq!(day(&site, d1()).await.unwrap()["views"], 1500 + 500);
+    assert_eq!(day(&site, d2()).await.unwrap()["views"], 500);
+    site
+}
+
+/// 1000 views that only increment keys of a maximal blob (their cut paths and hosts are its
+/// keys): no new key, the blob keeps its size, the cost is hashing and decoding it.
+async fn a_thousand_views_that_only_increment_a_maximal_blob(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", d1()), &maximal_blob()).await;
+    feed(&site, (0..1000).map(|i| repeat_view(d1(), i)).collect()).await;
+    let blob = day(&site, d1()).await.unwrap();
+    assert_eq!(blob["views"], 1500 + 1000);
+    let paths = blob["paths"].as_object().unwrap();
+    assert_eq!(paths.len(), CAP_PATHS, "nothing went to (other)");
+    assert_eq!(paths[&format!("/000{}", "p".repeat(196))], 5);
+    site
+}
+
+/// Three days in one batch, the third (oldest) with a maximal blob: the most days a batch
+/// writes, 1000 long views spread over them, at the default fuel. Older days than three
+/// are dropped.
+async fn a_batch_over_three_days_with_a_maximal_oldest(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", ago(3)), &maximal_blob()).await;
+    let events = (0..1000)
+        .map(|i| long_view(ago([1, 2, 3, 4][i % 4]), i))
+        .collect();
+    feed(&site, events).await;
+    assert_eq!(day(&site, ago(3)).await.unwrap()["views"], 1500 + 250);
+    assert_eq!(day(&site, ago(2)).await.unwrap()["views"], 250);
+    assert_eq!(day(&site, ago(1)).await.unwrap()["views"], 250);
+    assert!(
+        day(&site, ago(4)).await.is_none(),
+        "a fourth day is dropped"
+    );
     site
 }

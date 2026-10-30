@@ -143,8 +143,9 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
   already there is counted under `"(other)"`, which is not a path or a host.
 - A path is stored cut to its first 200 bytes and a referrer host to 100 (core allows 512 and
   253). The page shows 200 characters anyway, paths that differ only after the cut share one
-  count, and the length of a key a visitor can choose is bounded. So a blob is at most about
-  125 KB.
+  count, and the length of a key a visitor can choose is bounded. Core sends the path
+  percent-encoded, so nothing in it needs a JSON escape, and a blob is at most about 130 KB
+  (500 paths of 200 bytes, 200 hosts of 100, with counts of many digits).
 - **Retention** keeps the newest `retention_days` days, counted back from today (the wall
   clock): with 3, on 1 January the data for 30 and 31 December and 1 January is kept and 29
   December goes. An event for a day older than that is not stored. After each batch the
@@ -153,8 +154,8 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
   retention) clears over a few batches.
 - A blob written by a newer version of the plugin (`"v"` above 1) is left alone, and that
   day's events are not counted. A blob that is not JSON is replaced.
-- **Limits per batch.** A batch that touches more than eight days counts only the newest
-  eight. It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
+- **Limits per batch.** A batch that touches more than three days counts only the newest
+  three (a batch holds seconds of one node's events, so two at midnight is the normal most). It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
   touched day always, an older one only if it fits, so a batch across midnight on two full
   days counts the newest and skips the older (logged, its events are lost). The 1 MiB a call
   may write is never the limit that binds; fuel is.
@@ -177,6 +178,12 @@ Fine for a trend, not for billing. This is the same caveat as the `counter` exam
 - **Read-modify-write race.** A day's blob is read, changed and written back, which is not
   atomic. With more than one runner worker or several nodes, two batches handled at once can
   read the same blob, and one of them is lost.
+- **Failed reads.** The host answers `None` for a missing key and for a store read that
+  failed, and an empty list for a listing that failed. The plugin checks a missing blob with
+  a listing before it writes a first one over the day, which catches a failed read. It cannot
+  tell if the listing fails too, so a day whose read and listing both fail while the write
+  succeeds is overwritten with the current batch alone. That needs two calls in a row to fail
+  and a third to work; it is a known gap of the 0.1 `kv` interface.
 - **Lost events.** Events buffered on a node are lost when it crashes (up to 10 seconds'
   worth), when its buffer is full (10 000 events), when a batch cannot be queued, or when the
   plugin is not loaded on that node at flush time.
@@ -204,8 +211,12 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
   capped at 500 and 200 keys and cut to 200 and 100 bytes, and the stats page sums at most
   four days of them. Decoding a day costs fuel in proportion to its entries and bytes, which
   is why the lists cover only the newest days (above) and why a batch decodes at most 150 000
-  bytes. At the default fuel limit of 50 million the worst measured case is about 25 million
-  (1000 events with 508-byte paths and 253-byte hosts, counted onto a full day).
+  bytes. At the default fuel limit of 50 million, the most expensive batches measured need 26
+  to 30 million (1000 events with 508-byte paths and 253-byte hosts, spread over a midnight or
+  over three days and counted onto a day that already holds a full blob, or only adding to
+  its keys): about 1.7 to 1.9 times headroom. Core percent-encodes the path before it cuts it,
+  so a `\` or `"` in a request path (which core accepts and answers 404) costs no more than
+  any other byte; left raw, 1000 such 404s needed more than 80 million.
 
 ## Uninstall and data
 
