@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod analytics;
 mod common;
 mod egress;
 mod install;

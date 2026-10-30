@@ -1,0 +1,28 @@
+[plugin]
+name        = "analytics"
+version     = "0.1.0"
+publisher   = "ferritecms.dev"
+description = "Privacy-friendly page-view statistics: counts per day, path and referrer host, with a stats page for chosen users"
+world       = "ferrite:plugin/plugin@0.1.0"
+license     = "MIT"
+
+# Counts page views from the batched `request.served` events (no cookies, no IP, no user
+# agent, no query string) into one JSON blob per UTC day in the plugin's own storage, and
+# shows them on `/_p/analytics/` to the signed-in users listed in the `viewers` setting.
+# `site.url` is answered by the host: it names the site's own host, so a visit that comes
+# from the site itself is not a referral.
+[capabilities]
+kv           = true
+routes       = true
+options.read = ["site.url"]
+
+[hooks]
+"request.served" = 10
+
+[routes]
+"/" = { methods = ["GET"], rate_limit = "30/min" }
+
+[settings]
+viewers        = { type = "textarea", label = "Viewers: ids of the users who may open the stats page (separated by commas or new lines; empty means nobody)" }
+retention_days = { type = "number", label = "Days of statistics to keep (1 to 366)", default = 90 }
+exclude_paths  = { type = "text", label = "Paths not counted: comma-separated prefixes", default = "/admin,/_p" }
