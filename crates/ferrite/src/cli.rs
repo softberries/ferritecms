@@ -6,8 +6,8 @@ use clap::{Args, Parser, Subcommand};
 use crate::config_cmd::ConfigCommand;
 use crate::ext_cmd::{PluginCommand, ThemeCommand};
 use crate::{
-    backup, config_cmd, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate,
-    seed, serve, update, user_cmd,
+    backup, config_cmd, doctor, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd,
+    migrate, seed, serve, update, user_cmd,
 };
 
 #[derive(Debug, Parser)]
@@ -149,6 +149,19 @@ pub enum Command {
     Rollback(update::rollback::RollbackArgs),
     /// Probe a node's HTTP endpoint (for container health checks): exit 0 on 200, else 1.
     Healthcheck(healthcheck::HealthcheckArgs),
+    /// Check a site and report what is wrong, changing nothing.
+    ///
+    /// Prints one line per check, `<status>  <check>  <detail>`, with the status one of
+    /// ok, info, warn, error or skip, then `doctor: N ok, N warn, N error, N skip`. It
+    /// checks the version, the configuration, file modes and ownership, the database, the
+    /// media store, the cluster, the clock, the backup target, SMTP, TLS and the latest
+    /// release (09 §8). It creates and writes no file, folder, key or schema, works while
+    /// `serve` runs, and never prints a secret. `--offline` skips the checks that need the
+    /// network.
+    ///
+    /// Exit code: 3 when the database schema is newer than this binary allows, else 1 when
+    /// a check is an error, else 2 when one is a warning, else 0.
+    Doctor(doctor::DoctorArgs),
 }
 
 #[derive(Debug, Args)]
@@ -207,6 +220,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Restore(args) => backup::run_restore(args).await,
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
+        Command::Doctor(args) => doctor::execute(args).await,
         Command::SelfUpdate(args) => update::run(args).await,
         Command::Rollback(args) => update::rollback::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),

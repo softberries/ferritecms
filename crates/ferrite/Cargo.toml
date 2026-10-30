@@ -58,6 +58,9 @@ url.workspace = true
 uuid.workspace = true
 zstd.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 ferrite = { path = ".", features = ["test-seams"] }
 assert_cmd = "2.2.2"
