@@ -749,6 +749,43 @@ pub async fn single_walks_page_path(db: &TestDb) {
     );
 }
 
+/// The heading ids and `toc` are part of the hydrated item, in document order (P54, P55).
+pub async fn single_has_headings_toc(db: &TestDb) {
+    let store = db.store();
+    let author = user(store, "writer", Role::Author).await;
+    let mut it = item("post", "guide", ContentStatus::Published, Some(-HOUR));
+    let h = |level: u64, text: &str| {
+        json!({"type": "heading", "attrs": {"level": level},
+               "content": [{"type": "text", "text": text}]})
+    };
+    it.body = json!({"type": "doc", "content": [h(2, "Setup"), h(3, "Setup"), h(2, "Content")]});
+    insert(store, &author, it).await;
+    let r = reader(db.shared_store());
+    let p = r
+        .single("post", &parts(&["guide"]))
+        .await
+        .unwrap()
+        .value
+        .unwrap();
+    assert_eq!(
+        p.html,
+        "<h2 id=\"setup\">Setup</h2><h3 id=\"setup-1\">Setup</h3><h2 id=\"content-1\">Content</h2>"
+    );
+    let toc: Vec<(u8, &str, &str)> = p
+        .toc
+        .iter()
+        .map(|e| (e.level, e.id.as_str(), e.text.as_str()))
+        .collect();
+    assert_eq!(
+        toc,
+        [
+            (2, "setup", "Setup"),
+            (3, "setup-1", "Setup"),
+            (2, "content-1", "Content")
+        ]
+    );
+}
+
 /// Author, terms, featured image, inline media, excerpt and the keys recorded.
 pub async fn single_hydrates(db: &TestDb) {
     let store = db.store();
@@ -1962,6 +1999,7 @@ backend_tests!(
     related_never_unpublished,
     single_walks_page_path,
     single_hydrates,
+    single_has_headings_toc,
     listing_pages_and_deps,
     listing_with_interleaved_hidden,
     archives_by_term_author_date,

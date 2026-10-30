@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     CoreError, MAX_PARENT_DEPTH,
-    blocks::{self, InlineImage, RenderCtx, Responsive},
+    blocks::{self, InlineImage, RenderCtx, Responsive, TocEntry},
     content::EXCERPT_CHARS,
     events::{post_key, term_key, user_key},
     media::RASTER_MIMES,
@@ -157,9 +157,11 @@ impl Hydrator<'_> {
             let item = input.item;
             let featured = refs.featured.and_then(|id| media.get(&id));
             let fields = public_fields(&item.fields, &refd, featured.is_some());
+            let (html, toc) = self.render(&item.body, media);
             out.push(PageItem {
                 url,
-                html: self.render(&item.body, media),
+                html,
+                toc,
                 author: authors.get(&item.author_id).cloned(),
                 terms: item_terms.into_iter().map(term_public).collect(),
                 featured: featured.map(|m| self.media_public(m)),
@@ -211,12 +213,12 @@ impl Hydrator<'_> {
         Ok(out)
     }
 
-    fn render(&self, body: &Value, media: &HashMap<ContentId, Media>) -> String {
+    fn render(&self, body: &Value, media: &HashMap<ContentId, Media>) -> (String, Vec<TocEntry>) {
         let image = |id: &str| {
             let id: ContentId = id.parse().ok()?;
             media.get(&id).map(|m| self.inline_image(m))
         };
-        blocks::render_html(body, &RenderCtx { media: &image })
+        blocks::render_html_toc(body, &RenderCtx { media: &image })
     }
 
     /// An inline image of public media `m` (06 §4, the R28 follow-up), as the theme's

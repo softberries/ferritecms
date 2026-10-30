@@ -261,7 +261,7 @@ mod tests {
         );
         for tag in [
             "<p>",
-            "<h2>",
+            "<h2 id=",
             "<ul>",
             "<pre><code",
             "<blockquote>",

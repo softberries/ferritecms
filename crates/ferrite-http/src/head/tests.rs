@@ -25,6 +25,7 @@ fn item(title: &str, excerpt: &str) -> PageItem {
         },
         url: "/hello/".into(),
         html: String::new(),
+        toc: Vec::new(),
         author: None,
         terms: Vec::new(),
         featured: None,

@@ -356,7 +356,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | Name | Description | Dependency keys recorded |
 |---|---|---|
 | `site` | `title`, `url`, `description`, `locale`, `timezone` (config `site.timezone`, config only: no option key, a change needs a restart), `settings` (every declared theme setting with its value) | `option:site.title`, `option:site.description`, `option:site.locale`, `theme` (`site.url` is config, not an option: no key); the HTTP layer adds `option:theme.<name>.settings` |
-| `post` | current item: `id`, `kind`, `slug`, `title`, `excerpt`, `url`, `body` (sanitised HTML after plugin filters, marked safe), `date`, `updated` (RFC 3339, UTC), `menu_order`, `parent_id`, `fields`, `author`, `terms`, `featured` | `post:<id>`, `user:<author>`, `term:<id>` per term, `post:<featured media>` |
+| `post` | current item: `id`, `kind`, `slug`, `title`, `excerpt`, `url`, `body` (sanitised HTML after plugin filters, marked safe), `toc` (the body's headings, below), `date`, `updated` (RFC 3339, UTC), `menu_order`, `parent_id`, `fields`, `author`, `terms`, `featured` | `post:<id>`, `user:<author>`, `term:<id>` per term, `post:<featured media>` |
 | `page` | same object as `post`, set when the item's kind is `page` | as `post` |
 | `posts` | current listing: `items`, `page`, `per_page`, `total`, `pages`, `prev_page`, `next_page` | per item as `post`; the read adds `archive:<kind>` / `term:<id>` |
 | `archive` | listing routes only (R30): `kind` (`front`, `type`, `term`, `author`, `date`, `search`), `content_type`, `term`, `author`, `year`, `month` | `term:<id>` / `user:<id>` |
@@ -430,6 +430,34 @@ The dependency keys of the read that produced the context (ancestors, listings, 
 such as `reading.per_page` and `reading.front_page`) are merged by the HTTP layer, which also
 adds `theme` and `plugins` to every page. The full key grammar and the emitter/renderer
 contract are in `crates/ferrite-core/src/events.rs`.
+
+### Heading ids and `post.toc` (M4-3b P54, P55)
+
+The block renderer (`crates/ferrite-core/src/blocks/anchor.rs`) gives every `heading` node an
+`id` by GitHub's rule, so links written for GitHub (`#install-the-binary`) keep working
+after an import:
+
+1. take the heading's text (all text descendants, marks ignored) and lowercase it
+   (Unicode `to_lowercase`);
+2. keep alphanumeric characters (Unicode), `-`, `_` and the space, and drop the rest;
+3. turn each space into `-`; runs are not collapsed (`"a  b"` is `a--b`).
+
+An empty result becomes `section`. A repeated id within one body gets `-1`, `-2`, …
+appended (`setup`, `setup-1`). The counter starts with the reserved ids `content`,
+`comments`, `respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`
+(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`), so a heading "Content" becomes
+`content-1` and cannot collide with a theme landmark; a theme should not use another id
+that a heading could take. The kept characters need no escaping in the attribute, and the
+renderer escapes it anyway. Only headings with a valid level (1–6) that are not nested past
+`MAX_DEPTH` get an id; an invalid level renders as `<p>` without one. `html` blocks keep
+ammonia's rules (ids stripped), and no anchor link is added to the body (a theme can add
+one with a little JavaScript).
+
+`post.toc` is a list of `{level, id, text}` (`text` is the heading's plain text), in
+document order, for every heading the body renders. The theme chooses the levels it shows.
+It is computed with the body, before the plugin filters: when a `content.body` filter
+changes the HTML, `toc` stays as computed, so a filter that removes or renames a heading
+leaves a dead or stale entry.
 
 ## 5. Rendering pipeline (as built)
 

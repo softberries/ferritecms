@@ -19,6 +19,7 @@ const KEYS: &[&str] = &[
     "excerpt",
     "url",
     "body",
+    "toc",
     "date",
     "updated",
     "menu_order",
@@ -45,6 +46,7 @@ impl Object for ItemObject {
             "excerpt" => Value::from(i.excerpt.as_str()),
             "url" => Value::from(p.url.as_str()),
             "body" => Value::from_safe_string(p.html.clone()),
+            "toc" => Value::from(Serde(&p.toc)),
             "date" => i
                 .published_at
                 .map_or(Value::from(()), |t| Value::from(t.to_rfc3339())),

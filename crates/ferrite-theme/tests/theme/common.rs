@@ -86,6 +86,7 @@ pub fn item(kind: &str, title: &str) -> PageItem {
         },
         url: "/hello/".into(),
         html: "<p>Body <em>html</em></p>".into(),
+        toc: Vec::new(),
         author: Some(UserPublic {
             id: UserId::new(),
             login: "ana".into(),

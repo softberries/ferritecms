@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 use ferrite_domain::{ContentId, ContentStatus, TermId, Timestamp, UserId};
 use serde::Serialize;
 
+use crate::blocks::TocEntry;
+
 /// A read result plus the dependency keys it touched (renderer side of the contract in
 /// [`crate::events`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +90,11 @@ pub struct PageItem {
     /// safe), so any later transformation (plugin `content.body` filters included)
     /// must re-sanitise before the result is stored here.
     pub html: String,
+    /// The body's headings in document order, as rendered into [`html`](Self::html)
+    /// (`post.toc` in templates; M4-3b P55). Computed with the body: a plugin
+    /// `content.body` filter that changes the HTML leaves it as it was, so a filter that
+    /// removes a heading leaves a dead entry.
+    pub toc: Vec<TocEntry>,
     /// `None` only if the author row is gone.
     pub author: Option<UserPublic>,
     /// In stored position order.
