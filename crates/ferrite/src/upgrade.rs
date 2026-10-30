@@ -270,7 +270,9 @@ fn incomplete(rec: &UpgradeRecord, before: i64) -> bool {
 /// An unfinished earlier move is carried forward (its `schema_from` and snapshot become
 /// this move's): an attempt at this same move that stopped partway, or a move from the
 /// stored binary to another one that never stored its version (it died after migrating,
-/// and now a third binary starts: A→B crashed, then C).
+/// and now a third binary starts: A→B crashed, then C) whose record is unfinished
+/// (`schema_to` beyond the current schema, or a provisional `snapshot: null`). A finished
+/// A→B kept by a binary rollback to A is not carried into A→C.
 async fn begin(
     store: &dyn Store,
     data_dir: &Path,
@@ -292,7 +294,13 @@ async fn begin(
         let unfinished = if e.to == to {
             same_move(e, &to, stored.as_deref()) && incomplete(e, before)
         } else {
-            e.from.as_deref() == stored.as_deref() && e.schema_from < before
+            // Only an unfinished record: one that stopped short of its target, or a
+            // provisional one never finalised. A finished move kept by a binary rollback
+            // (target reached, snapshot named) is not carried: the next move's own
+            // snapshot is the one to restore.
+            e.from.as_deref() == stored.as_deref()
+                && e.schema_from < before
+                && (e.schema_to > before || e.snapshot.is_none() && e.schema_from < e.schema_to)
         };
         unfinished.then(|| Carry {
             schema_from: e.schema_from,

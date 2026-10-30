@@ -52,6 +52,14 @@ ferrite self-update [--version X] [--channel stable]
   - a move from the stored binary to another one that died after migrating (A→B
     crashed, then C starts: C's record is `from: A` with A→B's start and snapshot).
 
+  Only an unfinished record is carried: one whose `schema_to` lies beyond the current
+  schema, or a provisional one (`snapshot: null` with `schema_from < schema_to`). A
+  finished A→B that a binary rollback to A kept is not carried. A later A→C records its
+  own start and snapshot (`pre-<B's schema>-to-<C's>`), so `--restore-snapshot` loses no
+  more than needed. On Postgres a finished record also has `snapshot: null`, so
+  A→B→(rollback)A→C there does carry A→B's `schema_from`. There is no snapshot to
+  restore, and `migrate down` reaches the older start.
+
   A `migrate_up` that fails without moving the schema leaves the file as it was: the
   record that was there is written back, or the provisional one is removed when there
   was none.

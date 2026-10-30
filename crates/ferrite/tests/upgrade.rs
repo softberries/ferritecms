@@ -465,6 +465,52 @@ async fn unfinished_earlier_move_is_carried_into_the_next() {
     assert!(data.path().join(rec.snapshot.unwrap()).is_file());
 }
 
+/// A→B finished (target reached, snapshot named), a binary rollback to A, then A→C: C's
+/// record is its own move, with its own snapshot, not A→B's older start (restoring that
+/// snapshot would lose more than needed).
+#[tokio::test]
+async fn finished_move_kept_by_a_rollback_is_not_carried() {
+    let data = tempfile::tempdir().unwrap();
+    let store = sqlite_in(data.path()).await;
+    store.migrate_up(None).await.unwrap();
+    let l = latest(&store).await;
+    store.migrate_down(l - 2, true).await.unwrap();
+    let a = semver::Version::new(0, 0, 1);
+    let b = semver::Version::new(0, 0, 2);
+    let c = semver::Version::new(0, 0, 3);
+    set_last_binary(&store, &a.to_string()).await;
+
+    // A→B to l-1, finished.
+    let (_, ab) = upgrade::migrate_and_record(&store, data.path(), &b, Migrate::UpTo(Some(l - 1)))
+        .await
+        .unwrap();
+    let ab = ab.expect("A→B recorded");
+    assert_eq!((ab.schema_from, ab.schema_to), (l - 2, l - 1));
+    assert!(ab.snapshot.is_some());
+    // Binary rollback: A starts on l-1, which is its own or a newer schema, so it migrates
+    // nothing (this test binary embeds l, so the start is driven without migrating); the
+    // file is kept, the key says A.
+    let (_, kept) = upgrade::migrate_and_record(&store, data.path(), &a, Migrate::No)
+        .await
+        .unwrap();
+    assert!(kept.is_none());
+    assert_eq!(upgrade::load(data.path()).unwrap(), Some(ab));
+    assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
+
+    // A→C to l.
+    let rec = startup_check(&store, &c, &dbconf(), data.path())
+        .await
+        .unwrap()
+        .expect("A→C recorded");
+    assert_eq!(rec.from.as_deref(), Some("0.0.1"));
+    assert_eq!(rec.to, "0.0.3");
+    assert_eq!((rec.schema_from, rec.schema_to), (l - 1, l));
+    assert!(
+        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", l - 1)),
+        "{rec:?}"
+    );
+}
+
 fn ferrite() -> Command {
     let mut cmd = cargo_bin_cmd!("ferrite");
     cmd.env_clear();
