@@ -1,7 +1,7 @@
-// The dashboard (07 §3, M2b P16/P17): post count tiles, publishing activity, the actor's
-// recent drafts, what needs attention and site health. Every card loads and fails on
-// its own; a card the actor may not see is not rendered, so its data is never
-// requested. There is no route loader: the header's site title comes from the settings
+// The dashboard (07 §3, M2b P16/P17, M4 P36): post count tiles, publishing activity, the
+// actor's recent drafts, what needs attention, site health and site traffic. Every card
+// loads and fails on its own; a card the actor may not see is not rendered, so its data
+// is never requested. There is no route loader: the header's site title comes from the settings
 // query the sidebar also reads, and without it the greeting names no site.
 
 import { createFileRoute } from "@tanstack/react-router";
@@ -18,6 +18,7 @@ import { NeedsAttention } from "@/dashboard/needs-attention";
 import { attentionAccess, hasAttention } from "@/dashboard/queries";
 import { RecentDrafts } from "@/dashboard/recent-drafts";
 import { SiteHealth } from "@/dashboard/site-health";
+import { SiteMetrics } from "@/dashboard/site-metrics";
 import { Tiles } from "@/dashboard/tiles";
 
 export const Route = createFileRoute("/_app/")({
@@ -68,6 +69,7 @@ function Dashboard() {
             className={attention ? "lg:col-span-7" : "lg:col-span-12"}
           />
         ) : null}
+        {health ? <SiteMetrics className="lg:col-span-12" /> : null}
       </div>
     </div>
   );

@@ -91,10 +91,10 @@ test("admin_sees_health_and_attention", async ({ as, site, siteKey }) => {
 
   const health = page.getByRole("region", { name: "Site health" });
   await expect(health).toBeVisible();
-  // The page cache: numbers as text, scoped to this node.
+  // The page cache: numbers as text, scoped to this node since it started (R6).
   const cache = health.getByTestId("cache-ratio");
   await expect(cache).toBeVisible();
-  await expect(health.getByText("This node only")).toBeVisible();
+  await expect(health.getByText(/^This node, since /)).toBeVisible();
   const counts = await cache.locator("dd.tabular-nums").allTextContents();
   expect(counts).toHaveLength(4);
   for (const c of counts.slice(0, 3)) expect(c).toMatch(/^\d[\d,]*$/);

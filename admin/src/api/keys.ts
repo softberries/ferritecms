@@ -102,6 +102,8 @@ export const qk = {
   system: {
     status: ["system", "status"] as const,
     metrics: ["system", "metrics"] as const,
+    /** A dashboard range of `GET /system/metrics/series` (its window moves with the clock). */
+    series: (range: string) => ["system", "series", range] as const,
     jobs: (filters: JobFilters) => ["system", "jobs", filters] as const,
     /** Every job list (the dashboard's and the Jobs tab's); refetch after a retry. */
     jobLists: ["system", "jobs"] as const,
