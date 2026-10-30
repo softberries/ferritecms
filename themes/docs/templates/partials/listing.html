@@ -1,0 +1,28 @@
+{#- `posts` as a list of titles with excerpts, plus pagination from `pagination` (URLs
+    built by the server), or `empty` (a message) when there are none. -#}
+{%- if posts and posts.items %}
+<ul class="docs-list" role="list">
+  {%- for p in posts.items %}
+  {%- set summary = p.excerpt or (p.body | excerpt(30)) %}
+  <li class="docs-list__item">
+    <h2 class="docs-list__title"><a href="{{ p.url }}">{{ p.title }}</a></h2>
+    {%- if summary %}
+    <p class="docs-list__excerpt">{{ summary }}</p>
+    {%- endif %}
+  </li>
+  {%- endfor %}
+</ul>
+{%- if pagination and pagination.pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  {%- if pagination.prev_url %}
+  <a class="pagination__prev" rel="prev" href="{{ pagination.prev_url }}">Previous page</a>
+  {%- endif %}
+  <p class="pagination__status">Page {{ pagination.page }} of {{ pagination.pages }}</p>
+  {%- if pagination.next_url %}
+  <a class="pagination__next" rel="next" href="{{ pagination.next_url }}">Next page</a>
+  {%- endif %}
+</nav>
+{%- endif %}
+{%- else %}
+<p class="empty">{{ empty or "Nothing has been published here yet." }}</p>
+{%- endif %}

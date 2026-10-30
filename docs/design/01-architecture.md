@@ -103,7 +103,8 @@ ferritecms/
 │                                 #   plugins/, system/, auth/, lib/, i18n/), e2e/ (Playwright
 │                                 #   + support), scripts/ (dist and bundle checks, API drift
 │                                 #   check, the E2E wrapper), bundle-budget.json
-├── themes/                       # (built) starter themes embedded in the binary: `blog`
+├── themes/                       # (built) starter themes embedded in the binary: `blog`,
+│                                 #   `docs` (M4-3b P59; each under 150 KB, P65)
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
 │                                 #   counter, settings-probe, fetcher, admin-e2e (the admin

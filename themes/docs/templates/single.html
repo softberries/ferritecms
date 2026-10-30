@@ -1,0 +1,7 @@
+{#- Items of other types read like pages; the sidebar still shows the `nav_type` tree,
+    with this item current when it is part of it. -#}
+{% extends "base.html" %}
+{% block body_class %}is-single{% endblock %}
+{% block content %}
+{% include "partials/article.html" %}
+{% endblock %}

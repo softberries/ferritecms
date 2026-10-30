@@ -1,0 +1,13 @@
+{#- A menu as lists. Expects `items` (MenuNode list: label, url, children) and `flat`
+    (top level only, for the header). `aria-current` only on 200 pages that are not a
+    search, so error bodies never depend on the path. -#}
+<ul class="menu" role="list">
+{%- for node in items recursive %}
+  <li class="menu__item">
+    <a href="{{ node.url }}"{% if request.status == 200 and request.path and not request.s and node.url == request.path %} aria-current="page"{% endif %}>{{ node.label }}</a>
+    {%- if node.children and not flat %}
+    <ul class="menu__sub" role="list">{{ loop(node.children) }}</ul>
+    {%- endif %}
+  </li>
+{%- endfor %}
+</ul>

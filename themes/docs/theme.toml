@@ -1,0 +1,21 @@
+# The documentation starter theme (06 §8, M4-3b P59). Plain MiniJinja templates and CSS,
+# one small progressive-enhancement script, no build step.
+[theme]
+name        = "docs"
+version     = "0.1.0"
+author      = "FerriteCMS"
+license     = "MIT"
+homepage    = "https://github.com/softberries/ferritecms"
+description = "Documentation with a page-tree sidebar, breadcrumbs, a table of contents and previous/next links. Light and dark modes."
+
+[menus]
+primary = "Primary navigation"
+footer  = "Footer"
+
+[settings]
+# Link text uses the accent mixed with black (light scheme) or white (dark scheme); a
+# mid-tone accent keeps it above 4.5:1 in both, a very pale one (yellow) may not.
+accent_color = { type = "color", default = "#2563eb", label = "Accent colour (mid-tones keep links readable in light and dark mode)" }
+nav_type     = { type = "text", default = "page", label = "Content type shown in the sidebar (its page tree)" }
+show_toc     = { type = "bool", default = true, label = "Show the table of contents (“On this page”) on wide screens" }
+show_updated = { type = "bool", default = true, label = "Show when a page was last updated" }

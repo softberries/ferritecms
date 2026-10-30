@@ -72,7 +72,8 @@ directory depth 16; symlinks are refused (`crates/ferrite-theme/src/package.rs`)
 hash is the first 16 hex digits of a SHA-256 over all files and is part of every asset URL.
 Sources (`ThemeSource`):
 
-- embedded starter themes (`rust-embed` over the workspace `themes/` folder): `blog`;
+- embedded starter themes (`rust-embed` over the workspace `themes/` folder): `blog`,
+  `docs` (§8);
 - a folder `<data>/themes/<name>/` (solo mode only, see below);
 - a **bundle** (`ThemeSource::Bundle`), the artifact a theme is installed as.
 
@@ -645,5 +646,46 @@ are never cached.
 ## 8. Starter themes
 
 M1: `blog` (built, `themes/blog`, MIT, plain CSS, no build step, light and dark schemes).
-M4: `docs`, `business`. WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
+
+M4-3b: `docs` (built, `themes/docs`, MIT, P59; tests `crates/ferrite-theme/tests/docs.rs`).
+Plain CSS, system font stacks, no font files or images, light and dark from
+`prefers-color-scheme`, contrast ratios stated in the stylesheet's header (as `blog`).
+
+- **Layout.** A header (site title, the `primary` menu's top level, a search form; sticky
+  from 60rem); the page tree on the left; breadcrumbs, title, body, "Updated" date and a
+  previous/next pager in the centre (46rem wide at most); "On this page" on the right from
+  80rem. Under 60rem one column, the tree inside a `<details>` labelled "Pages", closed.
+  From 60rem the same `<details>` shows as the sidebar while closed, through
+  `::details-content` (inside `@supports selector(::details-content)`); a browser without
+  it shows the "Pages" toggle, and `docs.js` opens it on wide screens. The `footer` menu
+  sits in the footer.
+- **Data.** `base.html` reads `page_tree(post=post, kind=nav_type)` once (one bridge
+  call), so the sidebar, breadcrumbs and pager share one value; on search, archive and
+  404 pages (no `post`) the tree shows with nothing current, and the 404 body stays
+  independent of the path (R26). The sidebar is a recursive macro: each node with
+  children gets a `<details>` (open on the current trail) with its link outside the
+  `<summary>`, the current page `aria-current="page"`, and a `truncated` tree the note
+  "Only the first 1000 pages are listed.". Breadcrumbs (`<nav aria-label="Breadcrumb">`)
+  show for a page below the top level: the ancestors, then the current title unlinked.
+  The pager uses `rel="prev"`/`rel="next"`. The TOC lists `post.toc`'s level 2 and 3
+  entries when there are at least two. A tree of 1 110 nodes (10 × 10 × 10 under 10
+  roots) and a 65-level chain render within the default fuel and recursion limit
+  (tests); a 4 440-node tree also rendered within the fuel in a one-off run.
+- **Settings.** `accent_color` (color, `#2563eb`; links use it mixed with black or white
+  in oklab), `nav_type` (text, `page`: the type whose tree the sidebar shows; empty means
+  `page`), `show_toc` (bool, true), `show_updated` (bool, true). **Menus:** `primary`,
+  `footer`. **Templates:** `base`, `index`, `page`, `single`, `archive` (also term,
+  author and date archives), `search`, `404`, `500`; partials `sidebar`, `toc`,
+  `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
+  shared by page, single and index) and `listing`.
+- **Fixed ids** are reserved ones only (`content`, `nav`, `toc`, `search`; 06 §4), so no
+  heading id can collide with them.
+- **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
+  pages work without it) appends `<a class="heading-anchor" href="#id" aria-label="Link
+  to this section">#</a>` to each body heading with an id and, where
+  `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
+  button that reports through a visually hidden `role="status"` text. No syntax
+  highlighting (Later).
+
+`business`: M4-3b (P60). WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
 themes are not set up yet.

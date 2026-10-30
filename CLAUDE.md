@@ -119,12 +119,12 @@ by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
 `mail`, `viewers::allow`, `route::html`, `Head` additions; helpers used by module path).
 Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/{ci,release}.yml` and
 `.github/scripts/` (package, package-plugins, sums, verify-sig, newest, compat). Starter
-theme: `themes/blog` (embedded). Plugins: `plugins/examples/` (own workspace,
+themes: `themes/blog`, `themes/docs` (embedded; `docs`: page-tree sidebar, TOC, pager). Plugins: `plugins/examples/` (own workspace,
 built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
 each), the rest test fixtures. Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the `docs`/`business`
-themes and the docs site (M4-3b), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: the `business`
+theme and the docs site (M4-3b), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
 per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;

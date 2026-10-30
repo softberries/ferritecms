@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block body_class %}is-search{% endblock %}
+{% block content %}
+<div class="docs-listing">
+  <h1 class="docs-title">{% if request.s %}Search results for “{{ request.s }}”{% else %}Search{% endif %}</h1>
+  {% with form_id = "search-page", form_label = "Search again" %}{% include "partials/search-form.html" %}{% endwith %}
+  {%- if request.s and posts and posts.items %}
+  <p class="search-count" role="status">{{ posts.total }} {% if posts.total == 1 %}result{% else %}results{% endif %}</p>
+  {%- endif %}
+  {%- if posts and posts.items %}
+  {% include "partials/listing.html" %}
+  {%- else %}
+  <div class="empty" role="status">
+    <h2 class="empty__title">No results</h2>
+    <p>Nothing matched your search. Try different or fewer words, or browse the pages.</p>
+  </div>
+  {%- endif %}
+</div>
+{% endblock %}
