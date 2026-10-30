@@ -1,0 +1,15 @@
+{#- The page with the slug `contact`: its body, then, with the `contact_form` setting,
+    the contact-form plugin's form (install and enable the plugin first; without it the
+    form posts to a 404). -#}
+{% extends "page.html" %}
+{% block body_class %}is-page is-contact{% endblock %}
+{% block page_body %}
+<div class="contact wrap{% if site.settings.contact_form %} contact--form{% endif %}">
+  <div class="entry-content prose">
+    {{ post.body | safe }}
+  </div>
+  {%- if site.settings.contact_form %}
+  {% include "partials/contact-form.html" %}
+  {%- endif %}
+</div>
+{% endblock %}

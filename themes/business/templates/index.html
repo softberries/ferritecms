@@ -1,0 +1,22 @@
+{#- The final fallback (06 §2). -#}
+{% extends "base.html" %}
+{% block body_class %}is-index{% endblock %}
+{% block content %}
+{%- if post %}
+<article class="entry">
+  <header class="entry-header wrap wrap--prose">
+    <h1 class="entry-title">{{ post.title }}</h1>
+  </header>
+  <div class="entry-content prose wrap wrap--prose">
+    {{ post.body | safe }}
+  </div>
+</article>
+{%- else %}
+<div class="wrap">
+  <header class="page-header">
+    <h1 class="page-title">{% if posts and posts.page > 1 %}Latest news, page {{ posts.page }}{% else %}Latest news{% endif %}</h1>
+  </header>
+  {% include "partials/listing.html" %}
+</div>
+{%- endif %}
+{% endblock %}

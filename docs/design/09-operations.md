@@ -1034,7 +1034,7 @@ ferrite migrate up     --data DIR [--to VERSION]
 ferrite migrate down   --data DIR --to VERSION [--allow-lossy] [--yes]
 ferrite migrate verify --data DIR
 ferrite serve          --data DIR                      # M1c-2; cluster wiring M1.5
-ferrite seed demo      --data DIR [--force]            # M1c-2
+ferrite seed demo      --data DIR [--force] [--profile blog|business]  # M1c-2; --profile M4-3b
 ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
 ferrite media gc       --data DIR [--dry-run] [--grace-days N] [--claim]  # M4-1
@@ -1583,7 +1583,20 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 **`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
 
-- Writes demo content through the core services where they exist: an `admin` user (no
+- `--profile blog|business` (M4-3b P61) picks the content; `blog`, the default, is what
+  the next item describes. Another value is a usage error (exit 2).
+- `--profile business` writes the same `admin` user, then category News, four generated
+  PNGs (variants at the core sizes plus the embedded `business` theme's `[images]`, since
+  that is the theme the profile is for), pages Home (with a featured image and an
+  excerpt), Services, Consulting and Support (children of Home with `menu_order` 1–3,
+  each with an excerpt and a card image), About and Contact, three posts in News, menus
+  `primary` (Home → `/`, About, News → `/post/`, Contact) and `footer` (Services, About,
+  Contact, RSS feed), `site.title` "Larkspur Studio", `site.description` and
+  `reading.front_page` = Home's id. It activates no theme: the output ends with
+  `next: ferrite theme activate business --data DIR`. The child pages live under Home's
+  slug (`/home/services/`), as pages follow their parents. The rules below (refusal,
+  `--force`, atomicity) are the same for both profiles.
+- With the `blog` profile, writes demo content through the core services where they exist: an `admin` user (no
   password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
   admin` sets one), categories News and Guides, tags rust and cms,
   12 published posts with block bodies dated over the past months, three pages (About,

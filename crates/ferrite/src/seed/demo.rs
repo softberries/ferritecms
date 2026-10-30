@@ -133,11 +133,11 @@ pub(super) const POSTS: [DemoPost; 12] = [
     },
 ];
 
-fn text(t: &str) -> Value {
+pub(super) fn text(t: &str) -> Value {
     json!({ "type": "text", "text": t })
 }
 
-fn paragraph(t: &str) -> Value {
+pub(super) fn paragraph(t: &str) -> Value {
     json!({ "type": "paragraph", "content": [text(t)] })
 }
 
@@ -201,10 +201,30 @@ pub(super) fn page(
 
 /// A 1280×720 PNG: a diagonal orange-to-violet gradient.
 pub(super) fn gradient_png() -> anyhow::Result<Vec<u8>> {
-    let img = ImageBuffer::from_fn(IMAGE_WIDTH, IMAGE_HEIGHT, |x, y| {
-        let t = (x + y) as f32 / (IMAGE_WIDTH + IMAGE_HEIGHT) as f32;
+    gradient_png_of(
+        IMAGE_WIDTH,
+        IMAGE_HEIGHT,
+        [234.0, 88.0, 12.0],
+        [109.0, 40.0, 217.0],
+    )
+}
+
+/// A `width`×`height` PNG: a diagonal gradient from the RGB colour `from` (top left) to
+/// `to` (bottom right).
+pub(super) fn gradient_png_of(
+    width: u32,
+    height: u32,
+    from: [f32; 3],
+    to: [f32; 3],
+) -> anyhow::Result<Vec<u8>> {
+    let img = ImageBuffer::from_fn(width, height, |x, y| {
+        let t = (x + y) as f32 / (width + height) as f32;
         let mix = |a: f32, b: f32| (a + (b - a) * t).round() as u8;
-        Rgb([mix(234.0, 109.0), mix(88.0, 40.0), mix(12.0, 217.0)])
+        Rgb([
+            mix(from[0], to[0]),
+            mix(from[1], to[1]),
+            mix(from[2], to[2]),
+        ])
     });
     let mut out = Cursor::new(Vec::new());
     img.write_to(&mut out, ImageFormat::Png)?;

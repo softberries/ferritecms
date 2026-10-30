@@ -1,0 +1,11 @@
+{#- The call-to-action button from the settings `cta_label` and `cta_url`. Expects
+    `cta_class` (extra classes). Nothing when either setting is empty, or when the URL
+    names a scheme other than http(s), mailto or tel (no `javascript:` link). Both
+    values are auto-escaped, so a quote in the URL cannot leave the attribute. -#}
+{%- set cta_label = site.settings.cta_label | trim if site.settings.cta_label is string else "" %}
+{%- set cta_url = site.settings.cta_url | trim if site.settings.cta_url is string else "" %}
+{%- set url_lower = cta_url | lower %}
+{%- set scheme_ok = ":" not in cta_url or url_lower is startingwith("http://") or url_lower is startingwith("https://") or url_lower is startingwith("mailto:") or url_lower is startingwith("tel:") %}
+{%- if cta_label and cta_url and scheme_ok %}
+<a class="button {{ cta_class }}" href="{{ cta_url }}">{{ cta_label }}</a>
+{%- endif %}

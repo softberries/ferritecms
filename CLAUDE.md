@@ -129,7 +129,9 @@ Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C adm
 needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
 `cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
 it also creates the site key `<data>/secret.key`), then optionally
-`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content), then an account:
+`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content; `--profile business`
+writes a small-business site with a static front page for the `business` theme, then
+`theme activate business --data /tmp/site`), then an account:
 `cargo run -p ferrite -- user create --data /tmp/site --login me --email me@example.com`
 (prints a one-time password that must be changed at the first login; `--password-stdin`
 reads one from stdin instead; seed's own `admin` has no password until

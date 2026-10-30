@@ -1,0 +1,37 @@
+{#- Every listing but search: the type archive (`/post/`), and, as the hierarchy falls
+    back here, term, author and date archives. -#}
+{% extends "base.html" %}
+{% block body_class %}is-archive{% endblock %}
+{% block content %}
+<div class="wrap">
+  <header class="page-header">
+    {%- set kind = archive.kind %}
+    {%- if kind == "term" and archive.term %}
+    <p class="page-kicker">{% if archive.term.taxonomy == "category" %}Category{% elif archive.term.taxonomy in ["tag", "post_tag"] %}Tag{% else %}{{ archive.term.taxonomy | replace("_", " ") | capitalize }}{% endif %}</p>
+    <h1 class="page-title">{{ archive.term.name }}</h1>
+    {%- elif kind == "author" %}
+    <h1 class="page-title">{% if archive.author.display_name %}Posts by {{ archive.author.display_name }}{% else %}Posts by this author{% endif %}</h1>
+    {%- elif kind == "date" %}
+    {%- set year = archive.year %}
+    {%- set month = archive.month %}
+    {%- set valid_year = year is number and year >= 1000 and year <= 9999 %}
+    <h1 class="page-title">
+      {%- if valid_year and month is number and month >= 1 and month <= 12 -%}
+      {{ (year ~ "-" ~ ("0" ~ month)[-2:] ~ "-01T00:00:00Z") | date("%B %Y", tz="UTC") }}
+      {%- elif valid_year -%}
+      {{ year }}
+      {%- else -%}
+      Posts by date
+      {%- endif -%}
+    </h1>
+    {%- elif archive.content_type == "post" %}
+    <h1 class="page-title">News</h1>
+    {%- elif archive.content_type %}
+    <h1 class="page-title">{{ archive.content_type | replace("_", " ") | capitalize }}</h1>
+    {%- else %}
+    <h1 class="page-title">Archive</h1>
+    {%- endif %}
+  </header>
+  {% include "partials/listing.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{#- The contact-form plugin's form exactly as its README ("Put the form on a page") gives
+    it, plus a class on the form: it posts to the plugin's `/submit` route with `return`
+    = this page, and the `website` honeypot is hidden with CSS (never `type="hidden"`),
+    out of the tab order and from assistive technology. -#}
+<section class="contact-panel" aria-labelledby="contact-form-title">
+  <h2 id="contact-form-title" class="contact-panel__title">Send a message</h2>
+  <form class="contact-form" method="post" action="{{ plugin_route("contact-form", "/submit") }}">
+    <input type="hidden" name="return" value="{{ request.path }}">
+    <label for="cf-name">Name</label>
+    <input id="cf-name" name="name" autocomplete="name" required>
+    <label for="cf-email">E-mail</label>
+    <input id="cf-email" name="email" type="email" autocomplete="email" required>
+    <label for="cf-subject">Subject (optional)</label>
+    <input id="cf-subject" name="subject">
+    <label for="cf-message">Message</label>
+    <textarea id="cf-message" name="message" required></textarea>
+    <div style="position:absolute;left:-10000px" aria-hidden="true">
+      <label for="cf-website">Leave this field empty</label>
+      <input id="cf-website" name="website" tabindex="-1" autocomplete="off">
+    </div>
+    <button type="submit">Send</button>
+  </form>
+</section>
