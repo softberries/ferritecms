@@ -53,6 +53,7 @@ profile_tests!(
     the_prune_runs_before_counting,
     a_refused_write_still_prunes_and_the_next_batch_succeeds,
     compaction_makes_room_when_the_store_is_full,
+    a_compaction_refused_for_another_reason_keeps_the_full_day,
     the_page_says_which_days_could_not_be_read,
     encoded_paths_are_cut_whole_and_shown_decoded,
     the_worst_batch_with_maintenance_fits_the_default_fuel,
@@ -1250,10 +1251,12 @@ async fn the_largest_blob_after_truncation_fits_the_stats_page(site: Site) -> Si
 /// as the host does for a store read that failed (it cannot tell that from a missing key),
 /// and with `quota` set, `kv_set` refuses a write that would take the plugin's stored bytes
 /// past that many, as the host does at its 10 MiB (the same store call, a smaller limit).
+/// Writes of a key starting with one of `failing_set` answer the host's "storage error".
 /// Also used by the `contact-form` cases.
 pub(crate) struct Flaky {
     pub(crate) inner: Arc<StoreHostServices>,
     pub(crate) failing_get: Vec<String>,
+    pub(crate) failing_set: Vec<String>,
     pub(crate) quota: Option<(Arc<dyn Store>, u64)>,
 }
 
@@ -1263,6 +1266,7 @@ impl Flaky {
         Self {
             inner,
             failing_get: vec![key.to_owned()],
+            failing_set: Vec::new(),
             quota: None,
         }
     }
@@ -1272,6 +1276,7 @@ impl Flaky {
         Self {
             inner: site.services.clone(),
             failing_get: Vec::new(),
+            failing_set: Vec::new(),
             quota: Some((site.store.clone(), bytes)),
         }
     }
@@ -1307,6 +1312,9 @@ impl HostServices for Flaky {
         self.inner.kv_get(plugin, key).await
     }
     async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        if self.failing_set.iter().any(|k| key.starts_with(k.as_str())) {
+            return Err("storage error".into());
+        }
         let Some((store, bytes)) = &self.quota else {
             return self.inner.kv_set(plugin, key, value).await;
         };
@@ -1669,6 +1677,30 @@ async fn compaction_makes_room_when_the_store_is_full(site: Site) -> Site {
     site
 }
 
+/// A compaction write refused for a reason other than the quota (a store error, which may
+/// pass) keeps the full blob for a later batch rather than deleting it to make room.
+async fn a_compaction_refused_for_another_reason_keeps_the_full_day(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", ago(40)), &maximal_blob()).await;
+    let host = host_over(Flaky {
+        inner: site.services.clone(),
+        failing_get: Vec::new(),
+        failing_set: vec!["totals:".to_owned()],
+        quota: None,
+    });
+    host.dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap();
+    assert_eq!(days(&site).await, [ago(40), ago(0)]);
+    assert!(totals(&site, ago(40)).await.is_none());
+
+    // With the store working again, the next batch compacts it.
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0)]);
+    assert_eq!(totals(&site, ago(40)).await.unwrap()["views"], 1500);
+    site
+}
+
 /// A-1: the page lists which days have a blob and reads only those; a listed day whose
 /// read answers `None` failed to read, and the page says so instead of counting it as
 /// empty. With every stored day unreadable it says the statistics could not be read.
@@ -1705,6 +1737,7 @@ async fn the_page_says_which_days_could_not_be_read(site: Site) -> Site {
     let host = host_over(Flaky {
         inner: site.services.clone(),
         failing_get: vec![format!("day:{}", d1()), format!("day:{}", d2())],
+        failing_set: Vec::new(),
         quota: None,
     });
     let res = host

@@ -1229,9 +1229,11 @@ quota; the unit test `the_worst_case_footprint_fits_the_quota` builds the blobs 
 the sum stays under 9 MiB. Every batch prunes and compacts before it counts, keeping the
 operations its counting needs (at most eight compactions, each reading only the counts at
 the head of the blob), so a refused write never stops the prune, and a compaction whose
-write is refused deletes the full blob first and writes again: lowering a setting frees
-space at the next batch. The stats page lists the window's keys (one listing per month and
-tier) and reads only those, so a read that fails is reported, not shown as an empty day.
+write is refused over the quota deletes the full blob first and writes again (any other
+refusal leaves the full blob for a later batch): lowering a setting frees space at the next
+batch. The stats page lists the window's keys (one listing per month and tier) and reads only
+those, so a read that fails is reported, not shown as an empty day; a listing that fails comes
+back empty, so its days show as empty (the 0.1 `kv` gap).
 
 Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit), as the range
 between a limit that traps and one that passes, against the default 50 million (final review,

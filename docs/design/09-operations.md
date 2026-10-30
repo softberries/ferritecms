@@ -1119,12 +1119,17 @@ sudo -u ferrite env $(systemctl show ferrite --property=Environment --value) \
 ```
 
 `systemctl show` prints the unit's `Environment=` assignments, drop-ins included, separated
-by spaces; a value that holds a space comes out quoted and does not survive the shell's
-splitting (URLs and keys hold none). Variables from an `EnvironmentFile=` are not in that
-property: source the file into the same command (`set -a; . FILE; set +a` as a user who may
-read it) or pass it to a transient unit, `systemd-run --pipe --wait --collect -p User=ferrite
--p EnvironmentFile=FILE /usr/local/bin/ferrite doctor --data /var/lib/ferrite`. In Docker,
-`docker compose exec` inherits the container's environment.
+by spaces; a value that holds a space or a shell-special character (`?`, `&`, `$`, `[`, a
+quote; so a database URL with a query, or `[::1]:8080`) comes out quoted and does not survive
+the shell's splitting, and doctor then checks `ferrite.toml`'s value instead (this rests on
+systemd's quoting rule as documented, not on a run). Secrets do not belong in `Environment=`:
+any local user can read it with `systemctl show`, and this command would put them on sudo's
+command line (logged, and visible in `ps`). Keep `auth.secret_key`, database passwords and
+`AWS_*` keys in an `EnvironmentFile=` with mode 0600. Its variables are not in that property:
+pass the file to a transient unit, `systemd-run --pipe --wait --collect -p User=ferrite
+-p EnvironmentFile=FILE /usr/local/bin/ferrite doctor --data /var/lib/ferrite`, which also
+carries values the `$(…)` form cannot. In Docker, `docker compose exec` inherits the
+container's environment.
 
 | Check | What it checks |
 |---|---|

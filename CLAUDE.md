@@ -160,8 +160,9 @@ inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in t
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
 Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
-S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve` runs; `--offline` skips the S3,
-SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors, 3 schema incompatible; 09 §8).
+S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
+runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
+3 schema incompatible; 09 §8).
 Import a WordPress site (Tools → Export in WordPress gives the WXR file): `cargo run -p
 ferrite -- import wordpress export.xml --data /tmp/site [--uploads <copy of
 wp-content/uploads, or a .zip of it>] [--fetch-media] [--dry-run] [--report DIR] [--no-keep-permalinks]

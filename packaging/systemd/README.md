@@ -109,6 +109,17 @@ sudo -u ferrite env $(systemctl show ferrite --property=Environment --value) \
   /usr/local/bin/ferrite doctor --data /var/lib/ferrite
 ```
 
+That form carries only plain values: one with a space or a shell-special character (a
+database URL with `?`, `[::1]:8080`) is lost. Keep secrets (`FERRITE_AUTH__SECRET_KEY`,
+database passwords, `AWS_*`) in an `EnvironmentFile=` with mode 0600, not in `Environment=`,
+which any local user can read with `systemctl show`, and run doctor through a transient unit
+that reads the file:
+
+```sh
+systemd-run --pipe --wait --collect -p User=ferrite -p EnvironmentFile=/etc/ferrite/env \
+  /usr/local/bin/ferrite doctor --data /var/lib/ferrite
+```
+
 ## Update and roll back
 
 The binary is root-owned and `ProtectSystem=strict` makes `/usr/local/bin` read-only to the

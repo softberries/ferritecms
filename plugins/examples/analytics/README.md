@@ -220,7 +220,7 @@ An older day is compacted to its counts, under `totals:YYYY-MM-DD`; there is no 
 
 ## Storage
 
-A plugin may keep **10 MiB** of values in its key/value store (the host's quota, design 05 §3).
+A plugin may keep **10 MiB** of values in its key/value store (the host's quota, design 05 §6).
 Past it the host refuses the write, the batch fails, and failures count towards the plugin's
 auto-disable. So the plugin keeps two tiers and bounds what they can hold:
 
@@ -263,8 +263,8 @@ Fine for a trend, not for billing. This is the same caveat as the `counter` exam
   and listing both fail while the write succeeds is overwritten with the current batch alone.
   That needs two calls in a row to fail and a third to work; it is a known gap of the 0.1 `kv`
   interface. The stats page reads only listed days, so a failed read there is reported, not
-  shown as an empty day; a listing that fails makes the page say the statistics could not be
-  read.
+  shown as an empty day. A listing that fails comes back as an empty list, so the page shows
+  that month's days as empty (or "No data yet"): the same gap.
 - **Compaction.** A compaction writes the compacted blob, then deletes the full one. A delete
   that fails is not reported to the plugin, so the next batch would add that day's counts to
   the compacted blob a second time.

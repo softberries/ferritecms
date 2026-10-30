@@ -379,9 +379,15 @@ pub fn readable_path(path: &str) -> String {
         }
     }
     match String::from_utf8(out) {
-        Ok(text) if !text.chars().any(char::is_control) => text,
+        Ok(text) if !text.chars().any(|c| c.is_control() || is_bidi_control(c)) => text,
         _ => path.to_owned(),
     }
+}
+
+/// A bidirectional control (U+061C, U+200E, U+200F, U+202A..U+202E, U+2066..U+2069): decoded,
+/// it would make the row display reordered.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// `s` cut to [`SHOWN_CHARS`] characters, with an ellipsis when it was longer.
@@ -414,6 +420,9 @@ mod tests {
         // Control characters stay encoded.
         assert_eq!(readable_path("/a%00b"), "/a%00b");
         assert_eq!(readable_path("/a%0Ab"), "/a%0Ab");
+        // Bidi controls stay encoded, so a row cannot display reordered.
+        assert_eq!(readable_path("/a%E2%80%AEb"), "/a%E2%80%AEb");
+        assert_eq!(readable_path("/a%E2%81%A6b"), "/a%E2%81%A6b");
         // A `%` that starts no escape is kept as it is.
         assert_eq!(readable_path("/100%/x%4"), "/100%/x%4");
     }

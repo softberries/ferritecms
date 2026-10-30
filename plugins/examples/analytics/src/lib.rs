@@ -232,6 +232,8 @@ impl Meter {
 }
 
 const OUT_OF_OPS: &str = "this call is out of KV operations";
+/// How the host's refusal over the plugin's storage quota starts (05 §6).
+const QUOTA_EXCEEDED: &str = "kv quota exceeded";
 
 fn day_key(day: Day) -> String {
     format!("{DAY_PREFIX}{}", day.key())
@@ -354,9 +356,10 @@ fn compact(meter: &mut Meter, day: Day) -> core::result::Result<(), String> {
     match meter.set(&tkey, &blob) {
         Ok(()) => {}
         Err(Refused::Budget) => return Err(OUT_OF_OPS.to_owned()),
-        // Over the quota (most likely): the full blob is the big one, so free its space
-        // first and write again.
-        Err(Refused::Kv(first)) => {
+        // Over the quota: the full blob is the big one, so free its space first and write
+        // again. Any other refusal may be transient, so the full blob stays for a later
+        // batch.
+        Err(Refused::Kv(first)) if first.starts_with(QUOTA_EXCEEDED) => {
             warn(&format!(
                 "{tkey} not written ({first}); deleting {key} first to make room"
             ));
@@ -367,6 +370,7 @@ fn compact(meter: &mut Meter, day: Day) -> core::result::Result<(), String> {
                 Err(Refused::Kv(msg)) => Err(format!("{msg}; the counts of {key} are lost")),
             };
         }
+        Err(Refused::Kv(msg)) => return Err(format!("{tkey} not written ({msg}); {key} kept")),
     }
     meter.delete(&key).map_err(budget)
 }
