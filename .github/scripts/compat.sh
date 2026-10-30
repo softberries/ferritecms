@@ -68,7 +68,8 @@ check() {
   fi
   for path in / /healthz; do
     local code
-    code=$(curl -sS -o /dev/null -w '%{http_code}' "$base$path")
+    # A connection error prints 000 (and the log below) instead of exiting here.
+    code=$(curl -sS -o /dev/null -w '%{http_code}' "$base$path" || true)
     echo "GET $path -> $code"
     if [ "$code" != 200 ]; then
       echo "expected 200 from $path; the server's output:" >&2

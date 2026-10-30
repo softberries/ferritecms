@@ -30,7 +30,8 @@ LimitNOFILE=65536
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
-# Hardening. The data folder is the only writable path.
+# Hardening. The data folder is the only writable path: a local `[backup] to` or
+# `[media] root` outside it needs its own ReadWritePaths= in a drop-in (README.md).
 ProtectSystem=strict
 ReadWritePaths=/var/lib/ferrite
 ProtectHome=yes

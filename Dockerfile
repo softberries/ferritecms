@@ -10,11 +10,12 @@
 # the runtime image.
 #
 # Every base image is pinned as `name:tag@sha256:<multi-arch index digest>` (M4-2 P37), so
-# a build is reproducible and the release publishes what was checked; the tag only says
-# what the digest was taken from (2026-10-30, `docker buildx imagetools inspect`). Bump
-# the digests by hand to pick up new base releases. The distroless runtime carries the CA
-# certificates (`/etc/ssl/certs/ca-certificates.crt`) that outgoing HTTPS (S3 media,
-# plugin `http`, `self-update`) verifies against.
+# the base layers are fixed (the Rust toolchain still follows `stable`, which rustup
+# installs at build time per rust-toolchain.toml); the tag only says what the digest was
+# taken from (2026-10-30, `docker buildx imagetools inspect`). Bump the digests by hand
+# to pick up new base releases. The distroless runtime carries the CA certificates
+# (`/etc/ssl/certs/ca-certificates.crt`) that outgoing HTTPS (S3 media, plugin `http`,
+# `self-update`) verifies against.
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS admin
 RUN npm install -g pnpm@10.28.2

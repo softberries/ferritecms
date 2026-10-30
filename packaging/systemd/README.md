@@ -60,12 +60,40 @@ root on a systemd Linux host (Debian, Ubuntu, Fedora and the like).
    `Environment=FERRITE_LOG=debug`) belong in a drop-in, `systemctl edit ferrite`, so a
    newer copy of the unit can replace the file.
 
+## Folders outside the data folder
+
+`ProtectSystem=strict` leaves `/var/lib/ferrite` as the only path the service can write.
+Two settings can point elsewhere:
+
+- `[backup] to`, which must be outside the data folder (a relative path is relative to it,
+  so `"../backups"` is `/var/lib/backups`);
+- `[media] root`, when the media live in a local folder outside the data folder.
+
+With a local folder there, the scheduled backups (or the uploads) fail with a read-only
+file system error until the unit may write it. Either use S3 (`to = "s3://…"`, or
+`[media.s3]`), or create the folder for the `ferrite` user and add it in a drop-in:
+
+```sh
+install -d -o ferrite -g ferrite -m 0750 /var/backups/ferrite
+systemctl edit ferrite
+```
+
+```ini
+[Service]
+ReadWritePaths=/var/backups/ferrite
+```
+
+`ReadWritePaths=` in a drop-in adds to the unit's list, so the data folder stays
+writable. `systemctl restart ferrite` applies it. A folder that does not exist when the
+service starts makes it fail to start, so create the folder first.
+
 ## While it runs
 
 With SQLite, `serve` holds the data-folder lock: `seed`, `user`, `migrate`, `backup`,
 `import wordpress` and the other commands that open the database need the service
 stopped (`systemctl stop ferrite`), and run as the `ferrite` user (`sudo -u ferrite …`) so
-the files stay its own. A running site is backed up by `[backup]` in `ferrite.toml`.
+the files stay its own. A running site is backed up by `[backup]` in `ferrite.toml` (see
+above for a local `to`).
 
 ## Update and roll back
 
@@ -80,8 +108,13 @@ systemctl restart ferrite
 
 With `--data`, `self-update` also runs the new binary's `migrate status` for the site
 first. With SQLite that check cannot open the database while the service runs:
-`self-update` prints a warning and goes on, so stop the service first to see it. `--check` only reports whether a newer release exists. To go back to the previous binary
-(`/usr/local/bin/ferrite.prev`):
+`self-update` prints a warning and goes on, so stop the service first to see it.
+
+`--check` only reports whether a newer release exists. `self-update` installs GitHub's
+latest release, which is always the newest stable version (a later backport of an older
+line does not become the latest).
+
+To go back to the previous binary (`/usr/local/bin/ferrite.prev`):
 
 ```sh
 systemctl stop ferrite
@@ -89,9 +122,16 @@ ferrite rollback --data /var/lib/ferrite
 systemctl start ferrite
 ```
 
-`ferrite rollback --schema` also takes the schema back (09 §2). Commands that write into
-the data folder as root (such as `rollback --schema`) can leave root-owned files there:
-`chown -R ferrite:ferrite /var/lib/ferrite` afterwards.
+`ferrite rollback --schema` also takes the schema back (09 §2).
+
+Every root command given `--data` opens the site's database: `self-update --data`,
+`rollback --data` and `rollback --schema`. On SQLite it can leave files owned by root in
+the data folder (the database's `-wal` / `-shm` files, a snapshot or a moved database
+under `backups/`). Before starting the service again, check with
+`ls -la /var/lib/ferrite /var/lib/ferrite/backups`, and if anything is owned by root, run
+`chown -R ferrite:ferrite /var/lib/ferrite`. Running those commands as
+`sudo -u ferrite` avoids this when the binary's folder is writable to that user (it is
+not with the root-owned install above).
 
 ## TLS
 

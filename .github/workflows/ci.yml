@@ -278,13 +278,16 @@ jobs:
           toolchain: stable
       # Debug builds without the admin: the check is about the schema, not the binary's
       # speed or its embedded admin.
-      - name: Build the previous release
+      - name: Check out the previous release
         if: steps.prev.outputs.tag != ''
         env:
           TAG: ${{ steps.prev.outputs.tag }}
-        run: |
-          git worktree add "$RUNNER_TEMP/old" "$TAG"
-          cargo build --locked -p ferrite --manifest-path "$RUNNER_TEMP/old/Cargo.toml" --target-dir "$RUNNER_TEMP/old-target"
+        run: git worktree add "$RUNNER_TEMP/old" "$TAG"
+      # From its own folder, so the old tag's rust-toolchain.toml and .cargo/ apply.
+      - name: Build the previous release
+        if: steps.prev.outputs.tag != ''
+        working-directory: ${{ runner.temp }}/old
+        run: cargo build --locked -p ferrite --target-dir "$RUNNER_TEMP/old-target"
       - name: Build this commit
         if: steps.prev.outputs.tag != ''
         run: cargo build --locked -p ferrite
