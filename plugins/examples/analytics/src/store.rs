@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 /// The blob format. A blob with a higher version is left alone.
@@ -17,6 +18,12 @@ pub const MAX_PATHS: usize = 500;
 pub const MAX_REFERRERS: usize = 200;
 /// Where counts for keys past the cap go.
 pub const OTHER: &str = "(other)";
+/// Longest path stored, in bytes (cut at a character boundary). Core cuts events at 512;
+/// the page shows 200 characters anyway, and the cost of a day is the length of its keys.
+pub const MAX_PATH_BYTES: usize = 200;
+/// Longest referrer host stored, in bytes. Core allows 253; a real host is shorter, and
+/// a referrer is the visitor's to forge.
+pub const MAX_HOST_BYTES: usize = 100;
 
 /// Counts by key. A std `HashMap` with its randomly seeded hasher (the seed comes from
 /// `wasi:random`, which the host links): a plain deterministic hash would let a visitor who
@@ -25,17 +32,52 @@ pub const OTHER: &str = "(other)";
 /// (paths share long prefixes): many times slower.
 pub type Counts = HashMap<String, u64>;
 
-/// One `request.served` event. Only what the plugin uses; `cache` is ignored.
+/// One `request.served` event. Only what the plugin uses; `cache` is ignored. The path and
+/// the host are cut to [`MAX_PATH_BYTES`] and [`MAX_HOST_BYTES`] as they are read, so a
+/// 508-byte path costs a scan and no allocation of its tail: a batch of 1000 of them is
+/// the most expensive thing the plugin is asked to do.
 #[derive(Debug, Deserialize)]
 pub struct Event {
+    #[serde(deserialize_with = "clipped_path")]
     pub path: String,
     pub status: u16,
     /// RFC 3339 UTC.
     pub ts: String,
     #[serde(default)]
-    pub referrer_host: Option<String>,
+    pub referrer_host: Option<Host>,
     /// `browser`, `bot` or `other`.
     pub ua_class: String,
+}
+
+/// A referrer host, read cut to [`MAX_HOST_BYTES`].
+#[derive(Debug)]
+pub struct Host(pub String);
+
+impl<'de> Deserialize<'de> for Host {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        clipped(d, MAX_HOST_BYTES).map(Self)
+    }
+}
+
+fn clipped_path<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    clipped(d, MAX_PATH_BYTES)
+}
+
+/// A string cut to `max` bytes on a character boundary.
+fn clipped<'de, D: Deserializer<'de>>(d: D, max: usize) -> Result<String, D::Error> {
+    struct Cut(usize);
+    impl Visitor<'_> for Cut {
+        type Value = String;
+
+        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("a string")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<String, E> {
+            Ok(clip(v, self.0).to_owned())
+        }
+    }
+    d.deserialize_str(Cut(max))
 }
 
 /// A day's counts.
@@ -55,11 +97,42 @@ pub struct Totals {
     #[serde(default)]
     pub status: Counts,
     /// Views by path.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "paths_map")]
     pub paths: Counts,
     /// Views by the host of their referrer.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "referrers_map")]
     pub referrers: Counts,
+}
+
+fn paths_map<'de, D: Deserializer<'de>>(d: D) -> Result<Counts, D::Error> {
+    counts_with_room(d, MAX_PATHS + 1)
+}
+
+fn referrers_map<'de, D: Deserializer<'de>>(d: D) -> Result<Counts, D::Error> {
+    counts_with_room(d, MAX_REFERRERS + 1)
+}
+
+/// A map read with room for `room` keys at the outset. JSON gives no length ahead, so the
+/// default would grow the table in steps and hash every key again at each step, and hashing
+/// 200-byte keys is most of what reading a busy day costs.
+fn counts_with_room<'de, D: Deserializer<'de>>(d: D, room: usize) -> Result<Counts, D::Error> {
+    struct Room(usize);
+    impl<'de> Visitor<'de> for Room {
+        type Value = Counts;
+
+        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("a map of counts")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Counts, A::Error> {
+            let mut out = Counts::with_capacity(self.0);
+            while let Some((key, n)) = map.next_entry::<String, u64>()? {
+                out.insert(key, n);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(Room(room))
 }
 
 impl Default for Totals {
@@ -180,9 +253,12 @@ impl Totals {
                 if matches!(ev.status, 200 | 304) {
                     self.views += 1;
                     bump(&mut self.paths, &ev.path, MAX_PATHS);
-                    if let Some(host) = ev.referrer_host.as_deref()
+                    if let Some(Host(host)) = &ev.referrer_host
                         && !host.is_empty()
-                        && !self_host.is_some_and(|own| own.eq_ignore_ascii_case(host))
+                        // The host is already cut: compare it with the site's, cut alike.
+                        && !self_host.is_some_and(|own| {
+                            clip(own, MAX_HOST_BYTES).eq_ignore_ascii_case(host)
+                        })
                     {
                         bump(&mut self.referrers, host, MAX_REFERRERS);
                     }
@@ -191,6 +267,15 @@ impl Totals {
             _ => self.other += 1,
         }
     }
+}
+
+/// `s` cut to at most `max` bytes, on a character boundary.
+fn clip(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn status_class(status: u16) -> Option<&'static str> {

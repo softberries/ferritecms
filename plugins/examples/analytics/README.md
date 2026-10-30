@@ -140,9 +140,11 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
   today (a node whose clock runs fast): it must not push the history out. The plugin writes the
   counts before the maps, and the page relies on that to read older days cheaply.
 - `paths` holds at most 500 keys and `referrers` at most 200. Past that, a key that is not
-  already there is counted under `"(other)"`, which is not a path or a host. With paths of at
-  most 512 bytes and hosts of at most 253, a blob is at most about 320 KB, so two fit in the
-  1 MiB a call may write.
+  already there is counted under `"(other)"`, which is not a path or a host.
+- A path is stored cut to its first 200 bytes and a referrer host to 100 (core allows 512 and
+  253). The page shows 200 characters anyway, paths that differ only after the cut share one
+  count, and the length of a key a visitor can choose is bounded. So a blob is at most about
+  125 KB.
 - **Retention** keeps the newest `retention_days` days, counted back from today (the wall
   clock): with 3, on 1 January the data for 30 and 31 December and 1 January is kept and 29
   December goes. An event for a day older than that is not stored. After each batch the
@@ -151,8 +153,19 @@ One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is n
   retention) clears over a few batches.
 - A blob written by a newer version of the plugin (`"v"` above 1) is left alone, and that
   day's events are not counted. A blob that is not JSON is replaced.
-- A call may also write only 1 MiB. A batch that touches more than eight days counts only the
-  newest eight, and a day that would not fit in the budget is skipped; both are logged.
+- **Limits per batch.** A batch that touches more than eight days counts only the newest
+  eight. It also decodes and re-encodes at most 150 000 bytes of stored blobs: the newest
+  touched day always, an older one only if it fits, so a batch across midnight on two full
+  days counts the newest and skips the older (logged, its events are lost). The 1 MiB a call
+  may write is never the limit that binds; fuel is.
+- A day for which the host answers "no blob" is checked with a listing before a first blob is
+  written over it: the host answers the same for a missing key and for a read that failed,
+  and writing a fresh blob over a day that exists would lose its counts. If the key is there,
+  the day is left alone and logged.
+- A batch whose events are not all of the shape core sends is dropped whole and logged; an
+  event whose time cannot be read is only skipped.
+- Retention follows the wall clock of the node that runs the job, so a node whose clock is
+  days fast prunes that many of the oldest days early.
 
 ## The counts are approximate
 
@@ -188,9 +201,11 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
   `views`, `paths` or `referrers`).
 - **Work per call is bounded, not free.** The counts are held in ordinary hash maps with a
   random seed, so crafted paths or referrer hosts cannot pick colliding keys. A day's maps are
-  capped at 500 and 200 keys; the stats page sums at most four days of them. Decoding a day
-  costs fuel in proportion to its entries and bytes, which is why the lists cover only the
-  newest days (above).
+  capped at 500 and 200 keys and cut to 200 and 100 bytes, and the stats page sums at most
+  four days of them. Decoding a day costs fuel in proportion to its entries and bytes, which
+  is why the lists cover only the newest days (above) and why a batch decodes at most 150 000
+  bytes. At the default fuel limit of 50 million the worst measured case is about 25 million
+  (1000 events with 508-byte paths and 253-byte hosts, counted onto a full day).
 
 ## Uninstall and data
 

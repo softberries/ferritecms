@@ -3,7 +3,13 @@
 //! shows them to the listed viewers only, retention prunes back from today, the maps are
 //! capped, and a hostile path or referrer is escaped (Review Focus 2).
 
-use ferrite_plugin_host::{ActionEvent, Grant, Manifest, RouteRequest, RouteResponse};
+use std::sync::Arc;
+
+use ferrite_http::StoreHostServices;
+use ferrite_plugin_host::{
+    ActionEvent, Grant, HostConfig, HostServices, KindOk, Manifest, PluginHost, Post, RouteRequest,
+    RouteResponse, SettingSpec,
+};
 use serde_json::{Value, json};
 
 use crate::common::{Site, plugin_manifest, plugin_wasm};
@@ -27,7 +33,11 @@ profile_tests!(
     prune_uses_the_rest_of_the_call_budget,
     maps_are_capped_with_other,
     a_batch_of_many_days_stays_within_the_call_budget,
-    the_write_budget_drops_a_day_instead_of_failing,
+    long_paths_and_hosts_are_stored_clipped,
+    a_thousand_long_views_on_one_maximal_blob,
+    an_older_day_over_the_decode_budget_is_skipped,
+    the_largest_blob_after_truncation_fits_the_stats_page,
+    a_failed_read_never_overwrites_a_stored_day,
     stored_blobs_that_are_corrupt_or_newer_are_handled,
     a_malformed_payload_is_ignored,
 );
@@ -48,6 +58,7 @@ async fn site_with_analytics(site: Site) -> Site {
 
 /// The same with a fuel limit of `fuel` (granted, as an approved install would be).
 async fn site_with_fuel(site: Site, fuel: Option<&str>) -> Site {
+    clear_of_midnight().await;
     let site = crate::with_generous_deadlines(site);
     match fuel {
         None => site.install(PLUGIN).await,
@@ -62,6 +73,20 @@ async fn site_with_fuel(site: Site, fuel: Option<&str>) -> Site {
     let summary = site.load().await;
     assert_eq!(summary.loaded, [PLUGIN], "{:?}", summary.skipped);
     site
+}
+
+/// Waits until just after UTC midnight when it is less than two minutes away, so that a
+/// case, which counts back from "today" on every call, does not straddle the change of day.
+async fn clear_of_midnight() {
+    let now = chrono::Utc::now();
+    let midnight = (now.date_naive() + chrono::Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let left = midnight - now;
+    if left < chrono::Duration::minutes(2) {
+        tokio::time::sleep((left + chrono::Duration::seconds(1)).to_std().unwrap()).await;
+    }
 }
 
 /// A setting of the plugin (a plain option under its namespace).
@@ -202,8 +227,9 @@ fn stat(html: &str, name: &str) -> u64 {
 }
 
 /// The UTC day `n` days before today (`n` below 0: after), as `YYYY-MM-DD`. The plugin
-/// counts back from the wall clock, so the tests do too. (A run that crosses UTC midnight
-/// can fail; the window is a few milliseconds.) Leaked: a test process is short-lived.
+/// counts back from the wall clock, so the tests do too. (`site_with_fuel` waits out a
+/// UTC midnight that is less than two minutes away; a case that runs longer than that and
+/// is started just before it could still fail.) Leaked: a test process is short-lived.
 fn ago(n: i64) -> &'static str {
     let day = chrono::Utc::now().date_naive() - chrono::Duration::days(n);
     Box::leak(day.format("%Y-%m-%d").to_string().into_boxed_str())
@@ -263,10 +289,9 @@ async fn a_batch_is_counted_per_day(site: Site) -> Site {
             ),
             event(d2(), "00:00:01.000000", "/boom/", 500, None, "browser"),
             event(d2(), "00:00:02.000000", "/", 200, None, "browser"),
-            // Unusable: a time that is not a time, and an event of the wrong shape.
+            // Unusable, and skipped: a time that is not a time.
             json!({"path": "/", "status": 200, "ts": "garbage", "referrer_host": null,
                    "ua_class": "browser", "cache": "hit"}),
-            json!({"path": 7}),
         ],
     )
     .await;
@@ -361,9 +386,9 @@ async fn excluded_paths_follow_the_setting(site: Site) -> Site {
 
     // An empty setting excludes nothing.
     setting(&site, "exclude_paths", json!("")).await;
-    feed(&site, vec![view("2026-10-31", "/admin/users")]).await;
+    feed(&site, vec![view(ago(0), "/admin/users")]).await;
     assert_eq!(
-        day(&site, "2026-10-31").await.unwrap()["paths"],
+        day(&site, ago(0)).await.unwrap()["paths"],
         json!({"/admin/users": 1})
     );
     site
@@ -457,14 +482,34 @@ async fn stats_page_escapes_and_truncates(site: Site) -> Site {
         html.contains("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"),
         "{html}"
     );
-    // 200 characters of a long path or host, then an ellipsis.
-    assert!(html.contains(&format!("/{}…", "a".repeat(199))), "{html}");
+    // The plugin stores a path cut to 200 bytes and a host cut to 100, so these show whole.
+    assert!(
+        html.contains(&format!("<code>/{}</code>", "a".repeat(199))),
+        "{html}"
+    );
+    assert!(
+        html.contains(&format!("<code>{}</code>", "h".repeat(100))),
+        "{html}"
+    );
     assert!(!html.contains(&"a".repeat(200)), "{html}");
-    assert!(html.contains(&format!("{}…", "h".repeat(200))), "{html}");
-    assert!(!html.contains(&"h".repeat(201)), "{html}");
+    assert!(!html.contains(&"h".repeat(101)), "{html}");
     // Totals, a chart without script, and the two tables.
     assert_eq!(stat(&html, "views"), 2);
     assert!(html.contains("<svg"), "{html}");
+
+    // The page clips on its own too, for a blob it did not write: 200 characters, then an
+    // ellipsis.
+    let foreign = format!(
+        r#"{{"v":1,"views":1,"paths":{{"/{}":1}},"referrers":{{"{}":1}}}}"#,
+        "z".repeat(299),
+        "q".repeat(300)
+    );
+    kv_set(&site, &format!("day:{}", d2()), foreign.as_bytes()).await;
+    let (_, html) = stats(&site, &[]).await;
+    assert!(html.contains(&format!("/{}…", "z".repeat(199))), "{html}");
+    assert!(!html.contains(&"z".repeat(200)), "{html}");
+    assert!(html.contains(&format!("{}…", "q".repeat(200))), "{html}");
+    assert!(!html.contains(&"q".repeat(201)), "{html}");
     site
 }
 
@@ -603,47 +648,6 @@ async fn maps_are_capped_with_other(site: Site) -> Site {
     assert_eq!(status, 200);
     assert_eq!(stat(&html, "views"), 522);
     assert!(html.contains("(other)"), "{html}");
-    site
-}
-
-/// Writes are limited to 1 MiB per call. With large stored blobs the oldest day of a
-/// batch is dropped (and logged) rather than failing the whole call.
-async fn the_write_budget_drops_a_day_instead_of_failing(site: Site) -> Site {
-    // Re-encoding 1 MiB of seeded blobs costs more than the default fuel, which no blob
-    // the plugin can write would.
-    let site = site_with_fuel(site, Some("200_000_000")).await;
-    // ~450 KB each, which the plugin itself never writes (a blob is at most ~320 KB): ten
-    // paths of 45 000 bytes, so the entry count stays small and the fuel low. The branch
-    // under test is a defence, reached here by seeding.
-    let big = |extra: &str| {
-        let paths: serde_json::Map<String, Value> = (0..10)
-            .map(|i| (format!("/{extra}{i:03}{}", "x".repeat(45_000)), json!(1)))
-            .collect();
-        serde_json::to_vec(&json!({"v": 1, "views": 500, "paths": paths})).unwrap()
-    };
-    let days3 = [ago(3), ago(2), ago(1)];
-    let before: Vec<Vec<u8>> = days3.iter().map(|_| big("p")).collect();
-    assert!(before[0].len() > 440_000 && before[0].len() < 500_000);
-    for (d, blob) in days3.iter().zip(&before) {
-        kv_set(&site, &format!("day:{d}"), blob).await;
-    }
-    feed(&site, days3.iter().map(|d| view(d, "/")).collect()).await;
-
-    let after: Vec<Value> = {
-        let mut v = Vec::new();
-        for d in days3 {
-            v.push(day(&site, d).await.unwrap());
-        }
-        v
-    };
-    assert_eq!(after[2]["views"], 501);
-    assert_eq!(after[1]["views"], 501);
-    // The oldest did not fit in the budget: unchanged.
-    assert_eq!(after[0]["views"], 500);
-    assert_eq!(
-        kv_get(&site, &format!("day:{}", days3[0])).await.unwrap(),
-        before[0]
-    );
     site
 }
 
@@ -829,14 +833,14 @@ async fn prune_uses_the_rest_of_the_call_budget(site: Site) -> Site {
     for d in &old {
         kv_set(&site, &format!("day:{d}"), br#"{"v":1}"#).await;
     }
-    // Three operations go to counting (the day's blob in and out, the listing): 97 deletes
-    // of the 130 old days.
+    // Four operations go to counting (the day's blob in, the check that a missing blob is
+    // really missing, the blob out, the listing): 96 deletes of the 130 old days.
     feed(&site, vec![view(ago(0), "/")]).await;
     let left = days(&site).await;
-    assert_eq!(left.len(), 130 - 97 + 1, "{left:?}");
+    assert_eq!(left.len(), 130 - 96 + 1, "{left:?}");
     assert!(left.contains(&ago(0).to_owned()));
     // The oldest go first.
-    assert_eq!(left[0], old[97]);
+    assert_eq!(left[0], old[96]);
 
     feed(&site, vec![view(ago(0), "/")]).await;
     assert_eq!(days(&site).await, [ago(0)]);
@@ -855,13 +859,16 @@ async fn a_batch_of_many_days_stays_within_the_call_budget(site: Site) -> Site {
     site
 }
 
-/// Core always sends `{"events":[…]}`; anything else is logged and dropped rather than
-/// failing the call (a retry cannot fix it, and failures count towards auto-disable).
+/// Core always sends `{"events":[…]}` of events of one shape; anything else is logged and
+/// dropped whole rather than failing the call (a retry cannot fix it, and failures count towards auto-disable).
 async fn a_malformed_payload_is_ignored(site: Site) -> Site {
     let site = site_with_analytics(site).await;
     for payload in [
         json!({}),
         json!({"events": "x"}),
+        // One event of another shape drops the batch: core never sends one.
+        json!({"events": [view(d1(), "/"), {"path": 7}]}),
+        json!({"events": [view(d1(), "/"), 7]}),
         json!([1, 2]),
         json!(null),
     ] {
@@ -963,13 +970,13 @@ async fn stats_page_reads_short_distinct_keys_over_ninety_days(site: Site) -> Si
     site
 }
 
-/// The newest day with data is always decoded with its lists, however big its blob: one
-/// day of long percent-encoded paths is over the byte budget on its own.
+/// The newest day with data is always decoded with its lists, however big its blob. The
+/// plugin now writes at most about 125 KB a day, so this one is a blob from before the
+/// path cut (or a foreign one): 500 paths of 350 bytes and 200 hosts of 253, over 200 KB,
+/// which is over the byte budget on its own.
 async fn the_newest_day_is_always_decoded_in_full(site: Site) -> Site {
     let site = viewer_site(site).await;
-    // The biggest blob the plugin can write: 500 paths of 508 bytes (percent-encoded
-    // Cyrillic, 6 bytes a character) and 200 hosts of 253, about 313 KB.
-    let big = saturated(&|i| format!("/{}{i:03}", "%D0%B0".repeat(84)), &|i| {
+    let big = saturated(&|i| format!("/{}{i:03}", "%D0%B0".repeat(58)), &|i| {
         format!("{i:03}{}.org", "h".repeat(247))
     });
     assert!(big.len() > FULL_BYTES, "{}", big.len());
@@ -1034,5 +1041,245 @@ async fn older_days_read_through_the_brief_path(site: Site) -> Site {
         )),
         "{html}"
     );
+    site
+}
+
+// ---- long keys, the batch decode budget and a failed read --------------------------------
+
+/// A blob as large as the plugin can write: 500 paths of 200 bytes and 200 hosts of 100,
+/// about 125 KB, in the layout the plugin writes.
+fn maximal_blob() -> Vec<u8> {
+    saturated(&|i| format!("/{i:03}{}", "p".repeat(196)), &|i| {
+        format!("{i:03}{}", "h".repeat(97))
+    })
+}
+
+/// A browser view the way core can report the worst of them: a 508-byte percent-encoded
+/// path (84 Cyrillic letters) that differs from the next within its first 200 bytes, and a
+/// 253-byte referrer host.
+fn long_view(day: &str, i: usize) -> Value {
+    let path = format!("/{i:03}{}", "%D0%B0".repeat(84));
+    let host = format!("{i:03}{}", "h".repeat(250));
+    assert_eq!((path.len(), host.len()), (508, 253));
+    event(day, "12:00:00.000000", &path, 200, Some(&host), "browser")
+}
+
+/// Paths are stored cut to 200 bytes and referrer hosts to 100, so the length of a key an
+/// attacker can choose is bounded; paths that differ only after the cut share one count.
+async fn long_paths_and_hosts_are_stored_clipped(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    let long = format!("/{}", "a".repeat(507));
+    let other = format!("/{}b", "a".repeat(250));
+    // 150 two-byte characters: byte 200 falls inside one, so the cut is at 199.
+    let wide = format!("/{}", "é".repeat(150));
+    feed(
+        &site,
+        vec![
+            event(
+                d1(),
+                "09:00:00.000000",
+                &long,
+                200,
+                Some(&"h".repeat(253)),
+                "browser",
+            ),
+            event(d1(), "09:00:01.000000", &other, 200, None, "browser"),
+            event(d1(), "09:00:02.000000", &wide, 200, None, "browser"),
+            // The site's own host is compared in full, before any cut.
+            event(
+                d1(),
+                "09:00:03.000000",
+                "/",
+                200,
+                Some("example.com"),
+                "browser",
+            ),
+        ],
+    )
+    .await;
+    let blob = day(&site, d1()).await.unwrap();
+    assert_eq!(blob["views"], 4);
+    let paths = blob["paths"].as_object().unwrap();
+    assert_eq!(
+        paths[&long[..200]],
+        2,
+        "the first two share their first 200 bytes"
+    );
+    assert_eq!(paths[&wide[..199]], 1);
+    assert_eq!(paths["/"], 1);
+    assert_eq!(paths.len(), 3);
+    let mut hosts = serde_json::Map::new();
+    hosts.insert("h".repeat(100), json!(1));
+    assert_eq!(blob["referrers"], Value::Object(hosts));
+    site
+}
+
+/// 1000 views with 508-byte paths and 253-byte hosts on a maximal stored day: counted
+/// inside the default fuel (`ANALYTICS_FUEL` brackets it).
+async fn a_thousand_long_views_on_one_maximal_blob(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", d1()), &maximal_blob()).await;
+    feed(&site, (0..1000).map(|i| long_view(d1(), i)).collect()).await;
+    let blob = day(&site, d1()).await.unwrap();
+    assert_eq!(blob["views"], 1500 + 1000);
+    let paths = blob["paths"].as_object().unwrap();
+    assert_eq!(paths.len(), CAP_PATHS + 1);
+    assert!(paths.keys().all(|k| k.len() <= 200), "paths are cut");
+    assert!(
+        blob["referrers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|k| k.len() <= 100),
+        "hosts are cut"
+    );
+    site
+}
+
+/// A batch across midnight on two maximal stored days: the newest day is counted, and the
+/// older one, which would take the batch past its decode budget, is skipped (logged, its
+/// events lost, the blob untouched) instead of the call trapping on fuel. At the default
+/// fuel.
+async fn an_older_day_over_the_decode_budget_is_skipped(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    let before = maximal_blob();
+    assert!(
+        before.len() > 100_000 && before.len() < 150_000,
+        "{}",
+        before.len()
+    );
+    for d in [d1(), d2()] {
+        kv_set(&site, &format!("day:{d}"), &before).await;
+    }
+    let events = (0..1000)
+        .map(|i| long_view(if i % 2 == 0 { d1() } else { d2() }, i))
+        .collect();
+    feed(&site, events).await;
+    assert_eq!(day(&site, d2()).await.unwrap()["views"], 1500 + 500);
+    assert_eq!(day(&site, d1()).await.unwrap()["views"], 1500);
+    assert_eq!(
+        kv_get(&site, &format!("day:{}", d1())).await.unwrap(),
+        before
+    );
+
+    // Small days do fit together: both are counted.
+    feed(
+        &site,
+        vec![view(ago(4), "/"), view(ago(3), "/"), view(ago(5), "/")],
+    )
+    .await;
+    assert_eq!(days(&site).await, [ago(5), ago(4), ago(3), d1(), d2()]);
+    site
+}
+
+/// The page over the largest blob the plugin writes: `?days=1`, and 90 days of them (the
+/// newest in full, the rest by their totals), both at the default fuel.
+async fn the_largest_blob_after_truncation_fits_the_stats_page(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    let blob = maximal_blob();
+    for n in 0..90 {
+        kv_set(&site, &format!("day:{}", ago(n)), &blob).await;
+    }
+    let (status, html) = stats(&site, &[("days", "1")]).await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 1500);
+    assert!(html.contains("000hhhh"), "{html}");
+    assert!(!html.contains("data-note"), "{html}");
+
+    let (status, html) = stats(&site, &[("days", "90")]).await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 90 * 1500);
+    assert!(
+        html.contains("cover the newest 1 of the 90 days with data"),
+        "{html}"
+    );
+    site
+}
+
+/// [`StoreHostServices`] whose `kv_get` of one key answers `None`, as the host does for a
+/// store read that failed (it cannot tell that from a missing key).
+struct FailingGet {
+    inner: Arc<StoreHostServices>,
+    key: String,
+}
+
+#[async_trait::async_trait]
+impl HostServices for FailingGet {
+    async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
+        self.inner.get_post(id, kind_ok).await
+    }
+    async fn post_kind(&self, id: &str) -> Option<String> {
+        self.inner.post_kind(id).await
+    }
+    async fn get_post_by_slug(&self, kind: &str, slug: &str) -> Option<Post> {
+        self.inner.get_post_by_slug(kind, slug).await
+    }
+    async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
+        self.inner.list_posts(kind, limit, offset).await
+    }
+    async fn meta_get(&self, post: &str, key: &str) -> Option<String> {
+        self.inner.meta_get(post, key).await
+    }
+    async fn meta_set(&self, post: &str, key: &str, value: &str) -> Result<(), String> {
+        self.inner.meta_set(post, key, value).await
+    }
+    async fn option_get(&self, key: &str) -> Option<String> {
+        self.inner.option_get(key).await
+    }
+    async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
+        if key == self.key {
+            return None;
+        }
+        self.inner.kv_get(plugin, key).await
+    }
+    async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        self.inner.kv_set(plugin, key, value).await
+    }
+    async fn kv_delete(&self, plugin: &str, key: &str) {
+        self.inner.kv_delete(plugin, key).await;
+    }
+    async fn kv_list(&self, plugin: &str, prefix: &str, limit: u32) -> Vec<String> {
+        self.inner.kv_list(plugin, prefix, limit).await
+    }
+    async fn setting_get(&self, plugin: &str, key: &str, spec: &SettingSpec) -> Option<String> {
+        self.inner.setting_get(plugin, key, spec).await
+    }
+    async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        self.inner.notify_admins(plugin, subject, text).await
+    }
+}
+
+/// When the read of a day answers `None` but the key is there (the read failed), the day
+/// is left alone: writing a fresh blob would replace a whole day's counts with one batch.
+async fn a_failed_read_never_overwrites_a_stored_day(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    let stored = br#"{"v":1,"views":5}"#;
+    kv_set(&site, &format!("day:{}", d1()), stored).await;
+
+    let flaky = Arc::new(FailingGet {
+        inner: site.services.clone(),
+        key: format!("day:{}", d1()),
+    });
+    let host = PluginHost::new(HostConfig::default(), flaky).unwrap();
+    let manifest = Manifest::parse(&plugin_manifest(PLUGIN)).unwrap();
+    host.install(manifest, &plugin_wasm(PLUGIN)).unwrap();
+    host.dispatch_action(
+        PLUGIN,
+        "request.served",
+        payload(vec![view(d1(), "/"), view(d2(), "/")]),
+    )
+    .await
+    .unwrap();
+
+    // The unreadable day is untouched; the other, really missing, day is counted.
+    assert_eq!(
+        kv_get(&site, &format!("day:{}", d1())).await.unwrap(),
+        stored
+    );
+    assert_eq!(day(&site, d2()).await.unwrap()["views"], 1);
+
+    // With the read working, the same day is counted onto what is stored.
+    feed(&site, vec![view(d1(), "/")]).await;
+    assert_eq!(day(&site, d1()).await.unwrap()["views"], 6);
     site
 }

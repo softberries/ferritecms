@@ -23,11 +23,13 @@
 //! Fine for a trend, not for billing. An atomic increment (`kv.incr`) needs a new world
 //! version.
 //!
-//! **Budgets.** A call may make 100 KV operations and write 1 MiB. A batch reads and writes
-//! each touched day once (at most [`MAX_DAYS`] of them, the newest), then lists the day
-//! keys, oldest first, and deletes the ones past retention with what is left of the 100
-//! operations; the next batch continues. A day whose blob would not fit in the write budget
-//! is dropped and logged rather than failing the call.
+//! **Budgets.** A call may make 100 KV operations. A batch reads and writes each touched
+//! day once (at most [`MAX_DAYS`] of them, the newest), then lists the day keys, oldest
+//! first, and deletes the ones past retention with what is left of the 100 operations; the
+//! next batch continues. A batch also decodes and re-encodes at most [`BATCH_DECODE_BYTES`]
+//! of stored blobs: the newest touched day always, an older one only if it fits. Fuel, not
+//! the 1 MiB a call may write, is what limits a batch, and a day that does not fit is
+//! skipped and logged (its events are lost) instead of trapping the call.
 //!
 //! **Fuel.** The limit is counted in guest instructions, and decoding JSON is the cost. The
 //! counts live in a std `HashMap` ([`store::Counts`]; its random seed comes from
@@ -55,8 +57,10 @@ use store::{Event, Stored, Totals, host_of};
 const DAY_PREFIX: &str = "day:";
 /// KV operations one call may make.
 const MAX_OPS: u32 = 100;
-/// Key and value bytes one call may write.
-const MAX_WRITTEN: usize = 1024 * 1024;
+/// Stored bytes one batch decodes and re-encodes. The newest touched day always counts;
+/// an older one that would take the total past this is skipped (its events are lost). A
+/// blob the plugin writes is at most about 130 KB, and decoding costs fuel in proportion.
+const BATCH_DECODE_BYTES: usize = 150_000;
 /// Most days one batch writes: a read and a write each, leaving most of the 100 operations
 /// for the prune.
 const MAX_DAYS: usize = 8;
@@ -127,12 +131,12 @@ fn is_excluded(prefixes: &[String], path: &str) -> bool {
 
 #[derive(Deserialize)]
 struct Batch {
-    events: Vec<Value>,
+    events: Vec<Event>,
 }
 
 /// Why a KV call was not made.
 enum Refused {
-    /// The call is out of operations or write bytes.
+    /// The call is out of KV operations.
     Budget,
     /// The host refused the write.
     Kv(String),
@@ -143,16 +147,11 @@ enum Refused {
 struct Meter {
     kv: Kv,
     ops: u32,
-    written: usize,
 }
 
 impl Meter {
     fn new(kv: Kv) -> Self {
-        Self {
-            kv,
-            ops: 0,
-            written: 0,
-        }
+        Self { kv, ops: 0 }
     }
 
     fn take(&mut self) -> core::result::Result<(), Refused> {
@@ -169,11 +168,7 @@ impl Meter {
     }
 
     fn set(&mut self, key: &str, value: &[u8]) -> core::result::Result<(), Refused> {
-        if self.ops >= MAX_OPS || self.written + key.len() + value.len() > MAX_WRITTEN {
-            return Err(Refused::Budget);
-        }
-        self.ops += 1;
-        self.written += key.len() + value.len();
+        self.take()?;
         self.kv.set(key, value).map_err(Refused::Kv)
     }
 
@@ -183,9 +178,9 @@ impl Meter {
         Ok(())
     }
 
-    fn list(&mut self, prefix: &str) -> core::result::Result<Vec<String>, Refused> {
+    fn list(&mut self, prefix: &str, limit: u32) -> core::result::Result<Vec<String>, Refused> {
         self.take()?;
-        Ok(self.kv.list_keys(prefix, LIST_LIMIT))
+        Ok(self.kv.list_keys(prefix, limit))
     }
 }
 
@@ -197,26 +192,58 @@ fn warn(msg: &str) {
     ferrite_sdk::log(Level::Warn, &format!("analytics: {msg}"));
 }
 
-/// Add `events` to the stored blob of `day`, read and written once.
+/// How much of the batch's decode budget is spent.
+#[derive(Default)]
+struct Decoded {
+    days: usize,
+    bytes: usize,
+}
+
+/// Add `events` to the stored blob of `day`, read and written once. A day that is left
+/// alone (a newer blob, a read that looks failed, no room in the decode budget) is logged
+/// and its events are lost.
 fn count_day(
     meter: &mut Meter,
     day: Day,
     events: &[Event],
     self_host: Option<&str>,
+    decoded: &mut Decoded,
 ) -> core::result::Result<(), Refused> {
     let key = day_key(day);
-    let mut totals = match meter.get(&key)?.as_deref().map(Stored::decode) {
-        None => Totals::default(),
-        Some(Stored::Totals(t)) => t,
-        Some(Stored::Newer) => {
-            warn(&format!("{key} was written by a newer version, left alone"));
-            return Ok(());
-        }
-        Some(Stored::Corrupt) => {
-            warn(&format!(
-                "{key} is not a blob of this plugin, starting it again"
-            ));
+    let stored = meter.get(&key)?;
+    let mut totals = match stored.as_deref() {
+        None => {
+            // The host answers `None` both for a missing key and for a read that failed.
+            // Writing a fresh blob over a day that exists would lose that day's counts.
+            if !meter.list(&key, 1)?.is_empty() {
+                warn(&format!("{key} exists but could not be read, left alone"));
+                return Ok(());
+            }
             Totals::default()
+        }
+        Some(bytes) => {
+            if decoded.days > 0 && decoded.bytes + bytes.len() > BATCH_DECODE_BYTES {
+                warn(&format!(
+                    "{key} not counted: its blob ({} bytes) does not fit in this batch's decode budget",
+                    bytes.len()
+                ));
+                return Ok(());
+            }
+            decoded.days += 1;
+            decoded.bytes += bytes.len();
+            match Stored::decode(bytes) {
+                Stored::Totals(t) => t,
+                Stored::Newer => {
+                    warn(&format!("{key} was written by a newer version, left alone"));
+                    return Ok(());
+                }
+                Stored::Corrupt => {
+                    warn(&format!(
+                        "{key} is not a blob of this plugin, starting it again"
+                    ));
+                    Totals::default()
+                }
+            }
         }
     };
     for event in events {
@@ -227,8 +254,10 @@ fn count_day(
 }
 
 fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
-    // Core always sends `{"events":[…]}`. A payload that does not parse is logged and
-    // dropped: a retry could not fix it, and failures count toward auto-disable.
+    // Core always sends `{"events":[…]}` with events of one shape. A payload that does not
+    // parse, an event of another shape included, is logged and dropped whole: a retry could
+    // not fix it, and failures count toward auto-disable. (An event whose time cannot be
+    // read is only skipped.)
     let batch: Batch = match serde_json::from_str(&ev.payload) {
         Ok(batch) => batch,
         Err(e) => {
@@ -250,10 +279,7 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
     // excluded path, or falls outside the window is skipped.
     let mut by_day: BTreeMap<Day, Vec<Event>> = BTreeMap::new();
     let mut ahead = 0usize;
-    for raw in batch.events {
-        let Ok(event) = serde_json::from_value::<Event>(raw) else {
-            continue;
-        };
+    for event in batch.events {
         let Some(day) = Day::from_ts(&event.ts) else {
             continue;
         };
@@ -264,10 +290,11 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
         }
     }
     if ahead > 0 {
-        ferrite_sdk::log(
-            Level::Debug,
-            &format!("analytics: ignored {ahead} events dated more than a day ahead of today"),
-        );
+        // A warning: a node whose clock is more than a day behind this one's would lose
+        // every event it handles, and this line is how that shows.
+        warn(&format!(
+            "ignored {ahead} events dated more than a day ahead of today"
+        ));
     }
     if by_day.is_empty() {
         return Ok(());
@@ -283,11 +310,12 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
     // The first host error ends the loop: every further write would only add to what a
     // retry of the job counts twice.
     let mut meter = Meter::new(ctx.kv());
+    let mut decoded = Decoded::default();
     for (day, events) in by_day.iter().rev().take(MAX_DAYS) {
-        match count_day(&mut meter, *day, events, self_host.as_deref()) {
+        match count_day(&mut meter, *day, events, self_host.as_deref(), &mut decoded) {
             Ok(()) => {}
             Err(Refused::Budget) => warn(&format!(
-                "{} not counted: it does not fit in this call's budget",
+                "{} not counted: this call is out of KV operations",
                 day.key()
             )),
             // A failed write fails the call, so the job is retried: at-least-once delivery.
@@ -300,7 +328,7 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
 
 /// Delete the day blobs older than `keep_from`, oldest first, while operations are left.
 fn prune(meter: &mut Meter, keep_from: Day) {
-    let Ok(keys) = meter.list(DAY_PREFIX) else {
+    let Ok(keys) = meter.list(DAY_PREFIX, LIST_LIMIT) else {
         return;
     };
     for key in keys {

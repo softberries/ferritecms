@@ -1181,17 +1181,25 @@ method, headers, a body and several fetches per call).
 M4-3a adds the shipped example `analytics` (`plugins/examples/analytics`, a `request.served`
 subscriber, one route and a viewer list, `README.md`), the first example that stores a lot:
 one JSON blob per UTC day in KV. Three things it showed about the limits. A call's 100 KV
-operations and 1 MiB of writes are enough for a batch only if the plugin counts them (it
-reads and writes each touched day once, caps a batch at eight days and spends what is left on
-the prune). "Today" comes from the wall clock, which every plugin may read (`wasi:clocks`,
-§5): taking it from the newest event instead lets one event from a fast clock prune the
-history. And fuel is counted in guest instructions, not bytes read from the host: decoding a
-day blob of 500 paths into a `BTreeMap` was many times slower than the default 50 million
-allows for 90 days, so the plugin counts in a `HashMap` (randomly seeded from the linked
-`wasi:random`) and the stats page decodes the newest day in full plus at most three more
-within 150 000 bytes; older days give their totals alone, read from the front of the blob.
-Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit): the saturated
-90-day page needs 18 to 21 million with long keys and 15 to 18 million with short distinct
-ones, the largest batch (1000 events on two saturated days) 23 to 26 million, and the page
-over the largest blob the plugin can write (about 313 KB) 30 to 40 million. No limit above
-the default is requested.
+operations are enough for a batch only if the plugin counts them (it reads and writes each
+touched day once, caps a batch at eight days and spends what is left on the prune). "Today"
+comes from the wall clock, which every plugin may read (`wasi:clocks`, §5): taking it from
+the newest event instead lets one event from a fast clock prune the history. And fuel, not
+the 1 MiB a call may write, is what limits a batch: it is counted in guest instructions, and
+reading a day blob and the events costs in proportion to the entries and bytes. A `BTreeMap`
+of paths was many times slower than the default 50 million allows for 90 days, so the plugin
+counts in a `HashMap` (randomly seeded from the linked `wasi:random`); it stores a path cut to
+200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 125 KB; a
+batch decodes and re-encodes at most 150 000 bytes of blobs (the newest touched day always, an
+older one only if it fits, else it is skipped and logged); and the stats page decodes the newest
+day in full plus at most three more within 150 000 bytes, the older days giving their totals
+alone, read from the front of the blob.
+
+Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit), as the range
+between a limit that traps and one that passes, against the default 50 million: 1000 events
+with 508-byte paths and 253-byte hosts counted onto a full day, 23 to 26 million (the worst
+case; about 2x headroom); the same across midnight onto two full days, 20 to 23 million (the
+older day skipped); the page over 90 full days or over the largest blob, 11 to 14 million; the
+90-day page over 33 KB blobs, 15 to 18 million, and over short distinct keys, 12 to 15
+million; 1000 ordinary events onto two 33 KB days, 14 to 17 million. No limit above the
+default is requested.
