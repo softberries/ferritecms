@@ -11,7 +11,7 @@ use super::Finding;
 use crate::keys::{SECRET_KEY_FILE, validate_key_file};
 
 /// The detail of a check that needs the configuration when it did not load.
-const NO_CONFIG: &str = "the configuration did not load (see config.load)";
+pub(super) const NO_CONFIG: &str = "the configuration did not load (see config.load)";
 /// SQLite's lock file in the data folder (held by a running node).
 const LOCK_FILE: &str = "ferrite.lock";
 
@@ -434,25 +434,36 @@ fn lock(data: &Path) -> Lock {
     }
 }
 
-/// `db.lock_state` (P50): whether a node is running on this data folder. Only SQLite has a
-/// data-folder lock.
-pub(super) fn lock_state(data: &Path, config: Option<&Config>) -> Finding {
+/// `db.lock_state` (P50): whether a node is running on this data folder, and `true` when
+/// the lock is held (`net.listen` then probes the node). Only SQLite has a data-folder
+/// lock.
+pub(super) fn lock_state(data: &Path, config: Option<&Config>) -> (Finding, bool) {
     const ID: &str = "db.lock_state";
     let Some(config) = config else {
-        return Finding::skip(ID, NO_CONFIG);
+        return (Finding::skip(ID, NO_CONFIG), false);
     };
     if !matches!(config.database_kind(), DbKind::Sqlite { .. }) {
-        return Finding::info(ID, "Postgres: there is no data-folder lock");
+        return (
+            Finding::info(ID, "Postgres: there is no data-folder lock"),
+            false,
+        );
     }
     match lock(data) {
-        Lock::Free => Finding::info(ID, "no node is running on this data folder"),
-        Lock::Held => Finding::info(
-            ID,
-            format!("a node is running (it holds {LOCK_FILE} in the data folder)"),
+        Lock::Free => (
+            Finding::info(ID, "no node is running on this data folder"),
+            false,
         ),
-        Lock::Unknown(kind) => {
-            Finding::info(ID, format!("cannot tell whether a node is running: {kind}"))
-        }
+        Lock::Held => (
+            Finding::info(
+                ID,
+                format!("a node is running (it holds {LOCK_FILE} in the data folder)"),
+            ),
+            true,
+        ),
+        Lock::Unknown(kind) => (
+            Finding::info(ID, format!("cannot tell whether a node is running: {kind}")),
+            false,
+        ),
     }
 }
 

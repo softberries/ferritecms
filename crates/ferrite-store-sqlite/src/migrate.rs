@@ -29,8 +29,11 @@ fn embedded() -> Result<Vec<(i64, Directives)>, StoreError> {
         .collect()
 }
 
-/// Every embedded migration as a status entry.
-fn embedded_status() -> Result<Vec<PendingMigration>, StoreError> {
+/// Every embedded migration as a status entry, oldest first: with the applied versions
+/// and `schema_meta.min_binary_version`, [`MigrationStatus::compute`] gives what
+/// [`ferrite_store::Store::migration_status`] does (`ferrite doctor` reads those two over
+/// its own read-only connection while `serve` holds the store).
+pub fn embedded_status() -> Result<Vec<PendingMigration>, StoreError> {
     MIGRATOR
         .iter()
         .filter(|m| m.migration_type.is_up_migration())

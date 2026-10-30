@@ -1,7 +1,9 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! `ferrite doctor`: the runner, the output format, the exit codes and the file checks
-//! (M4-3a Task 6; the database, media, cluster, clock and network checks are Task 7).
+//! `ferrite doctor`: the runner, the output format, the exit codes, the file checks (M4-3a
+//! Task 6) and the database, media, cluster, clock and network checks (Task 7). A test that
+//! runs doctor without `--offline` points the release lookup at a local address with the
+//! hidden `--base-url` seam, so no test reaches GitHub.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -171,23 +173,6 @@ const ORDER: &[&str] = &[
     "release.latest",
 ];
 
-/// The checks Task 7 owns: `skip  <id>  not checked yet` until then.
-const TASK_7: &[&str] = &[
-    "db.connect",
-    "db.schema",
-    "db.identity",
-    "media.store",
-    "media.owner",
-    "clock.db_skew",
-    "clock.peers",
-    "cluster.versions",
-    "cluster.site_url",
-    "smtp.connect",
-    "tls.acme_directory",
-    "net.listen",
-    "release.latest",
-];
-
 #[test]
 fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -208,27 +193,63 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         ("fs.backups_dir", "ok"),
         ("fs.themes_dir", "info"),
         ("db.lock_state", "info"),
+        ("db.connect", "ok"),
+        ("db.schema", "ok"),
+        ("db.identity", "ok"),
         ("upgrade.record", "ok"),
+        // The local probe is not a network check: it runs offline too.
+        ("media.store", "ok"),
+        // No GC pass has written the owner marker yet.
+        ("media.owner", "info"),
+        ("clock.db_skew", "skip"),
+        ("clock.peers", "skip"),
+        ("cluster.versions", "skip"),
+        ("cluster.site_url", "skip"),
+        // Mail and TLS are off: nothing to connect to, offline or not.
+        ("smtp.connect", "info"),
         ("tls.dir", "info"),
+        ("tls.acme_directory", "info"),
+        ("net.listen", "skip"),
         ("backup.target", "info"),
+        ("release.latest", "skip"),
     ]
     .into_iter()
-    .chain(TASK_7.iter().map(|id| (*id, "skip")))
     .collect();
     for (id, status) in &expected {
         assert_eq!(out.status(id), *status, "{id}\n{}", out.stdout);
     }
     assert_eq!(expected.len(), ORDER.len());
-    for id in TASK_7 {
-        assert_eq!(out.detail(id), "not checked yet", "{id}");
-    }
-    assert_eq!(
-        out.summary,
-        format!("doctor: 7 ok, 0 warn, 0 error, {} skip", TASK_7.len())
+    assert!(
+        !out.stdout.contains("not checked yet"),
+        "every check is wired: {}",
+        out.stdout
     );
-    // The lock is not held.
+    assert_eq!(out.summary, "doctor: 11 ok, 0 warn, 0 error, 6 skip");
+    // The lock is not held, and SQLite has no clock or cluster to compare.
     assert!(
         out.detail("db.lock_state").contains("no node"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.detail("clock.db_skew").contains("SQLite"),
+        "{}",
+        out.stdout
+    );
+    for id in ["clock.peers", "cluster.versions", "cluster.site_url"] {
+        assert!(
+            out.detail(id).contains("solo SQLite site"),
+            "{id}: {}",
+            out.stdout
+        );
+    }
+    assert!(
+        out.detail("release.latest").contains("--offline"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.detail("net.listen").contains("no node"),
         "{}",
         out.stdout
     );
@@ -655,7 +676,16 @@ fn a_finished_postgres_record_without_snapshot_is_ok() {
     assert_eq!(out.status("config.load"), "ok", "{}", out.stdout);
     assert_eq!(out.status("upgrade.record"), "ok", "{}", out.stdout);
     assert_eq!(out.count("warn"), 0, "{}", out.stdout);
-    assert_eq!(out.code, 0, "{}", out.stdout);
+    // The only error: the database host does not exist (the database is always checked,
+    // even offline).
+    let errors: Vec<&str> = out
+        .lines
+        .iter()
+        .filter(|l| l.status == "error")
+        .map(|l| l.id.as_str())
+        .collect();
+    assert_eq!(errors, ["db.connect"], "{}", out.stdout);
+    assert_eq!(out.code, 1, "{}", out.stdout);
 
     // The same record on a SQLite site is an upgrade that did not finish.
     let mut cmd = ferrite();
@@ -892,7 +922,7 @@ fn doctor_changes_nothing_under_the_data_folder() {
     // reports must stay read-only.
     chmod(&tmp.path().join("secret.key"), 0o644);
 
-    let before = snapshot(tmp.path());
+    let before = unchanged_view(tmp.path());
     let repo_before = snapshot(&repo);
     // Let a changed mtime show up even on coarse clocks.
     std::thread::sleep(std::time::Duration::from_millis(50));
@@ -903,8 +933,105 @@ fn doctor_changes_nothing_under_the_data_folder() {
     assert_eq!(out.status("fs.secret_key"), "warn");
     assert_eq!(out.status("upgrade.record"), "warn");
     assert_eq!(out.status("backup.target"), "ok");
-    assert_eq!(before, snapshot(tmp.path()), "the data folder changed");
+    // The database checks ran (read-only) and the media probe ran.
+    assert_eq!(out.status("db.connect"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("db.identity"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("media.store"), "ok", "{}", out.stdout);
+    assert_eq!(
+        before,
+        unchanged_view(tmp.path()),
+        "the data folder changed"
+    );
     assert_eq!(repo_before, snapshot(&repo), "the backup target changed");
+
+    // Online too (the release lookup goes to a closed local port).
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let out = doctor_args(tmp.path(), &["--base-url", &closed_url()]);
+    assert_eq!(out.ids(), ORDER, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.status("release.latest"), "info", "{}", out.stdout);
+    assert_eq!(
+        before,
+        unchanged_view(tmp.path()),
+        "the data folder changed"
+    );
+
+    // A database without its WAL files (a clean shutdown checkpointed them away): the
+    // read-only open must not create them.
+    let db = tmp.path().join("ferrite.db");
+    checkpoint(&db);
+    assert!(!tmp.path().join("ferrite.db-wal").exists());
+    let before = unchanged_view(tmp.path());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
+    assert_eq!(
+        before,
+        unchanged_view(tmp.path()),
+        "the data folder changed"
+    );
+    assert!(!tmp.path().join("ferrite.db-wal").exists());
+    assert!(!tmp.path().join("ferrite.db-shm").exists());
+}
+
+/// [`snapshot`] of a data folder minus what doctor may touch: the media probe's `tmp/`
+/// folder (and the media root's own mtime and size, which change when `tmp/` is first
+/// made), the only write P49 allows; and the mtime of SQLite's `-shm` file, the shared
+/// memory index every reader of a WAL database updates (no data is written).
+fn unchanged_view(root: &Path) -> BTreeMap<PathBuf, (u32, u64, SystemTime)> {
+    let media = root.join("media");
+    snapshot(root)
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with(media.join("tmp")))
+        .map(|(path, (mode, len, mtime))| {
+            if path == media {
+                (path, (mode, 0, SystemTime::UNIX_EPOCH))
+            } else if path.to_string_lossy().ends_with("-shm") {
+                (path, (mode, len, SystemTime::UNIX_EPOCH))
+            } else {
+                (path, (mode, len, mtime))
+            }
+        })
+        .collect()
+}
+
+/// Checkpoints `db` and closes it as its last connection, so SQLite removes `-wal` and
+/// `-shm` (what a clean `serve` shutdown leaves).
+fn checkpoint(db: &Path) {
+    use sqlx::Connection;
+    let db = db.to_owned();
+    std::thread::spawn(move || {
+        rt().block_on(async move {
+            let mut conn = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+                .await
+                .expect("connect");
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(&mut conn)
+                .await
+                .expect("checkpoint");
+            conn.close().await.expect("close");
+        });
+    })
+    .join()
+    .unwrap();
+}
+
+fn rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+/// An `http://` URL on a local port nothing listens on.
+fn closed_url() -> String {
+    format!("http://127.0.0.1:{}", closed_port())
+}
+
+fn closed_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
 }
 
 #[test]
@@ -1001,5 +1128,742 @@ fn doctor_does_not_create_a_missing_lock_file() {
         "{}",
         out.stdout
     );
+    // The database checks still run (read-only, no lock needed).
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
     assert!(!tmp.path().join("ferrite.lock").exists());
+}
+
+// ---- Task 7: the database, media, cluster, clock and network checks ----
+
+/// `doctor --data DIR` with `env`, the release lookup pointed at a closed local port.
+fn online(data: &Path, env: &[(&str, String)]) -> Output {
+    let mut cmd = ferrite();
+    cmd.arg("doctor")
+        .arg("--data")
+        .arg(data)
+        .args(["--base-url", &closed_url()]);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    run(cmd)
+}
+
+/// `doctor --data DIR --offline` with `env`.
+fn offline_env(data: &Path, env: &[(&str, String)]) -> Output {
+    let mut cmd = ferrite();
+    cmd.arg("doctor").arg("--data").arg(data).arg("--offline");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    run(cmd)
+}
+
+/// Runs `statements` against the SQLite database `db`, then closes it.
+fn sqlite_exec(db: &Path, statements: &[&str]) {
+    use sqlx::Connection;
+    let db = db.to_owned();
+    let statements: Vec<String> = statements.iter().map(|s| (*s).to_owned()).collect();
+    std::thread::spawn(move || {
+        rt().block_on(async move {
+            let mut conn = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+                .await
+                .expect("connect");
+            for sql in statements {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                    .execute(&mut conn)
+                    .await
+                    .expect("statement");
+            }
+            conn.close().await.expect("close");
+        });
+    })
+    .join()
+    .unwrap();
+}
+
+fn sqlite_meta(db: &Path, key: &str) -> String {
+    use sqlx::Connection;
+    let (db, key) = (db.to_owned(), key.to_owned());
+    std::thread::spawn(move || {
+        rt().block_on(async move {
+            let mut conn = sqlx::SqliteConnection::connect(&format!("sqlite://{}", db.display()))
+                .await
+                .expect("connect");
+            let value: String = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+                .bind(&key)
+                .fetch_one(&mut conn)
+                .await
+                .expect("schema_meta");
+            conn.close().await.expect("close");
+            value
+        })
+    })
+    .join()
+    .unwrap()
+}
+
+/// `ferrite serve`, killed on drop.
+struct Serve(std::process::Child);
+
+impl Drop for Serve {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts `serve` for `data` with `env` and waits for its "Listening on" line.
+fn serve(data: &Path, env: &[(&str, String)]) -> Serve {
+    use std::io::BufRead;
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ferrite"));
+    cmd.env_clear()
+        .args(["serve", "--data"])
+        .arg(data)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn serve");
+    let stdout = child.stdout.take().expect("stdout");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { return };
+            if line.starts_with("Listening on http://") {
+                let _ = tx.send(());
+            }
+        }
+    });
+    let serve = Serve(child);
+    rx.recv_timeout(std::time::Duration::from_secs(60))
+        .expect("serve did not report its address");
+    serve
+}
+
+#[test]
+fn a_running_sqlite_site_is_read_without_its_lock() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let env = [(
+        "FERRITE_SERVER__LISTEN",
+        format!("127.0.0.1:{}", closed_port()),
+    )];
+    let _serve = serve(tmp.path(), &env);
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("db.lock_state"), "info", "{}", out.stdout);
+    assert!(
+        out.detail("db.lock_state").contains("a node is running"),
+        "{}",
+        out.stdout
+    );
+    for id in [
+        "db.connect",
+        "db.schema",
+        "db.identity",
+        "media.store",
+        "net.listen",
+    ] {
+        assert_eq!(out.status(id), "ok", "{id}\n{}\n{}", out.stdout, out.stderr);
+    }
+    assert!(
+        out.detail("db.connect").contains("read-only"),
+        "{}",
+        out.stdout
+    );
+    let listen = out.detail("net.listen");
+    assert!(
+        listen.contains("/healthz") && listen.contains("/readyz"),
+        "{listen}"
+    );
+    assert_eq!(out.count("error"), 0, "{}", out.stdout);
+    // Doctor took nothing from the node: it still answers.
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("net.listen"), "ok", "{}", out.stdout);
+}
+
+#[test]
+fn net_listen_is_skipped_without_a_node_and_flags_a_silent_one() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = online(tmp.path(), &[]);
+    assert_eq!(out.status("net.listen"), "skip", "{}", out.stdout);
+    // A process holds the lock, but nothing answers on server.listen.
+    let held = std::fs::File::options()
+        .write(true)
+        .open(tmp.path().join("ferrite.lock"))
+        .unwrap();
+    held.try_lock().unwrap();
+    let env = [(
+        "FERRITE_SERVER__LISTEN",
+        format!("127.0.0.1:{}", closed_port()),
+    )];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("net.listen"), "warn", "{}", out.stdout);
+    // The database checks still run, read-only.
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
+}
+
+#[test]
+fn a_schema_newer_than_the_binary_allows_is_exit_3() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    // Pending migrations: a warning.
+    ferrite()
+        .args([
+            "migrate",
+            "down",
+            "--to",
+            "1",
+            "--allow-lossy",
+            "--yes",
+            "--data",
+        ])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.schema"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("db.schema").contains("migrate up"),
+        "{}",
+        out.stdout
+    );
+    ferrite()
+        .args(["migrate", "up", "--data"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    // A newer schema that requires a newer binary (as the `migrate status` test fakes it).
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (99, 'future', 1, x'00', 0)",
+            "INSERT INTO schema_meta (key, value) VALUES ('min_binary_version', '99.0.0')",
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.schema"), "error", "{}", out.stdout);
+    assert!(out.detail("db.schema").contains("99.0.0"), "{}", out.stdout);
+    assert_eq!(out.code, 3, "{}", out.stdout);
+}
+
+#[test]
+fn identity_checks_site_id_and_the_last_binary() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let db = tmp.path().join("ferrite.db");
+    sqlite_exec(
+        &db,
+        &["UPDATE schema_meta SET value = '99.0.0' WHERE key = 'last_binary_version'"],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.identity"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("db.identity").contains("99.0.0"),
+        "{}",
+        out.stdout
+    );
+    sqlite_exec(&db, &["DELETE FROM schema_meta WHERE key = 'site_id'"]);
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.identity"), "error", "{}", out.stdout);
+    assert_eq!(out.code, 1);
+}
+
+#[test]
+fn an_owner_marker_of_another_install_is_a_warning() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let marker = tmp.path().join("media").join("ferrite-owner.json");
+    std::fs::write(
+        &marker,
+        r#"{"install_id":"another-install","site_id":"s","claimed_at":"2026-01-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.owner"), "warn", "{}", out.stdout);
+    let detail = out.detail("media.owner");
+    assert!(
+        detail.contains("another-install") && detail.contains("--claim"),
+        "{detail}"
+    );
+    assert_eq!(out.code, 2);
+    // A marker naming this install.
+    let install = sqlite_meta(&tmp.path().join("ferrite.db"), "install_id");
+    std::fs::write(
+        &marker,
+        format!(
+            r#"{{"install_id":"{install}","site_id":"s","claimed_at":"2026-01-01T00:00:00Z"}}"#
+        ),
+    )
+    .unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.owner"), "ok", "{}", out.stdout);
+    // A marker that is not one.
+    std::fs::write(&marker, "not json").unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.owner"), "warn", "{}", out.stdout);
+}
+
+#[test]
+fn a_missing_local_media_root_is_an_error_and_is_not_created() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    std::fs::remove_dir_all(tmp.path().join("media")).unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+    assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
+    assert!(!tmp.path().join("media").exists(), "doctor created media/");
+}
+
+/// An in-process S3 server (s3s-fs) with one bucket, `doctor-test`.
+struct S3 {
+    _rt: tokio::runtime::Runtime,
+    _dir: tempfile::TempDir,
+    endpoint: String,
+}
+
+const S3_SECRET: &str = "s3-secret-hunter2";
+
+fn s3_server() -> S3 {
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder as ConnBuilder;
+    use s3s::auth::SimpleAuth;
+    use s3s::service::S3ServiceBuilder;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("doctor-test")).unwrap();
+    let rt = rt();
+    let root = dir.path().to_owned();
+    let addr = rt.block_on(async move {
+        let fs = s3s_fs::FileSystem::new(&root).expect("s3s-fs");
+        let mut builder = S3ServiceBuilder::new(fs);
+        builder.set_auth(SimpleAuth::from_single("test-access", S3_SECRET));
+        let service = builder.build();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let service = service.clone();
+                tokio::spawn(async move {
+                    let http = ConnBuilder::new(TokioExecutor::new());
+                    let _ = http.serve_connection(TokioIo::new(socket), service).await;
+                });
+            }
+        });
+        addr
+    });
+    S3 {
+        _rt: rt,
+        _dir: dir,
+        endpoint: format!("http://{addr}"),
+    }
+}
+
+fn s3_env(s3: &S3, bucket: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("FERRITE_MEDIA__BACKEND", "s3".into()),
+        ("FERRITE_MEDIA__S3__BUCKET", bucket.into()),
+        ("FERRITE_MEDIA__S3__REGION", "us-east-1".into()),
+        ("FERRITE_MEDIA__S3__ENDPOINT", s3.endpoint.clone()),
+        ("FERRITE_MEDIA__S3__ACCESS_KEY_ID", "test-access".into()),
+        ("FERRITE_MEDIA__S3__SECRET_ACCESS_KEY", S3_SECRET.into()),
+        ("FERRITE_MEDIA__S3__ALLOW_HTTP", "true".into()),
+    ]
+}
+
+#[test]
+fn media_store_probes_s3_and_never_prints_its_keys() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    // `init` wrote a local media root; the S3 settings come from the environment.
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n",
+    )
+    .unwrap();
+    chmod(&tmp.path().join("ferrite.toml"), 0o600);
+    let s3 = s3_server();
+    let out = online(tmp.path(), &s3_env(&s3, "doctor-test"));
+    assert_eq!(out.status("config.load"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("media.store"), "ok", "{}", out.stdout);
+    let detail = out.detail("media.store");
+    assert!(
+        detail.contains("doctor-test") && detail.contains(&s3.endpoint),
+        "{detail}"
+    );
+    assert_eq!(out.status("media.owner"), "info", "{}", out.stdout);
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains(S3_SECRET), "{text}");
+    }
+    // A store doctor cannot use. (s3s-fs creates a missing bucket on the first put, so a
+    // wrong bucket name passes here; a wrong secret key is refused like one.)
+    let mut wrong = s3_env(&s3, "doctor-test");
+    wrong.retain(|(k, _)| *k != "FERRITE_MEDIA__S3__SECRET_ACCESS_KEY");
+    wrong.push((
+        "FERRITE_MEDIA__S3__SECRET_ACCESS_KEY",
+        "wrong-hunter2-key".into(),
+    ));
+    let out = online(tmp.path(), &wrong);
+    assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+    assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+    // An endpoint nothing answers on.
+    let mut gone = s3_env(&s3, "doctor-test");
+    gone.retain(|(k, _)| *k != "FERRITE_MEDIA__S3__ENDPOINT");
+    gone.push(("FERRITE_MEDIA__S3__ENDPOINT", closed_url()));
+    let out = online(tmp.path(), &gone);
+    assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+    // Offline: not probed.
+    let out = offline_env(tmp.path(), &s3_env(&s3, "doctor-test"));
+    assert_eq!(out.status("media.store"), "skip", "{}", out.stdout);
+    assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
+}
+
+#[test]
+fn smtp_connect_failure_is_a_warning_without_credentials() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let port = closed_port();
+    let env = [
+        (
+            "FERRITE_MAIL__SMTP_URL",
+            format!("smtp://doctor-user:hunter2@127.0.0.1:{port}"),
+        ),
+        ("FERRITE_MAIL__FROM", "ops@example.com".to_owned()),
+    ];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("smtp.connect"), "warn", "{}", out.stdout);
+    let detail = out.detail("smtp.connect");
+    assert!(
+        detail.contains(&format!("127.0.0.1:{port}")) && detail.contains("plain"),
+        "{detail}"
+    );
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("doctor-user"), "{text}");
+    }
+    let out = offline_env(tmp.path(), &env);
+    assert_eq!(out.status("smtp.connect"), "skip", "{}", out.stdout);
+    // Mail off.
+    let out = online(tmp.path(), &[]);
+    assert_eq!(out.status("smtp.connect"), "info", "{}", out.stdout);
+}
+
+#[test]
+fn acme_directory_that_does_not_answer_is_a_warning() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        format!(
+            "[site]\nurl = \"https://example.com\"\n\
+             [server.tls]\nmode = \"acme\"\ncontact = \"mailto:ops@example.com\"\n\
+             directory = \"https://127.0.0.1:{}/directory\"\n",
+            closed_port()
+        ),
+    )
+    .unwrap();
+    chmod(&tmp.path().join("ferrite.toml"), 0o600);
+    let out = online(tmp.path(), &[]);
+    assert_eq!(out.status("config.load"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("tls.acme_directory"), "warn", "{}", out.stdout);
+    let out = offline(tmp.path());
+    assert_eq!(out.status("tls.acme_directory"), "skip", "{}", out.stdout);
+}
+
+/// A local server answering `GET /repos/softberries/ferritecms/releases/latest` with a
+/// release tagged `tag`.
+fn release_server(tag: &str) -> (tokio::runtime::Runtime, String) {
+    let body =
+        serde_json::json!({"tag_name": tag, "draft": false, "prerelease": false, "assets": []})
+            .to_string();
+    let rt = rt();
+    let addr = rt.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/repos/softberries/ferritecms/releases/latest",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        addr
+    });
+    (rt, format!("http://{addr}"))
+}
+
+#[test]
+fn release_latest_warns_on_a_newer_release_and_informs_when_unreachable() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let (_rt, base) = release_server("v9.9.9");
+    let out = doctor_args(tmp.path(), &["--base-url", &base]);
+    assert_eq!(out.status("release.latest"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("release.latest").contains("9.9.9"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.code, 2, "{}", out.stdout);
+    let (_rt2, base) = release_server(&format!("v{}", env!("CARGO_PKG_VERSION")));
+    let out = doctor_args(tmp.path(), &["--base-url", &base]);
+    assert_eq!(out.status("release.latest"), "ok", "{}", out.stdout);
+    let out = doctor_args(tmp.path(), &["--base-url", &closed_url()]);
+    assert_eq!(out.status("release.latest"), "info", "{}", out.stdout);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+}
+
+// ---- Postgres ----
+
+const PG_URL_ENV: &str = "FERRITE_TEST_PG_URL";
+
+struct PgSchema {
+    url: String,
+    schema: String,
+}
+
+impl PgSchema {
+    /// `None` (after a SKIP line) when `FERRITE_TEST_PG_URL` is unset; panics in CI.
+    fn new() -> Option<Self> {
+        let Ok(url) = std::env::var(PG_URL_ENV) else {
+            if std::env::var("CI").as_deref() == Ok("true") {
+                panic!("{PG_URL_ENV} must be set in CI");
+            }
+            eprintln!("SKIP: Postgres doctor test skipped ({PG_URL_ENV} is not set)");
+            return None;
+        };
+        let schema = format!("t_{}", uuid::Uuid::now_v7().simple());
+        Some(Self { url, schema })
+    }
+
+    fn schema_exists(&self, schema: &str) -> bool {
+        use sqlx::Connection;
+        let (url, schema) = (self.url.clone(), schema.to_owned());
+        std::thread::spawn(move || {
+            rt().block_on(async move {
+                let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+                )
+                .bind(&schema)
+                .fetch_one(&mut conn)
+                .await
+                .expect("query");
+                conn.close().await.expect("close");
+                exists
+            })
+        })
+        .join()
+        .unwrap()
+    }
+
+    /// Registers a node row, as a running `serve` would, with `version` and `meta`.
+    fn register(&self, name: &str, version: &str, meta: serde_json::Value) {
+        use ferrite_store::Store;
+        let (url, schema) = (self.url.clone(), self.schema.clone());
+        let (name, version) = (name.to_owned(), version.to_owned());
+        std::thread::spawn(move || {
+            rt().block_on(async move {
+                let store =
+                    ferrite_store_postgres::PgStore::open(ferrite_store_postgres::PgOptions {
+                        max_connections: 1,
+                        schema: Some(schema),
+                        ..ferrite_store_postgres::PgOptions::new(url)
+                    })
+                    .await
+                    .expect("open pg");
+                store
+                    .read()
+                    .nodes()
+                    .register(&ferrite_domain::NewNode {
+                        id: ferrite_domain::NodeId::new(),
+                        name,
+                        version,
+                        schema_version: 12,
+                        meta,
+                    })
+                    .await
+                    .expect("register");
+            });
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+impl Drop for PgSchema {
+    fn drop(&mut self) {
+        use sqlx::Connection;
+        let url = self.url.clone();
+        let sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", self.schema);
+        let done = std::thread::spawn(move || {
+            rt().block_on(async move {
+                let mut conn = sqlx::PgConnection::connect(&url).await?;
+                sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                    .execute(&mut conn)
+                    .await?;
+                conn.close().await
+            })
+        })
+        .join();
+        if let Ok(Err(e)) = done {
+            eprintln!("warning: could not drop test schema {}: {e}", self.schema);
+        }
+    }
+}
+
+fn init_pg(dir: &Path, pg: &PgSchema) {
+    ferrite()
+        .args(["init", "--url", "https://example.com", "--db", &pg.url])
+        .args(["--schema", &pg.schema, "--data"])
+        .arg(dir)
+        .assert()
+        .success();
+    chmod(dir, 0o750);
+}
+
+#[test]
+fn postgres_site_checks_and_the_cluster_view() {
+    let Some(pg) = PgSchema::new() else { return };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_pg(tmp.path(), &pg);
+    let out = online(tmp.path(), &[]);
+    assert_eq!(out.status("db.connect"), "ok", "{}", out.stdout);
+    assert!(
+        out.detail("db.connect").contains("Postgres"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("db.identity"), "ok", "{}", out.stdout);
+    // The local clock and the server's agree here; either way it is a measured line.
+    assert!(
+        ["ok", "warn"].contains(&out.status("clock.db_skew")),
+        "{}",
+        out.stdout
+    );
+    assert!(out.detail("clock.db_skew").contains("ms"), "{}", out.stdout);
+    for id in ["clock.peers", "cluster.versions", "cluster.site_url"] {
+        assert_eq!(out.status(id), "info", "{id}\n{}", out.stdout);
+    }
+    assert_eq!(out.status("net.listen"), "skip", "{}", out.stdout);
+    assert_eq!(out.count("error"), 0, "{}", out.stdout);
+
+    // Two live nodes on different versions, one of them for another site URL and with a
+    // skewed clock.
+    pg.register(
+        "node-a",
+        "0.1.0",
+        serde_json::json!({"site_url": "https://example.com", "mode": "solo", "clock_skew_ms": 5}),
+    );
+    pg.register(
+        "node-b",
+        "0.2.0",
+        serde_json::json!({"site_url": "https://other.example", "mode": "solo", "clock_skew_ms": 4000}),
+    );
+    let out = online(tmp.path(), &[]);
+    assert_eq!(out.status("cluster.versions"), "warn", "{}", out.stdout);
+    let versions = out.detail("cluster.versions");
+    assert!(
+        versions.contains("0.1.0") && versions.contains("0.2.0"),
+        "{versions}"
+    );
+    assert_eq!(out.status("cluster.site_url"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("cluster.site_url").contains("node-b"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        !out.detail("cluster.site_url").contains("node-a"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.status("clock.peers"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("clock.peers").contains("node-b"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.code, 2, "{}", out.stdout);
+
+    // A live row with this configuration's node name is this folder's node: net.listen
+    // probes it (nothing answers on that port here).
+    let env = [
+        ("FERRITE_CLUSTER__NODE_NAME", "node-a".to_owned()),
+        (
+            "FERRITE_SERVER__LISTEN",
+            format!("127.0.0.1:{}", closed_port()),
+        ),
+    ];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("net.listen"), "warn", "{}", out.stdout);
+    let env = [("FERRITE_CLUSTER__NODE_NAME", "node-z".to_owned())];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("net.listen"), "skip", "{}", out.stdout);
+}
+
+#[test]
+fn postgres_missing_schema_is_an_error_and_is_not_created() {
+    let Some(pg) = PgSchema::new() else { return };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_pg(tmp.path(), &pg);
+    let missing = format!("{}_missing", pg.schema);
+    let env = [("FERRITE_DATABASE__SCHEMA", missing.clone())];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("db.connect"), "error", "{}", out.stdout);
+    assert!(
+        out.detail("db.connect").contains(&missing),
+        "{}",
+        out.stdout
+    );
+    for id in [
+        "db.schema",
+        "db.identity",
+        "clock.db_skew",
+        "cluster.versions",
+    ] {
+        assert_eq!(out.status(id), "skip", "{id}\n{}", out.stdout);
+    }
+    assert_eq!(out.code, 1, "{}", out.stdout);
+    assert!(!pg.schema_exists(&missing), "doctor created the schema");
+    assert!(pg.schema_exists(&pg.schema));
+}
+
+#[test]
+fn postgres_password_is_never_printed() {
+    let Some(pg) = PgSchema::new() else { return };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_pg(tmp.path(), &pg);
+    let mut url = url::Url::parse(&pg.url).unwrap();
+    url.set_password(Some("pg-hunter2")).unwrap();
+    let env = [("FERRITE_DATABASE__URL", url.to_string())];
+    // Whether the server checks the password or not, it never shows.
+    let out = online(tmp.path(), &env);
+    assert!(
+        ["ok", "error"].contains(&out.status("db.connect")),
+        "{}",
+        out.stdout
+    );
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("pg-hunter2"), "{text}");
+    }
+    // An unreachable server: an error, still without the password.
+    let env = [(
+        "FERRITE_DATABASE__URL",
+        format!(
+            "postgres://ferrite:pg-hunter2@127.0.0.1:{}/x",
+            closed_port()
+        ),
+    )];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("db.connect"), "error", "{}", out.stdout);
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("pg-hunter2"), "{text}");
+    }
 }

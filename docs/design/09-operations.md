@@ -1054,13 +1054,20 @@ Doctor never writes. It creates and changes no file, folder, key or schema, and 
 call `keys::site_key`, `gc::install_id` or `TlsCache::prepare`. Permissions are asked of the
 kernel with `access(2)` (the process's own user, ACLs and read-only mounts included) instead
 of writing a probe, and the SQLite lock is only tried and released at once, never created.
-The one write is the media probe object under `tmp/`, which the GC removes if it is ever
-left. Nothing prints a secret: a database or SMTP URL, an S3 key and `secret.key` never
-appear. `info` means informational or not applicable to this site (Postgres has no
-`ferrite.lock`, a solo site no cluster); `skip` means the check did not run (`--offline`, a
-configuration that did not load, a node that is running, or, until M4-3a Task 7 lands, not
-wired in: `skip  <id>  not checked yet`). Run it as the user that runs `serve`: a check
-passes or fails for the user that runs doctor.
+The one write is the media probe object under `tmp/` (a local root gets a `tmp/` folder if
+it had none), which the GC removes if it is ever left. A SQLite database is read over one
+read-only connection that takes no lock, opens no writer and runs no migration, so doctor
+works while `serve` runs and never stops one from starting; being read-only it never
+checkpoints the WAL (SQLite still updates the shared-memory index in `-shm`, as every
+reader does), and with no `-wal`/`-shm` files it opens the database `immutable`, since a
+read-only open would create them. On Postgres doctor first checks over a bare connection
+that the configured schema exists and only then opens the store, whose open would create
+it. Nothing prints a secret: a database or SMTP URL (or its user), an S3 key and
+`secret.key` never appear. `info` means informational or not applicable to this site
+(Postgres has no `ferrite.lock`, a solo site no cluster); `skip` means the check did not
+run (`--offline`, a configuration that did not load, a database or media store that did
+not open, no running node, or a SQLite site for the clock and cluster checks). Run it as
+the user that runs `serve`: a check passes or fails for the user that runs doctor.
 
 | Check | What it checks |
 |---|---|
@@ -1073,27 +1080,29 @@ passes or fails for the user that runs doctor.
 | `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
 | `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
 | `db.lock_state` | `info`: whether a node is running (it holds `<data>/ferrite.lock`). Tried without waiting and released at once; a missing lock file is not created. |
-| `db.connect` | The database opens; reports backend, latency and the Postgres version. |
-| `db.schema` | Migration status, as `migrate status`; an incompatible schema is exit 3. |
+| `db.connect` | The database opens read-only (`error` otherwise); reports backend, latency and, for Postgres, `host:port/database (schema S)` and the server version (older than 15 is an `error`). A Postgres schema that does not exist is an `error`, and it is not created. Postgres has 10 s to answer. |
+| `db.schema` | Migration status, as `migrate status`: up to date or a newer compatible schema is `ok`, pending migrations a `warn` (`migrate up`), an incompatible schema an `error` and exit 3, a migration recorded as failed an `error`. |
 | `db.identity` | `site_id` present (`error`), `install_id` present (`warn`), `last_binary_version` against the binary (`warn` if newer). |
 | `upgrade.record` | `upgrade.json` parses (`warn` if not); on SQLite a provisional record (`snapshot: null` with a schema move: an upgrade that did not finish) and a missing named snapshot are warnings (§1); on Postgres a null snapshot is the normal finished record. |
-| `media.store` | Local: the root exists, then the probe runs. S3: the probe runs; endpoint and bucket are reported, never keys. |
-| `media.owner` | The owner marker against `install_id`: absent is `info`, a mismatch a `warn` (the GC then deletes nothing; `media gc --claim`). |
-| `clock.db_skew` | Postgres: skew against the server's `now()`, `warn` over 2 s, `error` over 30 s (the TOTP window). SQLite: `skip` (the database uses the local clock). |
-| `clock.peers` | `warn` for live nodes whose recorded `clock_skew_ms` is over 2 s. |
-| `cluster.versions` | Postgres: live nodes' version and schema version; a mixed set is a `warn`. |
-| `cluster.site_url` | Live peers' `site_url` and mode match this configuration (`warn`). |
-| `smtp.connect` | With `[mail]`: connect, EHLO, STARTTLS and auth without sending mail; host, port and TLS mode are reported (`warn` on failure). Mail off is `info`. |
+| `media.store` | The write, read and delete probe `serve` runs at start (5 s). Local: the root must exist (`error`: a missing mount; doctor does not create it) and the probe runs even with `--offline`. S3: bucket, endpoint and prefix are reported, never keys (`skip` with `--offline`; without configured keys the store uses this shell's `AWS_*`). A failed probe is an `error`. |
+| `media.owner` | The owner marker against `install_id`: absent is `info` (the first GC pass writes it), this install's `ok`, another install's a `warn` (the GC then deletes nothing; `media gc --claim`), one that cannot be read a `warn`. `skip` when the store or the database did not open. |
+| `clock.db_skew` | Postgres: this machine's clock against the server's `now()` at the midpoint of the round trip, `warn` over 2 s, `error` over 30 s (the TOTP window). SQLite: `skip` (the database uses the local clock). |
+| `clock.peers` | Postgres: `warn` for live nodes (heartbeat within 30 s by the database clock) whose recorded `clock_skew_ms` is over 2 s; no live node is `info`. SQLite: `skip`. |
+| `cluster.versions` | Postgres: live nodes' version and schema version; a mixed set is a `warn` (normal during a rolling upgrade, not after it). SQLite: `skip`. |
+| `cluster.site_url` | Postgres: live nodes' recorded `site_url` and mode match this configuration (`warn`; such a node could not join, P15). SQLite: `skip`. |
+| `smtp.connect` | With `[mail]`: connect, TLS or STARTTLS, EHLO and AUTH as a send would, then `NOOP`, without sending mail (5 s); host, port and TLS mode are reported, never the URL or its user (`warn` on failure, `skip` with `--offline`). Mail off is `info`. |
 | `tls.dir` | ACME mode: `<data>/tls/` is 0700 and its files 0600 (`warn`; `serve` tightens them at start). Otherwise `info`. |
-| `tls.acme_directory` | ACME mode: a GET of the directory URL returns JSON (`warn`). |
-| `net.listen` | With a node running: `/healthz`, `/readyz` and, with `metrics_listen`, `/metrics` answer. Otherwise `skip`. |
+| `tls.acme_directory` | ACME mode: a GET of the directory URL returns an ACME directory (JSON naming `newNonce`) within 5 s (`warn` otherwise: certificates cannot be issued or renewed; `skip` with `--offline`). TLS off is `info`. |
+| `net.listen` | With a node running (SQLite: the lock is held; Postgres: a live node row has this configuration's `cluster.node_name`), `/healthz` and `/readyz` on `server.listen` (a wildcard address is probed on loopback) and, with `metrics_listen`, `/metrics` answer 200 within 5 s each. Nothing answering is a `warn` (the lock may be held by another command); a non-200 `/healthz` or `/readyz` an `error`; a failing `/metrics` a `warn`. No running node, Postgres without `cluster.node_name`, or a listen port of 0: `skip`. |
 | `backup.target` | With `[backup] to`: a local folder exists (or its nearest existing parent is writable, for the first backup to create it) and is writable (`error` with a schedule on, `warn` with it off), is empty or a repository (marker `ferrite-backup-repo.json`), and its newest snapshot is not older than twice the schedule's period (`warn`); a Postgres site's repository is read for export archives. An S3 target is listed with a 5 s timeout (`warn` on failure) and is `skip` with `--offline`. No target is `info`. |
-| `release.latest` | The newest stable release against the binary: newer is a `warn`, an unreachable lookup `info`, never `error`. |
+| `release.latest` | The newest stable release, looked up as `self-update --check` does (no download, no release key): newer is a `warn`, the same or older `ok`, a prerelease and an unreachable or failed lookup `info`, never `error`. |
 
-The network checks (an S3 backup target, `smtp.connect`, `tls.acme_directory`,
-`release.latest`) each have a 5 s timeout and become `skip` with `--offline`; the database
-is not a network check and is always required. Left out: an HTTP `Date` clock check,
-detection of the service user, update-path writability and `--json`.
+The network checks (an S3 media store or backup target, `smtp.connect`,
+`tls.acme_directory`, `release.latest`) each have a 5 s timeout and become `skip` with
+`--offline`; the database is not a network check and is always required. Left out: an HTTP
+`Date` clock check, detection of the service user, update-path writability and `--json`.
+Test seam (`test-seams` builds only): a hidden `--base-url` replaces the GitHub API root of
+`release.latest`, as for `self-update`.
 
 **`ferrite self-update`** (`crates/ferrite/src/update/`; §1): replaces the running binary
 with a newer signed release of this target, keeping the old one as `ferrite.prev`, and
