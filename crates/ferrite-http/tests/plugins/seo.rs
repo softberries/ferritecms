@@ -6,10 +6,11 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, Media, NewContent, Role, Term,
     TermId, Timestamp, User,
 };
-use ferrite_http::{HeadPage, PluginRequest, RenderTrace, page_head};
+use ferrite_http::{HeadPage, PluginRequest, RenderTrace, StoreHostServices, page_head};
+use ferrite_plugin_host::{FilterValue, Head, LinkTag, MetaTag, ScriptTag};
 use serde_json::{Value, json};
 
-use crate::common::{HOUR, Site};
+use crate::common::{HOUR, SITE_URL, Site, plugin_manifest, plugin_wasm};
 use crate::profile_tests;
 
 profile_tests!(
@@ -22,6 +23,8 @@ profile_tests!(
     settings_drive_feed_link_verification_and_twitter_site,
     organization_settings_reach_the_publisher,
     nothing_core_emitted_is_repeated,
+    options_grant_decides_which_dependent_tags_appear,
+    tags_already_in_the_head_are_not_repeated,
 );
 
 async fn term(site: &Site, taxonomy: &str, slug: &str, name: &str) -> TermId {
@@ -437,10 +440,21 @@ async fn organization_settings_reach_the_publisher(site: Site) -> Site {
     site
 }
 
-/// The plugin repeats no tag of core's. With no `site.title` option it takes the site
-/// name from core's own head (`<item> – <site>`).
+/// `site` whose services know the configured site title `title` (`ferrite.toml`), the
+/// fallback of `options.get("site.title")` (ruling X1). Call it before installing.
+fn configured(mut site: Site, title: &str) -> Site {
+    site.services = std::sync::Arc::new(
+        StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL)
+            .with_site_key(site.key.clone())
+            .with_site_title(title.to_owned()),
+    );
+    crate::with_generous_deadlines(site)
+}
+
+/// The plugin repeats no tag of core's. With no `site.title` option the site name is the
+/// configured title, which the host answers through `options.get`.
 async fn nothing_core_emitted_is_repeated(site: Site) -> Site {
-    let site = crate::with_generous_deadlines(site);
+    let site = configured(site, "Configured Title");
     site.install("seo").await;
     site.load().await;
     let author = site.user("ada", Role::Author).await;
@@ -458,10 +472,204 @@ async fn nothing_core_emitted_is_repeated(site: Site) -> Site {
     }
     assert_eq!(html.matches("rel=\"canonical\"").count(), 1, "{html}");
     assert_eq!(name(&html, "description").len(), 1, "{html}");
-    // The host escapes the `&` of the test site's title.
-    assert_eq!(prop(&html, "og:site_name"), ["Test &amp; Site"], "{html}");
+    assert_eq!(prop(&html, "og:site_name"), ["Configured Title"], "{html}");
+    let blocks = json_ld(&html);
+    assert_eq!(
+        of_type(&blocks, "BlogPosting").unwrap()["publisher"]["name"],
+        "Configured Title"
+    );
 
     let home = render(&site, None, "/", "en").await;
-    assert_eq!(prop(&home, "og:site_name"), ["Test &amp; Site"], "{home}");
+    assert_eq!(prop(&home, "og:site_name"), ["Configured Title"], "{home}");
+    assert_eq!(
+        of_type(&json_ld(&home), "WebSite").unwrap()["name"],
+        "Configured Title"
+    );
+
+    // A stored option wins over the configured title.
+    option(&site, "site.title", json!("Stored Title")).await;
+    let home = render(&site, None, "/", "en").await;
+    assert_eq!(prop(&home, "og:site_name"), ["Stored Title"], "{home}");
+    site
+}
+
+/// `options.read` names the keys a plugin may read (ruling X1). A plugin granted only
+/// `site.title` reads no URL, and one granted only `site.url` reads no title; the tags
+/// that depend on the missing option are left out and the rest is still added. (A
+/// component that imports `options` is not loaded at all without any `options.read`.)
+async fn options_grant_decides_which_dependent_tags_appear(site: Site) -> Site {
+    let site = configured(site, "Configured Title");
+    let author = site.user("ada", Role::Author).await;
+    let id = item(&site, &author, "post", "bare", "Bare", json!({}), &[]).await;
+    let hash = site.put_artifact(plugin_wasm("seo")).await;
+    let from_manifest = |reads: &str| {
+        plugin_manifest("seo").replace(
+            "options.read = [\"site.title\", \"site.url\"]",
+            &format!("options.read = [{reads}]"),
+        )
+    };
+
+    // Title only: a site name and a publisher, but no URL: no `WebSite`, no feed link.
+    site.row("seo", &from_manifest("\"site.title\""), hash.clone(), true)
+        .await;
+    assert_eq!(site.load().await.loaded, ["seo"]);
+    let home = render(&site, None, "/", "en").await;
+    assert_eq!(prop(&home, "og:site_name"), ["Configured Title"], "{home}");
+    assert!(!home.contains("application/rss+xml"), "{home}");
+    assert!(json_ld(&home).is_empty(), "{home}");
+    let html = render(&site, Some(id), "/", "en").await;
+    let blocks = json_ld(&html);
+    let publisher = &of_type(&blocks, "BlogPosting").unwrap()["publisher"];
+    assert_eq!(publisher["name"], "Configured Title");
+
+    // URL only: no site name, so a `WebSite` without a name, the feed link, and a
+    // `BlogPosting` without a publisher.
+    site.row("seo", &from_manifest("\"site.url\""), hash, true)
+        .await;
+    assert_eq!(site.load().await.loaded, ["seo"]);
+    let home = render(&site, None, "/", "en").await;
+    assert!(prop(&home, "og:site_name").is_empty(), "{home}");
+    assert!(home.contains(RSS), "{home}");
+    let blocks = json_ld(&home);
+    let web = of_type(&blocks, "WebSite").unwrap();
+    assert_eq!(web["url"], "https://example.com/");
+    assert!(web.get("name").is_none());
+    let html = render(&site, Some(id), "/", "en").await;
+    assert!(prop(&html, "og:site_name").is_empty(), "{html}");
+    assert_eq!(prop(&html, "article:author"), ["ada display"]);
+    let blocks = json_ld(&html);
+    let post = of_type(&blocks, "BlogPosting").unwrap();
+    assert_eq!(post["headline"], "Bare");
+    assert!(post.get("publisher").is_none());
+
+    // The same enforcement for a key outside the grant: `reader` is granted `site.url`
+    // only, and its `options.get("site.title")` is unset.
+    let reader = plugin_manifest("reader").replace(
+        "options.read      = [\"site.title\"]",
+        "options.read      = [\"site.url\"]",
+    );
+    let hash = site.put_artifact(plugin_wasm("reader")).await;
+    site.row("reader", &reader, hash, true).await;
+    assert_eq!(site.load().await.loaded.len(), 2);
+    let home = render(&site, None, "/", "en").await;
+    assert_eq!(name(&home, "reader-option"), ["-"], "{home}");
+    site
+}
+
+/// An earlier-priority plugin (or core) already put these in the head: the plugin adds
+/// none of them again and leaves the earlier values alone. Filter level, with an
+/// incoming head that already holds every tag the plugin would add.
+async fn tags_already_in_the_head_are_not_repeated(site: Site) -> Site {
+    let site = site_with_seo(site).await;
+    setting(&site, "twitter_site", json!("ferritecms")).await;
+    setting(&site, "google_verification", json!("g")).await;
+    setting(&site, "bing_verification", json!("b")).await;
+    let author = site.user("ada", Role::Author).await;
+    let news = term(&site, "category", "news", "News").await;
+    let rust = term(&site, "tag", "rust", "Rust").await;
+    let id = item(
+        &site,
+        &author,
+        "post",
+        "dup",
+        "Dup",
+        json!({}),
+        &[news, rust],
+    )
+    .await;
+
+    let og = |p: &str, c: &str| MetaTag {
+        name: None,
+        property: Some(p.into()),
+        content: c.into(),
+    };
+    let named = |n: &str, c: &str| MetaTag {
+        name: Some(n.into()),
+        property: None,
+        content: c.into(),
+    };
+    let earlier = Head {
+        title: Some("Dup".into()),
+        metas: vec![
+            og("og:title", "Dup"),
+            og("og:site_name", "Earlier"),
+            og("og:locale", "xx_XX"),
+            og("article:published_time", "2000-01-01T00:00:00Z"),
+            og("article:author", "Earlier Author"),
+            og("article:section", "Earlier Section"),
+            og("article:tag", "Earlier Tag"),
+            named("twitter:card", "app"),
+            named("twitter:title", "Earlier"),
+            named("twitter:description", "Earlier"),
+            named("twitter:site", "@earlier"),
+            named("google-site-verification", "earlier"),
+            named("msvalidate.01", "earlier"),
+        ],
+        links: vec![LinkTag {
+            rel: "alternate".into(),
+            href: "https://example.com/other-feed/".into(),
+            hreflang: None,
+            kind: Some("application/rss+xml".into()),
+        }],
+        scripts: vec![
+            ScriptTag {
+                src: None,
+                json_ld: Some(r#"{"@type":"BlogPosting","headline":"Earlier"}"#.into()),
+            },
+            ScriptTag {
+                src: None,
+                json_ld: Some(r#"{"@type":"WebSite","name":"Earlier"}"#.into()),
+            },
+        ],
+    };
+
+    // A post page (`BlogPosting` present) and the home page (`WebSite` present).
+    for (item, path) in [(Some(id), "/dup/"), (None, "/")] {
+        let req = PluginRequest::public(path, "en", item);
+        let mut trace = RenderTrace::default();
+        let FilterValue::Head(out) = ferrite_http::run_filter(
+            &site.host,
+            "render.head",
+            FilterValue::Head(earlier.clone()),
+            &req,
+            &mut trace,
+        )
+        .await
+        else {
+            panic!("render.head returned another variant");
+        };
+        assert!(
+            site.host.failures().is_empty(),
+            "{:?}",
+            site.host.failures()
+        );
+        let html = ferrite_http::render_head(&out, crate::SITE);
+        for (attr, key, earlier_value) in [
+            ("property", "og:site_name", "Earlier"),
+            ("property", "og:locale", "xx_XX"),
+            ("property", "article:published_time", "2000-01-01T00:00:00Z"),
+            ("property", "article:author", "Earlier Author"),
+            ("property", "article:section", "Earlier Section"),
+            ("property", "article:tag", "Earlier Tag"),
+            ("name", "twitter:card", "app"),
+            ("name", "twitter:title", "Earlier"),
+            ("name", "twitter:description", "Earlier"),
+            ("name", "twitter:site", "@earlier"),
+            ("name", "google-site-verification", "earlier"),
+            ("name", "msvalidate.01", "earlier"),
+        ] {
+            assert_eq!(metas(&html, attr, key), [earlier_value], "{key}: {html}");
+        }
+        assert_eq!(html.matches("application/rss+xml").count(), 1, "{html}");
+        assert!(html.contains("other-feed"), "{html}");
+        // Still the two earlier blocks, none added.
+        let blocks = json_ld(&html);
+        assert_eq!(blocks.len(), 2, "{html}");
+        assert_eq!(
+            of_type(&blocks, "BlogPosting").unwrap()["headline"],
+            "Earlier"
+        );
+        assert_eq!(of_type(&blocks, "WebSite").unwrap()["name"], "Earlier");
+    }
     site
 }

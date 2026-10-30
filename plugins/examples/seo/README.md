@@ -23,7 +23,7 @@ in the admin and apply to core's tags; this plugin copies the result.
 
 | Tag | Where | Source |
 |---|---|---|
-| `og:site_name` | every page | the `site.title` option; else core's own head |
+| `og:site_name` | every page | the `site.title` option (the stored title, else the configured one) |
 | `og:locale` | every page with a locale | the request locale, `-` written as `_` (`pl-PL` becomes `pl_PL`) |
 | `twitter:card` | every page | `summary_large_image` when core emitted an `og:image`, else `summary` |
 | `twitter:title`, `twitter:description` | every page | copied from core's `og:title` and `og:description` |
@@ -70,7 +70,7 @@ API: inspect with `POST /api/v1/plugins/inspect`, then `POST /api/v1/plugins` wi
 The report lists these, and the plugin asks for nothing else:
 
 - `content.read = ["post"]`: read published posts (title, publish time, author, terms, URL).
-- `options.read = ["site.title", "site.url"]`: read those two site options.
+- `options.read = ["site.title", "site.url"]`: read the site title and the site URL.
 - `render.head`: add tags to the head of every page. The report marks this as high risk,
   because a head script can load from any `https://` host. This plugin only adds meta tags,
   one link and JSON-LD, but the grant is what you approve.
@@ -100,13 +100,11 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
 - **No modified date.** A `post` carries only its publish time, so there is no
   `article:modified_time` or `dateModified`.
 - **No author URL or avatar.** The author is the display name only.
-- **No site URL option on current sites.** The plugin asks for `site.url`, but core keeps the
-  site URL in `ferrite.toml`, not in the options. It takes the site URL from core's canonical
-  link instead (the canonical minus the page path, else its origin).
-- **No site name without the option or a plain title.** With no `site.title` option set, the
-  site name is read from core's head: the `og:title` on pages without an item, or the part of
-  the title after `<post title> – ` on a post. A post with its own SEO title names no site, so
-  `og:site_name` is left out there.
+- **Site URL and title come from the host's options.** `site.url` is the configured site URL
+  and `site.title` is the stored title, else the one in `ferrite.toml`. If you narrow the
+  grant so that one of them cannot be read, the tags that need it are left out: without
+  `site.title`, no `og:site_name` and no publisher name; without `site.url`, no `WebSite`
+  JSON-LD and no RSS link.
 - **Posts only.** The plugin reads `post` items. For other types or custom taxonomies, extend
   `content.read` in the manifest and the code.
 - **No IndexNow, no robots or sitemap changes, no content analysis.** Plugins cannot serve

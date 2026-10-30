@@ -23,8 +23,10 @@ const RSS: &str = "application/rss+xml";
 fn head(mut head: Head, ctx: &Ctx) -> Result<Head> {
     let request = ctx.request();
     let post = ctx.current_post().filter(|p| p.kind == "post");
-    let site_url = site_url(&head, &request.path);
-    let site_title = site_title(&head, ctx, post.as_ref());
+    // Without the `options.read` grant both are `None`, and the tags that need them are
+    // left out.
+    let site_url = site_url();
+    let site_title = site_title();
 
     if let Some(title) = &site_title
         && !head.has_meta_property("og:site_name")
@@ -120,60 +122,27 @@ fn article(head: &mut Head, post: &Post) {
         head.og("article:section", &section.name);
     }
     if !head.has_meta_property("article:tag") {
-        // Core's tag taxonomy is `tag` (the importer maps WordPress `post_tag` to it).
-        for tag in post
-            .terms
-            .iter()
-            .filter(|t| matches!(t.taxonomy.as_str(), "tag" | "post_tag"))
-        {
+        // Core's tag taxonomy is `tag`; the WordPress importer maps `post_tag` to it.
+        for tag in post.terms.iter().filter(|t| t.taxonomy == "tag") {
             head.og("article:tag", &tag.name);
         }
     }
 }
 
-/// The site name: the `site.title` option, else what core's own head says. Core's
-/// `og:title` is the site title on a page without an item; on an item the head title
-/// is `<item> – <site>` (unless the item has its own SEO title, which names no site).
-fn site_title(head: &Head, ctx: &Ctx, post: Option<&Post>) -> Option<String> {
-    if let Some(title) = options::get("site.title")
-        && !title.trim().is_empty()
-    {
-        return Some(title.trim().to_owned());
-    }
-    if ctx.request().post.is_none() {
-        return head.meta_property("og:title").map(str::to_owned);
-    }
-    let prefix = format!("{} – ", post?.title.trim());
-    let title = head.as_wit().title.as_deref()?.strip_prefix(&prefix)?;
-    Some(title.to_owned()).filter(|t| !t.is_empty())
+/// The site name: the `site.title` option (the host answers the configured title when
+/// no option is stored). `None` when the plugin is not granted the option.
+fn site_title() -> Option<String> {
+    options::get("site.title")
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
 }
 
-/// The site URL without a trailing slash. The `site.url` option when the host gives it,
-/// else core's canonical link without the page path, else its origin (a canonical
-/// replaced by the item's own SEO canonical may name another site).
-fn site_url(head: &Head, path: &str) -> Option<String> {
-    if let Some(url) = options::get("site.url").map(|u| u.trim().trim_end_matches('/').to_owned())
-        && url.starts_with("http")
-    {
-        return Some(url);
-    }
-    let canonical = head
-        .as_wit()
-        .links
-        .iter()
-        .find(|l| l.rel == "canonical")?
-        .href
-        .as_str();
-    if let Some(base) = canonical.strip_suffix(path)
-        && base.starts_with("http")
-    {
-        return Some(base.trim_end_matches('/').to_owned());
-    }
-    let after_scheme = canonical.find("://")? + 3;
-    let end = canonical[after_scheme..]
-        .find('/')
-        .map_or(canonical.len(), |i| after_scheme + i);
-    Some(canonical[..end].to_owned())
+/// The site URL without a trailing slash: the `site.url` option, which the host answers
+/// from the configuration. `None` when the plugin is not granted the option.
+fn site_url() -> Option<String> {
+    options::get("site.url")
+        .map(|u| u.trim().trim_end_matches('/').to_owned())
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
 }
 
 fn website(site_url: &str, name: Option<&str>) -> Value {

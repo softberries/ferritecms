@@ -7,8 +7,9 @@ world       = "ferrite:plugin/plugin@0.1.0"
 license     = "MIT"
 
 # Adds to core's head what core does not emit, and never repeats a tag core (or an
-# earlier plugin) already put there. `site.url` is requested for sites that expose it;
-# the plugin falls back to core's canonical link.
+# earlier plugin) already put there. Both options are answered by the host: `site.url`
+# is the configured site URL, `site.title` the stored option else the configured title.
+# Without the grant the tags that need them are left out.
 [capabilities]
 content.read = ["post"]
 options.read = ["site.title", "site.url"]
