@@ -462,11 +462,12 @@ impl From<SeriesStep> for SeriesStepDto {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SeriesBucketDto {
     pub start: DateTime<Utc>,
-    /// Responses of every route class but `other` (health checks, the comment form).
+    /// Responses of every route class but `other` (health checks).
     pub requests: u64,
     /// Those of `requests` with a 5xx status.
     pub errors_5xx: u64,
-    /// `200` HTML page views (no bots, previews or logged-in requests).
+    /// HTML page views: `200` answers and `304` revalidations of public pages (no bots,
+    /// previews or logged-in requests).
     pub page_views: u64,
     /// Page cache lookups that found a page.
     pub cache_hits: u64,

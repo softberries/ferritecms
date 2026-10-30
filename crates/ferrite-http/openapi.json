@@ -13309,7 +13309,7 @@
           "page_views": {
             "type": "integer",
             "format": "int64",
-            "description": "`200` HTML page views (no bots, previews or logged-in requests).",
+            "description": "HTML page views: `200` answers and `304` revalidations of public pages (no bots,\npreviews or logged-in requests).",
             "minimum": 0
           },
           "plugin_calls": {
@@ -13327,7 +13327,7 @@
           "requests": {
             "type": "integer",
             "format": "int64",
-            "description": "Responses of every route class but `other` (health checks, the comment form).",
+            "description": "Responses of every route class but `other` (health checks).",
             "minimum": 0
           },
           "start": {

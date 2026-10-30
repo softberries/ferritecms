@@ -745,8 +745,9 @@ scrape_configs:
       - targets: ["10.0.0.5:9464", "10.0.0.6:9464"]
 ```
 
-`Metrics::snapshot()` gives the cumulative counters (requests and 5xx errors of every class but `other`, so load-balancer health checks stay out (ruling R3; `/metrics` counts every class), page views,
-cache hits and misses, plugin calls and failures, jobs completed and failed attempts of
+`Metrics::snapshot()` gives the cumulative counters (requests and 5xx errors of every class but `other`, so load-balancer health checks stay out (ruling R3; `/metrics` counts every class), page views
+(`200` answers and `304` revalidations of public HTML pages, M4-2 R8), cache hits and
+misses, plugin calls and failures, jobs completed and failed attempts of
 this node's runner, and the page-class latency buckets) that the per-minute
 `node_metrics` rows are made from.
 

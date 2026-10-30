@@ -304,7 +304,7 @@ async fn requests_counted_by_class_and_status(app: App) -> App {
     app.post("Hello", "hello", &[]).await;
     let before = metrics.snapshot();
     assert_eq!(before, MetricsSnapshot::default(), "nothing counted yet");
-    let cases: [(Method, &str, &str, &str); 10] = [
+    let cases: [(Method, &str, &str, &str); 11] = [
         (Method::GET, "/", "page", "2xx"),
         (Method::GET, "/hello/", "page", "2xx"),
         (Method::GET, "/hello", "page", "3xx"),
@@ -314,7 +314,10 @@ async fn requests_counted_by_class_and_status(app: App) -> App {
         (Method::GET, "/_media/00/x.png", "media", "4xx"),
         (Method::GET, "/_p/nobody/", "plugin", "4xx"),
         (Method::GET, "/healthz", "other", "2xx"),
-        (Method::POST, "/", "other", "4xx"),
+        // The public site's other methods and the comment form are pages, so their 5xx
+        // errors show (here: a 405, and a form post refused without its origin).
+        (Method::POST, "/", "page", "4xx"),
+        (Method::POST, "/_comment", "page", "4xx"),
     ];
     for (method, path, _, _) in &cases {
         let mut req = request(method.clone(), path);
@@ -378,13 +381,14 @@ async fn requests_counted_by_class_and_status(app: App) -> App {
         );
     }
     let snap = metrics.snapshot();
-    // The snapshot leaves out the two `other` requests (R3); `/metrics` counts them.
-    assert_eq!(snap.requests, 9);
+    // The snapshot leaves out the `other` request, the health check (R3); `/metrics`
+    // counts it.
+    assert_eq!(snap.requests, 11);
     assert_eq!(snap.errors_5xx, 0);
-    // Four page requests: their latencies are in the page histogram.
-    assert_eq!(snap.page_latency.iter().sum::<u64>(), 4);
+    // Six page requests: their latencies are in the page histogram.
+    assert_eq!(snap.page_latency.iter().sum::<u64>(), 6);
     let delta = snap.since(&before);
-    assert_eq!(delta.requests, 9);
+    assert_eq!(delta.requests, 11);
     app
 }
 
@@ -415,8 +419,9 @@ async fn page_views_skip_bots_previews_logged_in(app: App) -> App {
     }
     assert_eq!(views(), 3, "bots");
 
-    // Not counted: a logged-in request, a preview, a 404, a redirect, a 304, HEAD, a
-    // feed (not HTML), the API.
+    // Not counted: a logged-in request, a preview, a 404, a redirect, HEAD, a feed (not
+    // HTML), its 304, a bot's 304, the API. A browser's 304 revalidation of a page counts
+    // (M4-2 R8).
     let cookie = app.session(&app.ada_user).await;
     let r = app.send(browser("/hello/", BROWSER, Some(&cookie))).await;
     assert_eq!(r.status, StatusCode::OK);
@@ -448,20 +453,42 @@ async fn page_views_skip_bots_previews_logged_in(app: App) -> App {
     assert!(r.status.is_redirection());
     let etag = app.get("/hello/").await.header("etag").unwrap().to_owned();
     assert_eq!(views(), 4, "the plain GET above counts");
-    let mut cond = browser("/hello/", BROWSER, None);
-    cond.headers_mut()
-        .insert(header::IF_NONE_MATCH, etag.parse().unwrap());
-    assert_eq!(app.send(cond).await.status, StatusCode::NOT_MODIFIED);
+    let revalidate = |path: &str, ua: &str, etag: &str, cookie: Option<&str>| {
+        let mut cond = browser(path, ua, cookie);
+        cond.headers_mut()
+            .insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        cond
+    };
+    let r = app.send(revalidate("/hello/", BROWSER, &etag, None)).await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(views(), 5, "a revalidated page view counts");
+    let r = app
+        .send(revalidate("/hello/", "Googlebot/2.1", &etag, None))
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED);
+    let r = app
+        .send(revalidate("/hello/", BROWSER, &etag, Some(&cookie)))
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{r:?}");
+    assert_eq!(views(), 5, "a bot's or a logged-in revalidation");
+    let mut head = revalidate("/hello/", BROWSER, &etag, None);
+    *head.method_mut() = Method::HEAD;
+    assert_eq!(app.send(head).await.status, StatusCode::NOT_MODIFIED);
     let mut head = browser("/hello/", BROWSER, None);
     *head.method_mut() = Method::HEAD;
     assert_eq!(app.send(head).await.status, StatusCode::OK);
     let r = app.send(browser("/feed/", BROWSER, None)).await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let feed_etag = r.header("etag").expect("feed etag").to_owned();
+    let r = app
+        .send(revalidate("/feed/", BROWSER, &feed_etag, None))
+        .await;
+    assert_eq!(r.status, StatusCode::NOT_MODIFIED, "{r:?}");
     app.send(browser("/api/v1/content", BROWSER, None)).await;
-    assert_eq!(views(), 4, "{post:?}");
+    assert_eq!(views(), 5, "{post:?}");
 
     let samples = parse(&metrics.render().await);
-    assert_eq!(value(&samples, "ferrite_page_views_total", &[]), Some(4.0));
+    assert_eq!(value(&samples, "ferrite_page_views_total", &[]), Some(5.0));
     app
 }
 

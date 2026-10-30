@@ -8,8 +8,9 @@
 //! allocation per request, as the rest of the stack already does). The labels are
 //! `&'static str`s. A response below 200 (none today)
 //! is not counted. **Page views** ([`Metrics::count_page_view`]): the public handler
-//! counts a `200` `GET` of an HTML page that is neither a preview nor a logged-in request
-//! and whose `User-Agent` does not match [`is_bot`]; nothing per visitor is kept.
+//! counts a `GET` of an HTML page answered `200`, or `304` when the browser revalidated
+//! its stored copy (M4-2 R8), that is neither a preview nor a logged-in request and whose
+//! `User-Agent` does not match [`is_bot`]; nothing per visitor is kept.
 //!
 //! **At scrape time** ([`Metrics::render`], Prometheus text format 0.0.4), read from the
 //! sources the registry was given: the page cache (hits and misses since it was built,
@@ -69,7 +70,9 @@ pub const SCRAPE_DB_TIMEOUT: Duration = Duration::from_secs(2);
 /// What part of the site a request is for (the `class` label).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteClass {
-    /// Public pages (GET/HEAD): content, archives, feeds, sitemaps, redirects, 404s.
+    /// The public site: pages (content, archives, feeds, sitemaps, redirects, 404s),
+    /// the theme comment form (`POST /_comment`) and other methods there (405s), so
+    /// their 5xx errors show.
     Page,
     /// `/api/v1`.
     Api,
@@ -81,7 +84,8 @@ pub enum RouteClass {
     Plugin,
     /// `/_preview/…` (first segment `_preview` in any case or encoding).
     Preview,
-    /// Health checks, the comment form, other methods on the public site.
+    /// Health checks (`/healthz`, `/readyz`): load-balancer noise, left out of the
+    /// dashboard's requests (ruling R3).
     Other,
 }
 
@@ -97,8 +101,9 @@ impl RouteClass {
         RouteClass::Other,
     ];
 
-    /// The class of a request for `path` (raw, no query) with `method`.
-    pub fn of(method: &Method, path: &str) -> Self {
+    /// The class of a request for `path` (raw, no query); every method of a path has
+    /// the same class.
+    pub fn of(path: &str) -> Self {
         let under = |prefix: &str| {
             path.strip_prefix(prefix)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
@@ -115,10 +120,8 @@ impl RouteClass {
             RouteClass::Preview
         } else if path == "/healthz" || path == "/readyz" {
             RouteClass::Other
-        } else if method == Method::GET || method == Method::HEAD {
-            RouteClass::Page
         } else {
-            RouteClass::Other
+            RouteClass::Page
         }
     }
 
@@ -694,7 +697,7 @@ pub(crate) async fn track(
     req: Request,
     next: Next,
 ) -> Response<Body> {
-    let class = RouteClass::of(req.method(), req.uri().path());
+    let class = RouteClass::of(req.uri().path());
     let started = Instant::now();
     let res = next.run(req).await;
     metrics.record(class, res.status(), started.elapsed());
@@ -778,11 +781,12 @@ mod tests {
             (&get, "/%5FPreview/x", RouteClass::Preview),
             (&get, "/healthz", RouteClass::Other),
             (&get, "/readyz", RouteClass::Other),
-            (&Method::POST, "/_comment", RouteClass::Other),
-            (&Method::POST, "/", RouteClass::Other),
+            (&Method::POST, "/healthz", RouteClass::Other),
+            (&Method::POST, "/_comment", RouteClass::Page),
+            (&Method::POST, "/", RouteClass::Page),
             (&Method::HEAD, "/", RouteClass::Page),
         ] {
-            assert_eq!(RouteClass::of(method, path), class, "{method} {path}");
+            assert_eq!(RouteClass::of(path), class, "{method} {path}");
         }
     }
 

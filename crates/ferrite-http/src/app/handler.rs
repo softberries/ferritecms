@@ -21,7 +21,10 @@ use super::{
     AppState, LoggedIn,
     error_page::{self, Missing},
     media, pipeline,
-    response::{method_not_allowed, noindex, page_response, private_no_store, redirect, text},
+    response::{
+        HtmlRevalidation, method_not_allowed, noindex, page_response, private_no_store, redirect,
+        text,
+    },
     theme_asset,
 };
 use crate::api::cookie::read_session_cookie;
@@ -95,23 +98,28 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     res
 }
 
-/// A page view (P34): a `200` `GET` of an HTML page (not a feed, sitemap or robots
-/// file), not logged in, whose `User-Agent` (if any) is not a bot's
-/// ([`is_bot`](crate::metrics::is_bot)). Previews never get here.
+/// A page view (P34, M4-2 R8): a `GET` of an HTML page (not a feed, sitemap or robots
+/// file) answered `200`, or `304` when the browser revalidated its stored copy (a
+/// returning reader; [`HtmlRevalidation`]), not logged in, whose `User-Agent` (if any)
+/// is not a bot's ([`is_bot`](crate::metrics::is_bot)). Previews never get here.
 fn is_page_view(
     method: &Method,
     headers: &HeaderMap,
     res: &Response<Body>,
     logged_in: bool,
 ) -> bool {
-    method == Method::GET
-        && res.status() == StatusCode::OK
-        && !logged_in
-        && res
+    let html = match res.status() {
+        StatusCode::OK => res
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|ct| ct.starts_with("text/html"))
+            .is_some_and(|ct| ct.starts_with("text/html")),
+        StatusCode::NOT_MODIFIED => res.extensions().get::<HtmlRevalidation>().is_some(),
+        _ => false,
+    };
+    method == Method::GET
+        && html
+        && !logged_in
         && !headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())

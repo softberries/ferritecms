@@ -2951,7 +2951,8 @@ export interface components {
             page_latency: number[];
             /**
              * Format: int64
-             * @description `200` HTML page views (no bots, previews or logged-in requests).
+             * @description HTML page views: `200` answers and `304` revalidations of public pages (no bots,
+             *     previews or logged-in requests).
              */
             page_views: number;
             /**
@@ -2966,7 +2967,7 @@ export interface components {
             plugin_failures: number;
             /**
              * Format: int64
-             * @description Responses of every route class but `other` (health checks, the comment form).
+             * @description Responses of every route class but `other` (health checks).
              */
             requests: number;
             /** Format: date-time */
