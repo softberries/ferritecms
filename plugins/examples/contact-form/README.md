@@ -48,7 +48,7 @@ The report lists these, and the plugin asks for nothing else:
   default limit of 10 requests a minute per visitor; `/submit` takes **10 posts an hour per
   visitor** and accepts posts from any origin (`cross_origin`, see below).
 - `kv` (low): keep the inbox in the plugin's own key/value store.
-- `mail = "admins"` (medium): mail the site's active admins. The plugin never sees their
+- `mail = "admins"` (high): mail the site's active admins. The plugin never sees their
   addresses.
 - `options.read = ["site.title"]` (low): name the site on the form page.
 
@@ -124,9 +124,11 @@ HTML-escaped, although the sandbox would not run a script anyway.
 
 Lengths count characters, not bytes, after cleaning: CR and LF are removed from every field
 except `message`; in `name` and `subject` any other control character (a tab, say) and the
-Unicode line and paragraph separators become a space; each field is trimmed. The message keeps
-its line breaks, as LF (CR LF and a lone CR become LF), and its tabs, and loses any other
-control character. Repeated keys count their first value; unknown fields are ignored.
+Unicode line and paragraph separators become a space, and Unicode format characters (category
+Cf: bidirectional overrides such as U+202E, zero-width characters, the soft hyphen) are
+removed, so a name or subject cannot be made to display as something else; each field is
+trimmed. The message keeps its line breaks, as LF (CR LF and a lone CR become LF), its tabs and
+its format characters (it is only ever shown escaped), and loses any other control character. Repeated keys count their first value; unknown fields are ignored.
 
 ## The mail
 
@@ -148,7 +150,10 @@ second), then the message.
   writes to the site's own `from` address. Copy the visitor's address from the body.
 - **At most 10 mails per plugin per hour**, a limit of the host shared by every visitor. The
   11th message within an hour is stored but not mailed (logged). Spam that gets past the
-  honeypot can use up that hour; the inbox still has every message.
+  honeypot can use up that hour; the inbox still keeps those messages, as far as it holds
+  them (the newest 100 within 900 KiB, see "What is stored"). A flood from many addresses can
+  push earlier messages out of the inbox as well. With `store_messages` off, every post after
+  the 10th mail in an hour gets the 503 page, since it is neither stored nor mailed.
 - The host queues the mail and sends it afterwards. The plugin learns only that the mail was
   accepted, not that it arrived.
 
@@ -184,7 +189,7 @@ Set them on the plugin's page in the admin's Plugins screen, or with
 | `viewers` | textarea | empty (nobody) | ids of the users who may open the inbox |
 | `subject_prefix` | text | `[Contact]` | put before the subject of each mail; empty for none |
 | `success_message` | textarea | empty: "Your message was sent. Thank you for getting in touch." | the thank-you text; line breaks are kept |
-| `store_messages` | bool | true | keep messages in the inbox; off, they are only mailed |
+| `store_messages` | bool | true | keep messages in the inbox; off, they are only mailed, and a post whose mail is refused (no `[mail]`, the 10-an-hour limit) gets the 503 page |
 
 ## What is stored
 
@@ -203,7 +208,10 @@ line, then one message per line, newest first:
 - A blob whose version line is not this plugin's (not JSON, another shape) is logged and
   started again with the next message. A blob written by a newer version (`"v"` above 1) is
   left alone: the message is mailed but not stored, and the inbox page says so. A stored line
-  that is not a message is shown as unreadable and kept until it drops out.
+  that is not a message is shown as unreadable and kept until it drops out. Lines written by
+  hand are never decoded past a size bound: a version line over 1 KiB makes the blob not this
+  plugin's, and a message line over 32 KiB (the plugin writes at most about 23 KB) is shown as
+  unreadable, so a huge line cannot exhaust a call's fuel.
 - The host answers "no blob" both for a missing key and for a read that failed. Before it
   writes a first blob the plugin checks with a listing that the key is really missing; if it
   is there, the message is not stored (logged), so a failed read never wipes the inbox. The

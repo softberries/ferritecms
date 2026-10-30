@@ -30,6 +30,7 @@ use crate::profile_tests;
 profile_tests!(
     a_valid_post_mails_the_admins_and_stores_it,
     cr_and_lf_are_stripped_from_name_and_subject,
+    format_characters_are_stripped_from_name_and_subject,
     a_filled_honeypot_stores_and_sends_nothing,
     a_missing_message_is_422_naming_the_field,
     field_limits_are_checked,
@@ -47,6 +48,7 @@ profile_tests!(
     the_inbox_is_paged,
     a_failed_read_never_overwrites_the_inbox,
     a_corrupt_inbox_is_replaced_and_a_newer_one_kept,
+    huge_hand_written_lines_are_not_decoded,
     worst_cases_fit_half_the_default_fuel,
 );
 
@@ -1014,6 +1016,98 @@ async fn a_corrupt_inbox_is_replaced_and_a_newer_one_kept(site: Site) -> Site {
         "{:?}",
         site.host.failures()
     );
+    site
+}
+
+/// Review: Unicode format characters (category Cf: bidi overrides, zero-width characters)
+/// in `name` and `subject` could make the mail subject or the inbox display as something
+/// else; they are dropped there and kept in the message, which is only shown escaped.
+async fn format_characters_are_stripped_from_name_and_subject(site: Site) -> Site {
+    let (site, mailer) = with_mail(site).await;
+    let (status, html) = submit(
+        &site,
+        &valid(&[
+            ("name", "Ann\u{202E}gpj.exe\u{200B}"),
+            ("subject", "\u{FEFF}Invoice\u{2066} paid\u{2069}"),
+            ("message", "Hello \u{202E}there, this is the message."),
+        ]),
+    )
+    .await;
+    assert_thanks(status, &html);
+    let sent = mailer.wait_for(1, WAIT).await;
+    assert_eq!(
+        sent[0].subject,
+        format!("[{MAIL_SITE_TITLE}] [Contact] Invoice paid")
+    );
+    assert!(
+        sent[0].text.contains("Name: Anngpj.exe\n"),
+        "{}",
+        sent[0].text
+    );
+    let m = &stored(&site).await[0];
+    assert_eq!(m["name"], "Anngpj.exe");
+    assert_eq!(m["subject"], "Invoice paid");
+    assert_eq!(m["message"], "Hello \u{202E}there, this is the message.");
+
+    // A subject taken from the message drops them too.
+    submit(
+        &site,
+        &valid(&[
+            ("subject", ""),
+            ("message", "\u{202E}Pay\u{200B} now, please."),
+        ]),
+    )
+    .await;
+    let sent = mailer.wait_for(2, WAIT).await;
+    assert_eq!(
+        sent[1].subject,
+        format!("[{MAIL_SITE_TITLE}] [Contact] Pay now, please.")
+    );
+    site
+}
+
+/// Review: a blob written into the store by hand with a huge line is never decoded whole:
+/// a version line over 1 KiB makes the blob not ours, and a message line over 32 KiB is
+/// shown as unreadable. Both at the default fuel.
+async fn huge_hand_written_lines_are_not_decoded(site: Site) -> Site {
+    let site = without_mail(site).await;
+    setting(&site, "viewers", json!(VIEWER)).await;
+    let escapes = "\\\"".repeat(500_000);
+
+    // A message line of 1 MB of escapes between two readable messages.
+    let mut huge = blob(vec![message(0, "the newest stored message")]);
+    huge.extend_from_slice(
+        format!("{{\"at\":\"x\",\"name\":\"{escapes}\",\"email\":\"a@b\",\"message\":\"m\"}}\n")
+            .as_bytes(),
+    );
+    huge.extend_from_slice(&serde_json::to_vec(&message(2, "an older message")).unwrap());
+    huge.push(b'\n');
+    kv_set(&site, &huge).await;
+    let (status, html) = inbox_page(&site, Some(VIEWER), &[]).await;
+    assert_eq!(status, 200);
+    assert!(html.contains("3 messages"), "{html:.2000}");
+    assert!(html.contains("Sender 0<") && html.contains("Sender 2<"));
+    assert_eq!(html.matches("could not be read").count(), 1);
+    assert!(html.len() < 100_000, "{}", html.len());
+    // A submit keeps what fits the cap: the huge line and what is older than it go.
+    let (status, html) = submit(&site, &valid(&[])).await;
+    assert_thanks(status, &html);
+    let names: Vec<Value> = stored(&site)
+        .await
+        .iter()
+        .map(|m| m["name"].clone())
+        .collect();
+    assert_eq!(names, [json!("Ann Example"), json!("Sender 0")]);
+
+    // A version line of 1 MB: not ours, never decoded; the next message starts again.
+    let header = format!("{{\"v\":1,\"pad\":\"{escapes}\"}}\n");
+    kv_set(&site, header.as_bytes()).await;
+    let (status, html) = inbox_page(&site, Some(VIEWER), &[]).await;
+    assert_eq!(status, 200);
+    assert!(html.contains("could not be read"), "{html}");
+    let (status, html) = submit(&site, &valid(&[])).await;
+    assert_thanks(status, &html);
+    assert_eq!(stored(&site).await.len(), 1);
     site
 }
 

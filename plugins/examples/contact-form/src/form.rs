@@ -91,15 +91,47 @@ fn without_breaks(s: &str) -> String {
     s.chars().filter(|&c| c != '\r' && c != '\n').collect()
 }
 
-/// A one-line field: CR and LF removed, any other control character or Unicode line
-/// separator made a space, then trimmed.
+/// A one-line field: CR, LF and format characters ([`is_format`]) removed, any other control
+/// character or Unicode line separator made a space, then trimmed.
 fn single_line(s: &str) -> String {
     let line: String = s
         .chars()
-        .filter(|&c| c != '\r' && c != '\n')
+        .filter(|&c| c != '\r' && c != '\n' && !is_format(c))
         .map(|c| if is_break_like(c) { ' ' } else { c })
         .collect();
     line.trim().to_owned()
+}
+
+/// A Unicode format character (General Category Cf, Unicode 16): bidirectional overrides
+/// and isolates (U+202A..U+202E, U+2066..U+2069), zero-width characters, the soft hyphen,
+/// tags and the like. Invisible, they can make a name or a subject display as something
+/// else in a mail client (U+202E reverses what follows), so one-line fields drop them. The
+/// message keeps them: it is shown escaped and never goes into a header.
+pub fn is_format(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
 }
 
 /// The message keeps its line breaks, as LF (CR LF and a lone CR become LF), and its tabs;
@@ -174,6 +206,22 @@ mod tests {
         assert_eq!(s.name, "AnnBcc: x@evil.test");
         assert_eq!(s.subject, "Hi there now");
         assert_eq!(s.email, "a@b.test");
+    }
+
+    #[test]
+    fn format_characters_leave_one_line_fields_only() {
+        let s = Submission::from_pairs(&pairs(&[
+            ("name", "Ann\u{202E}gpj.exe\u{200B}"),
+            ("subject", "\u{FEFF}Invoice\u{2066}\u{00AD}x\u{E0041}"),
+            ("message", "Hello \u{202E}there\u{200D} friend"),
+        ]));
+        assert_eq!(s.name, "Anngpj.exe");
+        assert_eq!(s.subject, "Invoicex");
+        assert_eq!(s.message, "Hello \u{202E}there\u{200D} friend");
+        // Not format characters: letters, marks, ordinary spaces.
+        for c in ['a', 'ż', '\u{0301}', ' ', '😀', '\u{2028}'] {
+            assert!(!is_format(c), "{c:?}");
+        }
     }
 
     #[test]

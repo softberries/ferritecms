@@ -246,8 +246,8 @@ fn send_mail(ctx: &Ctx, message: &Message) -> bool {
 }
 
 /// `<prefix> <subject>`, or the first 60 characters of the message for an empty subject,
-/// on one line (control characters and line separators become spaces, runs of whitespace
-/// one space) and cut to the host's 200 characters.
+/// on one line (format characters dropped, control characters and line separators become
+/// spaces, runs of whitespace one space) and cut to the host's 200 characters.
 fn mail_subject(prefix: &str, subject: &str, message: &str) -> String {
     let topic = if subject.is_empty() {
         one_line(message)
@@ -267,9 +267,12 @@ fn mail_subject(prefix: &str, subject: &str, message: &str) -> String {
     }
 }
 
+/// `s` on one line: format characters dropped, control characters and line separators made
+/// spaces, runs of whitespace one space.
 fn one_line(s: &str) -> String {
     let spaced: String = s
         .chars()
+        .filter(|&c| !form::is_format(c))
         .map(|c| if form::is_break_like(c) { ' ' } else { c })
         .collect();
     spaced.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -365,5 +368,10 @@ mod tests {
         assert_eq!(mail_subject("P", "", &msg), format!("P {}", "m".repeat(60)));
         let s = mail_subject("ł", &"ż".repeat(250), "x");
         assert_eq!(s.chars().count(), 200);
+        // Format characters from the prefix or the message do not reach the subject.
+        assert_eq!(
+            mail_subject("[\u{202E}C]", "", "Pay \u{200B}now\u{2066}!"),
+            "[C] Pay now!"
+        );
     }
 }

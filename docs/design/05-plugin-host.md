@@ -1217,8 +1217,10 @@ P46, `README.md`): a sandboxed form page `GET /`, `POST /submit` (`cross_origin`
 form on a plugin page posts with `Origin: null`; `rate_limit = "10/h"`) that themes post their
 own form to with `plugin_route("contact-form", "/submit")`, and a viewer-guarded `GET /inbox`.
 A valid post is mailed with `notify-admins` (the subject made one line and cut to 200
-characters before the host adds the site title; a mail error is logged, not shown) and kept in
-one KV blob of the latest 100 messages within 900 KiB. Fuel shaped its storage: a JSON
+characters before the host adds the site title; a mail error is logged, not shown, unless the
+message was not stored either: then the visitor gets a 503) and kept in one KV blob of the
+latest 100 messages within 900 KiB. A body over 96 KiB is refused with 413 before it is
+decoded (the largest valid form is about 68 KB; the host passes up to 1 MiB). Fuel shaped its storage: a JSON
 document of messages that each need escapes (`"` throughout) cost more than 25 million to
 decode and re-encode at 16 messages, so the blob is JSON lines (a version line, then one
 compact message per line, newest first). A submit finds the stored lines by their line breaks,

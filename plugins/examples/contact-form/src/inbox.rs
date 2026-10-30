@@ -49,11 +49,24 @@ impl Message {
         serde_json::to_vec(self).map_err(|e| e.to_string())
     }
 
-    /// A stored line read back; `None` when it is not a message.
+    /// A stored line read back; `None` when it is not a message, or is longer than any line
+    /// this plugin writes ([`MAX_LINE`]), which is never decoded: decoding costs fuel per
+    /// byte, and a huge line written into the store by hand must not trap the page.
     pub fn decode(line: &[u8]) -> Option<Self> {
+        if line.len() > MAX_LINE {
+            return None;
+        }
         serde_json::from_slice(line).ok()
     }
 }
+
+/// Longest message line decoded. The longest the plugin writes is about 23 KB: 5000
+/// four-byte characters of message, 100 of name, 254 of e-mail and 150 of subject, a page of
+/// 512 characters each escaped (`\"`), the time and the keys.
+pub const MAX_LINE: usize = 32 * 1024;
+/// Longest version line decoded. Ours is `{"v":1}`; the slack leaves room for a newer
+/// version's line to be recognised (and left alone) rather than replaced.
+const MAX_VERSION_LINE: usize = 1024;
 
 /// A stored blob, opened.
 #[derive(Debug)]
@@ -72,10 +85,14 @@ struct Version {
 }
 
 impl<'a> Stored<'a> {
-    /// Split a stored blob into its lines. Only the version line is decoded.
+    /// Split a stored blob into its lines. Only the version line is decoded, and only when
+    /// it is at most [`MAX_VERSION_LINE`] bytes (a longer one is not ours).
     pub fn open(bytes: &'a [u8]) -> Self {
         let mut lines = Lines(bytes);
         let first = lines.next().unwrap_or_default();
+        if first.len() > MAX_VERSION_LINE {
+            return Self::Corrupt;
+        }
         match serde_json::from_slice::<Version>(first) {
             Ok(Version { v: Some(VERSION) }) => {
                 Self::Lines(lines.filter(|l| !l.is_empty()).collect())
@@ -201,6 +218,27 @@ mod tests {
         }
         assert_eq!(find_lf(&[0x8a; 20]), None);
         assert_eq!(find_lf(b"0123456789abcdef"), None);
+    }
+
+    #[test]
+    fn the_longest_line_written_is_decoded_and_a_longer_one_is_not() {
+        let m = Message {
+            at: "2026-01-01T00:00:00Z".into(),
+            name: "😀".repeat(100),
+            email: format!("{}@{}", "😀".repeat(126), "😀".repeat(127)),
+            subject: "😀".repeat(150),
+            page: format!("/{}", "\"".repeat(511)),
+            message: "😀".repeat(5000),
+        };
+        let line = m.line().unwrap();
+        assert!(line.len() <= MAX_LINE, "{}", line.len());
+        assert!(Message::decode(&line).is_some());
+        let mut long = m.clone();
+        long.message.push_str(&"x".repeat(MAX_LINE));
+        assert!(Message::decode(&long.line().unwrap()).is_none());
+        // A version line padded past the bound is not read, whatever it says.
+        let header = format!("{{\"v\":1,\"pad\":\"{}\"}}\n", "x".repeat(MAX_VERSION_LINE));
+        assert!(matches!(Stored::open(header.as_bytes()), Stored::Corrupt));
     }
 
     #[test]
