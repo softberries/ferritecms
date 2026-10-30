@@ -1,0 +1,3 @@
+# Install
+
+Download the binary.

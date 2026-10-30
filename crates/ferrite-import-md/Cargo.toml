@@ -1,0 +1,23 @@
+[package]
+name = "ferrite-import-md"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+ferrite-import-wp = { path = "../ferrite-import-wp" }
+jiff.workspace = true
+pulldown-cmark.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

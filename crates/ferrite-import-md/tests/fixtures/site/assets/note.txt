@@ -1,0 +1,1 @@
+A note, not Markdown: a folder without Markdown gets no page.
