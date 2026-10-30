@@ -249,8 +249,8 @@ jobs:
           sys.exit(1 if bad else 0)
           EOF
       # The plugins asset (the wasm is target-independent), packed from a local build the
-      # way release.yml does, then each folder is a plugin `ferrite plugin check` can read:
-      # the manifest and exactly one .wasm.
+      # way release.yml does, then each folder holds what `ferrite plugin check` reads (that
+      # check itself ran by hand in M4-3a Task 5): the manifest and exactly one .wasm.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: stable
