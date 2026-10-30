@@ -679,8 +679,9 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
   shared by page, single and index) and `listing`.
 - **Fixed ids** are reserved ones (`content`, `nav`, `toc`, `search`; 06 §4) or start
-  with `docs-` (`docs-search-page`, `docs-search-error`), so no heading id can collide
-  with them (test `fixed_ids_are_reserved_or_prefixed`).
+  with `docs-` (`docs-search-page`, `docs-search-error`; test
+  `fixed_ids_are_reserved_or_prefixed`). A reserved id never collides with a heading id;
+  the `docs-` ones appear only on the search and 404 pages, which render no body.
 - **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
   pages work without it; a second run adds nothing) puts each body heading with an id
   in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link

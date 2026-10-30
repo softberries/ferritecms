@@ -474,7 +474,7 @@ pre code { font-size: inherit; }
   .docs-pages-toggle { display: none; }
 }
 
-@media (max-width: 59.99rem) {
+@media not (min-width: 60rem) {
   .docs-pages-toggle:not([open]) + .docs-nav { display: none; }
 }
 

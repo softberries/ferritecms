@@ -1,7 +1,7 @@
 {#- The page frame (P59): sticky header, the page-tree sidebar, the main column and the
     table of contents. `tree` (the `nav_type` setting's tree, `post` current when it is
     in it) is read once here; one bridge call per render. Fixed ids are reserved ones
-    only (06 §4), so no heading id in the body can collide with them. -#}
+    (06 §4) or `docs-`-prefixed ones on pages without a body (06 §8). -#}
 <!doctype html>
 <html lang="{{ site.locale or 'en' }}">
 <head>
