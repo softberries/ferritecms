@@ -1,7 +1,6 @@
 //! UTC calendar days, from event timestamps and storage keys, without a date library.
 //!
-//! The plugin has no clock: "today" is the newest event day it has seen, so the retention
-//! cutoff and the stats window depend on the events alone.
+//! "Today" is the wall clock's UTC day ([`Day::today`]).
 
 /// A calendar day, counted from 1970-01-01. Ordering is chronological.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,6 +66,23 @@ impl Day {
         format!("{y:04}-{m:02}-{d:02}")
     }
 
+    /// The current UTC day, from the wall clock.
+    pub fn today() -> Self {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        Self::from_unix_secs(secs)
+    }
+
+    fn from_unix_secs(secs: u64) -> Self {
+        Self(i64::try_from(secs / 86_400).unwrap_or(0))
+    }
+
+    /// The day `n` days later.
+    pub fn after(self, n: u32) -> Self {
+        Self(self.0 + i64::from(n))
+    }
+
     /// The day `n` days earlier.
     pub fn before(self, n: u32) -> Self {
         Self(self.0 - i64::from(n))
@@ -111,4 +127,89 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
         month as u32,
         day as u32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Day;
+
+    fn day(key: &str) -> Day {
+        Day::parse_key(key).unwrap()
+    }
+
+    #[test]
+    fn keys_round_trip_and_order() {
+        for key in ["1970-01-01", "2026-10-30", "2028-02-29", "9999-12-31"] {
+            assert_eq!(day(key).key(), key);
+        }
+        assert!(day("2026-10-29") < day("2026-10-30"));
+        assert!(day("2026-12-31") < day("2027-01-01"));
+    }
+
+    #[test]
+    fn counting_back_crosses_months_years_and_leap_days() {
+        assert_eq!(day("2027-01-01").before(1).key(), "2026-12-31");
+        assert_eq!(day("2026-03-01").before(1).key(), "2026-02-28");
+        assert_eq!(day("2028-03-01").before(1).key(), "2028-02-29");
+        assert_eq!(day("2100-03-01").before(1).key(), "2100-02-28");
+        assert_eq!(day("2000-03-01").before(1).key(), "2000-02-29");
+        assert_eq!(day("2026-10-30").before(365).key(), "2025-10-30");
+        assert_eq!(day("2028-02-28").after(2).key(), "2028-03-01");
+        assert_eq!(day("2026-12-31").after(1).key(), "2027-01-01");
+    }
+
+    #[test]
+    fn impossible_dates_are_refused() {
+        for key in [
+            "2027-02-29",
+            "2100-02-29",
+            "2026-04-31",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-01-00",
+            "2026-1-01",
+            "20261001",
+            "",
+        ] {
+            assert_eq!(Day::parse_key(key), None, "{key}");
+        }
+        assert!(Day::parse_key("2000-02-29").is_some());
+    }
+
+    #[test]
+    fn timestamps_are_rfc3339_utc_only() {
+        let ok = |ts: &str| Day::from_ts(ts).map(Day::key);
+        assert_eq!(ok("2026-10-30T12:34:56Z").as_deref(), Some("2026-10-30"));
+        assert_eq!(
+            ok("2026-10-30T23:59:59.999999Z").as_deref(),
+            Some("2026-10-30")
+        );
+        assert_eq!(
+            ok("2026-10-30T00:00:00.123456789Z").as_deref(),
+            Some("2026-10-30")
+        );
+        for ts in [
+            "",
+            "garbage",
+            "2026-10-30",
+            "2026-10-30T12:34:56",
+            "2026-10-30T12:34:56+02:00",
+            "2026-10-30T12:34:56.Z",
+            "2026-10-30T24:00:00Z",
+            "2026-10-30T12:60:00Z",
+            "2026-10-30 12:34:56Z",
+            "2026-10-30T12:34:56ZZ",
+            "2026-02-30T12:34:56Z",
+        ] {
+            assert_eq!(ok(ts), None, "{ts}");
+        }
+    }
+
+    #[test]
+    fn unix_seconds_give_the_utc_day() {
+        assert_eq!(Day::from_unix_secs(0).key(), "1970-01-01");
+        assert_eq!(Day::from_unix_secs(86_399).key(), "1970-01-01");
+        assert_eq!(Day::from_unix_secs(86_400).key(), "1970-01-02");
+        assert_eq!(Day::from_unix_secs(1_793_318_400).key(), "2026-10-30");
+    }
 }

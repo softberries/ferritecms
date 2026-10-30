@@ -76,12 +76,15 @@ pub fn not_a_viewer(user: &str) -> String {
     )
 }
 
-/// The page when nothing has been counted yet.
-pub fn no_data() -> String {
+/// The page when the period holds no data.
+pub fn no_data(period: u32) -> String {
+    let (days, s) = (period, if period == 1 { "" } else { "s" });
     document(
         "Analytics",
-        "<h1>Analytics</h1><p>No data yet. Page views appear here a few seconds after \
-         visitors load pages of the site.</p>",
+        &format!(
+            "<h1>Analytics</h1><p>No data yet for the last {days} day{s}. Page views appear \
+             here a few seconds after visitors load pages of the site.</p>"
+        ),
     )
 }
 

@@ -1180,12 +1180,18 @@ M2a-2b adds `fetcher` (`http = ["api.example.test"]`, route `GET /get?u=<url>` a
 method, headers, a body and several fetches per call).
 M4-3a adds the shipped example `analytics` (`plugins/examples/analytics`, a `request.served`
 subscriber, one route and a viewer list, `README.md`), the first example that stores a lot:
-one JSON blob per UTC day in KV. Two things it showed about the limits. A call's 100 KV
+one JSON blob per UTC day in KV. Three things it showed about the limits. A call's 100 KV
 operations and 1 MiB of writes are enough for a batch only if the plugin counts them (it
 reads and writes each touched day once, caps a batch at eight days and spends what is left on
-the prune). And fuel is counted in guest instructions, not bytes read from the host: decoding
-a day blob of 500 paths into a `BTreeMap` cost many times the default 50 million for 90 days,
-because every insert compares whole strings that share long prefixes. The plugin counts in a
-hash map and decodes only the newest ~200 KB of blobs in full (the older days give totals
-alone, read from the front of the blob without parsing the maps); the worst case measured
-needs at most about half the default fuel. No limit above the default is requested.
+the prune). "Today" comes from the wall clock, which every plugin may read (`wasi:clocks`,
+§5): taking it from the newest event instead lets one event from a fast clock prune the
+history. And fuel is counted in guest instructions, not bytes read from the host: decoding a
+day blob of 500 paths into a `BTreeMap` was many times slower than the default 50 million
+allows for 90 days, so the plugin counts in a `HashMap` (randomly seeded from the linked
+`wasi:random`) and the stats page decodes the newest day in full plus at most three more
+within 150 000 bytes; older days give their totals alone, read from the front of the blob.
+Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit): the saturated
+90-day page needs 18 to 21 million with long keys and 15 to 18 million with short distinct
+ones, the largest batch (1000 events on two saturated days) 23 to 26 million, and the page
+over the largest blob the plugin can write (about 313 KB) 30 to 40 million. No limit above
+the default is requested.

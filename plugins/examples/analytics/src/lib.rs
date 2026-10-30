@@ -5,11 +5,12 @@
 //! class, and nothing else: no cookie, no IP address (not even a hash), no query string.
 //! So there is nothing to identify a visitor with, and this plugin cannot count unique
 //! visitors. It counts page views per UTC day, in one JSON blob per day under the KV key
-//! `day:YYYY-MM-DD` (see [`store`]). A key `latest` names the newest day stored.
+//! `day:YYYY-MM-DD` (see [`store`]).
 //!
-//! **The plugin has no clock.** "Today" is the newest event day it has seen. That is what
-//! the retention cutoff and the stats window count back from, so both follow the events
-//! and the tests can drive them.
+//! **"Today" is the wall clock's UTC day** (`wasi:clocks/wall-clock` is linked for every
+//! plugin). The retention cutoff and the end of the stats window count back from it. An
+//! event is filed under its own `ts` day, but one dated more than a day ahead of today is
+//! ignored: a node whose clock runs fast must not be able to push the history out.
 //!
 //! **The counts are approximate (R19).** A batch is a `plugin.action` job, delivered at
 //! least once, and reading a blob then writing it back is not atomic:
@@ -29,9 +30,10 @@
 //! is dropped and logged rather than failing the call.
 //!
 //! **Fuel.** The limit is counted in guest instructions, and decoding JSON is the cost. The
-//! counts live in a hash map ([`store::Counts`]): a `BTreeMap` of paths, which share long
-//! prefixes, was many times too slow. The stats page decodes only the newest
-//! [`FULL_DECODE_BYTES`] of blobs with their maps; the rest give their totals alone.
+//! counts live in a std `HashMap` ([`store::Counts`]; its random seed comes from
+//! `wasi:random`, which is linked), because a `BTreeMap` was many times slower. The stats
+//! page decodes the newest day with data in full and then more days up to [`FULL_DECODE_DAYS`]
+//! in all within [`FULL_DECODE_BYTES`]; older days give their totals alone.
 
 mod date;
 mod page;
@@ -51,13 +53,12 @@ use page::Slot;
 use store::{Event, Stored, Totals, host_of};
 
 const DAY_PREFIX: &str = "day:";
-const LATEST: &str = "latest";
 /// KV operations one call may make.
 const MAX_OPS: u32 = 100;
 /// Key and value bytes one call may write.
 const MAX_WRITTEN: usize = 1024 * 1024;
-/// Most days one batch writes: two reads and writes each, leaving most of the 100
-/// operations for the prune.
+/// Most days one batch writes: a read and a write each, leaving most of the 100 operations
+/// for the prune.
 const MAX_DAYS: usize = 8;
 /// What `list-keys` returns at most.
 const LIST_LIMIT: u32 = 100;
@@ -70,8 +71,10 @@ const DEFAULT_EXCLUDE: &str = "/admin,/_p";
 const PERIODS: [u32; 4] = [1, 7, 30, 90];
 const MAX_PERIOD: u32 = 90;
 const DEFAULT_PERIOD: u32 = 30;
-/// Stored bytes the stats page decodes in full per request (see `stats`).
-const FULL_DECODE_BYTES: usize = 200_000;
+/// Most days, and stored bytes in all, the stats page decodes in full per request; the
+/// newest day with data is always one of them (see `stats`).
+const FULL_DECODE_DAYS: usize = 4;
+const FULL_DECODE_BYTES: usize = 150_000;
 
 // ---- settings -------------------------------------------------------------------------
 
@@ -224,14 +227,29 @@ fn count_day(
 }
 
 fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
-    let batch: Batch = serde_json::from_str(&ev.payload)
-        .map_err(|e| PluginError::InvalidInput(format!("request.served payload: {e}")))?;
+    // Core always sends `{"events":[…]}`. A payload that does not parse is logged and
+    // dropped: a retry could not fix it, and failures count toward auto-disable.
+    let batch: Batch = match serde_json::from_str(&ev.payload) {
+        Ok(batch) => batch,
+        Err(e) => {
+            warn(&format!("request.served payload not understood: {e}"));
+            return Ok(());
+        }
+    };
     let excluded = excluded_prefixes(ctx);
     let self_host = options::get("site.url").as_deref().and_then(host_of);
 
-    // Group by the event's own UTC day. An event that cannot be read, or lies under an
-    // excluded path, is skipped.
+    // "Today" is the wall clock's UTC day. Retention keeps the newest N days counted back
+    // from it, and an event more than a day ahead of it (a node whose clock runs fast) is
+    // ignored, so it cannot push history out.
+    let today = Day::today();
+    let keep_from = today.before(retention_days(ctx) - 1);
+    let newest_allowed = today.after(1);
+
+    // Group by the event's own UTC day. An event that cannot be read, lies under an
+    // excluded path, or falls outside the window is skipped.
     let mut by_day: BTreeMap<Day, Vec<Event>> = BTreeMap::new();
+    let mut ahead = 0usize;
     for raw in batch.events {
         let Ok(event) = serde_json::from_value::<Event>(raw) else {
             continue;
@@ -239,30 +257,20 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
         let Some(day) = Day::from_ts(&event.ts) else {
             continue;
         };
-        if !is_excluded(&excluded, &event.path) {
+        if day > newest_allowed {
+            ahead += 1;
+        } else if day >= keep_from && !is_excluded(&excluded, &event.path) {
             by_day.entry(day).or_default().push(event);
         }
     }
+    if ahead > 0 {
+        ferrite_sdk::log(
+            Level::Debug,
+            &format!("analytics: ignored {ahead} events dated more than a day ahead of today"),
+        );
+    }
     if by_day.is_empty() {
         return Ok(());
-    }
-
-    let mut meter = Meter::new(ctx.kv());
-    let refused = |r: Refused| match r {
-        Refused::Budget => PluginError::Other("kv call budget exceeded".to_owned()),
-        Refused::Kv(msg) => PluginError::Other(msg),
-    };
-    let stored_latest = meter
-        .get(LATEST)
-        .map_err(refused)?
-        .and_then(|b| String::from_utf8(b).ok())
-        .and_then(|s| Day::parse_key(&s));
-    let batch_newest = by_day.keys().next_back().copied();
-    // Retention keeps the newest N days, counted back from the newest day seen.
-    let now = batch_newest.max(stored_latest);
-    let keep_from = now.map(|now| now.before(retention_days(ctx) - 1));
-    if let Some(keep_from) = keep_from {
-        by_day.retain(|day, _| *day >= keep_from);
     }
 
     if by_day.len() > MAX_DAYS {
@@ -272,7 +280,9 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
         ));
     }
     // Newest first, so that if the write budget runs out it is the oldest day that loses.
-    let mut failed = None;
+    // The first host error ends the loop: every further write would only add to what a
+    // retry of the job counts twice.
+    let mut meter = Meter::new(ctx.kv());
     for (day, events) in by_day.iter().rev().take(MAX_DAYS) {
         match count_day(&mut meter, *day, events, self_host.as_deref()) {
             Ok(()) => {}
@@ -280,22 +290,12 @@ fn served(ev: ActionEvent, ctx: &Ctx) -> Result<()> {
                 "{} not counted: it does not fit in this call's budget",
                 day.key()
             )),
-            Err(Refused::Kv(msg)) => failed = Some(msg),
+            // A failed write fails the call, so the job is retried: at-least-once delivery.
+            Err(Refused::Kv(msg)) => return Err(PluginError::Other(msg)),
         }
     }
-
-    if let Some(newest) = by_day.keys().next_back()
-        && stored_latest.is_none_or(|latest| *newest > latest)
-        && let Err(Refused::Kv(msg)) = meter.set(LATEST, newest.key().as_bytes())
-    {
-        failed = Some(msg);
-    }
-
-    if let Some(keep_from) = keep_from {
-        prune(&mut meter, keep_from);
-    }
-    // A failed write fails the call, so the job is retried: at-least-once delivery.
-    failed.map_or(Ok(()), |msg| Err(PluginError::Other(msg)))
+    prune(&mut meter, keep_from);
+    Ok(())
 }
 
 /// Delete the day blobs older than `keep_from`, oldest first, while operations are left.
@@ -338,30 +338,34 @@ fn stats(req: RouteRequest, ctx: &Ctx) -> Result<RouteResponse> {
         return Ok(html(403, page::not_a_viewer(user)));
     }
 
-    let kv = ctx.kv();
-    let Some(latest) = kv
-        .get(LATEST)
-        .and_then(|b| String::from_utf8(b).ok())
-        .and_then(|s| Day::parse_key(&s))
-    else {
-        return Ok(html(200, page::no_data()));
-    };
-    // The newest day, then one read per day of the window: 91 of the 100 operations at
-    // most. A day with nothing stored (or a blob this version cannot read) counts as empty.
+    // One read per day of the window, ending today: 90 of the 100 operations at most. A day
+    // with nothing stored (or a blob this version cannot read) counts as empty.
     //
-    // Decoding costs fuel in proportion to the bytes, and a busy site's blob is tens of
-    // kilobytes, so only the newest blobs up to `FULL_DECODE_BYTES` are decoded with their
-    // path and referrer maps; the older ones give their totals alone, and the page says so.
+    // Decoding costs fuel in proportion to the entries, and a busy site's blob holds up to
+    // 700 of them. So only the newest day with data is always decoded with its path and
+    // referrer maps; after it, further days follow while fewer than `FULL_DECODE_DAYS` are
+    // decoded and their blobs add up to `FULL_DECODE_BYTES`. From the first day that does not
+    // fit, every older day gives its totals alone, and the page says so. This also bounds the
+    // map the page sums the lists in: at most `FULL_DECODE_DAYS` days of capped maps.
+    let kv = ctx.kv();
+    let today = Day::today();
     let period = period(&req);
-    let mut full_left = FULL_DECODE_BYTES;
+    let mut full_open = true;
+    let mut full_days = 0usize;
+    let mut full_bytes = 0usize;
     let mut slots: Vec<Slot> = (0..period)
         .map(|back| {
-            let day = latest.before(back);
+            let day = today.before(back);
             let mut full = false;
             let totals = kv.get(&day_key(day)).and_then(|bytes| {
-                full = bytes.len() <= full_left;
+                full = full_open
+                    && (full_days == 0
+                        || (full_days < FULL_DECODE_DAYS
+                            && full_bytes + bytes.len() <= FULL_DECODE_BYTES));
+                full_open = full;
                 if full {
-                    full_left -= bytes.len();
+                    full_days += 1;
+                    full_bytes += bytes.len();
                 }
                 let stored = if full {
                     Stored::decode(&bytes)
@@ -377,6 +381,9 @@ fn stats(req: RouteRequest, ctx: &Ctx) -> Result<RouteResponse> {
         })
         .collect();
     slots.reverse();
+    if slots.iter().all(|s| s.totals.is_none()) {
+        return Ok(html(200, page::no_data(period)));
+    }
     Ok(html(200, page::stats(&slots, &PERIODS, period)))
 }
 

@@ -91,18 +91,21 @@ else (no role), so the plugin keeps its own list: the **Viewers** setting.
    shows the stats to no one.
 4. Open the page again.
 
-The page shows, for the last 1, 7, 30 or 90 days (`?days=N`, any number from 1 to 90 is
-accepted, 30 when it is missing or not a number): page views, bot and other requests, the
+The page shows, for the last 1, 7, 30 or 90 days (`?days=N`: the first `days` value is read as
+a whole number, 0 counts as 1, anything above 90 as 90, and a missing value or one that is not
+a whole number (`abc`, `-3`) as 30): page views, bot and other requests, the
 response classes, a bar chart of views per day (empty days included), the top 20 paths and the
-top 20 referrer hosts. Days are UTC days, counted back from **the newest day with data**: the
-plugin has no clock, so "today" is the newest event it has seen. Paths and hosts are
-HTML-escaped and shown cut to 200 characters.
+top 20 referrer hosts. Days are UTC days and the period ends **today**, by the wall clock of
+the node that serves the page. Paths and hosts are HTML-escaped and shown cut to 200
+characters.
 
 The page decodes stored data inside the sandbox, which has a fixed budget of work per request.
 The totals and the chart always cover the whole period. The path and referrer lists are built
-from the newest days whose stored blobs add up to 200 000 bytes (about six days of a site
-whose days are full, with 500 paths and 200 referrers; more days the smaller they are), and the
-page says when it covers fewer days than the period. Choose a shorter period to include every day in the lists.
+from the newest day with data (always, however big its blob) and then up to three more days,
+as long as their blobs add up to 150 000 bytes. A site whose days are full, with 500 paths and
+200 referrers, gets four days of lists; a quiet site gets four too, because of the day limit.
+The page says when the lists cover fewer days than the period. Choose a shorter period to
+include every day in the lists.
 
 ## Settings
 
@@ -123,8 +126,7 @@ Paths are compared as received, percent-encoded. Core does not send events for `
 
 ## What is stored
 
-One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`, and the key `latest`
-holding the newest day stored:
+One JSON blob per UTC day under the plugin's KV key `day:YYYY-MM-DD`; there is no other key:
 
 ```json
 {"v":1,"views":120,"bots":14,"other":3,
@@ -134,14 +136,16 @@ holding the newest day stored:
 ```
 
 - The day is the event's own UTC time, so a batch that spans midnight updates two blobs. An
-  event whose time cannot be read is skipped.
+  event whose time cannot be read is skipped, and so is one dated more than a day ahead of
+  today (a node whose clock runs fast): it must not push the history out. The plugin writes the
+  counts before the maps, and the page relies on that to read older days cheaply.
 - `paths` holds at most 500 keys and `referrers` at most 200. Past that, a key that is not
   already there is counted under `"(other)"`, which is not a path or a host. With paths of at
   most 512 bytes and hosts of at most 253, a blob is at most about 320 KB, so two fit in the
   1 MiB a call may write.
-- **Retention** keeps the newest `retention_days` days, counted back from the newest event day
-  seen: with 3, when 1 January arrives the data for 30 and 31 December and 1 January is kept
-  and 29 December goes. An event for a day older than that is not stored. After each batch the
+- **Retention** keeps the newest `retention_days` days, counted back from today (the wall
+  clock): with 3, on 1 January the data for 30 and 31 December and 1 January is kept and 29
+  December goes. An event for a day older than that is not stored. After each batch the
   plugin lists the day keys, oldest first, and deletes the expired ones. A call may make 100 KV
   operations; counting uses a handful, the rest go to deleting, so a large backlog (a lowered
   retention) clears over a few batches.
@@ -182,9 +186,11 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
   removing the plugin with `--purge`.
 - **A coarse bot filter**, as above, and 404 scanner noise is counted in `status` (not in
   `views`, `paths` or `referrers`).
-- **A hash map with a plain hash** holds the counts: crafted paths could slow one call down to
-  its fuel limit, which fails that call. A day's maps are capped at 500 and 200 keys, which
-  bounds this.
+- **Work per call is bounded, not free.** The counts are held in ordinary hash maps with a
+  random seed, so crafted paths or referrer hosts cannot pick colliding keys. A day's maps are
+  capped at 500 and 200 keys; the stats page sums at most four days of them. Decoding a day
+  costs fuel in proportion to its entries and bytes, which is why the lists cover only the
+  newest days (above).
 
 ## Uninstall and data
 

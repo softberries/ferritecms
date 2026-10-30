@@ -1,12 +1,12 @@
 //! The `analytics` example plugin through a real host (M4-3a Task 3, plan P44 and P46):
 //! batches of `request.served` events become one KV blob per UTC day, the stats page
-//! shows them to the listed viewers only, retention prunes by event time, the maps are
+//! shows them to the listed viewers only, retention prunes back from today, the maps are
 //! capped, and a hostile path or referrer is escaped (Review Focus 2).
 
-use ferrite_plugin_host::{ActionEvent, RouteRequest, RouteResponse};
+use ferrite_plugin_host::{ActionEvent, Grant, Manifest, RouteRequest, RouteResponse};
 use serde_json::{Value, json};
 
-use crate::common::Site;
+use crate::common::{Site, plugin_manifest, plugin_wasm};
 use crate::profile_tests;
 
 profile_tests!(
@@ -16,30 +16,49 @@ profile_tests!(
     stats_page_escapes_and_truncates,
     stats_page_without_data,
     stats_page_reads_a_full_window,
+    stats_page_reads_short_distinct_keys_over_ninety_days,
+    the_newest_day_is_always_decoded_in_full,
+    older_days_read_through_the_brief_path,
     a_full_batch_on_full_blobs_fits_the_call_limits,
     days_parameter_sums_the_window,
     retention_keeps_the_newest_days,
-    retention_follows_event_time_across_months_and_leap_days,
+    a_future_event_cannot_push_history_out,
     retention_setting_is_clamped_and_defaults_to_ninety,
     prune_uses_the_rest_of_the_call_budget,
     maps_are_capped_with_other,
     a_batch_of_many_days_stays_within_the_call_budget,
     the_write_budget_drops_a_day_instead_of_failing,
     stored_blobs_that_are_corrupt_or_newer_are_handled,
-    a_malformed_payload_is_refused,
+    a_malformed_payload_is_ignored,
 );
 
 const PLUGIN: &str = "analytics";
-const D1: &str = "2026-10-29";
-const D2: &str = "2026-10-30";
 const CAP_PATHS: usize = 500;
 const CAP_REFERRERS: usize = 200;
 
 // ---- helpers --------------------------------------------------------------------------
 
+/// A site with the plugin installed. `ANALYTICS_FUEL=<n>` installs it with a fuel limit of
+/// `n` instead of the default, to bracket what a case needs (the figures in the task
+/// report): `ANALYTICS_FUEL=25000000 cargo test -p ferrite-http --test plugins analytics`.
 async fn site_with_analytics(site: Site) -> Site {
+    let fuel = std::env::var("ANALYTICS_FUEL").ok();
+    site_with_fuel(site, fuel.as_deref()).await
+}
+
+/// The same with a fuel limit of `fuel` (granted, as an approved install would be).
+async fn site_with_fuel(site: Site, fuel: Option<&str>) -> Site {
     let site = crate::with_generous_deadlines(site);
-    site.install(PLUGIN).await;
+    match fuel {
+        None => site.install(PLUGIN).await,
+        Some(fuel) => {
+            let manifest = plugin_manifest(PLUGIN) + &format!("\n[limits]\nfuel = {fuel}\n");
+            let granted = Grant::of(&Manifest::parse(&manifest).unwrap()).to_json();
+            let hash = site.put_artifact(plugin_wasm(PLUGIN)).await;
+            site.row_granted(PLUGIN, &manifest, hash, true, granted)
+                .await;
+        }
+    }
     let summary = site.load().await;
     assert_eq!(summary.loaded, [PLUGIN], "{:?}", summary.skipped);
     site
@@ -134,12 +153,6 @@ async fn days(site: &Site) -> Vec<String> {
         .collect()
 }
 
-async fn latest(site: &Site) -> Option<String> {
-    kv_get(site, "latest")
-        .await
-        .map(|b| String::from_utf8(b).unwrap())
-}
-
 fn request(user: Option<&str>, query: &[(&str, &str)]) -> RouteRequest {
     RouteRequest {
         method: "GET".into(),
@@ -188,13 +201,21 @@ fn stat(html: &str, name: &str) -> u64 {
         .unwrap_or_else(|_| panic!("no number after {marker}: {rest:.40}"))
 }
 
-/// `2026-09-01` plus `n` days, for `n` below 60.
-fn date(n: u32) -> String {
-    if n < 30 {
-        format!("2026-09-{:02}", n + 1)
-    } else {
-        format!("2026-10-{:02}", n - 29)
-    }
+/// The UTC day `n` days before today (`n` below 0: after), as `YYYY-MM-DD`. The plugin
+/// counts back from the wall clock, so the tests do too. (A run that crosses UTC midnight
+/// can fail; the window is a few milliseconds.) Leaked: a test process is short-lived.
+fn ago(n: i64) -> &'static str {
+    let day = chrono::Utc::now().date_naive() - chrono::Duration::days(n);
+    Box::leak(day.format("%Y-%m-%d").to_string().into_boxed_str())
+}
+
+/// Two days that are safely inside the window and not in the future.
+fn d1() -> &'static str {
+    ago(2)
+}
+
+fn d2() -> &'static str {
+    ago(1)
 }
 
 // ---- counting -------------------------------------------------------------------------
@@ -208,33 +229,40 @@ async fn a_batch_is_counted_per_day(site: Site) -> Site {
     feed(
         &site,
         vec![
-            event(D1, "08:00:00.000000", "/", 200, news, "browser"),
-            event(D1, "08:00:01.000000", "/a/", 200, None, "browser"),
-            event(D1, "08:00:02.000000", "/a/", 304, news, "browser"),
-            event(D1, "08:00:03.000000", "/missing/", 404, None, "browser"),
-            event(D1, "08:00:04.000000", "/", 200, None, "bot"),
-            event(D1, "08:00:05.000000", "/feed/", 200, None, "other"),
+            event(d1(), "08:00:00.000000", "/", 200, news, "browser"),
+            event(d1(), "08:00:01.000000", "/a/", 200, None, "browser"),
+            event(d1(), "08:00:02.000000", "/a/", 304, news, "browser"),
+            event(d1(), "08:00:03.000000", "/missing/", 404, None, "browser"),
+            event(d1(), "08:00:04.000000", "/", 200, None, "bot"),
+            event(d1(), "08:00:05.000000", "/feed/", 200, None, "other"),
             event(
-                D1,
+                d1(),
                 "08:00:06.000000",
                 "/x/",
                 200,
                 Some("example.com"),
                 "browser",
             ),
-            event(D1, "08:00:07.000000", "/admin/users", 200, None, "browser"),
-            event(D1, "08:00:08.000000", "/_p/foo", 200, None, "browser"),
-            event(D1, "23:59:59.999999", "/go/", 301, None, "browser"),
             event(
-                D2,
+                d1(),
+                "08:00:07.000000",
+                "/admin/users",
+                200,
+                None,
+                "browser",
+            ),
+            event(d1(), "08:00:08.000000", "/_p/foo", 200, None, "browser"),
+            event(d1(), "23:59:59.999999", "/go/", 301, None, "browser"),
+            event(
+                d2(),
                 "00:00:00.000000",
                 "/",
                 200,
                 Some("search.example.net"),
                 "browser",
             ),
-            event(D2, "00:00:01.000000", "/boom/", 500, None, "browser"),
-            event(D2, "00:00:02.000000", "/", 200, None, "browser"),
+            event(d2(), "00:00:01.000000", "/boom/", 500, None, "browser"),
+            event(d2(), "00:00:02.000000", "/", 200, None, "browser"),
             // Unusable: a time that is not a time, and an event of the wrong shape.
             json!({"path": "/", "status": 200, "ts": "garbage", "referrer_host": null,
                    "ua_class": "browser", "cache": "hit"}),
@@ -244,7 +272,7 @@ async fn a_batch_is_counted_per_day(site: Site) -> Site {
     .await;
 
     assert_eq!(
-        day(&site, D1).await.unwrap(),
+        day(&site, d1()).await.unwrap(),
         json!({
             "v": 1, "views": 4, "bots": 1, "other": 1,
             "status": {"2xx": 5, "3xx": 2, "4xx": 1},
@@ -253,7 +281,7 @@ async fn a_batch_is_counted_per_day(site: Site) -> Site {
         })
     );
     assert_eq!(
-        day(&site, D2).await.unwrap(),
+        day(&site, d2()).await.unwrap(),
         json!({
             "v": 1, "views": 2, "bots": 0, "other": 0,
             "status": {"2xx": 2, "5xx": 1},
@@ -261,27 +289,26 @@ async fn a_batch_is_counted_per_day(site: Site) -> Site {
             "referrers": {"search.example.net": 1},
         })
     );
-    assert_eq!(days(&site).await, [D1, D2]);
-    assert_eq!(latest(&site).await.as_deref(), Some(D2));
+    assert_eq!(days(&site).await, [d1(), d2()]);
 
     // A second batch adds to the stored blobs.
     feed(
         &site,
         vec![
-            event(D2, "01:00:00.000000", "/", 200, news, "browser"),
-            event(D2, "01:00:01.000000", "/new/", 404, None, "browser"),
+            event(d2(), "01:00:00.000000", "/", 200, news, "browser"),
+            event(d2(), "01:00:01.000000", "/new/", 404, None, "browser"),
         ],
     )
     .await;
-    let d2 = day(&site, D2).await.unwrap();
-    assert_eq!(d2["views"], 3);
-    assert_eq!(d2["status"], json!({"2xx": 3, "4xx": 1, "5xx": 1}));
-    assert_eq!(d2["paths"], json!({"/": 3}));
+    let blob = day(&site, d2()).await.unwrap();
+    assert_eq!(blob["views"], 3);
+    assert_eq!(blob["status"], json!({"2xx": 3, "4xx": 1, "5xx": 1}));
+    assert_eq!(blob["paths"], json!({"/": 3}));
     assert_eq!(
-        d2["referrers"],
+        blob["referrers"],
         json!({"news.example.org": 1, "search.example.net": 1})
     );
-    assert_eq!(days(&site).await, [D1, D2]);
+    assert_eq!(days(&site).await, [d1(), d2()]);
     site
 }
 
@@ -300,12 +327,12 @@ async fn excluded_paths_follow_the_setting(site: Site) -> Site {
             "/a",
         ]
         .into_iter()
-        .map(|p| view(D1, p))
+        .map(|p| view(d1(), p))
         .collect(),
     )
     .await;
     assert_eq!(
-        day(&site, D1).await.unwrap()["paths"],
+        day(&site, d1()).await.unwrap()["paths"],
         json!({"/administrator": 1, "/adm": 1, "/a": 1})
     );
 
@@ -323,12 +350,12 @@ async fn excluded_paths_follow_the_setting(site: Site) -> Site {
             "/nope",
         ]
         .into_iter()
-        .map(|p| view(D2, p))
+        .map(|p| view(d2(), p))
         .collect(),
     )
     .await;
     assert_eq!(
-        day(&site, D2).await.unwrap()["paths"],
+        day(&site, d2()).await.unwrap()["paths"],
         json!({"/privately": 1, "/admin/z": 1, "/nope": 1})
     );
 
@@ -349,7 +376,7 @@ async fn excluded_paths_follow_the_setting(site: Site) -> Site {
 /// exactly.
 async fn stats_page_needs_a_listed_viewer(site: Site) -> Site {
     let site = site_with_analytics(site).await;
-    feed(&site, vec![view(D1, "/")]).await;
+    feed(&site, vec![view(d1(), "/")]).await;
 
     // `viewers` not set at all.
     let res = page_as(&site, None, &[]).await;
@@ -405,9 +432,9 @@ async fn stats_page_escapes_and_truncates(site: Site) -> Site {
     feed(
         &site,
         vec![
-            event(D1, "10:00:00.000000", hostile, 200, Some(host), "browser"),
+            event(d1(), "10:00:00.000000", hostile, 200, Some(host), "browser"),
             event(
-                D1,
+                d1(),
                 "10:00:01.000000",
                 &long,
                 200,
@@ -445,66 +472,8 @@ async fn stats_page_without_data(site: Site) -> Site {
     let site = viewer_site(site).await;
     let (status, html) = stats(&site, &[]).await;
     assert_eq!(status, 200);
-    assert!(html.contains("No data yet"), "{html}");
+    assert!(html.contains("No data yet for the last 30 days"), "{html}");
     assert!(!html.contains("data-stat"), "{html}");
-    site
-}
-
-/// The 90 days a page can show, each with 500 paths and 200 referrers: the stored blobs
-/// the page reads are the biggest the plugin writes in practice, and the call stays
-/// within its fuel (the default limit; measured at half of it) and its 100 KV operations.
-async fn stats_page_reads_a_full_window(site: Site) -> Site {
-    let site = viewer_site(site).await;
-    let paths: serde_json::Map<String, Value> = (0..CAP_PATHS)
-        .map(|i| {
-            (
-                format!("/blog/2026/a-reasonably-long-post-title-{i:03}/"),
-                json!(3),
-            )
-        })
-        .collect();
-    let referrers: serde_json::Map<String, Value> = (0..CAP_REFERRERS)
-        .map(|i| (format!("referrer-{i:03}.example.org"), json!(5)))
-        .collect();
-    // In the layout the plugin writes: the counts first, then `paths` and `referrers`.
-    let blob = format!(
-        r#"{{"v":1,"views":1500,"bots":10,"other":5,"status":{{"2xx":1600,"4xx":7}},"paths":{},"referrers":{}}}"#,
-        Value::Object(paths),
-        Value::Object(referrers)
-    )
-    .into_bytes();
-    assert!(blob.len() > 30_000, "{}", blob.len());
-    let mut stored = Vec::new();
-    for (month, last) in [(7, 31), (8, 31), (9, 30)] {
-        stored.extend((1..=last).map(|d| format!("2026-{month:02}-{d:02}")));
-    }
-    stored.truncate(90);
-    for d in &stored {
-        kv_set(&site, &format!("day:{d}"), &blob).await;
-    }
-    kv_set(&site, "latest", stored.last().unwrap().as_bytes()).await;
-
-    let (status, html) = stats(&site, &[("days", "90")]).await;
-    assert_eq!(status, 200, "{}", &html[..html.len().min(300)]);
-    // Every day is in the totals and the chart; the lists cover the newest days whose
-    // blobs fit the decode budget (200 000 bytes), and the page says so.
-    let listed = 200_000 / blob.len();
-    assert_eq!(stat(&html, "views"), 90 * 1500);
-    assert_eq!(stat(&html, "bots"), 90 * 10);
-    assert_eq!(html.matches("class=\"bar\"").count(), 90);
-    assert!(
-        html.contains(&format!(
-            "cover the newest {listed} of the 90 days with data"
-        )),
-        "{html}"
-    );
-    assert!(html.contains("referrer-000.example.org"));
-    assert!(html.contains("/blog/2026/a-reasonably-long-post-title-000/"));
-
-    // A shorter period fits entirely: no note.
-    let (status, html) = stats(&site, &[("days", "5")]).await;
-    assert_eq!(status, 200);
-    assert!(!html.contains("data-note"), "{html}");
     site
 }
 
@@ -525,12 +494,12 @@ fn full_blob(prefix: &str) -> Vec<u8> {
 /// count and encode both blobs inside the default fuel and the 1 MiB write budget.
 async fn a_full_batch_on_full_blobs_fits_the_call_limits(site: Site) -> Site {
     let site = site_with_analytics(site).await;
-    for d in [D1, D2] {
+    for d in [d1(), d2()] {
         kv_set(&site, &format!("day:{d}"), &full_blob("blog")).await;
     }
     let events: Vec<Value> = (0..1000)
         .map(|i| {
-            let d = if i % 2 == 0 { D1 } else { D2 };
+            let d = if i % 2 == 0 { d1() } else { d2() };
             let path = format!("/blog/a-reasonably-long-post-title-{:03}/", i % CAP_PATHS);
             let referrer = format!("referrer-{:03}.example.org", i % CAP_REFERRERS);
             event(d, "12:00:00.000000", &path, 200, Some(&referrer), "browser")
@@ -539,7 +508,7 @@ async fn a_full_batch_on_full_blobs_fits_the_call_limits(site: Site) -> Site {
     feed(&site, events).await;
     // Day 1 got the even events, day 2 the odd ones; each path of the stored blob that an
     // event named (twice) went from 3 to 5.
-    for (d, hit) in [(D1, "000"), (D2, "001")] {
+    for (d, hit) in [(d1(), "000"), (d2(), "001")] {
         let blob = day(&site, d).await.unwrap();
         assert_eq!(blob["views"], 2000, "{d}");
         let paths = blob["paths"].as_object().unwrap();
@@ -556,25 +525,179 @@ async fn a_full_batch_on_full_blobs_fits_the_call_limits(site: Site) -> Site {
     site
 }
 
-/// `?days=N` sums the N days ending at the newest stored day; an unusable N means 30 and
-/// a large one is capped at 90.
+// ---- retention ------------------------------------------------------------------------
+
+// ---- caps and budgets -----------------------------------------------------------------
+
+/// P44: `paths` and `referrers` are capped at 500 and 200 keys; past that, new keys count
+/// under "(other)". Keys already stored keep counting.
+async fn maps_are_capped_with_other(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    let events: Vec<Value> = (0..520)
+        .map(|i| {
+            let referrer = (i < 220).then(|| format!("h{i:03}.example.org"));
+            event(
+                d1(),
+                "09:00:00.000000",
+                &format!("/p{i:03}"),
+                200,
+                referrer.as_deref(),
+                "browser",
+            )
+        })
+        .collect();
+    feed(&site, events).await;
+
+    let blob = day(&site, d1()).await.unwrap();
+    assert_eq!(blob["views"], 520);
+    let paths = blob["paths"].as_object().unwrap();
+    assert_eq!(paths.len(), CAP_PATHS + 1);
+    assert_eq!(paths["(other)"], 20);
+    assert_eq!(paths["/p000"], 1);
+    assert_eq!(paths["/p499"], 1);
+    assert!(!paths.contains_key("/p500"));
+    let referrers = blob["referrers"].as_object().unwrap();
+    assert_eq!(referrers.len(), CAP_REFERRERS + 1);
+    assert_eq!(referrers["(other)"], 20);
+    assert!(referrers.contains_key("h199.example.org"));
+    assert!(!referrers.contains_key("h200.example.org"));
+
+    // A stored key keeps its own count; a new key still goes to "(other)".
+    feed(
+        &site,
+        vec![
+            event(
+                d1(),
+                "09:01:00.000000",
+                "/p000",
+                200,
+                Some("h000.example.org"),
+                "browser",
+            ),
+            event(
+                d1(),
+                "09:01:01.000000",
+                "/new",
+                200,
+                Some("new.example.org"),
+                "browser",
+            ),
+        ],
+    )
+    .await;
+    let blob = day(&site, d1()).await.unwrap();
+    assert_eq!(blob["views"], 522);
+    assert_eq!(blob["paths"]["/p000"], 2);
+    assert_eq!(blob["paths"]["(other)"], 21);
+    assert_eq!(blob["paths"].as_object().unwrap().len(), CAP_PATHS + 1);
+    assert_eq!(blob["referrers"]["h000.example.org"], 2);
+    assert_eq!(blob["referrers"]["(other)"], 21);
+    assert!(
+        kv_get(&site, &format!("day:{}", d1())).await.unwrap().len() < 1024 * 1024,
+        "under the per-call write budget"
+    );
+
+    // The page ranks real paths and shows "(other)" last.
+    setting(&site, "viewers", json!("v")).await;
+    let (status, html) = stats(&site, &[]).await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 522);
+    assert!(html.contains("(other)"), "{html}");
+    site
+}
+
+/// Writes are limited to 1 MiB per call. With large stored blobs the oldest day of a
+/// batch is dropped (and logged) rather than failing the whole call.
+async fn the_write_budget_drops_a_day_instead_of_failing(site: Site) -> Site {
+    // Re-encoding 1 MiB of seeded blobs costs more than the default fuel, which no blob
+    // the plugin can write would.
+    let site = site_with_fuel(site, Some("200_000_000")).await;
+    // ~450 KB each, which the plugin itself never writes (a blob is at most ~320 KB): ten
+    // paths of 45 000 bytes, so the entry count stays small and the fuel low. The branch
+    // under test is a defence, reached here by seeding.
+    let big = |extra: &str| {
+        let paths: serde_json::Map<String, Value> = (0..10)
+            .map(|i| (format!("/{extra}{i:03}{}", "x".repeat(45_000)), json!(1)))
+            .collect();
+        serde_json::to_vec(&json!({"v": 1, "views": 500, "paths": paths})).unwrap()
+    };
+    let days3 = [ago(3), ago(2), ago(1)];
+    let before: Vec<Vec<u8>> = days3.iter().map(|_| big("p")).collect();
+    assert!(before[0].len() > 440_000 && before[0].len() < 500_000);
+    for (d, blob) in days3.iter().zip(&before) {
+        kv_set(&site, &format!("day:{d}"), blob).await;
+    }
+    feed(&site, days3.iter().map(|d| view(d, "/")).collect()).await;
+
+    let after: Vec<Value> = {
+        let mut v = Vec::new();
+        for d in days3 {
+            v.push(day(&site, d).await.unwrap());
+        }
+        v
+    };
+    assert_eq!(after[2]["views"], 501);
+    assert_eq!(after[1]["views"], 501);
+    // The oldest did not fit in the budget: unchanged.
+    assert_eq!(after[0]["views"], 500);
+    assert_eq!(
+        kv_get(&site, &format!("day:{}", days3[0])).await.unwrap(),
+        before[0]
+    );
+    site
+}
+
+/// A blob that is not JSON is replaced (the day starts again); one with a version the
+/// plugin does not know is left alone, and that day's events are not counted.
+async fn stored_blobs_that_are_corrupt_or_newer_are_handled(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", d1()), b"not json at all").await;
+    let future = br#"{"v":2,"hits":99}"#;
+    kv_set(&site, &format!("day:{}", d2()), future).await;
+    feed(&site, vec![view(d1(), "/"), view(d2(), "/")]).await;
+    assert_eq!(day(&site, d1()).await.unwrap()["views"], 1);
+    assert_eq!(
+        kv_get(&site, &format!("day:{}", d2())).await.unwrap(),
+        future
+    );
+    site
+}
+
+// ---- the clock, retention and the stats window ------------------------------------------
+
+/// The plugin's fixed limits for decoding the stats page (see `FULL_DECODE_*` in its
+/// `lib.rs`).
+const FULL_DAYS: usize = 4;
+const FULL_BYTES: usize = 150_000;
+
+/// A stored blob with a view count only, enough for the prune and the window.
+const STUB: &[u8] = br#"{"v":1,"views":5}"#;
+
+async fn seed_days(site: &Site, ago_days: &[i64]) {
+    for &n in ago_days {
+        kv_set(site, &format!("day:{}", ago(n)), STUB).await;
+    }
+}
+
+/// `?days=N` sums the N days ending today; an unusable N means 30 and a large one is
+/// capped at 90.
 async fn days_parameter_sums_the_window(site: Site) -> Site {
     let site = viewer_site(site).await;
-    // Day i (0..40) has i + 1 views, one batch per day.
-    for i in 0..40u32 {
-        let d = date(i);
+    // Day i (0..40) is 39 - i days ago and has i + 1 views and one bot, one batch each.
+    for i in 0..40i64 {
+        let d = ago(39 - i);
         feed(
             &site,
             (0..=i)
-                .map(|_| view(&d, "/"))
-                .chain([event(&d, "13:00:00.000000", "/bot/", 200, None, "bot")])
+                .map(|_| view(d, "/"))
+                .chain([event(d, "13:00:00.000000", "/bot/", 200, None, "bot")])
                 .collect(),
         )
         .await;
     }
-    assert_eq!(latest(&site).await.as_deref(), Some(date(39).as_str()));
 
-    let sum = |from: u32| (from..40).map(|i| u64::from(i) + 1).sum::<u64>();
+    // Today (i = 39) has 40 views; the window of N days holds the N newest.
+    let sum = |from: i64| (from..40).map(|i| i as u64 + 1).sum::<u64>();
     for (query, days, views, bots) in [
         (vec![("days", "1")], 1, 40, 1),
         (vec![("days", "7")], 7, sum(33), 7),
@@ -602,122 +725,91 @@ async fn days_parameter_sums_the_window(site: Site) -> Site {
     site
 }
 
-// ---- retention ------------------------------------------------------------------------
-
-/// "Keep N days" keeps the newest N, whatever the order the batches arrive in; an event
-/// older than that is not stored.
+/// "Keep N days" keeps the newest N counted back from today; an event older than that is
+/// not stored, and one at most a day ahead of today is.
 async fn retention_keeps_the_newest_days(site: Site) -> Site {
     let site = site_with_analytics(site).await;
     setting(&site, "retention_days", json!(3)).await;
-    for d in ["2026-12-29", "2026-12-30", "2026-12-31"] {
-        feed(&site, vec![view(d, "/")]).await;
+    for n in 1..=5 {
+        kv_set(&site, &format!("day:{}", ago(n)), STUB).await;
     }
-    assert_eq!(
-        days(&site).await,
-        ["2026-12-29", "2026-12-30", "2026-12-31"]
-    );
-    feed(&site, vec![view("2027-01-01", "/")]).await;
-    assert_eq!(
-        days(&site).await,
-        ["2026-12-30", "2026-12-31", "2027-01-01"]
-    );
-    feed(&site, vec![view("2027-01-02", "/")]).await;
-    assert_eq!(
-        days(&site).await,
-        ["2026-12-31", "2027-01-01", "2027-01-02"]
-    );
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(2), ago(1), ago(0)]);
     // A straggler from before the window is dropped, not stored and pruned later.
-    feed(&site, vec![view("2026-12-29", "/old/")]).await;
-    assert_eq!(
-        days(&site).await,
-        ["2026-12-31", "2027-01-01", "2027-01-02"]
-    );
-    // The latest day marker is not a day key and stays.
-    assert_eq!(latest(&site).await.as_deref(), Some("2027-01-02"));
+    feed(&site, vec![view(ago(3), "/old/")]).await;
+    assert_eq!(days(&site).await, [ago(2), ago(1), ago(0)]);
 
-    // Retention 1: only the newest day.
+    // Retention 1: only today (and tomorrow, which a node a little ahead may report).
     setting(&site, "retention_days", json!(1)).await;
-    feed(&site, vec![view("2027-01-03", "/")]).await;
-    assert_eq!(days(&site).await, ["2027-01-03"]);
-    // A batch of several days: the older ones are dropped within the batch.
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0)]);
     feed(
         &site,
-        vec![
-            view("2027-01-03", "/"),
-            view("2027-01-04", "/"),
-            view("2027-01-05", "/"),
-        ],
+        vec![view(ago(1), "/"), view(ago(0), "/"), view(ago(-1), "/")],
     )
     .await;
-    assert_eq!(days(&site).await, ["2027-01-05"]);
+    assert_eq!(days(&site).await, [ago(0), ago(-1)]);
+    // Two days ahead is too far.
+    feed(&site, vec![view(ago(-2), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0), ago(-1)]);
     site
 }
 
-/// The cutoff is calendar arithmetic: it crosses a year, and a leap day exists only in
-/// leap years.
-async fn retention_follows_event_time_across_months_and_leap_days(site: Site) -> Site {
+/// An event dated far ahead (a node whose clock is wrong) is ignored: it does not move
+/// "today", so nothing is pruned and the events that follow are still counted.
+async fn a_future_event_cannot_push_history_out(site: Site) -> Site {
     let site = site_with_analytics(site).await;
-    setting(&site, "retention_days", json!(2)).await;
-    for d in ["2027-02-27", "2027-02-28", "2027-03-01"] {
-        feed(&site, vec![view(d, "/")]).await;
+    for n in [80, 3, 2, 1] {
+        kv_set(&site, &format!("day:{}", ago(n)), STUB).await;
     }
-    // 2027 has no 29 February: the day before 1 March is the 28th.
-    assert_eq!(days(&site).await, ["2027-02-28", "2027-03-01"]);
-
-    for d in ["2028-02-28", "2028-02-29", "2028-03-01"] {
-        feed(&site, vec![view(d, "/")]).await;
-    }
-    assert_eq!(days(&site).await, ["2028-02-29", "2028-03-01"]);
-
-    // 2100 is not a leap year; 2000 is.
-    for d in ["2100-02-28", "2100-03-01"] {
-        feed(&site, vec![view(d, "/")]).await;
-    }
-    assert_eq!(days(&site).await, ["2100-02-28", "2100-03-01"]);
-    // An impossible date is an unusable event.
+    // Only future events: nothing is written or deleted, and the call is fine.
     feed(
         &site,
-        vec![view("2100-02-29", "/"), view("2100-13-01", "/")],
+        vec![
+            view(ago(-400), "/"),
+            view(ago(-2), "/"),
+            view(ago(-5000), "/"),
+        ],
     )
     .await;
-    assert_eq!(days(&site).await, ["2100-02-28", "2100-03-01"]);
+    assert_eq!(days(&site).await, [ago(80), ago(3), ago(2), ago(1)]);
+    // With a real event in the same batch, only that one is counted.
+    feed(&site, vec![view(ago(-400), "/"), view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(80), ago(3), ago(2), ago(1), ago(0)]);
+    for n in [80, 3, 2, 1] {
+        assert_eq!(day(&site, ago(n)).await.unwrap()["views"], 5, "{}", ago(n));
+    }
+    assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 1);
     site
 }
 
 /// Valid is 1..=366: more is 366, less is 1, and an unset or unusable value is 90.
 async fn retention_setting_is_clamped_and_defaults_to_ninety(site: Site) -> Site {
     let site = site_with_analytics(site).await;
-    let blob = br#"{"v":1,"views":1}"#;
 
-    // Unset: the manifest default, 90 days. The newest day is 2026-10-30, so 2026-08-02
-    // (89 days earlier) is the oldest kept.
-    for d in ["2026-08-01", "2026-08-02"] {
-        kv_set(&site, &format!("day:{d}"), blob).await;
-    }
-    feed(&site, vec![view(D2, "/")]).await;
-    assert_eq!(days(&site).await, ["2026-08-02", D2]);
+    // Unset: the manifest default, 90 days, so the 89th day back is the oldest kept.
+    seed_days(&site, &[90, 89]).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(89), ago(0)]);
 
     // Not a number: 90 again.
     setting(&site, "retention_days", json!("many")).await;
-    kv_set(&site, "day:2026-08-01", blob).await;
-    feed(&site, vec![view(D2, "/")]).await;
-    assert_eq!(days(&site).await, ["2026-08-02", D2]);
+    seed_days(&site, &[90]).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(89), ago(0)]);
 
-    // 5000 is 366: 2025-10-30 (365 days before the newest) is kept, the day before goes.
+    // 5000 is 366: the 365th day back is kept, the 366th goes.
     setting(&site, "retention_days", json!(5000)).await;
-    for d in ["2025-10-29", "2025-10-30"] {
-        kv_set(&site, &format!("day:{d}"), blob).await;
-    }
-    feed(&site, vec![view(D2, "/")]).await;
-    assert_eq!(days(&site).await, ["2025-10-30", "2026-08-02", D2]);
+    seed_days(&site, &[366, 365]).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(365), ago(89), ago(0)]);
 
-    // 0 and negative are 1.
+    // 0 and negative are 1: only today stays.
     for v in [json!(0), json!(-7)] {
         setting(&site, "retention_days", v).await;
-        kv_set(&site, "day:2026-10-29", blob).await;
-        feed(&site, vec![view(D2, "/")]).await;
-        assert_eq!(days(&site).await, [D2]);
-        kv_set(&site, "day:2026-08-02", blob).await;
+        seed_days(&site, &[89, 1]).await;
+        feed(&site, vec![view(ago(0), "/")]).await;
+        assert_eq!(days(&site).await, [ago(0)]);
     }
     site
 }
@@ -737,97 +829,18 @@ async fn prune_uses_the_rest_of_the_call_budget(site: Site) -> Site {
     for d in &old {
         kv_set(&site, &format!("day:{d}"), br#"{"v":1}"#).await;
     }
-    // Five operations go to counting (the latest day, the day's blob in and out, the
-    // latest day out, the listing): 95 deletes of the 130 old days.
-    feed(&site, vec![view(D2, "/")]).await;
+    // Three operations go to counting (the day's blob in and out, the listing): 97 deletes
+    // of the 130 old days.
+    feed(&site, vec![view(ago(0), "/")]).await;
     let left = days(&site).await;
-    assert_eq!(left.len(), 130 - 95 + 1, "{left:?}");
-    assert!(left.contains(&D2.to_owned()));
+    assert_eq!(left.len(), 130 - 97 + 1, "{left:?}");
+    assert!(left.contains(&ago(0).to_owned()));
     // The oldest go first.
-    assert_eq!(left[0], old[95]);
+    assert_eq!(left[0], old[97]);
 
-    feed(&site, vec![view(D2, "/")]).await;
-    assert_eq!(days(&site).await, [D2]);
-    assert_eq!(day(&site, D2).await.unwrap()["views"], 2);
-    site
-}
-
-// ---- caps and budgets -----------------------------------------------------------------
-
-/// P44: `paths` and `referrers` are capped at 500 and 200 keys; past that, new keys count
-/// under "(other)". Keys already stored keep counting.
-async fn maps_are_capped_with_other(site: Site) -> Site {
-    let site = site_with_analytics(site).await;
-    let events: Vec<Value> = (0..520)
-        .map(|i| {
-            let referrer = (i < 220).then(|| format!("h{i:03}.example.org"));
-            event(
-                D1,
-                "09:00:00.000000",
-                &format!("/p{i:03}"),
-                200,
-                referrer.as_deref(),
-                "browser",
-            )
-        })
-        .collect();
-    feed(&site, events).await;
-
-    let blob = day(&site, D1).await.unwrap();
-    assert_eq!(blob["views"], 520);
-    let paths = blob["paths"].as_object().unwrap();
-    assert_eq!(paths.len(), CAP_PATHS + 1);
-    assert_eq!(paths["(other)"], 20);
-    assert_eq!(paths["/p000"], 1);
-    assert_eq!(paths["/p499"], 1);
-    assert!(!paths.contains_key("/p500"));
-    let referrers = blob["referrers"].as_object().unwrap();
-    assert_eq!(referrers.len(), CAP_REFERRERS + 1);
-    assert_eq!(referrers["(other)"], 20);
-    assert!(referrers.contains_key("h199.example.org"));
-    assert!(!referrers.contains_key("h200.example.org"));
-
-    // A stored key keeps its own count; a new key still goes to "(other)".
-    feed(
-        &site,
-        vec![
-            event(
-                D1,
-                "09:01:00.000000",
-                "/p000",
-                200,
-                Some("h000.example.org"),
-                "browser",
-            ),
-            event(
-                D1,
-                "09:01:01.000000",
-                "/new",
-                200,
-                Some("new.example.org"),
-                "browser",
-            ),
-        ],
-    )
-    .await;
-    let blob = day(&site, D1).await.unwrap();
-    assert_eq!(blob["views"], 522);
-    assert_eq!(blob["paths"]["/p000"], 2);
-    assert_eq!(blob["paths"]["(other)"], 21);
-    assert_eq!(blob["paths"].as_object().unwrap().len(), CAP_PATHS + 1);
-    assert_eq!(blob["referrers"]["h000.example.org"], 2);
-    assert_eq!(blob["referrers"]["(other)"], 21);
-    assert!(
-        kv_get(&site, &format!("day:{D1}")).await.unwrap().len() < 1024 * 1024,
-        "under the per-call write budget"
-    );
-
-    // The page ranks real paths and shows "(other)" last.
-    setting(&site, "viewers", json!("v")).await;
-    let (status, html) = stats(&site, &[]).await;
-    assert_eq!(status, 200);
-    assert_eq!(stat(&html, "views"), 522);
-    assert!(html.contains("(other)"), "{html}");
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0)]);
+    assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 2);
     site
 }
 
@@ -835,62 +848,16 @@ async fn maps_are_capped_with_other(site: Site) -> Site {
 /// the call stays within its 100 KV operations, so it does not fail.
 async fn a_batch_of_many_days_stays_within_the_call_budget(site: Site) -> Site {
     let site = site_with_analytics(site).await;
-    let events: Vec<Value> = (0..10).map(|i| view(&date(i), "/")).collect();
+    let events: Vec<Value> = (1..=10).rev().map(|n| view(ago(n), "/")).collect();
     feed(&site, events).await;
-    let want: Vec<String> = (2..10).map(date).collect();
+    let want: Vec<&str> = (1..=8).rev().map(ago).collect();
     assert_eq!(days(&site).await, want);
-    assert_eq!(latest(&site).await.as_deref(), Some(date(9).as_str()));
     site
 }
 
-/// Writes are limited to 1 MiB per call. With large stored blobs the oldest day of a
-/// batch is dropped (and logged) rather than failing the whole call.
-async fn the_write_budget_drops_a_day_instead_of_failing(site: Site) -> Site {
-    let site = site_with_analytics(site).await;
-    // ~450 KB each: 500 paths of ~900 bytes.
-    let big = |extra: &str| {
-        let paths: serde_json::Map<String, Value> = (0..CAP_PATHS)
-            .map(|i| (format!("/{extra}{i:03}{}", "x".repeat(900)), json!(1)))
-            .collect();
-        serde_json::to_vec(&json!({"v": 1, "views": 500, "paths": paths})).unwrap()
-    };
-    let days3 = ["2026-10-28", "2026-10-29", "2026-10-30"];
-    let before: Vec<Vec<u8>> = days3.iter().map(|_| big("p")).collect();
-    assert!(before[0].len() > 440_000 && before[0].len() < 500_000);
-    for (d, blob) in days3.iter().zip(&before) {
-        kv_set(&site, &format!("day:{d}"), blob).await;
-    }
-    feed(&site, days3.iter().map(|d| view(d, "/")).collect()).await;
-
-    let after: Vec<Value> = {
-        let mut v = Vec::new();
-        for d in days3 {
-            v.push(day(&site, d).await.unwrap());
-        }
-        v
-    };
-    assert_eq!(after[2]["views"], 501);
-    assert_eq!(after[1]["views"], 501);
-    // The oldest did not fit in the budget: unchanged.
-    assert_eq!(after[0]["views"], 500);
-    assert_eq!(kv_get(&site, "day:2026-10-28").await.unwrap(), before[0]);
-    site
-}
-
-/// A blob that is not JSON is replaced (the day starts again); one with a version the
-/// plugin does not know is left alone, and that day's events are not counted.
-async fn stored_blobs_that_are_corrupt_or_newer_are_handled(site: Site) -> Site {
-    let site = site_with_analytics(site).await;
-    kv_set(&site, &format!("day:{D1}"), b"not json at all").await;
-    let future = br#"{"v":2,"hits":99}"#;
-    kv_set(&site, &format!("day:{D2}"), future).await;
-    feed(&site, vec![view(D1, "/"), view(D2, "/")]).await;
-    assert_eq!(day(&site, D1).await.unwrap()["views"], 1);
-    assert_eq!(kv_get(&site, &format!("day:{D2}")).await.unwrap(), future);
-    site
-}
-
-async fn a_malformed_payload_is_refused(site: Site) -> Site {
+/// Core always sends `{"events":[…]}`; anything else is logged and dropped rather than
+/// failing the call (a retry cannot fix it, and failures count towards auto-disable).
+async fn a_malformed_payload_is_ignored(site: Site) -> Site {
     let site = site_with_analytics(site).await;
     for payload in [
         json!({}),
@@ -898,8 +865,7 @@ async fn a_malformed_payload_is_refused(site: Site) -> Site {
         json!([1, 2]),
         json!(null),
     ] {
-        let err = site
-            .host
+        site.host
             .dispatch_action(
                 PLUGIN,
                 "request.served",
@@ -909,12 +875,164 @@ async fn a_malformed_payload_is_refused(site: Site) -> Site {
                 },
             )
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("invalid"), "{err}");
+            .unwrap();
     }
     // An empty batch is fine and writes nothing.
     feed(&site, Vec::new()).await;
     assert!(days(&site).await.is_empty());
-    assert_eq!(latest(&site).await, None);
+    assert!(site.host.is_enabled(PLUGIN));
+    site
+}
+
+// ---- the stats page decode budget -------------------------------------------------------
+
+/// A saturated blob (500 paths, 200 referrers) in the layout the plugin writes, with the
+/// keys from `path` and `referrer`.
+fn saturated(path: &dyn Fn(usize) -> String, referrer: &dyn Fn(usize) -> String) -> Vec<u8> {
+    let map = |n: usize, key: &dyn Fn(usize) -> String| {
+        Value::Object((0..n).map(|i| (key(i), json!(3))).collect())
+    };
+    format!(
+        r#"{{"v":1,"views":1500,"bots":10,"other":5,"status":{{"2xx":1600,"4xx":7}},"paths":{},"referrers":{}}}"#,
+        map(CAP_PATHS, path),
+        map(CAP_REFERRERS, referrer),
+    )
+    .into_bytes()
+}
+
+/// The 90 days a page can show, each with 500 long paths and 200 referrers (about 33 KB):
+/// the totals and the chart cover every day, the lists the newest days that fit the decode
+/// budget, and the call stays within the default fuel and its 100 KV operations.
+async fn stats_page_reads_a_full_window(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    let blob = saturated(
+        &|i| format!("/blog/2026/a-reasonably-long-post-title-{i:03}/"),
+        &|i| format!("referrer-{i:03}.example.org"),
+    );
+    assert!(blob.len() > 30_000, "{}", blob.len());
+    for n in 0..90 {
+        kv_set(&site, &format!("day:{}", ago(n)), &blob).await;
+    }
+
+    let (status, html) = stats(&site, &[("days", "90")]).await;
+    assert_eq!(status, 200, "{}", &html[..html.len().min(300)]);
+    assert_eq!(stat(&html, "views"), 90 * 1500);
+    assert_eq!(stat(&html, "bots"), 90 * 10);
+    assert_eq!(stat(&html, "status-4xx"), 90 * 7);
+    assert_eq!(html.matches("class=\"bar\"").count(), 90);
+    let listed = (FULL_BYTES / blob.len()).clamp(1, FULL_DAYS);
+    assert!(
+        html.contains(&format!(
+            "cover the newest {listed} of the 90 days with data"
+        )),
+        "{html}"
+    );
+    assert!(html.contains("referrer-000.example.org"));
+    assert!(html.contains("/blog/2026/a-reasonably-long-post-title-000/"));
+
+    // A shorter period that fits entirely has no note.
+    let (status, html) = stats(&site, &[("days", "3")]).await;
+    assert_eq!(status, 200);
+    assert!(!html.contains("data-note"), "{html}");
+    site
+}
+
+/// Short keys that differ from day to day (500 paths and 200 referrers each, so the page
+/// sums up to `FULL_DAYS` x 700 different keys): the entry count, not the byte count, is
+/// the cost. The call stays under the default fuel (`ANALYTICS_FUEL` brackets it).
+async fn stats_page_reads_short_distinct_keys_over_ninety_days(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    for n in 0..90usize {
+        let blob = saturated(&|i| format!("/{n:02}{i:03}"), &|i| {
+            format!("{n:02}{i:03}.io")
+        });
+        kv_set(&site, &format!("day:{}", ago(n as i64)), &blob).await;
+    }
+    let (status, html) = stats(&site, &[("days", "90")]).await;
+    assert_eq!(status, 200, "{}", &html[..html.len().min(300)]);
+    assert_eq!(stat(&html, "views"), 90 * 1500);
+    assert!(
+        html.contains(&format!(
+            "cover the newest {FULL_DAYS} of the 90 days with data"
+        )),
+        "{html}"
+    );
+    // The newest day's keys are listed; the oldest day's are not.
+    assert!(html.contains("/00000"), "{html}");
+    assert!(!html.contains("/89000"), "{html}");
+    site
+}
+
+/// The newest day with data is always decoded with its lists, however big its blob: one
+/// day of long percent-encoded paths is over the byte budget on its own.
+async fn the_newest_day_is_always_decoded_in_full(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    // The biggest blob the plugin can write: 500 paths of 508 bytes (percent-encoded
+    // Cyrillic, 6 bytes a character) and 200 hosts of 253, about 313 KB.
+    let big = saturated(&|i| format!("/{}{i:03}", "%D0%B0".repeat(84)), &|i| {
+        format!("{i:03}{}.org", "h".repeat(247))
+    });
+    assert!(big.len() > FULL_BYTES, "{}", big.len());
+    kv_set(&site, &format!("day:{}", ago(0)), &big).await;
+    kv_set(&site, &format!("day:{}", ago(1)), STUB).await;
+
+    let (status, html) = stats(&site, &[("days", "1")]).await;
+    assert_eq!(status, 200);
+    assert!(html.contains("000hhhh"), "{html}");
+    assert!(!html.contains("data-note"), "{html}");
+
+    // The older day is not decoded in full once the newest took the budget.
+    let (_, html) = stats(&site, &[("days", "2")]).await;
+    assert!(
+        html.contains("cover the newest 1 of the 2 days with data"),
+        "{html}"
+    );
+    assert_eq!(stat(&html, "views"), 1500 + 5);
+    site
+}
+
+/// Days the plugin wrote itself, read through the brief path (the older ones, past the
+/// day budget): their totals and status classes must come out right, which depends on
+/// the counts being written ahead of the maps.
+async fn older_days_read_through_the_brief_path(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    // Eight days, oldest first: one view, one bot and `k + 1` 404s each.
+    for k in 0..8i64 {
+        let d = ago(7 - k);
+        let mut events = vec![
+            view(d, "/"),
+            event(d, "10:00:00.000000", "/", 200, None, "bot"),
+        ];
+        events.extend((0..=k).map(|i| {
+            event(
+                d,
+                "11:00:00.000000",
+                &format!("/gone/{i}/"),
+                404,
+                None,
+                "browser",
+            )
+        }));
+        feed(&site, events).await;
+        let blob = kv_get(&site, &format!("day:{d}")).await.unwrap();
+        assert!(
+            blob.starts_with(br#"{"v":1,"views":"#),
+            "counts first: {}",
+            String::from_utf8_lossy(&blob)
+        );
+    }
+    let (status, html) = stats(&site, &[("days", "8")]).await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 8);
+    assert_eq!(stat(&html, "bots"), 8);
+    assert_eq!(stat(&html, "status-2xx"), 16);
+    assert_eq!(stat(&html, "status-4xx"), 36);
+    let listed = FULL_DAYS;
+    assert!(
+        html.contains(&format!(
+            "cover the newest {listed} of the 8 days with data"
+        )),
+        "{html}"
+    );
     site
 }

@@ -6,7 +6,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -19,46 +18,12 @@ pub const MAX_REFERRERS: usize = 200;
 /// Where counts for keys past the cap go.
 pub const OTHER: &str = "(other)";
 
-/// Counts by key. A hash map, not a `BTreeMap`: the tree compares whole strings on the way
-/// down (paths share long prefixes) and the fuel is counted in instructions, which made a
-/// stats page of 90 blobs cost many times the default limit. The hash is not
-/// collision-resistant, which is fine here: a day's map holds at most 500 keys, and the
-/// worst a crafted set of paths can do is slow one call down to its fuel limit.
-pub type Counts = HashMap<String, u64, BuildHasherDefault<Fx>>;
-
-/// A small multiplicative hasher over 8-byte words.
-#[derive(Default)]
-pub struct Fx(u64);
-
-impl Fx {
-    fn add(&mut self, word: u64) {
-        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
-    }
-}
-
-impl Hasher for Fx {
-    fn write(&mut self, bytes: &[u8]) {
-        let (words, rest) = bytes.as_chunks::<8>();
-        for word in words {
-            self.add(u64::from_le_bytes(*word));
-        }
-        if !rest.is_empty() {
-            let mut w = [0; 8];
-            w[..rest.len()].copy_from_slice(rest);
-            self.add(u64::from_le_bytes(w));
-        }
-    }
-
-    fn write_u8(&mut self, byte: u8) {
-        self.add(u64::from(byte));
-    }
-
-    fn finish(&self) -> u64 {
-        // The last step is a multiplication, which leaves the low bits (the bucket index)
-        // depending only on the low bits of its input: fold the high half down.
-        self.0 ^ (self.0 >> 32)
-    }
-}
+/// Counts by key. A std `HashMap` with its randomly seeded hasher (the seed comes from
+/// `wasi:random`, which the host links): a plain deterministic hash would let a visitor who
+/// forges `Referer` hosts pick colliding keys. A `BTreeMap` is not an option, because the
+/// fuel is counted in instructions and the tree compares whole strings on the way down
+/// (paths share long prefixes): many times slower.
+pub type Counts = HashMap<String, u64>;
 
 /// One `request.served` event. Only what the plugin uses; `cache` is ignored.
 #[derive(Debug, Deserialize)]
