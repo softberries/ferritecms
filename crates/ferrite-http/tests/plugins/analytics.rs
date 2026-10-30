@@ -1051,7 +1051,7 @@ async fn older_days_read_through_the_brief_path(site: Site) -> Site {
 // ---- long keys, the batch decode budget and a failed read --------------------------------
 
 /// A blob as large as the plugin can write: 500 paths of 200 bytes and 200 hosts of 100,
-/// about 125 KB, in the layout the plugin writes.
+/// about 130 KB, in the layout the plugin writes.
 fn maximal_blob() -> Vec<u8> {
     saturated(&|i| format!("/{i:03}{}", "p".repeat(196)), &|i| {
         format!("{i:03}{}", "h".repeat(97))

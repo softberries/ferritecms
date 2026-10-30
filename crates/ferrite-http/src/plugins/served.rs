@@ -150,15 +150,19 @@ pub fn ua_class(ua: &str) -> UaClass {
 /// event is documented as a *percent-encoded* path. Left raw, a `\` or `"` is doubled by
 /// the JSON payload and costs a plugin many times the instructions to read back (1000
 /// events of 508 backslashes trapped the `analytics` example at the default fuel limit).
-/// An existing `%XX` is kept as it is (a `%` is not encoded again). The result is ASCII,
-/// so the cut cannot land inside a character.
+/// An existing `%XX` is kept as it is (not encoded again); a `%` that does not start one
+/// becomes `%25`. The result is ASCII, so the cut cannot land inside a character.
 fn served_path(path: &str) -> String {
+    let bytes = path.as_bytes();
     let mut out = String::with_capacity(path.len().min(MAX_SERVED_PATH + 3));
-    for &b in path.as_bytes() {
+    for (i, &b) in bytes.iter().enumerate() {
         if out.len() >= MAX_SERVED_PATH {
             break;
         }
-        if is_path_byte(b) {
+        let escape = b == b'%'
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
+        if escape || (b != b'%' && is_path_byte(b)) {
             out.push(char::from(b));
         } else {
             out.push_str(&format!("%{b:02X}"));
@@ -176,8 +180,8 @@ fn served_path(path: &str) -> String {
     out
 }
 
-/// A byte that may stand in a URI path as it is: RFC 3986 `pchar` and `/`, plus the `%`
-/// that starts an escape.
+/// A byte that may stand in a URI path as it is: RFC 3986 `pchar` and `/` (a `%` only when
+/// it starts an escape, which `served_path` checks).
 fn is_path_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric()
         || matches!(
@@ -493,6 +497,9 @@ mod tests {
         let ok = "/Az09-._~/:@!$&'()*+,;=/%C3%A9/%00";
         assert_eq!(served_path(ok), ok);
         assert_eq!(served_path("/"), "/");
+        // A `%` that starts no escape is itself encoded, never dropped.
+        assert_eq!(served_path("/50%"), "/50%25");
+        assert_eq!(served_path("/a%zz/%4"), "/a%25zz/%254");
     }
 
     #[test]
