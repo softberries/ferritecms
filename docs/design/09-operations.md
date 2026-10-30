@@ -1218,7 +1218,11 @@ lock and run fence as the WordPress import, so a re-run of the same name updates
 the files and keeps what was edited here. `--front-page` makes the root `index.md` (or
 `README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it).
 `--dry-run` runs everything in one transaction and rolls it back; its images are staged under
-`<data>/import/<run-id>/` and deleted. There is no report file: it prints
+`<data>/import/<run-id>/` and deleted. Its only heartbeat is the one written when that
+transaction opens (rolled back with it), so a very large dry run, one that takes over 120 s,
+can outlive the staleness window: another import may then take the run over (`--takeover`,
+or a job), and closing the dry run's run fails (exit 1) instead of printing its report (by
+reading of the fence; not tested). There is no report file: it prints
 `created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
 when set, then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
 `too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,

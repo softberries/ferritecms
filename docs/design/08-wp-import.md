@@ -199,7 +199,7 @@ unreferenced for the grace period (03 §6).
 
 ## 8. Markdown import
 
-`ferrite import markdown DIR` (M4-3b P62, rulings R-b4 to R-b6; CLI in 09 §8; crate
+`ferrite import markdown DIR` (M4-3b P62, rulings R-b4 to R-b6 and R-b9; CLI in 09 §8; crate
 `ferrite-import-md`) imports a folder of Markdown files as pages. It does not use the WXR
 pipeline above, but it shares the run and map rules:
 
@@ -207,15 +207,19 @@ pipeline above, but it shares the run and map rules:
   name), started with `ImportService::start` under the same lock and fence as a WordPress
   run, so exit 3 means another import is running (any source). It records no steps and has
   no work file or report file: the report is printed.
-- **Map key.** `import_map.wp_id` is the first 8 bytes of SHA-256 of the file's path
-  relative to `DIR` (`/` separators) as a big-endian `i64`, masked to be non-negative; kind
-  `content` for a page (a folder without an index uses the folder's path), `media` for an
-  image (the image's path). Pages and media also get the meta `import.md.id` with that key
-  (`ImportContent.id_meta`; WordPress items keep `import.wp.id`).
+- **Map key.** `import_map.wp_id` is `map_id(s)`: the first 8 bytes of SHA-256 of a string
+  `s` as a big-endian `i64`, masked to be non-negative. Kind `content` for a page: `s` is
+  the file's path relative to `DIR` (`/` separators), except for a folder's page (R-b9),
+  whose `s` is the folder's path plus `/` (`/` for the root): one key whether an
+  `index.md`/`README.md` fills the page or it is synthesized, so adding or removing the
+  index later updates that page in place (same id, slug and URL; its children stay
+  under it), and links to the folder or to its index reach the same page. Kind `media`
+  for an image: `s` is the image's path. Pages and media also get the meta `import.md.id`
+  with that key (`ImportContent.id_meta`; WordPress items keep `import.wp.id`).
 - **Map hash.** A page: SHA-256 over the file's bytes and the format version `md1` (a
-  synthesized folder page: `md1` and the folder's path), then the parent's path (R-b6), so
-  a file whose parent page changed (a new `index.md` in its folder) is updated and moves.
-  An image: SHA-256 over its bytes and `md1`.
+  synthesized folder page: `md1` and the folder's path), then the parent page's key string
+  (R-b6), so a switch between an index and a synthesized page is an `updated`, and a page
+  whose parent page changed is updated too. An image: SHA-256 over its bytes and `md1`.
 - **Re-runs**, as for WordPress items (§2, P4):
 
   | The file since the last run | The page since the import wrote it | Outcome |
@@ -226,9 +230,10 @@ pipeline above, but it shares the run and map rules:
   | renamed or deleted | any | stays on the site, reported `not-in-source` |
   | new | none | `created` |
 
-  A mapped image is not read again; one whose bytes changed keeps the file it was
-  imported with (core does not replace a media item's file) and is reported
-  `image-changed`.
+  A mapped image is not read again. One whose bytes changed is never replaced by a
+  re-run: the media item keeps the file it was first imported with (core does not
+  replace a media item's file) and the run reports `image-changed`; replace it in the
+  media library.
 - **Passes.** 1 media, 2 content (parents first; relative links kept as written; then the
   front page), 3 links: every page created, updated or unchanged (not one kept, nor one
   edited here since) is converted again with its links pointing at the target pages'
@@ -246,4 +251,8 @@ pipeline above, but it shares the run and map rules:
 - **Never read:** a path above `DIR`, through a symlink (files are opened with
   `O_NOFOLLOW` on unix), rooted or absolute, or hidden. Such images are reported `outside`
   or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the
-  folder still imports (exit 2).
+  folder still imports (exit 2). A rooted image source (`/x.png`) is a URL on the site:
+  it is reported `outside`, never read from disk, and kept in the body as written; a
+  relative one that is not imported is left out of the body.
+- **Markdown.** GFM table column alignment (`|:--|--:|`) is dropped without a note: the
+  editor's table cells have no alignment.

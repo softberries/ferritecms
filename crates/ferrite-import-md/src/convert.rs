@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn aligned_table_converts_and_counts_the_alignment() {
+    fn aligned_table_converts_and_drops_the_alignment() {
         let md = "| L | C | R |\n|:--|:-:|--:|\n| a | b | c |\n";
         let (c, notes, _) = conv(md);
         let cell = |t: &str, kind: &str| json!({"type": kind, "attrs": {"colspan": 1, "rowspan": 1}, "content": [para(t)]});

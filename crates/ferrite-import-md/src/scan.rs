@@ -167,8 +167,8 @@ impl Problem {
             }
             Self::RefusedImage { message, .. } => format!("image not imported: {message}"),
             Self::ImageChanged { .. } => {
-                "the image changed; the media item keeps the file first imported (replace \
-                 it in the media library)"
+                "the image changed; the media item keeps the file first imported, a re-run \
+                 never replaces it (replace it in the media library)"
                     .to_owned()
             }
             Self::SlugChanged { slug, .. } => {

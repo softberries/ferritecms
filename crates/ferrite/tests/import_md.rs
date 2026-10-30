@@ -183,7 +183,7 @@ both!(
     an_edited_file_updates,
     an_admin_edit_is_kept,
     a_renamed_file_makes_a_new_page,
-    a_new_index_reparents_its_folder,
+    a_new_index_fills_its_folder_page_in_place,
     a_changed_slug_updates_the_links_to_it,
     duplicate_sibling_slugs_get_their_own_links,
     outside_dir_is_never_read,
@@ -404,7 +404,7 @@ async fn imports_a_tree(site: Site) {
     );
     assert_eq!(
         r.meta().get(home.id, "import.md.id").await.unwrap(),
-        Some(json!(ferrite_import_md::map_id("index.md")))
+        Some(json!(ferrite_import_md::map_id("/")))
     );
     // The image is a media item, and the body points at it.
     let srcs = image_srcs(&install.body);
@@ -543,33 +543,71 @@ async fn a_renamed_file_makes_a_new_page(site: Site) {
     assert_eq!(p["api"].parent_id, Some(p["reference"].id));
 }
 
-/// Ruling R-b6: a new `index.md` in a folder that had a synthesized page becomes the
-/// parent of the folder's files, which are updated to move under it.
-async fn a_new_index_reparents_its_folder(site: Site) {
+/// Ruling R-b9: a folder's page is its folder's. A new `index.md` fills the synthesized
+/// page in place (same id, same URL, children stay), and removing it again empties the
+/// page, still in place.
+async fn a_new_index_fills_its_folder_page_in_place(site: Site) {
     let (_root, dir) = tree();
     assert_eq!(site.import(&dir, &[]).await.status.code(), Some(0));
+    let before = pages(&site).await;
+    let section = &before["reference"];
+    assert_eq!(section.body["content"], json!([]));
+    let store = site.store().await;
+    let path = |s: &Arc<dyn Store>, id| {
+        let s = s.clone();
+        async move {
+            ContentService::new(s, Arc::new(PermalinkRules::default()))
+                .permalink(id)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(path(&store, section.id).await, "/reference/");
+    store.close().await;
+    drop(store);
+
     write(
         &dir,
         "03-reference/index.md",
-        b"# Reference\n\nAll of it.\n",
+        b"# The reference\n\nAll of it.\n",
     );
     let out = site.import(&dir, &[]).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let o = stdout(&out);
-    assert!(o.contains("created 1, updated 1, unchanged 5"), "{o}");
-    // The synthesized page stays, so the new one gets the next free slug.
-    assert!(o.contains("not-in-source  /reference/  "), "{o}");
-    assert!(
-        o.contains(
-            "slug-changed  03-reference/index.md  its slug was taken, the page got slug reference-2"
-        ),
-        "{o}"
-    );
+    assert!(o.contains("created 0, updated 1, unchanged 6"), "{o}");
+    assert!(!o.contains("not-in-source"), "{o}");
+    assert!(!o.contains("slug-changed"), "{o}");
     let p = pages(&site).await;
-    let index = &p["reference-2"];
-    assert_eq!(index.title, "Reference");
-    assert_eq!(p["api"].parent_id, Some(index.id));
-    assert_eq!(p["api"].title, "API");
+    assert_eq!(p.len(), 7, "{:?}", p.keys());
+    assert!(!p.contains_key("reference-2"));
+    let filled = &p["reference"];
+    assert_eq!(filled.id, section.id);
+    assert_eq!(filled.title, "The reference");
+    assert!(
+        filled.body.to_string().contains("All of it."),
+        "{}",
+        filled.body
+    );
+    assert_eq!(p["api"].parent_id, Some(section.id));
+    assert_eq!(p["api"].version, before["api"].version);
+    let store = site.store().await;
+    assert_eq!(path(&store, section.id).await, "/reference/");
+    store.close().await;
+    drop(store);
+
+    // The index removed again: back to the synthesized empty page, in place.
+    std::fs::remove_file(dir.join("03-reference/index.md")).unwrap();
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("created 0, updated 1, unchanged 6"), "{o}");
+    assert!(!o.contains("not-in-source"), "{o}");
+    let p = pages(&site).await;
+    let emptied = &p["reference"];
+    assert_eq!(emptied.id, section.id);
+    assert_eq!(emptied.title, "Reference");
+    assert_eq!(emptied.body["content"], json!([]));
+    assert_eq!(p["api"].parent_id, Some(section.id));
 }
 
 /// Ruling R-b6: a page whose target changed its slug gets its links rewritten, though its

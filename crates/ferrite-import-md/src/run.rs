@@ -8,9 +8,12 @@
 //!    (type from the content, SVG sanitised, opened without following symlinks). A
 //!    mapped image is not read again: one whose bytes changed keeps its file and is
 //!    reported ([`Problem::ImageChanged`]), since core does not replace an item's file;
-//! 2. **content:** every page, parents first, through [`ImportBatch::content`], with the
-//!    map hash over the file's bytes, [`FORMAT`] and the parent's path, so a file moved
-//!    under a new parent is an update (ruling R-b6). Relative links are kept as written;
+//! 2. **content:** every page, parents first, through [`ImportBatch::content`]. A folder's
+//!    page is keyed by its folder (`<folder>/`), index file or synthesized, so a new or
+//!    removed index updates it in place (ruling R-b9); other pages by their file path.
+//!    The map hash covers the file's bytes, [`FORMAT`] and the parent page's key, so a
+//!    file moved under another parent is an update (R-b6). Relative links are kept as
+//!    written;
 //!    `--front-page` then sets `reading.front_page` under the import's option rule;
 //! 3. **links:** every page written or unchanged (not one kept as edited here) is
 //!    converted again with its links rewritten to the target pages' paths, and stored
@@ -115,7 +118,7 @@ impl MdReport {
 /// One page of the run.
 struct Doc {
     md: MdDoc,
-    /// The `import_map` key: [`map_id`] of `md.rel`.
+    /// The `import_map` key: [`map_id`] of [`page_key`].
     wp_id: i64,
     /// The map hash: the file's hash ([`FORMAT`] included) and the parent's path.
     hash: String,
@@ -174,12 +177,28 @@ pub async fn run(
         problems: scanned.problems,
         ..MdReport::default()
     };
+    // Each page's key by its file path, for its children's hashes.
+    let keys: HashMap<&str, String> = scanned
+        .docs
+        .iter()
+        .map(|md| (md.rel.as_str(), page_key(md)))
+        .collect();
+    let hashes: Vec<String> = scanned
+        .docs
+        .iter()
+        .map(|md| {
+            let parent = md.parent.as_deref().and_then(|p| keys.get(p));
+            map_hash(md, parent.map_or("", String::as_str))
+        })
+        .collect();
+    drop(keys);
     let mut docs: Vec<Doc> = scanned
         .docs
         .into_iter()
-        .map(|md| Doc {
-            wp_id: map_id(&md.rel),
-            hash: map_hash(&md),
+        .zip(hashes)
+        .map(|(md, hash)| Doc {
+            wp_id: map_id(&page_key(&md)),
+            hash,
             md,
             id: None,
             written: None,
@@ -260,13 +279,26 @@ pub async fn run(
     Ok(report)
 }
 
-/// The map hash of a page (ruling R-b6): its file hash (bytes and [`FORMAT`]) and its
-/// parent's path, so a page whose parent changed is written again.
-fn map_hash(md: &MdDoc) -> String {
+/// The string a page's `import_map` key is [`map_id`] of (ruling R-b9): a folder's page
+/// is identified by its folder, `<folder>/` (`/` for the root), whether an `index.md` or
+/// `README.md` fills it or it is synthesized, so adding or removing the index updates
+/// that page in place; any other page by its file path.
+fn page_key(md: &MdDoc) -> String {
+    match &md.folder {
+        Some(folder) => format!("{folder}/"),
+        None => md.rel.clone(),
+    }
+}
+
+/// The map hash of a page (rulings R-b6, R-b9): its file hash (bytes and [`FORMAT`]; for
+/// a synthesized page [`FORMAT`] and the folder) and its parent page's key, so a page
+/// whose parent page changed is written again, while a folder page that a new index
+/// fills stays the same parent.
+fn map_hash(md: &MdDoc, parent_key: &str) -> String {
     let mut h = Sha256::new();
     h.update(md.hash.as_bytes());
     h.update(b"\nparent:");
-    h.update(md.parent.as_deref().unwrap_or("").as_bytes());
+    h.update(parent_key.as_bytes());
     hex(&h.finalize())
 }
 
