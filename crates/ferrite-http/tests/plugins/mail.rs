@@ -49,7 +49,8 @@ async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
     let mailer = Arc::new(MemoryMailer::new());
     let services = Arc::new(
         StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL)
-            .with_mailer(Arc::new(MailQueue::new(mailer.clone())), title.to_owned()),
+            .with_site_title(title.to_owned())
+            .with_mailer(Arc::new(MailQueue::new(mailer.clone()))),
     );
     let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
     site.install(name).await;

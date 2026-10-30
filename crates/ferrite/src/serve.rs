@@ -432,9 +432,10 @@ async fn boot(
         None => None,
     };
     let mut services = StoreHostServices::new(store.clone(), reader.clone(), &http.site_url)
-        .with_site_key(site_key.clone());
+        .with_site_key(site_key.clone())
+        .with_site_title(config.site.title.clone());
     if let Some(queue) = &mail {
-        services = services.with_mailer(queue.clone(), config.site.title.clone());
+        services = services.with_mailer(queue.clone());
     }
     // The plugin `http` import (P16): one outbound client per node; never a reason not
     // to boot (ruling R19).

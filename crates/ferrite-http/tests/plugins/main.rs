@@ -9,6 +9,7 @@ mod egress;
 mod install;
 mod mail;
 mod reload;
+mod seo;
 mod settings;
 
 use common::{HOUR, SITE_URL, Site};
@@ -596,6 +597,57 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
     site
 }
 
+/// Ruling X1: `options.get` answers `site.url` (the configured URL, no trailing slash)
+/// and `site.title` (the option when it is a non-blank string, else the configured
+/// title) as JSON strings; settings stay private.
+async fn site_options_come_from_the_configuration(site: Site) -> Site {
+    let s = ferrite_http::StoreHostServices::new(
+        site.store.clone(),
+        site.reader.clone(),
+        "https://example.com/",
+    )
+    .with_site_title("Configured \"Title\"".to_owned());
+    assert_eq!(
+        s.option_get("site.url").await.as_deref(),
+        Some("\"https://example.com\"")
+    );
+    // No option stored: the configured title, JSON-escaped.
+    assert_eq!(
+        s.option_get("site.title").await.as_deref(),
+        Some("\"Configured \\\"Title\\\"\"")
+    );
+    let options = site.store.read().options();
+    options
+        .set("site.title", &json!("Stored"), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.option_get("site.title").await.as_deref(),
+        Some("\"Stored\"")
+    );
+    // A blank or non-string option falls back to the configured title
+    // (`settings::site_title`; a theme would show a blank string as it is).
+    for unset in [json!("  "), json!(7)] {
+        options.set("site.title", &unset, false).await.unwrap();
+        assert_eq!(
+            s.option_get("site.title").await.as_deref(),
+            Some("\"Configured \\\"Title\\\"\""),
+            "{unset}"
+        );
+    }
+    // Other keys are read as before; `site.url` is never an option row.
+    options
+        .set("site.url", &json!("https://evil.test"), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.option_get("site.url").await.as_deref(),
+        Some("\"https://example.com\"")
+    );
+    assert_eq!(s.option_get("site.description").await, None);
+    site
+}
+
 /// P23 + Task 11 carry: `post_kind` answers the type of any item whatever its status
 /// (the host's type check), while `meta.set`, like `meta.get`, reaches only items the
 /// plugin could see (published), so an action cannot annotate a draft.
@@ -878,6 +930,7 @@ profile_tests!(
     kv_use_is_volatile,
     sanitised_content_filters,
     services_kv_settings_options_meta,
+    site_options_come_from_the_configuration,
     plugin_read_errors_are_volatile,
     seo_read_error_is_volatile,
     meta_writes_reach_visible_items_only,

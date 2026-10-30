@@ -165,7 +165,7 @@ homepage    = "https://example.dev/seo-pro"
 content.read       = ["post", "page"]       # content types readable; ["*"] = all public types
 content.meta.read  = ["seo.*"]
 content.meta.write = ["seo.*"]              # meta key globs; "plugin.<name>.*" always allowed
-options.read       = ["site.title", "site.url"]
+options.read       = ["site.title", "site.url"]   # site.url, site.title: configured values (§7a)
 kv                 = true
 http               = ["api.indexnow.org"]   # hostnames, HTTPS only; no wildcards in v1
 render.head        = true                   # may contribute structured head tags
@@ -876,6 +876,15 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   does, and a plugin's own `plugin.<name>.*` keys need no grant.
   `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its
   own settings through `settings.get`, option `plugin.<name>.settings.<key>`).
+  Two keys come from the configuration (ruling M4-3a X1), each still needing its `options.read`
+  grant: `site.url` answers the configured site URL without a trailing slash, as a JSON string
+  (it is not stored as an option), and `site.title` answers the stored `site.title` option when
+  it is a string with more than whitespace, else the title configured in `ferrite.toml`
+  (`settings::site_title`, as mail and the TOTP issuer use it; the theme layer takes any stored
+  string as it is, so for a blank stored title the plugin sees the configured one and a theme the
+  blank).
+  `StoreHostServices::with_site_title` supplies the configured title (it also serves the
+  plugin-mail subject prefix); `serve` sets it from `[site] title`.
 - **Preview scoping.** Per-request state travels in a tokio task-local set around each filter
   chain (`run_filter`). During an authenticated preview, `get-post` and `meta.get` on *that one
   item* return it, so plugins render previews faithfully. The preview item can only come from
@@ -1105,6 +1114,9 @@ ferrite_sdk::export_plugin! {
     check what core already emitted before adding a tag.
   - `options::get(key) -> Option<String>` (`options.read`): the decoded value when the
     option is a JSON string; `None` when it is unset, not granted or any other JSON type.
+    `site.url` and `site.title` fall back to the configuration (§7a), so with the grant they
+    are normally `Some`; `None` still happens when the call's content budget is spent or the
+    store read for `site.title` fails.
     The unescape is minimal (`\" \\ \/ \b \f \n \r \t \uXXXX` with surrogate pairs), so the
     SDK needs no JSON crate; a plugin that wants a number or object reads the raw text
     through the bindings.
