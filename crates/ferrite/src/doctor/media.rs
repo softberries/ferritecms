@@ -123,6 +123,7 @@ async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
                 secret_access_key.as_ref().map(|s| s.expose().to_owned()),
                 std::env::var("AWS_ACCESS_KEY_ID").ok(),
                 std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+                std::env::var("AWS_SESSION_TOKEN").ok(),
             ];
             (place, keys.into_iter().flatten().collect())
         }
