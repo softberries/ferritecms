@@ -14,6 +14,7 @@ mod filters;
 pub mod hierarchy;
 mod manifest;
 mod package;
+mod page_tree;
 pub mod render;
 mod view;
 

@@ -1,6 +1,10 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread, site::srcset};
+use ferrite_core::{
+    DepKeys, MediaPublic, PageItem,
+    comments::CommentThread,
+    site::{ContentTree, ListOrder, srcset},
+};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
@@ -30,10 +34,17 @@ pub trait HelperBridge: Send + Sync {
     /// `item` itself is public (loaded through `SiteReader`, published-only). Keys:
     /// at least `archive:<kind>` and `post:<item>`, even when the result is empty.
     fn related(&self, item: ContentId, n: u32) -> Bridged<Vec<PageItem>>;
-    /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`]) public items of `kind`, newest first;
-    /// `term` narrows to one term, written `"<taxonomy>/<slug>"`. Keys: at least
-    /// `archive:<kind>`, plus `term:<id>` for the term when it exists.
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>>;
+    /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`]) public items of `kind` in `order`
+    /// (newest first, or `menu_order` then title); `term` narrows to one term, written
+    /// `"<taxonomy>/<slug>"`. Keys: at least `archive:<kind>`, plus `term:<id>` for the
+    /// term when it exists.
+    fn query(
+        &self,
+        kind: &str,
+        term: Option<&str>,
+        limit: u32,
+        order: ListOrder,
+    ) -> Bridged<Vec<PageItem>>;
     /// The menu at location `name`, with links to non-public items removed. Keys:
     /// `menu:<name>`, plus `post:<id>`/`term:<id>` for **every** target, including
     /// removed (draft, trashed, missing) ones.
@@ -49,6 +60,12 @@ pub trait HelperBridge: Send + Sync {
     fn comments(&self, _item: ContentId, _page: u32) -> Bridged<Option<CommentThread>> {
         (None, DepKeys::default())
     }
+    /// The public items of `kind` as a flat tree (`SiteReader::tree`, M4-3b P56): the
+    /// sitemap's items and paths, at most `MAX_TREE_NODES`; `None` for media or a type
+    /// without public items. Keys: `archive:<kind>`. The default has no data.
+    fn tree(&self, _kind: &str) -> Bridged<Option<ContentTree>> {
+        (None, DepKeys::default())
+    }
 }
 
 /// A bridge with no data: every helper returns nothing. For error pages and tests.
@@ -59,7 +76,7 @@ impl HelperBridge for NoBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {

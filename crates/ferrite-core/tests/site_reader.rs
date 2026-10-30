@@ -8,6 +8,7 @@ use std::sync::Arc;
 use ferrite_core::{
     Actor, CoreError, FeedSource, FrontPage, PageItem, PermalinkRules, SiteRead, SiteReader,
     events::{archive_key, option_key, post_key, term_key, user_key},
+    site::ListOrder,
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, ContentType, Media, NewContent,
@@ -366,27 +367,62 @@ pub async fn no_leak_by_id_and_latest(db: &TestDb) {
     );
     assert!(!r.is_visible(ContentId::new()).await.unwrap());
 
-    let latest = r.latest("post", 10, 0).await.unwrap();
+    let latest = r.latest("post", 10, 0, ListOrder::Date).await.unwrap();
     assert_eq!(slugs(&latest.value), SHOWN);
     assert!(latest.deps.contains(&archive_key("post")));
     for p in &latest.value {
         assert!(latest.deps.contains(&post_key(p.item.id)));
     }
     assert_eq!(
-        slugs(&r.latest("post", 10, 1).await.unwrap().value),
+        slugs(
+            &r.latest("post", 10, 1, ListOrder::Date)
+                .await
+                .unwrap()
+                .value
+        ),
         ["other"]
     );
     assert_eq!(
-        slugs(&r.latest("post", 1, 0).await.unwrap().value),
+        slugs(&r.latest("post", 1, 0, ListOrder::Date).await.unwrap().value),
         ["visible"]
     );
-    assert!(r.latest("post", 10, 2).await.unwrap().value.is_empty());
-    assert!(r.latest("page", 10, 0).await.unwrap().value.is_empty());
-    assert!(r.latest("media", 10, 0).await.unwrap().value.is_empty());
-    assert!(r.latest("post", 0, 0).await.unwrap().value.is_empty());
+    assert!(
+        r.latest("post", 10, 2, ListOrder::Date)
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    assert!(
+        r.latest("page", 10, 0, ListOrder::Date)
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    assert!(
+        r.latest("media", 10, 0, ListOrder::Date)
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
+    assert!(
+        r.latest("post", 0, 0, ListOrder::Date)
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
     // Past the paging cap: nothing, like deep archive pages.
     let deep = u32::try_from(ferrite_core::site::MAX_SKIP).unwrap() + 1;
-    assert!(r.latest("post", 10, deep).await.unwrap().value.is_empty());
+    assert!(
+        r.latest("post", 10, deep, ListOrder::Date)
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
 }
 
 pub async fn no_leak_listings(db: &TestDb) {
@@ -1712,7 +1748,10 @@ pub async fn term_items_respects_limit(db: &TestDb) {
 
     let counting = Arc::new(CountingStore::new(db.shared_store()));
     let r = reader(counting.clone());
-    let read = r.term_items("post", "category", "news", 30).await.unwrap();
+    let read = r
+        .term_items("post", "category", "news", 30, ListOrder::Date)
+        .await
+        .unwrap();
     assert_eq!(read.value.len(), 30);
     let expected: Vec<String> = (0..30).map(|i| format!("p{i:02}")).collect();
     assert_eq!(slugs(&read.value), expected);
@@ -1724,22 +1763,32 @@ pub async fn term_items_respects_limit(db: &TestDb) {
 
     // Any kind the taxonomy lists works; another kind, an unknown term or taxonomy
     // returns nothing.
-    let books = r.term_items("book", "genre", "scifi", 5).await.unwrap();
+    let books = r
+        .term_items("book", "genre", "scifi", 5, ListOrder::Date)
+        .await
+        .unwrap();
     assert_eq!(slugs(&books.value), ["dune"]);
     assert!(books.deps.contains(&archive_key("book")));
-    let wrong = r.term_items("post", "genre", "scifi", 5).await.unwrap();
+    let wrong = r
+        .term_items("post", "genre", "scifi", 5, ListOrder::Date)
+        .await
+        .unwrap();
     assert!(wrong.value.is_empty());
     assert!(wrong.deps.contains(&archive_key("post")));
     assert!(wrong.deps.contains(&term_key(scifi)));
     for (tax, slug) in [("category", "nope"), ("nope", "news")] {
-        let none = r.term_items("post", tax, slug, 5).await.unwrap();
+        let none = r
+            .term_items("post", tax, slug, 5, ListOrder::Date)
+            .await
+            .unwrap();
         assert!(none.value.is_empty(), "{tax}/{slug}");
         assert!(none.deps.contains(&archive_key("post")));
     }
     // The limit is 1..=MAX_QUERY_LIMIT.
     for bad in [0, ferrite_core::site::MAX_QUERY_LIMIT + 1] {
         assert!(matches!(
-            r.term_items("post", "category", "news", bad).await,
+            r.term_items("post", "category", "news", bad, ListOrder::Date)
+                .await,
             Err(CoreError::InvalidField { .. })
         ));
     }
@@ -1749,6 +1798,7 @@ pub async fn term_items_respects_limit(db: &TestDb) {
             "category",
             "news",
             ferrite_core::site::MAX_QUERY_LIMIT,
+            ListOrder::Date,
         )
         .await
         .unwrap();

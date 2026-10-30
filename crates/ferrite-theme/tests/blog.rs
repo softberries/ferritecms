@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_core::{
     DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    site::ListOrder,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
@@ -159,7 +160,7 @@ impl HelperBridge for FakeBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (self.related.clone(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, name: &str) -> Bridged<Option<MenuTree>> {
@@ -847,7 +848,7 @@ impl HelperBridge for ThreadBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
