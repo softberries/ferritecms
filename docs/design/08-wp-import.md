@@ -229,7 +229,7 @@ pipeline above, but it shares the run and map rules:
   | `slug` | the slug (not empty); else from the file name (`NN-name` → `name`) |
   | `order` | `menu_order`; else `NN` of an `NN-name` file name, else 0 |
   | `draft` | `true`: the page is a draft, whatever `date` says |
-  | `date` | RFC 3339 with an offset. Later than the run's start: the page is `scheduled` at that date (`scheduled_at` and its `content.publish_scheduled` job, R-b13). Earlier: published with that date. Absent: published, dated by an earlier run's import of it, else the run's start |
+  | `date` | RFC 3339 with an offset. Later than the run's start: the page is `scheduled` at that date (`scheduled_at` and its `content.publish_scheduled` job, R-b13). Once a scheduled page goes live, its publishing bumps the item's version, so later changes to its file are `kept (edited here)` and its links are no longer fixed up, as for a WordPress item the import scheduled (§6). Earlier: published with that date. Absent: published, dated by an earlier run's import of it, else the run's start |
   | `description` | the excerpt and the SEO description |
 
 - **Re-runs**, as for WordPress items (§2, P4):
@@ -243,9 +243,11 @@ pipeline above, but it shares the run and map rules:
   | skipped (bad front matter, unreadable, too large, not UTF-8; or under a folder that could not be read or is too deep) | any | nothing written, reported (`bad-front-matter`, `unreadable`, …), never `not-in-source` |
   | new | none | `created` |
 
-  A skipped `index.md`/`README.md` leaves its folder's page as an earlier run left it; on
-  a first run the folder gets the empty stand-in page so its files still have a parent
-  (`MdDoc.index_skipped`).
+  A skipped `index.md`/`README.md` (any of the reasons above, or a symlink, reported
+  `outside`) leaves its folder's page as an earlier run left it; on a first run the folder
+  gets the empty stand-in page so its files still have a parent (`MdDoc.index_skipped`).
+  Only the index's own problem line is printed then, not `synthesized`, which is kept for
+  a folder with no index at all.
 
   A mapped image is read only to compare its hash (a new one is hashed while it is
   staged, so each file is read once). One whose bytes changed is never replaced by a
@@ -277,6 +279,11 @@ pipeline above, but it shares the run and map rules:
   or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the
   folder still imports (exit 2). A rooted image source (`/x.png`) is a URL on the site:
   it is reported `outside`, never read from disk, and kept in the body as written; a
-  relative one that is not imported is left out of the body.
+  relative one that is not imported is left out of the body. This holds for a folder that
+  does not change during the run: every path component is checked with `lstat` before a
+  file is opened and only the last one is opened with `O_NOFOLLOW`, so a folder above it
+  swapped for a symlink in between could be followed (the folder is the operator's own).
+  A symlinked `index.md`/`README.md` is a skipped index: its folder's page stays as an
+  earlier run left it.
 - **Markdown.** GFM table column alignment (`|:--|--:|`) is dropped without a note: the
   editor's table cells have no alignment.

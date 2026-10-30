@@ -52,7 +52,7 @@ use uuid::Uuid;
 use crate::convert::{Converted, convert};
 use crate::error::MdError;
 use crate::scan::{
-    FORMAT, MdDoc, Miss, Problem, Scan, hex, lexical, locate, map_id, open_nofollow,
+    FORMAT, MdDoc, Miss, Problem, Scan, hex, is_index_name, lexical, locate, map_id, open_nofollow,
 };
 
 /// The option `--front-page` sets.
@@ -1139,7 +1139,7 @@ fn skipped(p: &Problem) -> (Vec<String>, Option<String>) {
 fn file_keys(file: &str) -> Vec<String> {
     let mut keys = vec![file.to_owned()];
     let (folder, name) = file.rsplit_once('/').unwrap_or(("", file));
-    if name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("readme.md") {
+    if is_index_name(name) {
         keys.push(format!("{folder}/"));
     }
     keys

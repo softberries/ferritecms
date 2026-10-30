@@ -471,9 +471,19 @@ impl Walker {
         parent: Option<&str>,
         opened: Option<std::fs::ReadDir>,
     ) -> Result<(), MdError> {
+        let reported = self.scan.problems.len();
         let Some(entries) = self.entries(abs, rel, opened)? else {
             return Ok(());
         };
+        // An index the listing dropped and reported (a symlink, or one that could not be
+        // `lstat`ed) is a skipped index, as one whose read fails.
+        let dropped_index = self.scan.problems[reported..].iter().any(|p| match p {
+            Problem::OutsideDir { file, .. } | Problem::Unreadable { file, .. } => file
+                .strip_prefix(rel)
+                .map(|f| f.trim_start_matches('/'))
+                .is_some_and(is_index_name),
+            _ => false,
+        });
         let index = ["index.md", "readme.md"].into_iter().find_map(|i| {
             entries.iter().find_map(|e| match e {
                 Entry::Md(n) if n.eq_ignore_ascii_case(i) => Some(n.clone()),
@@ -536,13 +546,15 @@ impl Walker {
         }
         if !root && page.is_none() && self.scan.docs.len() > start {
             let (slug, order) = slug_order(name);
+            // The index exists but was skipped: its own problem line says so.
+            let index_skipped = index.is_some() || dropped_index;
             self.scan.docs.insert(
                 start,
                 MdDoc {
                     rel: rel.to_owned(),
                     parent: parent.map(str::to_owned),
                     folder: Some(rel.to_owned()),
-                    index_skipped: index.is_some(),
+                    index_skipped,
                     slug,
                     order,
                     front: FrontMatter::default(),
@@ -551,9 +563,11 @@ impl Walker {
                     fallback_title: title_from_name(name),
                 },
             );
-            self.scan.problems.push(Problem::SynthesizedSection {
-                dir: rel.to_owned(),
-            });
+            if !index_skipped {
+                self.scan.problems.push(Problem::SynthesizedSection {
+                    dir: rel.to_owned(),
+                });
+            }
         }
         Ok(())
     }
@@ -721,6 +735,11 @@ impl Walker {
 }
 
 /// The slug and order a file stem or folder name gives: `NN-name` is `name` and `NN`.
+/// Whether a file name is a folder's index: `index.md` or `README.md`, any case.
+pub(crate) fn is_index_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("readme.md")
+}
+
 fn slug_order(name: &str) -> (String, i32) {
     match split_number(name) {
         Some((n, rest)) => (slugify(rest), n),

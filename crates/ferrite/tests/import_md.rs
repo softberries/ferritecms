@@ -951,6 +951,7 @@ async fn a_skipped_index_keeps_its_folder_page(site: Site) {
         "{o}"
     );
     assert!(!o.contains("not-in-source"), "{o}");
+    assert!(!o.contains("synthesized  guides "), "{o}");
     let p = pages(&site).await;
     let after = &p["guides"];
     assert_eq!(
@@ -958,6 +959,42 @@ async fn a_skipped_index_keeps_its_folder_page(site: Site) {
         (&before.title, &before.body, before.version)
     );
     assert_eq!(p["write"].parent_id, Some(before.id));
+
+    // The index replaced by a symlink (to a copy outside the folder): reported
+    // `outside`, never read, and the page stays as well.
+    #[cfg(unix)]
+    {
+        let outside = tempfile::tempdir().unwrap();
+        write(
+            outside.path(),
+            "README.md",
+            b"+++\norder = 4\n+++\n# Linked\n\nFrom outside.\n",
+        );
+        std::fs::remove_file(dir.join("guides/README.md")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("README.md"),
+            dir.join("guides/README.md"),
+        )
+        .unwrap();
+        let out = site.import(&dir, &[]).await;
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+        let o = stdout(&out);
+        assert!(
+            o.contains("created 0, updated 0, unchanged 6, kept (edited here) 0"),
+            "{o}"
+        );
+        assert!(o.contains("outside  guides/README.md  "), "{o}");
+        assert!(!o.contains("synthesized  guides "), "{o}");
+        assert!(!o.contains("not-in-source"), "{o}");
+        let p = pages(&site).await;
+        let after = &p["guides"];
+        assert_eq!(
+            (&after.title, &after.body, after.version),
+            (&before.title, &before.body, before.version)
+        );
+        assert!(!after.body.to_string().contains("From outside."));
+        assert_eq!(p["write"].parent_id, Some(before.id));
+    }
 }
 
 /// A skipped root index keeps the home page and the front page as they are, with no

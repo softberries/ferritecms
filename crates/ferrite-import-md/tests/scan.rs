@@ -193,13 +193,39 @@ fn bad_index_gets_a_synthesized_page() {
     assert_eq!(rels, ["getting-started", "getting-started/first.md"]);
     assert_eq!(s.docs[0].fallback_title, "Getting started");
     assert_eq!(s.docs[1].parent.as_deref(), Some("getting-started"));
+    assert!(s.docs[0].index_skipped);
+    // The index's own line says why; no "no index.md" line.
     assert!(matches!(
         &s.problems[..],
-        [
-            Problem::BadFrontMatter { file, line: 2, .. },
-            Problem::SynthesizedSection { dir },
-        ] if file == "getting-started/index.md" && dir == "getting-started"
+        [Problem::BadFrontMatter { file, line: 2, .. }] if file == "getting-started/index.md"
     ));
+}
+
+/// A symlinked index is reported `outside` and counts as a skipped index, so the
+/// folder's stand-in page is marked and gets no `synthesized` line.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_index_is_a_skipped_index() {
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "README.md", b"# Repo readme\n");
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "guides/one.md", b"# One\n");
+    std::os::unix::fs::symlink(
+        outside.path().join("README.md"),
+        dir.path().join("guides/Index.md"),
+    )
+    .unwrap();
+    write(dir.path(), "plain/one.md", b"# One\n");
+    let s = scan(dir.path()).unwrap();
+    assert!(doc(&s.docs, "guides").index_skipped);
+    assert!(!doc(&s.docs, "plain").index_skipped);
+    assert_eq!(
+        s.problems
+            .iter()
+            .map(|p| (p.kind(), p.file()))
+            .collect::<Vec<_>>(),
+        [("outside", "guides/Index.md"), ("synthesized", "plain")]
+    );
 }
 
 #[test]
