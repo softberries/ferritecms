@@ -224,14 +224,14 @@ struct Ownership {
 }
 
 /// A marker, for messages.
-fn describe(marker: &OwnerMarker) -> String {
+pub(crate) fn describe(marker: &OwnerMarker) -> String {
     format!(
         "install {} (site {}, claimed {})",
         marker.install_id, marker.site_id, marker.claimed_at
     )
 }
 
-fn foreign(owner: &str) -> String {
+pub(crate) fn foreign(owner: &str) -> String {
     format!(
         "the media store belongs to {owner}, not this site's install (`ferrite media gc \
          --claim` makes this site its owner)"

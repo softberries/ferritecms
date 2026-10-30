@@ -1,7 +1,7 @@
 //! `ferrite doctor`: checks a site without changing anything (M4-3a P48–P53).
 //!
 //! One line per check, `<status>  <check-id>  <detail>` with the status padded to five
-//! characters, in the fixed order of [`run`]; then `doctor: N ok, N warn, N error, N skip`.
+//! characters, in the fixed order of P53; then `doctor: N ok, N warn, N error, N skip`.
 //! The exit code is 3 when the database schema is newer than this binary allows, else 1
 //! when a check is an error, else 2 when one is a warning, else 0 ([`Report::exit_code`]).
 //!
@@ -12,11 +12,17 @@
 //! URLs, S3 keys and `secret.key` never appear.
 //!
 //! This module holds the runner, the status and the report; `fs.rs` and `backup.rs` the file
-//! checks. A check that needs the database, the media store, the cluster or the network
-//! is a `skip  <id>  not checked yet` line until it is wired in.
+//! checks, `db.rs` the database checks (read-only: SQLite without its lock, Postgres only
+//! once its schema is known to exist), `media.rs` the media probe and owner marker,
+//! `cluster.rs` the clock and node-registry checks, and `net.rs` SMTP, the ACME directory,
+//! the running node's endpoints and the release lookup.
 
 mod backup;
+mod cluster;
+mod db;
 mod fs;
+mod media;
+mod net;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -170,19 +176,29 @@ pub struct DoctorArgs {
     /// directory, the release lookup) are skipped.
     #[arg(long)]
     pub offline: bool,
+    /// Test seam: the GitHub API root for `release.latest` instead of
+    /// https://api.github.com (plain HTTP allowed), as `self-update --base-url`.
+    #[cfg(feature = "test-seams")]
+    #[arg(long, hide = true)]
+    pub base_url: Option<String>,
 }
 
 /// The `ferrite doctor` command: prints the report to stdout and exits per
 /// [`Report::exit_code`]. Never fails: a problem is a line in the report.
 pub async fn execute(args: DoctorArgs) -> anyhow::Result<ExitCode> {
-    let report = run(&args.data, args.offline).await;
+    #[cfg(feature = "test-seams")]
+    let release_api = args.base_url.as_deref();
+    #[cfg(not(feature = "test-seams"))]
+    let release_api = None;
+    let report = run(&args.data, args.offline, release_api).await;
     print!("{report}");
     Ok(ExitCode::from(report.exit_code()))
 }
 
 /// Runs every check against the site in `data`, in the order of P53. With `offline`, no
-/// network connection is made.
-pub async fn run(data: &Path, offline: bool) -> Report {
+/// network connection is made. `release_api` (the test seam) replaces the GitHub API root
+/// of the release lookup.
+async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     let mut findings = vec![version_binary()];
     let (config, loaded) = config_load(data);
     findings.extend(loaded);
@@ -194,33 +210,71 @@ pub async fn run(data: &Path, offline: bool) -> Report {
     findings.push(fs::database_files(data, config));
     findings.push(fs::backups_dir(data, config));
     findings.push(fs::themes_dir(data, config));
-    findings.push(fs::lock_state(data, config));
-    findings.extend(pending(["db.connect", "db.schema", "db.identity"]));
+    let (lock_state, lock_held) = fs::lock_state(data, config);
+    findings.push(lock_state);
+    let (connect, database) = db::connect(config, lock_held).await;
+    findings.push(connect);
+    let database = database.as_ref();
+    let (schema, incompatible) = db::schema(database, config).await;
+    findings.push(schema);
+    findings.push(db::identity(database, config).await);
     findings.push(fs::upgrade_record(data, config));
-    findings.extend(pending([
-        "media.store",
-        "media.owner",
-        "clock.db_skew",
-        "clock.peers",
-        "cluster.versions",
-        "cluster.site_url",
-        "smtp.connect",
-    ]));
+    let (media_store, media) = media::store(config, offline).await;
+    findings.push(media_store);
+    findings.push(media::owner(media.as_ref(), database, config).await);
+    findings.push(cluster::db_skew(database, config).await);
+    let registry = cluster::registry(database, config).await;
+    findings.push(cluster::peers(&registry));
+    findings.push(cluster::versions(&registry));
+    findings.push(cluster::site_url(&registry, config));
+    findings.push(net::smtp(config, offline).await);
     findings.push(fs::tls_dir(data, config));
-    findings.extend(pending(["tls.acme_directory", "net.listen"]));
+    findings.push(net::acme_directory(config, offline).await);
+    findings.push(net::listen(config, running_node(config, lock_held, &registry)).await);
     findings.push(backup::target(data, config, offline).await);
-    findings.extend(pending(["release.latest"]));
+    findings.push(net::release(offline, release_api).await);
 
     Report {
         findings,
-        incompatible: false,
+        incompatible,
     }
 }
 
-/// Checks that a later task wires in keep their place in the output.
-fn pending<const N: usize>(ids: [&'static str; N]) -> impl Iterator<Item = Finding> {
-    ids.into_iter()
-        .map(|id| Finding::skip(id, "not checked yet"))
+/// Whether a node runs for this data folder (P50): SQLite, the lock is held; Postgres, a
+/// live node row carries this configuration's `cluster.node_name` (without one, doctor
+/// cannot tell which row would be this folder's).
+fn running_node(
+    config: Option<&Config>,
+    lock_held: bool,
+    registry: &cluster::Registry,
+) -> net::Node {
+    let Some(config) = config else {
+        return net::Node::NotRunning(fs::NO_CONFIG);
+    };
+    match config.database_kind() {
+        ferrite_config::DbKind::Sqlite { .. } if lock_held => net::Node::Running,
+        ferrite_config::DbKind::Sqlite { .. } => {
+            net::Node::NotRunning("no node is running on this data folder")
+        }
+        ferrite_config::DbKind::Postgres { .. } => {
+            let configured = config.cluster.node_name.as_deref();
+            if configured.is_none_or(|n| n.trim().is_empty()) {
+                return net::Node::NotRunning(
+                    "cluster.node_name is not set, so doctor cannot tell whether a node runs \
+                     for this folder",
+                );
+            }
+            // The name as `serve` registers it (trimmed, cut to the registry's limit).
+            let name = ferrite_cluster::node_name(configured);
+            if registry.has_node(&name) {
+                net::Node::Running
+            } else if registry.was_read() {
+                net::Node::NotRunning("no live node has this cluster.node_name")
+            } else {
+                net::Node::NotRunning("the node registry was not read (see db.connect)")
+            }
+        }
+    }
 }
 
 fn version_binary() -> Finding {
