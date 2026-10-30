@@ -625,7 +625,8 @@ async fn site_options_come_from_the_configuration(site: Site) -> Site {
         s.option_get("site.title").await.as_deref(),
         Some("\"Stored\"")
     );
-    // A blank or non-string option falls back like the themes' title.
+    // A blank or non-string option falls back to the configured title
+    // (`settings::site_title`; a theme would show a blank string as it is).
     for unset in [json!("  "), json!(7)] {
         options.set("site.title", &unset, false).await.unwrap();
         assert_eq!(

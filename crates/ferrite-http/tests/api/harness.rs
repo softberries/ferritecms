@@ -251,7 +251,8 @@ impl Api {
         let key = SiteKey::generate().expect("site key");
         let services = Arc::new(
             StoreHostServices::new(store.clone(), reader.clone(), SITE_URL)
-                .with_site_key(key.clone()),
+                .with_site_key(key.clone())
+                .with_site_title(SITE_TITLE.into()),
         );
         let host = Arc::new(PluginHost::new(HostConfig::default(), services).expect("host"));
         let reloader = PluginReloader::new(store.clone(), media_store.clone(), host.clone());

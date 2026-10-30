@@ -25,6 +25,10 @@ profile_tests!(
     nothing_core_emitted_is_repeated,
     options_grant_decides_which_dependent_tags_appear,
     tags_already_in_the_head_are_not_repeated,
+    json_ld_follows_the_seo_overrides,
+    unicode_title_is_kept,
+    kind_filter_keeps_readable_pages_out,
+    json_ld_shapes_and_twitter_property_count_as_present,
 );
 
 async fn term(site: &Site, taxonomy: &str, slug: &str, name: &str) -> TermId {
@@ -316,7 +320,8 @@ async fn home_gets_website_search_action(site: Site) -> Site {
     );
     assert_eq!(action["query-input"], "required name=search_term_string");
     assert_eq!(prop(&html, "og:site_name"), ["Blog Title"]);
-    assert_eq!(prop(&html, "og:locale"), ["en"]);
+    // A bare language is not an Open Graph locale (`ll_TT`).
+    assert!(prop(&html, "og:locale").is_empty(), "{html}");
     assert_eq!(name(&html, "twitter:card"), ["summary"]);
     assert!(html.contains(RSS), "{html}");
     assert!(!html.contains("article:"), "{html}");
@@ -671,5 +676,152 @@ async fn tags_already_in_the_head_are_not_repeated(site: Site) -> Site {
         );
         assert_eq!(of_type(&blocks, "WebSite").unwrap()["name"], "Earlier");
     }
+    site
+}
+
+/// The JSON-LD agrees with the canonical link and the OG tags core settled on: an item's
+/// `seo.canonical` and `seo.title` override `post.url` and `post.title`.
+async fn json_ld_follows_the_seo_overrides(site: Site) -> Site {
+    let site = site_with_seo(site).await;
+    let author = site.user("ada", Role::Author).await;
+    let id = item(&site, &author, "post", "plain", "Plain", json!({}), &[]).await;
+    let meta = site.store.read().meta();
+    meta.set(
+        id,
+        "seo.canonical",
+        &json!("https://canonical.example/the-post/"),
+    )
+    .await
+    .unwrap();
+    meta.set(id, "seo.title", &json!("Custom SEO Title"))
+        .await
+        .unwrap();
+
+    let html = render(&site, Some(id), "/", "en").await;
+
+    assert_eq!(
+        prop(&html, "og:url"),
+        ["https://canonical.example/the-post/"],
+        "{html}"
+    );
+    assert_eq!(prop(&html, "og:title"), ["Custom SEO Title"]);
+    let blocks = json_ld(&html);
+    let post = of_type(&blocks, "BlogPosting").unwrap();
+    assert_eq!(post["url"], "https://canonical.example/the-post/");
+    assert_eq!(post["headline"], "Custom SEO Title");
+    site
+}
+
+/// Non-ASCII text goes through the JSON-LD and the meta tags unharmed.
+async fn unicode_title_is_kept(site: Site) -> Site {
+    let site = site_with_seo(site).await;
+    let author = site.user("ada", Role::Author).await;
+    let title = "Zażółć gęślą jaźń 😀 日本語";
+    let id = item(&site, &author, "post", "uni", title, json!({}), &[]).await;
+
+    let html = render(&site, Some(id), "/", "en").await;
+
+    let blocks = json_ld(&html);
+    assert_eq!(of_type(&blocks, "BlogPosting").unwrap()["headline"], title);
+    assert_eq!(prop(&html, "og:title"), [title]);
+    assert_eq!(name(&html, "twitter:title"), [title]);
+    site
+}
+
+/// Where a `page` is readable (`content.read = ["post", "page"]`) the kind filter alone
+/// keeps `article:*` and `BlogPosting` off it (P43: posts only).
+async fn kind_filter_keeps_readable_pages_out(site: Site) -> Site {
+    let site = crate::with_generous_deadlines(site);
+    option(&site, "site.title", json!("Blog Title")).await;
+    let manifest = plugin_manifest("seo").replace(
+        "content.read = [\"post\"]",
+        "content.read = [\"post\", \"page\"]",
+    );
+    assert!(manifest.contains("\"post\", \"page\""), "{manifest}");
+    let hash = site.put_artifact(plugin_wasm("seo")).await;
+    site.row("seo", &manifest, hash, true).await;
+    assert_eq!(site.load().await.loaded, ["seo"]);
+    let author = site.user("ada", Role::Author).await;
+    let page = item(&site, &author, "page", "about", "About", json!({}), &[]).await;
+    let post = item(&site, &author, "post", "news", "News", json!({}), &[]).await;
+
+    let html = render(&site, Some(page), "/", "en").await;
+    assert_eq!(prop(&html, "og:site_name"), ["Blog Title"], "{html}");
+    assert!(!html.contains("article:"), "{html}");
+    assert!(json_ld(&html).is_empty(), "{html}");
+
+    let html = render(&site, Some(post), "/", "en").await;
+    assert_eq!(prop(&html, "article:author"), ["ada display"], "{html}");
+    assert!(of_type(&json_ld(&html), "BlogPosting").is_some());
+    site
+}
+
+/// An earlier plugin's JSON-LD in any usual shape (a top-level array, a `@graph`, a
+/// `@type` array) counts as present, and a Twitter tag written as `property` counts as
+/// present. A block of another type does not.
+async fn json_ld_shapes_and_twitter_property_count_as_present(site: Site) -> Site {
+    let site = site_with_seo(site).await;
+    let author = site.user("ada", Role::Author).await;
+    let id = item(&site, &author, "post", "shapes", "Shapes", json!({}), &[]).await;
+    let run = async |earlier: Head, item: Option<ContentId>, path: &str| {
+        let req = PluginRequest::public(path, "en", item);
+        let mut trace = RenderTrace::default();
+        let FilterValue::Head(out) = ferrite_http::run_filter(
+            &site.host,
+            "render.head",
+            FilterValue::Head(earlier),
+            &req,
+            &mut trace,
+        )
+        .await
+        else {
+            panic!("render.head returned another variant");
+        };
+        assert!(
+            site.host.failures().is_empty(),
+            "{:?}",
+            site.host.failures()
+        );
+        ferrite_http::render_head(&out, crate::SITE)
+    };
+    let with_ld = |json: &str| Head {
+        scripts: vec![ScriptTag {
+            src: None,
+            json_ld: Some(json.into()),
+        }],
+        ..Head::default()
+    };
+
+    for (kind, item, path) in [
+        ("BlogPosting", Some(id), "/shapes/"),
+        ("WebSite", None, "/"),
+    ] {
+        let shapes = [
+            format!(r#"[{{"@type":"{kind}"}}]"#),
+            format!(r#"{{"@graph":[{{"@type":"WebPage"}},{{"@type":"{kind}"}}]}}"#),
+            format!(r#"{{"@type":["Thing","{kind}"]}}"#),
+        ];
+        for shape in &shapes {
+            let html = run(with_ld(shape), item, path).await;
+            assert_eq!(json_ld(&html).len(), 1, "{shape}: {html}");
+        }
+        // Control: another type is not the one wanted, so the plugin adds its own.
+        let html = run(with_ld(r#"{"@type":"WebPage"}"#), item, path).await;
+        let blocks = json_ld(&html);
+        assert_eq!(blocks.len(), 2, "{html}");
+        assert!(of_type(&blocks, kind).is_some(), "{html}");
+    }
+
+    let earlier = Head {
+        metas: vec![MetaTag {
+            name: None,
+            property: Some("twitter:card".into()),
+            content: "app".into(),
+        }],
+        ..Head::default()
+    };
+    let html = run(earlier, None, "/").await;
+    assert_eq!(prop(&html, "twitter:card"), ["app"], "{html}");
+    assert!(name(&html, "twitter:card").is_empty(), "{html}");
     site
 }

@@ -24,7 +24,7 @@ in the admin and apply to core's tags; this plugin copies the result.
 | Tag | Where | Source |
 |---|---|---|
 | `og:site_name` | every page | the `site.title` option (the stored title, else the configured one) |
-| `og:locale` | every page with a locale | the request locale, `-` written as `_` (`pl-PL` becomes `pl_PL`) |
+| `og:locale` | every page with a regional locale | the request locale, `-` written as `_` (`pl-PL` becomes `pl_PL`); a bare language such as `en` adds nothing, because Open Graph wants `ll_TT` |
 | `twitter:card` | every page | `summary_large_image` when core emitted an `og:image`, else `summary` |
 | `twitter:title`, `twitter:description` | every page | copied from core's `og:title` and `og:description` |
 | `twitter:site` | every page | the `twitter_site` setting |
@@ -47,7 +47,8 @@ The plugin is a folder holding `ferrite-plugin.toml` and one `.wasm`. From the p
 asset (`ferrite-plugins-<version>.tar.gz`, which holds `seo/`), or built from source:
 
 ```sh
-cargo build --release --target wasm32-wasip2 --manifest-path plugins/Cargo.toml
+rustup target add wasm32-wasip2
+cargo build --release --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo
 mkdir seo-plugin
 cp plugins/examples/seo/ferrite-plugin.toml seo-plugin/
 cp plugins/target/wasm32-wasip2/release/seo.wasm seo-plugin/
@@ -113,7 +114,7 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
 
 ## Uninstall and data
 
-`ferrite plugin remove seo` (or the admin) removes the plugin; its settings are kept for 30
+`ferrite plugin remove seo --data /path/to/site` (or the admin) removes the plugin; its settings are kept for 30
 days, so a reinstall in that time finds them, and `--purge` deletes them at once. The plugin
 stores nothing else. Settings live in the site's options under `plugin.seo.settings.*`, and the
 page cache refreshes when you change one.
