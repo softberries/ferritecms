@@ -4,6 +4,7 @@
 //! keeping the old one as `ferrite.prev`. It never restarts anything.
 
 mod release;
+pub mod rollback;
 pub mod swap;
 mod verify;
 
@@ -356,8 +357,9 @@ fn is_binary_entry(path: &Path) -> bool {
         && parts.last() == Some(&Component::Normal(OsStr::new("ferrite")))
 }
 
-/// Runs the new binary with `args` (stdin closed, bounded by [`PROBE_TIMEOUT`]); returns
-/// its exit code and its stdout followed by its stderr.
+/// Runs `binary` (the new one, or for `rollback` the kept one) with `args` (stdin closed,
+/// bounded by [`PROBE_TIMEOUT`]); returns its exit code and its stdout followed by its
+/// stderr.
 async fn probe(binary: &Path, args: &[&OsStr]) -> Result<(Option<i32>, String)> {
     let child = tokio::process::Command::new(binary)
         .args(args)
@@ -369,11 +371,12 @@ async fn probe(binary: &Path, args: &[&OsStr]) -> Result<(Option<i32>, String)> 
         .map_err(|_| {
             let shown: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
             anyhow!(
-                "the new binary did not answer `{}` in time",
+                "{} did not answer `{}` in time",
+                binary.display(),
                 shown.join(" ")
             )
         })?
-        .with_context(|| format!("cannot run the new binary {}", binary.display()))?;
+        .with_context(|| format!("cannot run {}", binary.display()))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok((out.status.code(), text))
