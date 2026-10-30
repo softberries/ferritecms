@@ -21,9 +21,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { uiLocale } from "@/lib/locale";
 import {
   type MetricPoint,
+  bucketTooltipLabel,
   dayTicks,
+  durationParts,
   hasPerformance,
-  hourLabel,
+  hitRatioText,
   p95Parts,
   points,
   summarise,
@@ -33,6 +35,18 @@ import { Panel, PanelError, ScopeBadge, StaleNote } from "./panel";
 
 const MARGIN = { top: 6, right: 4, bottom: 0, left: 0 };
 const Y_WIDTH = 56;
+
+/** An axis position as a plain duration ("250 ms", "10 s"), never a bound. */
+function useDurationText(): (ms: number) => string {
+  const { t } = useTranslation("dashboard");
+  const number = new Intl.NumberFormat(uiLocale(), { maximumFractionDigits: 1 });
+  return (ms) => {
+    const d = durationParts(ms);
+    return t(d.unit === "s" ? "performance.s" : "performance.ms", {
+      value: number.format(d.value),
+    });
+  };
+}
 
 /** "≤ 250 ms", "≤ 2.5 s", "> 5 s". */
 function useP95Text(): (ms: number) => string {
@@ -59,7 +73,7 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
   const totals = useMemo(() => (data ? summarise(data.buckets) : null), [data]);
   const p95Text = useP95Text();
   const number = new Intl.NumberFormat(uiLocale());
-  const percent = new Intl.NumberFormat(uiLocale(), { style: "percent", maximumFractionDigits: 0 });
+  const durationText = useDurationText();
 
   let body;
   if (series.isError && !data) {
@@ -97,7 +111,7 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
         <Metric
           testId="hit-ratio"
           label={t("performance.ratio")}
-          value={lookups === 0 ? null : percent.format(totals.hits / lookups)}
+          value={lookups === 0 ? null : hitRatioText(totals.hits / lookups)}
           caption={
             lookups === 0
               ? t("performance.noLookups", { span })
@@ -116,8 +130,8 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
               color="var(--chart-2)"
               domain={[0, 100]}
               ticks={[0, 50, 100]}
-              tick={(v) => percent.format(v / 100)}
-              value={(v) => percent.format(v / 100)}
+              tick={(v) => hitRatioText(v / 100)}
+              value={(v) => hitRatioText(v / 100)}
             />
           )}
         </Metric>
@@ -137,7 +151,7 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
               label={t("performance.p95")}
               color="var(--chart-5)"
               domain={[0, "dataMax"]}
-              tick={(v) => p95Text(v).replace(/^[≤>]\s*/, "")}
+              tick={durationText}
               value={p95Text}
               step
             />
@@ -215,6 +229,7 @@ function MiniChart({
   /** A step line: the p95 is a bucket bound, not a measurement between hours. */
   step?: boolean;
 }) {
+  const { t } = useTranslation("dashboard");
   const config = { [dataKey]: { label, color } } satisfies ChartConfig;
   const format = tickFormat(range);
   return (
@@ -246,10 +261,7 @@ function MiniChart({
           content={
             <ChartTooltipContent
               indicator="line"
-              labelFormatter={(_, payload) => {
-                const at = (payload[0]?.payload as MetricPoint | undefined)?.t;
-                return at === undefined ? null : hourLabel(at);
-              }}
+              labelFormatter={bucketTooltipLabel(t("metrics.soFar"))}
               formatter={(v) => (
                 <div className="flex w-full items-center justify-between gap-4">
                   <span className="text-muted-foreground">{label}</span>

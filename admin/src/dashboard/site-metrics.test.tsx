@@ -110,15 +110,20 @@ describe("site-metrics", () => {
         .getAllByRole("listitem")
         .find((li) => li.textContent?.includes(name));
     expect(item("Page views")).toHaveTextContent("1,234");
-    expect(item("Requests")).toHaveTextContent("1,550");
+    expect(item("All requests")).toHaveTextContent("1,550");
     expect(item("5xx errors")).toHaveTextContent("3");
-    expect(item("5xx errors")).toHaveTextContent("0.2% of requests");
+    expect(item("5xx errors")).toHaveTextContent("0.2% of all requests");
     expect(within(traffic).getByText("All nodes")).toBeVisible();
     expect(within(traffic).getByTestId("traffic-chart")).toBeInTheDocument();
     expect(within(traffic).getByTestId("errors-chart")).toBeInTheDocument();
     // The text twin: one row per hour.
     const table = within(traffic).getByRole("table", { hidden: true });
-    expect(within(table).getAllByRole("row", { hidden: true })).toHaveLength(25);
+    const tableRows = within(table).getAllByRole("row", { hidden: true });
+    expect(tableRows).toHaveLength(25);
+    // Only the current hour is marked as still in progress; the caption names all requests.
+    expect(tableRows.at(-1)).toHaveTextContent("(in progress)");
+    expect(tableRows.at(-2)).not.toHaveTextContent("(in progress)");
+    expect(table).toHaveTextContent("including assets, the API and the admin");
 
     const performance = screen.getByRole("region", { name: "Performance" });
     expect(within(performance).getByText("All nodes")).toBeVisible();
@@ -145,13 +150,17 @@ describe("site-metrics", () => {
     const week = within(range).getByRole("radio", { name: "7 days" });
     expect(day).toHaveAttribute("aria-checked", "true");
     expect(
-      await screen.findByText("Page views and requests per hour, the last 24 hours"),
+      await screen.findByText(
+        "Page views, and all requests including assets, the API and the admin, per hour, the last 24 hours",
+      ),
     ).toBeVisible();
 
     await user.click(week);
     expect(week).toHaveAttribute("aria-checked", "true");
     expect(
-      await screen.findByText("Page views and requests per hour, the last 7 days"),
+      await screen.findByText(
+        "Page views, and all requests including assets, the API and the admin, per hour, the last 7 days",
+      ),
     ).toBeVisible();
     await waitFor(() => expect(seen).toHaveLength(2));
     const url = seen[1]!;
@@ -171,9 +180,32 @@ describe("site-metrics", () => {
     // Back to 24 hours: answered from the cache, no third request.
     await user.click(day);
     expect(
-      await screen.findByText("Page views and requests per hour, the last 24 hours"),
+      await screen.findByText(
+        "Page views, and all requests including assets, the API and the admin, per hour, the last 24 hours",
+      ),
     ).toBeVisible();
     expect(seen).toHaveLength(2);
+  });
+
+  it("arrow_keys_select_the_range", async () => {
+    // The ARIA radio group pattern: Tab reaches the checked radio, an arrow moves and
+    // selects.
+    const user = userEvent.setup();
+    const seen = stubRoutes({ [SERIES]: busy });
+    renderWithRouter(<SiteMetrics />);
+    const range = await screen.findByRole("radiogroup", { name: "Time range" });
+    const day = within(range).getByRole("radio", { name: "24 hours" });
+    const week = within(range).getByRole("radio", { name: "7 days" });
+    await user.tab();
+    expect(day).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(week).toHaveFocus();
+    expect(week).toHaveAttribute("aria-checked", "true");
+    expect(day).toHaveAttribute("aria-checked", "false");
+    await waitFor(() => expect(seen).toHaveLength(2));
+    await user.keyboard("{ArrowLeft}");
+    expect(day).toHaveFocus();
+    expect(day).toHaveAttribute("aria-checked", "true");
   });
 
   it("a_failed_load_offers_a_retry", async () => {

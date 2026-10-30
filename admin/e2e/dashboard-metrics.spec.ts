@@ -105,7 +105,9 @@ test("traffic_card_shows_page_hits", async ({ as, site, snap, expectAccessible }
     Date.parse(url.searchParams.get("to") ?? "") - Date.parse(url.searchParams.get("from") ?? ""),
   ).toBe(168 * HOUR);
   await expect(
-    traffic.getByText("Page views and requests per hour, the last 7 days"),
+    traffic.getByText(
+      "Page views, and all requests including assets, the API and the admin, per hour, the last 7 days",
+    ),
   ).toBeVisible();
   await expect(traffic).not.toHaveAttribute("aria-busy", "true");
   expect(await shownTotal(page, "Page views")).toBeGreaterThanOrEqual(day);
@@ -192,7 +194,9 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await snap(page, "dashboard-metrics-day");
   await section.getByRole("radio", { name: "7 days" }).click();
   await expect(
-    traffic.getByText("Page views and requests per hour, the last 7 days"),
+    traffic.getByText(
+      "Page views, and all requests including assets, the API and the admin, per hour, the last 7 days",
+    ),
   ).toBeVisible();
   await expect(traffic).not.toHaveAttribute("aria-busy", "true");
   await expect(traffic.getByTestId("errors-chart")).toBeVisible();

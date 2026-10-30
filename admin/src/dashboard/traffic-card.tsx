@@ -1,4 +1,6 @@
-// Traffic (`manage_system`, P36): page views and requests per hour as two areas, the
+// Traffic (`manage_system`, P36): page views and all requests per hour as two areas
+// ("All requests" is every route class but health checks and the comment form: assets,
+// the API and the admin too, this dashboard's own polling included; R6), the
 // 5xx errors as their own bar strip under them (a count of a different size on one axis
 // would lie flat; red beside the ember page views fails the colour check), and the
 // range's totals above, which double as the legend: each names its series' line key
@@ -24,11 +26,13 @@ import { uiLocale } from "@/lib/locale";
 import {
   type MetricPoint,
   type MetricTotals,
+  bucketTooltipLabel,
   byLocalDay,
   dayLabel,
   dayTicks,
   hasTraffic,
   hourLabel,
+  inProgress,
   points,
   summarise,
   tickFormat,
@@ -77,7 +81,7 @@ export function TrafficCard({ range, className }: { range: MetricsRange; classNa
         <Totals totals={totals} />
         <TrafficChart rows={rows} range={range} />
         <ErrorsStrip rows={rows} range={range} total={totals.errors} span={span} />
-        <TrafficTable rows={rows} range={range} span={span} />
+        <TrafficTable rows={rows} range={range} span={span} now={series.dataUpdatedAt} />
         {series.isError ? <StaleNote at={series.dataUpdatedAt} /> : null}
       </div>
     );
@@ -232,10 +236,7 @@ function TrafficChart({ rows, range }: { rows: MetricPoint[]; range: MetricsRang
           content={
             <ChartTooltipContent
               indicator="line"
-              labelFormatter={(_, payload) => {
-                const at = (payload[0]?.payload as MetricPoint | undefined)?.t;
-                return at === undefined ? null : hourLabel(at);
-              }}
+              labelFormatter={bucketTooltipLabel(t("metrics.soFar"))}
             />
           }
         />
@@ -281,15 +282,18 @@ function ErrorsStrip({
   const config = {
     errors: { label: t("traffic.errors"), color: ERROR_COLOUR },
   } satisfies ChartConfig;
+  const peak = Math.max(...rows.map((r) => r.errors));
   return (
     <div className="flex flex-col gap-1">
       <p className="text-xs font-medium text-muted-foreground">{t("traffic.errorsChart")}</p>
       <ChartContainer
         config={config}
-        className="aspect-auto h-16 w-full"
+        className="aspect-auto h-20 w-full"
         data-testid="errors-chart"
       >
-        <BarChart data={rows} margin={MARGIN} barCategoryGap="20%">
+        <BarChart data={rows} margin={{ ...MARGIN, bottom: 6 }} barCategoryGap="20%">
+          {/* A 0 baseline and a line at the busiest hour, so the bars stand on something. */}
+          <CartesianGrid vertical={false} />
           <XAxis {...xAxisProps(rows, range)} hide />
           <YAxis
             allowDecimals={false}
@@ -297,8 +301,9 @@ function ErrorsStrip({
             axisLine={false}
             tickMargin={4}
             width={Y_WIDTH}
-            tickCount={2}
-            domain={[0, "dataMax"]}
+            domain={[0, peak]}
+            ticks={[0, peak]}
+            interval={0}
             tickFormatter={compact}
           />
           <ChartTooltip
@@ -306,10 +311,7 @@ function ErrorsStrip({
             content={
               <ChartTooltipContent
                 indicator="line"
-                labelFormatter={(_, payload) => {
-                  const at = (payload[0]?.payload as MetricPoint | undefined)?.t;
-                  return at === undefined ? null : hourLabel(at);
-                }}
+                labelFormatter={bucketTooltipLabel(t("metrics.soFar"))}
               />
             }
           />
@@ -331,17 +333,30 @@ function TrafficTable({
   rows,
   range,
   span,
+  now,
 }: {
   rows: MetricPoint[];
   range: MetricsRange;
   span: string;
+  /** When the figures were read; the bucket holding that instant was still in progress. */
+  now: number;
 }) {
   const { t } = useTranslation("dashboard");
   const number = new Intl.NumberFormat(uiLocale());
   const lines =
     range === "24h"
-      ? rows.map((r) => ({ key: r.t, label: hourLabel(r.t), ...r }))
-      : byLocalDay(rows).map((d) => ({ key: d.day, label: dayLabel(d.day), ...d }));
+      ? rows.map((r) => ({
+          key: r.t,
+          label: inProgress(r.t, now)
+            ? t("traffic.inProgress", { label: hourLabel(r.t) })
+            : hourLabel(r.t),
+          ...r,
+        }))
+      : byLocalDay(rows, now).map((d) => ({
+          key: d.day,
+          label: d.partial ? t("traffic.partialDay", { label: dayLabel(d.day) }) : dayLabel(d.day),
+          ...d,
+        }));
   return (
     // The wrapper clips: `sr-only` on a table itself widens the page (activity chart).
     <div className="sr-only">

@@ -458,7 +458,9 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   The M4-2 dashboard's Site traffic (Task 9, P36; `src/dashboard/site-metrics.tsx`,
   `traffic-card.tsx`, `performance-card.tsx`, `metrics-series.ts`) adds no kit component
   but two patterns. **One range control for a group of charts:** a single-select
-  `ToggleGroup` (`spacing={0}`, `role="radiogroup"`, "Time range") sits once in the
+  `ToggleGroup` (`spacing={0}`, `role="radiogroup"`, "Time range"; each item selects on
+  focus, so an arrow key moves and selects as the ARIA radio pattern expects, where Radix
+  alone only moves focus) sits once in the
   group's header row above the cards it scopes, never inside one card, so every number
   in the group covers the same hours; a switch keeps the previous figures at 60 % opacity
   with `aria-busy` until the new ones arrive (`keepPreviousData`), no skeleton.

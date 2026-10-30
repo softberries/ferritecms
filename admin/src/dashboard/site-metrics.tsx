@@ -41,7 +41,14 @@ export function SiteMetrics({ className }: { className?: string }) {
           }}
         >
           {METRICS_RANGES.map((r) => (
-            <ToggleGroupItem key={r} value={r} className="px-3 pointer-coarse:h-11">
+            <ToggleGroupItem
+              key={r}
+              value={r}
+              className="px-3 pointer-coarse:h-11"
+              // The items are radios (`role="radio"`): an arrow key that moves focus also
+              // selects, as the ARIA radio group pattern has it (Radix only moves focus).
+              onFocus={() => setRange(r)}
+            >
               {t(`metrics.ranges.${r}`)}
             </ToggleGroupItem>
           ))}
