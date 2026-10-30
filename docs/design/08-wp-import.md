@@ -196,3 +196,94 @@ unreferenced for the grace period (03 §6).
   -p ferrite-import-wp --test corpus_real` imports both into a fresh site; without the
   variable the test prints `SKIP`.
 - No anonymised production export was used in M3-1.
+
+## 8. Markdown import
+
+`ferrite import markdown DIR` (M4-3b P62, rulings R-b4 to R-b6 and R-b9; CLI in 09 §8; crate
+`ferrite-import-md`) imports a folder of Markdown files as pages. It does not use the WXR
+pipeline above, but it shares the run and map rules:
+
+- **Run.** An import run of source `markdown:<NAME>` (`--source`, default the folder's
+  name), started with `ImportService::start` under the same lock and fence as a WordPress
+  run, so exit 3 means another import is running (any source). It records no steps and has
+  no work file or report file: the report is printed.
+- **Map key.** `import_map.wp_id` is `map_id(s)`: the first 8 bytes of SHA-256 of a string
+  `s` as a big-endian `i64`, masked to be non-negative. Kind `content` for a page: `s` is
+  the file's path relative to `DIR` (`/` separators), except for a folder's page (R-b9),
+  whose `s` is the folder's path plus `/` (`/` for the root): one key whether an
+  `index.md`/`README.md` fills the page or it is synthesized, so adding or removing the
+  index later updates that page in place (same id, slug and URL; its children stay
+  under it), and links to the folder or to its index reach the same page. Kind `media`
+  for an image: `s` is the image's path. Pages and media also get the meta `import.md.id`
+  with that key (`ImportContent.id_meta`; WordPress items keep `import.wp.id`).
+- **Map hash.** A page: SHA-256 over the file's bytes and the format version `md1` (a
+  synthesized folder page: `md1` and the folder's path), then the parent page's key string
+  (R-b6), so a switch between an index and a synthesized page is an `updated`, and a page
+  whose parent page changed is updated too. An image: SHA-256 over its bytes and `md1`.
+- **Front matter** (TOML between `+++` lines; any other key, invalid TOML or a `---` YAML
+  block skips the file, reported `bad-front-matter` with its line):
+
+  | Key | Effect |
+  |---|---|
+  | `title` | the page title (not empty); else the first `# H1`, else from the file name |
+  | `slug` | the slug (not empty); else from the file name (`NN-name` → `name`) |
+  | `order` | `menu_order`; else `NN` of an `NN-name` file name, else 0 |
+  | `draft` | `true`: the page is a draft, whatever `date` says |
+  | `date` | RFC 3339 with an offset. Later than the run's start: the page is `scheduled` at that date (`scheduled_at` and its `content.publish_scheduled` job, R-b13). Once a scheduled page goes live, its publishing bumps the item's version, so later changes to its file are `kept (edited here)` and its links are no longer fixed up, as for a WordPress item the import scheduled (§6). Earlier: published with that date. Absent: published, dated by an earlier run's import of it, else the run's start |
+  | `description` | the excerpt and the SEO description |
+
+- **Re-runs**, as for WordPress items (§2, P4):
+
+  | The file since the last run | The page since the import wrote it | Outcome |
+  |---|---|---|
+  | unchanged (same hash) | any | `unchanged`: nothing written |
+  | changed | not edited (same version) | `updated` in place |
+  | changed | edited here | `kept (edited here)`: nothing written |
+  | renamed or deleted | any | stays on the site, reported `not-in-source` |
+  | skipped (bad front matter, unreadable, too large, not UTF-8; or under a folder that could not be read or is too deep) | any | nothing written, reported (`bad-front-matter`, `unreadable`, …), never `not-in-source` |
+  | new | none | `created` |
+
+  A skipped `index.md`/`README.md` (any of the reasons above, or a symlink, reported
+  `outside`) leaves its folder's page as an earlier run left it; on a first run the folder
+  gets the empty stand-in page so its files still have a parent (`MdDoc.index_skipped`).
+  Only the index's own problem line is printed then, not `synthesized`, which is kept for
+  a folder with no index at all.
+
+  A mapped image is read only to compare its hash (a new one is hashed while it is
+  staged, so each file is read once). One whose bytes changed is never replaced by a
+  re-run: the media item keeps the file it was first imported with (core does not
+  replace a media item's file) and the run reports `image-changed`; replace it in the
+  media library. A mapped image that is now gone, unreadable or refused keeps its media
+  item in the pages that name it (reported `missing-image`, `unreadable` or
+  `refused-image`), so the link pass, which converts a page's whole body again, does not
+  drop it from a page whose file did not change.
+- **Passes.** 1 media, 2 content (parents first; relative links kept as written; then the
+  front page), 3 links: every page created, updated or unchanged (not one kept, nor one
+  edited here since) is converted again with its links pointing at the target pages'
+  paths, and written with `ImportBatch::set_body_and_fields` only when that body differs
+  from the stored one. That write moves the map row's version with the item's, so it does
+  not count as an edit here on the next run; a page whose own file did not change still
+  gets the new path of a target whose slug changed. Batches commit one by one (at most 500
+  items); a dry run uses one transaction for the whole run and rolls it back.
+- **Slugs.** A sibling's taken slug gets core's `-N` (the later file in name order;
+  `01-install.md` before `install.md`, folder `guides/` before `guides.md`), reported
+  `slug-changed`; links resolve to each page's real path.
+- **Front page.** `--front-page` writes `reading.front_page` (map kind `option`, id 1, the
+  value's hash) on the first run, and on a re-run only while the site still holds what
+  the import last set; else the site's choice is kept, reported `front-page-kept`. Only a
+  root index that is public after the run (published, dated no later than now) is set;
+  a draft or a scheduled one is reported `front-page-not-public` (exit 2) and the setting
+  is left as it was (R-b12).
+- **Never read:** a path above `DIR`, through a symlink (files are opened with
+  `O_NOFOLLOW` on unix), rooted or absolute, or hidden. Such images are reported `outside`
+  or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the
+  folder still imports (exit 2). A rooted image source (`/x.png`) is a URL on the site:
+  it is reported `outside`, never read from disk, and kept in the body as written; a
+  relative one that is not imported is left out of the body. This holds for a folder that
+  does not change during the run: every path component is checked with `lstat` before a
+  file is opened and only the last one is opened with `O_NOFOLLOW`, so a folder above it
+  swapped for a symlink in between could be followed (the folder is the operator's own).
+  A symlinked `index.md`/`README.md` is a skipped index: its folder's page stays as an
+  earlier run left it.
+- **Markdown.** GFM table column alignment (`|:--|--:|`) is dropped without a note: the
+  editor's table cells have no alignment.

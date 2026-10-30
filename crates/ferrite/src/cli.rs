@@ -29,7 +29,7 @@ pub enum Command {
     /// Add sample content.
     #[command(subcommand)]
     Seed(seed::SeedCommand),
-    /// Import content from another CMS.
+    /// Import content from another CMS or a folder of Markdown files.
     #[command(subcommand)]
     Import(import_cmd::ImportCommand),
     /// Media storage tools.

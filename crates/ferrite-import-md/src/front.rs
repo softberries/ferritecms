@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use ferrite_domain::Timestamp;
 use serde::Deserialize;
 
 use crate::error::MdError;
@@ -13,8 +14,9 @@ pub struct FrontMatter {
     pub slug: Option<String>,
     pub order: Option<i32>,
     pub draft: bool,
-    /// RFC 3339 with an offset: a TOML offset date-time or a string.
-    pub date: Option<jiff::Timestamp>,
+    /// RFC 3339 with an offset: a TOML offset date-time or a string; kept to the
+    /// microsecond.
+    pub date: Option<Timestamp>,
     /// The excerpt and the SEO description.
     pub description: Option<String>,
 }
@@ -83,8 +85,8 @@ fn next_line(text: &str, start: usize) -> (&str, usize) {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
-    title: Option<String>,
-    slug: Option<String>,
+    title: Option<toml::Spanned<String>>,
+    slug: Option<toml::Spanned<String>>,
     order: Option<i32>,
     #[serde(default)]
     draft: bool,
@@ -107,7 +109,12 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
                 toml::Value::String(s) => s,
                 _ => String::new(),
             };
-            Some(text.parse::<jiff::Timestamp>().map_err(|_| {
+            // Stored with microseconds, as every timestamp of the site.
+            let parsed = text
+                .parse::<jiff::Timestamp>()
+                .ok()
+                .and_then(|t| Timestamp::from_micros(t.as_microsecond()).ok());
+            Some(parsed.ok_or_else(|| {
                 (
                     offset,
                     "`date` must be an RFC 3339 date-time with an offset, as \
@@ -118,13 +125,29 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
         }
     };
     Ok(FrontMatter {
-        title: raw.title,
-        slug: raw.slug,
+        title: not_blank("title", raw.title, block)?,
+        slug: not_blank("slug", raw.slug, block)?,
         order: raw.order,
         draft: raw.draft,
         date,
         description: raw.description,
     })
+}
+
+/// `value` unless it is empty or only whitespace: then the offset of `key`'s value and
+/// what is wrong.
+fn not_blank(
+    key: &str,
+    value: Option<toml::Spanned<String>>,
+    block: &str,
+) -> Result<Option<String>, (usize, String)> {
+    match value {
+        Some(v) if v.get_ref().trim().is_empty() => Err((
+            v.span().start.min(block.len()),
+            format!("`{key}` must not be empty (leave the key out instead)"),
+        )),
+        v => Ok(v.map(toml::Spanned::into_inner)),
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +158,11 @@ mod tests {
 
     fn split(text: &str) -> Result<(FrontMatter, &str), MdError> {
         split_front_matter(text, Path::new("guides/a.md"))
+    }
+
+    fn ts(rfc3339: &str) -> Timestamp {
+        let t: jiff::Timestamp = rfc3339.parse().unwrap();
+        Timestamp::from_micros(t.as_microsecond()).unwrap()
     }
 
     fn line_of(e: MdError) -> (usize, String) {
@@ -163,7 +191,7 @@ mod tests {
                 slug: Some("setup".into()),
                 order: Some(3),
                 draft: true,
-                date: Some("2026-10-30T12:00:00Z".parse().unwrap()),
+                date: Some(ts("2026-10-30T12:00:00Z")),
                 description: Some("How to install.".into()),
             }
         );
@@ -173,7 +201,7 @@ mod tests {
     #[test]
     fn date_as_a_string_with_an_offset() {
         let (fm, _) = split("+++\ndate = \"2026-10-30T14:00:00+02:00\"\n+++\n").unwrap();
-        assert_eq!(fm.date, Some("2026-10-30T12:00:00Z".parse().unwrap()));
+        assert_eq!(fm.date, Some(ts("2026-10-30T12:00:00Z")));
     }
 
     #[test]
@@ -222,6 +250,16 @@ mod tests {
         assert_eq!(line, 2);
         let (line, _) = line_of(split("+++\ndraft = \"yes\"\n+++\n").unwrap_err());
         assert_eq!(line, 2);
+    }
+
+    #[test]
+    fn empty_title_or_slug_is_refused() {
+        let (line, msg) = line_of(split("+++\norder = 1\ntitle = \"\"\n+++\n").unwrap_err());
+        assert_eq!(line, 3);
+        assert!(msg.contains("title"), "{msg}");
+        let (line, msg) = line_of(split("+++\nslug = \"  \"\n+++\n").unwrap_err());
+        assert_eq!(line, 2);
+        assert!(msg.contains("slug"), "{msg}");
     }
 
     #[test]

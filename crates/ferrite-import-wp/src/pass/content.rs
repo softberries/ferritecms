@@ -17,7 +17,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use ferrite_core::fields::{FEATURED_IMAGE, FieldDef, MAX_ROWS, MAX_TEXT};
-use ferrite_core::import::{ContentOutcome, ImportBatch, ImportContent, Written};
+use ferrite_core::import::{ContentOutcome, ImportBatch, ImportContent, WP_ID_META, Written};
 use ferrite_domain::{ContentId, ContentStatus, ImportMapKind, TermId, Timestamp, UserId};
 use futures::TryStreamExt;
 use serde_json::{Map, Value, json};
@@ -842,6 +842,7 @@ async fn prepare(
     let excerpt = item.excerpt.trim();
     let mut content = ImportContent {
         wp_id: item.wp_id,
+        id_meta: WP_ID_META,
         hash: String::new(),
         kind: kind.to_owned(),
         title: item.title.replace('\0', ""),

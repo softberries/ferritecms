@@ -96,6 +96,8 @@ source), `import_blobs` (import reports over the media store), `metrics` (the re
 `/metrics` text), `tls` (HSTS, the redirect app); the REST API in `src/api/` with its
 OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress importer: WXR
 parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
+`ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
+blocks through `ferrite-import-wp`'s HTML converter, `run` over `ImportService`),
 `ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
 renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService` +
@@ -107,7 +109,7 @@ transaction)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy a
 marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
-`jobs/import.rs`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
+`jobs/import.rs`), `ferrite-import-md` (`import_cmd`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
 prune jobs incl. `node_metrics.prune`) -> `ferrite-store` (traits; `catalogue`, `export`
 reader and `import_writer` for the portable copies; `NodeMetricsRepo`, `node_metrics` skipped
 by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
@@ -180,6 +182,13 @@ next `serve`). With `serve` running, import from the admin's Import screen
 wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
 `GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
 `import:read` to read; `409` while another import is queued or running).
+Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
+markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
+[--source NAME]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
+folder's page; with SQLite `serve` must be stopped; prints the counts and one
+`<kind>  <file>  <detail>` line per problem; exit 0 done, 2 skipped files, missing or
+refused images or broken links, 3 another import running, 1 error; a re-run of the same
+`--source` (default the folder's name) updates changed files and keeps pages edited here).
 Move, copy and back up a site (09 §4 and §8; with SQLite `serve` must be stopped for each
 of these except `media sync`, which opens no database): `ferrite export --data DIR --out
 FILE|- [--with-media]` (0, 2 artifacts missing from the store, 3 schema newer, 1 error; never

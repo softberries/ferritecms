@@ -1582,6 +1582,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-domain",
  "ferrite-http",
+ "ferrite-import-md",
  "ferrite-import-wp",
  "ferrite-media",
  "ferrite-plugin-host",
@@ -1785,15 +1786,22 @@ name = "ferrite-import-md"
 version = "0.1.0"
 dependencies = [
  "ferrite-core",
+ "ferrite-domain",
  "ferrite-import-wp",
+ "ferrite-media",
+ "futures",
  "jiff",
+ "libc",
  "pulldown-cmark",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
  "toml",
+ "tracing",
  "uuid",
 ]
 

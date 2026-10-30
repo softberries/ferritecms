@@ -1060,6 +1060,8 @@ ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]           
 ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
+ferrite import markdown DIR --data DATA [--as LOGIN] [--type page] [--front-page]
+    [--dry-run] [--source NAME]                                                   # M4-3b
 ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
 ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ferrite doctor         --data DIR [--offline]                                    # M4-3a
@@ -1207,6 +1209,41 @@ or refused media, 3 another import running (`--takeover` takes over one with no 
 for 120 s), 1 on any error (a run that failed after it started still writes its partial
 report, M3-2). With SQLite `serve` holds the data folder's lock: stop it first. Media
 variants are made by the next `serve` (the `media.variants` jobs).
+
+**`ferrite import markdown`** (`crates/ferrite/src/import_cmd.rs`, `crates/ferrite-import-md`;
+M4-3b P62, design 08 §8): imports the folder `DIR` of Markdown files as pages of `--type`
+(default `page`) as the active admin `--as` names (default: the first active admin). It is an
+import run of source `markdown:<NAME>` (`--source`, default the folder's name) under the same
+lock and run fence as the WordPress import, so a re-run of the same name updates what changed in
+the files and keeps what was edited here. `--front-page` makes the root `index.md` (or
+`README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it), but only
+when that page is public after the run: a draft or scheduled root index is reported
+`front-page-not-public` (exit 2) and the setting is left as it was. A front matter `date`
+later than the run's start imports the page as scheduled at that date (`draft = true` wins); a
+past or absent date publishes it.
+`--dry-run` runs everything in one transaction and rolls it back; its images are staged under
+`<data>/import/<run-id>/` and deleted. Its only heartbeat is the one written when that
+transaction opens (rolled back with it), so a very large dry run, one that takes over 120 s,
+can outlive the staleness window: another import may then take the run over (`--takeover`,
+or a job), and closing the dry run's run fails (exit 1) instead of printing its report (by
+reading of the fence; not tested). On Postgres that one transaction also holds the row locks
+of every existing row it updates (pages, map rows, the run's row) until it ends, image
+reads and staging included, so on a live site an admin's save of one of those pages
+waits for the dry run.
+There is no report file: it prints
+`created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
+when set, then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
+`too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
+`refused-image`, `broken-link`, `other-type`, `no-front-page`, `front-page-not-public`, and the notices
+`synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`). Exit
+0 done (notices only), 2 done with skipped files, missing or refused images, broken links or
+a `--front-page` that is not public,
+3 another import running, 1 on any error. These are checked before a run starts, so they
+write nothing and leave no run: `--front-page` with another type, a folder that is not a
+folder or cannot be scanned, and a `--type` that does not exist, is `media`, or is not
+hierarchical while the folder nests pages. An error after the run started marks that run
+`failed` (each batch it committed stays). With SQLite `serve` holds the data folder's lock:
+stop it first. Media variants are made by the next `serve`.
 
 **Imports through the admin and the API** (M3-2; design 08 §1): with `serve` running, an
 admin uploads the WXR file and, optionally, a zip of the uploads on the admin's Import

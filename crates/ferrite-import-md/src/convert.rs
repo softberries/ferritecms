@@ -23,8 +23,9 @@ pub struct Converted {
     /// Relative image sources (as the HTML holds them), in order, without duplicates: the
     /// caller resolves them inside the import's folder.
     pub images: Vec<String>,
-    /// Relative links to a `.md` file or to a folder (ending in `/`), as written with any
-    /// `#fragment`, in order, without duplicates.
+    /// Relative links to a `.md` file or to a folder (ending in `/`), and any other
+    /// relative link the [`Rewrite`] changed (a folder named without its `/`), as written
+    /// with any `#fragment`, in order, without duplicates.
     pub links: Vec<String>,
 }
 
@@ -48,7 +49,7 @@ pub fn convert(markdown: &str, rw: &dyn Rewrite, notes: &mut Notes) -> Converted
     }
     for e in &mut events {
         if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = e {
-            *info = first_word(info).to_owned().into();
+            *info = first_word(info).to_ascii_lowercase().into();
         }
     }
     let mut out = String::new();
@@ -169,10 +170,13 @@ impl Rewrite for Recording<'_> {
     }
 
     fn href(&self, href: &str) -> String {
-        if is_relative(href) && is_page_link(href) {
+        let out = self.inner.href(href);
+        // A page link by its form, or any relative link the caller rewrote (a folder
+        // named without its trailing `/`).
+        if is_relative(href) && (is_page_link(href) || out != href) {
             push_new(&self.links, href);
         }
-        self.inner.href(href)
+        out
     }
 }
 
@@ -395,6 +399,69 @@ mod tests {
         let images = content(&c).iter().filter(|n| n["type"] == "image").count();
         assert_eq!(images, 3);
         assert_eq!(notes.unsupported_tags["img"].count, 2);
+    }
+
+    #[test]
+    fn fence_languages_are_lower_cased() {
+        let (c, _, _) = conv("```Rust\nfn x() {}\n```\n\n```TOML extra\na = 1\n```\n");
+        assert_eq!(
+            content(&c),
+            [
+                json!({"type": "codeBlock", "attrs": {"language": "rust"},
+                       "content": [text("fn x() {}\n")]}),
+                json!({"type": "codeBlock", "attrs": {"language": "toml"},
+                       "content": [text("a = 1\n")]}),
+            ]
+        );
+    }
+
+    #[test]
+    fn aligned_table_converts_and_drops_the_alignment() {
+        let md = "| L | C | R |\n|:--|:-:|--:|\n| a | b | c |\n";
+        let (c, notes, _) = conv(md);
+        let cell = |t: &str, kind: &str| json!({"type": kind, "attrs": {"colspan": 1, "rowspan": 1}, "content": [para(t)]});
+        assert_eq!(
+            content(&c),
+            [json!({"type": "table", "content": [
+                {"type": "tableRow", "content": [
+                    cell("L", "tableHeader"), cell("C", "tableHeader"), cell("R", "tableHeader")
+                ]},
+                {"type": "tableRow", "content": [
+                    cell("a", "tableCell"), cell("b", "tableCell"), cell("c", "tableCell")
+                ]}
+            ]})]
+        );
+        // The editor's cells have no alignment: the HTML converter reads no `style` on a
+        // cell, so the column alignment is lost without a note.
+        assert_eq!(notes, Notes::default());
+    }
+
+    #[test]
+    fn a_folder_link_without_a_slash_is_listed_when_rewritten() {
+        struct Folders;
+        impl Rewrite for Folders {
+            fn image(&self, src: &str) -> ImageRef {
+                ImageRef::Missing(src.to_owned())
+            }
+            fn attachment(&self, _: i64) -> Option<Uuid> {
+                None
+            }
+            fn href(&self, href: &str) -> String {
+                match href {
+                    "guides" => "/guides/".to_owned(),
+                    other => other.to_owned(),
+                }
+            }
+        }
+        let mut notes = Notes::default();
+        let c = convert(
+            "[g](guides) [f](file.pdf) [h](guides.md)\n",
+            &Folders,
+            &mut notes,
+        );
+        assert_eq!(c.links, ["guides", "guides.md"]);
+        let first = &content(&c)[0]["content"][0];
+        assert_eq!(first["marks"][0]["attrs"]["href"], "/guides/");
     }
 
     #[test]

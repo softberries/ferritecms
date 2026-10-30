@@ -9,15 +9,24 @@ workspace = true
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
+ferrite-domain = { path = "../ferrite-domain" }
 ferrite-import-wp = { path = "../ferrite-import-wp" }
+ferrite-media = { path = "../ferrite-media" }
+futures.workspace = true
 jiff.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+tokio-util = { workspace = true, features = ["io"] }
 toml.workspace = true
+tracing.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
