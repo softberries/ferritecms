@@ -25,7 +25,9 @@ cp plugins/examples/contact-form/ferrite-plugin.toml contact-form-plugin/
 cp plugins/target/wasm32-wasip2/release/contact_form.wasm contact-form-plugin/
 ```
 
-Then, with `serve` stopped if the site uses SQLite:
+With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its
+`contact-form/` folder where the commands below say `contact-form-plugin`. Then, with `serve`
+stopped if the site uses SQLite:
 
 ```sh
 ferrite plugin check   --data /path/to/site --dir contact-form-plugin   # prints the permission report

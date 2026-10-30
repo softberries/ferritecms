@@ -104,12 +104,13 @@ ferritecms/
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
 │                                 #   counter, settings-probe, fetcher, admin-e2e (the admin
-│                                 #   E2E's plugin, M2b-3), hostile/*; seo, analytics,
-│                                 #   contact-form are M4
+│                                 #   E2E's plugin, M2b-3), hostile/*; and the shipped
+│                                 #   seo, analytics, contact-form (M4-3a; a release asset,
+│                                 #   09 §7)
 ├── packaging/systemd/            # (M4-2) ferrite.service + install guide (09 §7)
 ├── Dockerfile                    # (M1.5; digests pinned M4-2) the image (09 §7)
 ├── .github/                      # workflows ci.yml, release.yml (M4-2); scripts/ (package,
-│                                 #   sums, verify-sig, newest, compat; M4-2)
+│                                 #   package-plugins, sums, verify-sig, newest, compat)
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
 └── docs/                         # design/, superpowers/ (plans, rulings, exits), operations/
                                   #   (M4-2: cluster-runbook.md, solo-upgrade.md)

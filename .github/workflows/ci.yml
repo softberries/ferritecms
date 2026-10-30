@@ -200,7 +200,8 @@ jobs:
           path: admin/test-results/screens/
           if-no-files-found: ignore
 
-  # Release and packaging checks (M4-2 P28, P37, P38) that need no build.
+  # Release and packaging checks (M4-2 P28, P37, P38; M4-3a P47) that need no binary
+  # build (only the three example plugins are built, for their release asset).
   packaging:
     runs-on: ubuntu-latest
     permissions:
@@ -228,6 +229,44 @@ jobs:
           systemd-analyze security --offline=true packaging/systemd/ferrite.service || true
       - name: release scripts
         run: shellcheck .github/scripts/*.sh
+      # The release packs the example plugins at the workspace version (M4-3a P47), and
+      # package-plugins.sh refuses a manifest with another one: a version bump has to move
+      # the three manifests with the workspace version (09 §7). Caught here, not at the tag.
+      - name: plugin manifest versions match the workspace version
+        run: |
+          python3 - <<'EOF'
+          import sys, tomllib
+          with open("Cargo.toml", "rb") as f:
+              want = tomllib.load(f)["workspace"]["package"]["version"]
+          bad = False
+          for name in ("seo", "analytics", "contact-form"):
+              path = f"plugins/examples/{name}/ferrite-plugin.toml"
+              with open(path, "rb") as f:
+                  have = tomllib.load(f)["plugin"]["version"]
+              if have != want:
+                  print(f"::error file={path}::plugin version {have} != workspace version {want}")
+                  bad = True
+          sys.exit(1 if bad else 0)
+          EOF
+      # The plugins asset (the wasm is target-independent), packed from a local build the
+      # way release.yml does, then each folder is a plugin `ferrite plugin check` can read:
+      # the manifest and exactly one .wasm.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          targets: wasm32-wasip2
+      - name: plugins asset
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          cargo build --release --locked --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form
+          .github/scripts/package-plugins.sh "$version" "$RUNNER_TEMP/plugins"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -C "$RUNNER_TEMP/unpacked" -xzf "$RUNNER_TEMP/plugins/ferrite-plugins-$version.tar.gz"
+          for p in seo analytics contact-form; do
+            test -f "$RUNNER_TEMP/unpacked/$p/ferrite-plugin.toml"
+            test -f "$RUNNER_TEMP/unpacked/$p/$p.wasm"
+            test "$(find "$RUNNER_TEMP/unpacked/$p" -name '*.wasm' | wc -l)" -eq 1
+          done
 
   # Backward compatibility (M4-2 P38; 02 §8, S5): the previous `v*` tag's binary must run
   # against a database migrated by this commit's binary, on SQLite and Postgres. Without

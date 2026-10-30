@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Writes DIR/SHA256SUMS (`sha256sum` format, M4-2 P25) over the release assets in DIR,
-# after checking that all EXPECTED (default 6) of them are there.
+# after checking that all EXPECTED (default 7: the six target tarballs and, since M4-3a
+# P47, `ferrite-plugins-<VERSION>.tar.gz`) of them are there.
 #
 #   .github/scripts/sums.sh DIR [EXPECTED]
 set -euo pipefail
@@ -10,7 +11,7 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
   exit 1
 fi
 dir=$1
-expected=${2:-6}
+expected=${2:-7}
 if ! [[ "$expected" =~ ^[0-9]+$ ]]; then
   echo "usage: $0 DIR [EXPECTED]: EXPECTED must be a number" >&2
   exit 1

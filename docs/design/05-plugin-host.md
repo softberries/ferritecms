@@ -1229,3 +1229,16 @@ the ten it shows. Measured by bisecting the plugin's fuel limit: a submit onto a
 about 9 million; the dearest inbox page (ten messages of `"`), about 19 million; the test suite
 runs these at half the default. A failed `kv.get` (`None`) is checked with `list-keys` before
 a first blob is written, as in `analytics`.
+
+**The shipped examples, as built (M4-3a P47).** `seo`, `analytics` and `contact-form`
+(`plugins/examples/`, each with a `README.md`) are the plugins a site can use as they are, not
+only test fixtures: `seo` (`content.read = ["post"]`, `options.read` of `site.title` and
+`site.url`, `render.head`), `analytics` (`options.read`, `kv`, one route, `request.served`) and
+`contact-form` (`options.read`, `kv`, three routes, `mail`). A release attaches them as
+`ferrite-plugins-<version>.tar.gz` (09 §7): the folders `seo/`, `analytics/` and `contact-form/`
+at its top level, each holding `ferrite-plugin.toml`, `<name>.wasm` (the crate's
+`contact_form.wasm` is `contact-form.wasm` there) and `README.md`, so each folder is the `--dir`
+of `ferrite plugin check|install` as it is. The plugins are not embedded in the binary: every
+install needs the approval of its permission report (§2), which a bundled plugin would skip.
+The plugin version is the workspace version: `.github/scripts/package-plugins.sh` refuses
+when a manifest says otherwise.

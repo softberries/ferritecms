@@ -52,7 +52,9 @@ cp plugins/examples/analytics/ferrite-plugin.toml analytics-plugin/
 cp plugins/target/wasm32-wasip2/release/analytics.wasm analytics-plugin/
 ```
 
-Then, with `serve` stopped if the site uses SQLite:
+With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its
+`analytics/` folder where the commands below say `analytics-plugin`. Then, with `serve` stopped
+if the site uses SQLite:
 
 ```sh
 ferrite plugin check   --data /path/to/site --dir analytics-plugin   # prints the permission report
