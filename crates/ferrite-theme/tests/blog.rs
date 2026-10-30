@@ -76,6 +76,7 @@ fn item(kind: &str, slug: &str, title: &str) -> PageItem {
         },
         url: format!("/{slug}/"),
         html: "<p>Body <em>html</em></p>".into(),
+        toc: Vec::new(),
         author: Some(UserPublic {
             id: UserId::new(),
             login: "ana".into(),

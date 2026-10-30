@@ -1,3 +1,4 @@
+use ferrite_core::blocks::TocEntry;
 use ferrite_core::events::{post_key, term_key, user_key};
 use ferrite_theme::{RenderContext, RequestInfo, ThemeError};
 
@@ -73,6 +74,42 @@ fn item_fields() {
             "{id}|post|hello|&#x2f;hello&#x2f;|An excerpt|2024-03-05T10:20:30+00:00|Ana|ana|\
              News|&#x2f;category&#x2f;news&#x2f;|Alt|blue|None"
         )
+    );
+}
+
+#[test]
+fn toc_is_in_the_context() {
+    let mut it = item("post", "T");
+    it.toc = vec![
+        TocEntry {
+            level: 2,
+            id: "setup".into(),
+            text: "Set <up>".into(),
+        },
+        TocEntry {
+            level: 3,
+            id: "setup-1".into(),
+            text: "Again".into(),
+        },
+    ];
+    let mut c = ctx();
+    c.item = Some(it);
+    let out = render_str(
+        "{% for h in post.toc %}{{ h.level }}:{{ h.id }}:{{ h.text }};{% endfor %}",
+        c,
+    )
+    .unwrap();
+    // The text is escaped like any other template value; only `post.body` is trusted.
+    assert_eq!(out.html, "2:setup:Set &lt;up&gt;;3:setup-1:Again;");
+    assert_eq!(
+        render_str("{{ post.toc|length }}", {
+            let mut c = ctx();
+            c.item = Some(item("post", "T"));
+            c
+        })
+        .unwrap()
+        .html,
+        "0"
     );
 }
 

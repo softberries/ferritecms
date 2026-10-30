@@ -28,6 +28,13 @@ pub fn relative_url_allowed(url: &str) -> bool {
         && !url.chars().any(|c| c == '\\' || c.is_control())
 }
 
+/// Fragment ids that theme landmarks and core markup use (M4-3b P54). The block
+/// renderer seeds its heading-id counter with them, so a heading "Content" gets
+/// `content-1` and never collides with a landmark.
+pub const RESERVED_FRAGMENT_IDS: [&str; 10] = [
+    "content", "comments", "respond", "search", "menu", "top", "main", "toc", "nav", "footer",
+];
+
 /// The YouTube player URL prefix of a content `embed` node's `<iframe>` (M3 P11); the
 /// 11-character video id follows.
 pub const YOUTUBE_PLAYER: &str = "https://www.youtube-nocookie.com/embed/";
