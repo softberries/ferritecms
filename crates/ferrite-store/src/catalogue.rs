@@ -107,7 +107,7 @@ pub const BACKEND_SPECIFIC: &[&str] = &["search_docs"];
 
 use ColType::{Bool, Bytes, Id, Int, Json, Text, Timestamp as Ts};
 
-/// Every table of the latest schema (migrations 0001–0011), in foreign-key order: each
+/// Every table of the latest schema (migrations 0001–0012), in foreign-key order: each
 /// table comes after the tables it references. Not listed: SQLite's FTS5 `search_fts`
 /// and its shadow tables, and sqlx's `_sqlx_migrations`.
 pub static TABLES: &[TableSpec] = &[
@@ -638,6 +638,27 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &[],
         export: Export::Rows,
     },
+    TableSpec {
+        name: "node_metrics",
+        columns: &[
+            ("node_id", Id),
+            ("minute", Ts),
+            ("requests", Int),
+            ("errors_5xx", Int),
+            ("page_views", Int),
+            ("cache_hits", Int),
+            ("cache_misses", Int),
+            ("plugin_calls", Int),
+            ("plugin_failures", Int),
+            ("jobs_done", Int),
+            ("jobs_failed", Int),
+            ("p95_ms", Int),
+        ],
+        key: &["node_id", "minute"],
+        self_ref: None,
+        nullable: &[],
+        export: Export::Skip,
+    },
 ];
 
 /// The catalogue entry of table `name`.
@@ -816,7 +837,7 @@ mod tests {
                 assert_eq!(t.column(t.key[0]), Some(ColType::Text), "{}", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 34);
+        assert_eq!(TABLES.len(), 35);
     }
 
     #[test]
@@ -837,6 +858,7 @@ mod tests {
                 "sessions",
                 "rate_limits",
                 "idempotency_keys",
+                "node_metrics",
             ]
         );
         assert_eq!(

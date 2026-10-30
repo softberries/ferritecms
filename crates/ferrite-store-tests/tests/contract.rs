@@ -3,9 +3,9 @@ use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
-    menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
-    plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
-    user_filters::*,
+    menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
+    plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
+    user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -20,7 +20,14 @@ backend_tests!(
     migration_0008_roundtrip,
     migration_0009_roundtrip,
     migration_0010_roundtrip,
+    migration_0012_roundtrip,
     migrate_up_reports_snapshot,
+);
+
+backend_tests!(
+    node_metrics_insert_and_series_sum_across_nodes,
+    series_p95_is_max,
+    prune_older_than_7_days,
 );
 
 backend_tests!(

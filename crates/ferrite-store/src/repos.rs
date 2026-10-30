@@ -9,10 +9,10 @@ use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
     ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, ImportMapKind, ImportMapRow,
     ImportRun, ImportRunId, ImportRunState, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
-    JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser,
-    Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery, Revision,
-    RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
-    UserQuery,
+    JobQuery, JobStatus, Media, Menu, MetricCounts, NewAudit, NewContent, NewEvent, NewJob,
+    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
+    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, SeriesBucket, SeriesStep, Session,
+    Taxonomy, Term, TermId, Timestamp, User, UserId, UserQuery,
 };
 
 use uuid::Uuid;
@@ -196,6 +196,38 @@ pub trait Repos: Send + Sync {
     fn idempotency(&self) -> &dyn IdempotencyRepo;
     fn autosaves(&self) -> &dyn AutosaveRepo;
     fn imports(&self) -> &dyn ImportRepo;
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo;
+}
+
+/// Per-node minute metrics (`node_metrics`, M4-2 P35).
+#[async_trait]
+pub trait NodeMetricsRepo: Send + Sync {
+    /// Adds `counts` to `node`'s row of `minute` (a whole UTC minute), in one statement:
+    /// the row is created if absent; otherwise its counts are added to and `p95_ms`
+    /// becomes the larger of the two. A writer that flushes the same minute twice (a
+    /// shutdown flush, a write retried after a failure) so never conflicts or loses a
+    /// count. `Invalid`: `minute` before 1970 or not a whole minute, a count above `i64::MAX`, or
+    /// `p95_ms` above `i32::MAX`.
+    async fn insert(
+        &self,
+        node: NodeId,
+        minute: Timestamp,
+        counts: &MetricCounts,
+    ) -> Result<(), StoreError>;
+    /// The rows whose minute is in `[from, to)` (of `node` only, when given), summed per
+    /// `step` bucket (aligned to the Unix epoch; `p95_ms` the largest): ascending by
+    /// start, only buckets with rows. `Invalid`: `from >= to`.
+    async fn series(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        step: SeriesStep,
+        node: Option<NodeId>,
+    ) -> Result<Vec<SeriesBucket>, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) rows whose
+    /// minute is before `before`; returns the count. Callers loop until a batch comes
+    /// back short (R5).
+    async fn prune(&self, before: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 #[async_trait]

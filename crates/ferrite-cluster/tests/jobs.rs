@@ -26,10 +26,10 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
     TestDb, auth::align_to_window, backend_tests_spawning, fixtures::fixture_user,
@@ -682,6 +682,9 @@ impl Repos for FaultyRepos {
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.read().imports()
     }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.read().node_metrics()
+    }
 }
 
 #[async_trait]
@@ -1079,6 +1082,25 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
         .add("fresh", "render.head", hours_ago(23), 2)
         .await
         .unwrap();
+    // Node metrics: kept 7 days.
+    let metrics = store.read().node_metrics();
+    let metrics_node = NodeId::new();
+    let minute_ago = |h: i64| {
+        let t = now - h * 3_600_000_000;
+        Timestamp::from_micros(t - t.rem_euclid(60_000_000)).unwrap()
+    };
+    let one = ferrite_domain::MetricCounts {
+        requests: 1,
+        ..Default::default()
+    };
+    metrics
+        .insert(metrics_node, minute_ago(7 * 24 + 1), &one)
+        .await
+        .unwrap();
+    metrics
+        .insert(metrics_node, minute_ago(7 * 24 - 1), &one)
+        .await
+        .unwrap();
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
@@ -1094,12 +1116,12 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     .unwrap()
     .spawn(stop.clone());
     let jobs = store.read().jobs();
-    wait_for(Duration::from_secs(5), "five prune jobs done", || async {
+    wait_for(Duration::from_secs(5), "six prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
-        // Once the old fixture job is pruned: the fresh one plus the five prune jobs.
+        // Once the old fixture job is pruned: the fresh one plus the six prune jobs.
         let gone = jobs.get(old_job).await.unwrap().is_none()
             && jobs.get(old_dead).await.unwrap().is_none();
-        (gone && counts[&JobStatus::Done] == 6).then_some(())
+        (gone && counts[&JobStatus::Done] == 7).then_some(())
     })
     .await;
     stop.cancel();
@@ -1132,11 +1154,25 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let since = Timestamp::from_micros(0).unwrap();
     assert_eq!(failures.sum_since("old", since).await.unwrap(), 0);
     assert_eq!(failures.sum_since("fresh", since).await.unwrap(), 2);
+    let left = metrics
+        .series(
+            since,
+            Timestamp::from_micros(now + 1).unwrap(),
+            ferrite_domain::SeriesStep::Day,
+            Some(metrics_node),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        left.iter().map(|b| b.counts.requests).sum::<u64>(),
+        1,
+        "the 8-day-old minute went, the 6-day-old one stayed"
+    );
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
-        6,
-        "fresh fixture + five prune jobs"
+        7,
+        "fresh fixture + six prune jobs"
     );
     assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
 }
