@@ -21,23 +21,32 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    only prehashed signatures, minisign's default), then the asset's sha256 against the line
    `SHA256SUMS` lists for it. The repository's `release.pub` is a comment-only placeholder:
    a binary built from it refuses with "this build has no release key". Downloads are
-   HTTPS-only (redirects included) and capped (1 MiB for the two small files, 1 GiB for the
-   asset).
+   HTTPS-only (redirects included), capped (1 MiB for the two small files, 1 GiB for the
+   asset) and bounded: 30 s to connect, 60 s per read and 10 minutes for the whole download.
+   **What the signature binds:** the version and the target, through the asset name that
+   `SHA256SUMS` lists and the new binary's `--version`. The channel is not signed: "stable"
+   (not a draft, not a prerelease) comes from the unsigned API metadata, so a compromised API
+   could offer a signed prerelease as stable. Prerelease builds therefore must not be signed
+   with the release key (or a later format puts the channel in the trusted comment).
 3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
    it is also the writability check: an unwritable folder is refused with the hint to run as
    the binary's owner, outside the systemd sandbox). Only the archive's `ferrite` file (top
-   level or one folder down) is extracted, mode 0755. The new binary's `--version` must
+   level or one folder down; `./` components are ignored, so `tar -C dir .` archives work;
+   at most 512 MiB) is extracted, mode 0755. The new binary's `--version` must
    report the release's version. With `--data DIR` its `migrate status --data DIR` runs too
    and its output is shown: exit 0 or 2 (pending migrations) go on, 3 (the schema is
    incompatible with the new binary) refuses, any other result is a warning (with SQLite the
-   status cannot be read while `serve` holds the data folder lock).
+   status cannot be read while `serve` holds the data folder lock, and the warning points at
+   the output shown).
 4. **Confirm.** `Replace … ? [y/N]` on a terminal; without one, `--yes` is required.
 5. **Swap.** The running binary (symlinks resolved) is copied to `<name>.prev` beside it
    (`ferrite.prev`, replacing an older one), then the new binary, given the running binary's
    permission bits, is renamed over it. Both steps go through temp files in the same folder
    and a `rename`, so the binary's path never goes missing or holds a partial file
-   (`update::swap::install_new`; `rollback` uses `update::swap::swap_with_prev`). Every
-   refusal before this step leaves the binary and its folder as they were.
+   (`update::swap::install_new`; `rollback` uses `update::swap::swap_with_prev`, which on a
+   failed second rename puts the former binary back, or when that fails too keeps its temp
+   copy and names it in the error, so no binary is lost). Every refusal before this step
+   leaves the binary and its folder as they were.
 6. **No restart.** It prints the restart command (`systemctl restart ferrite`, or stop and
    start `ferrite serve`); `serve` never updates itself, so there is no dedicated exit code
    (P31 corrects the earlier plan here).
@@ -608,8 +617,8 @@ signature or sha256, no asset for this target, a new binary that does not report
 release's version, an unwritable binary folder, a build without a release key); every
 refusal leaves the binary untouched. Test seams (`test-seams` builds only): a hidden
 `--base-url` replaces the GitHub API root (plain HTTP allowed), a hidden
-`--test-current-exe PATH` the running binary's path, and `FERRITE_TEST_RELEASE_PUBKEY` the
-embedded key.
+`--test-current-exe PATH` the running binary's path, a hidden `--test-download-deadline-ms`
+the 10-minute download bound, and `FERRITE_TEST_RELEASE_PUBKEY` the embedded key.
 
 **`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
 WXR file as the active admin `--as` names (default: the first active admin). Writes

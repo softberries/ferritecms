@@ -7,6 +7,7 @@ mod release;
 pub mod swap;
 mod verify;
 
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
@@ -20,6 +21,10 @@ use release::{Client, Release};
 
 /// How long the new binary may take to answer `--version` / `migrate status`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+/// The bound on the whole download of a release (the per-read timeout is separate).
+const DOWNLOAD_DEADLINE: Duration = Duration::from_secs(600);
+/// The largest binary extracted from a release asset.
+const MAX_BINARY: u64 = 512 << 20;
 
 #[derive(Debug, Args)]
 pub struct SelfUpdateArgs {
@@ -45,6 +50,10 @@ pub struct SelfUpdateArgs {
     #[cfg(feature = "test-seams")]
     #[arg(long, hide = true)]
     pub test_current_exe: Option<PathBuf>,
+    /// Test seam: the bound on the whole download, in milliseconds (default 10 minutes).
+    #[cfg(feature = "test-seams")]
+    #[arg(long, hide = true)]
+    pub test_download_deadline_ms: Option<u64>,
 }
 
 pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
@@ -127,9 +136,17 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
             )
         })?;
 
-    let new = fetch_and_verify(&client, &release, &asset_name, &key, work.path()).await?;
+    let new = fetch_and_verify(
+        &client,
+        &release,
+        &asset_name,
+        &key,
+        work.path(),
+        download_deadline(&args),
+    )
+    .await?;
 
-    let (code, out) = probe(&new, &["--version"]).await?;
+    let (code, out) = probe(&new, &[OsStr::new("--version")]).await?;
     let reported = out.trim();
     let reported_version = reported
         .split_whitespace()
@@ -144,8 +161,9 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
     println!("new binary: {reported}");
 
     if let Some(data) = &args.data {
-        let data_arg = data.to_string_lossy();
-        let (code, out) = probe(&new, &["migrate", "status", "--data", &data_arg]).await?;
+        let mut probe_args = ["migrate", "status", "--data"].map(OsStr::new).to_vec();
+        probe_args.push(data.as_os_str());
+        let (code, out) = probe(&new, &probe_args).await?;
         println!("migrate status of the new binary for {}:", data.display());
         print!("{out}");
         match code {
@@ -155,8 +173,8 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
                  exit 3); nothing was changed"
             ),
             other => eprintln!(
-                "warning: migrate status failed (exit {other:?}); with SQLite it cannot \
-                 read the database while `serve` runs"
+                "warning: could not read the migration status with the new binary (exit \
+                 {other:?}; for example, SQLite while `serve` runs): see its output above"
             ),
         }
     }
@@ -192,6 +210,16 @@ fn current_exe(args: &SelfUpdateArgs) -> Result<PathBuf> {
     std::fs::canonicalize(&exe).with_context(|| format!("cannot resolve {}", exe.display()))
 }
 
+/// The bound on downloading a release (10 minutes; a test seam may shorten it).
+fn download_deadline(args: &SelfUpdateArgs) -> Duration {
+    #[cfg(feature = "test-seams")]
+    if let Some(ms) = args.test_download_deadline_ms {
+        return Duration::from_millis(ms);
+    }
+    let _ = args;
+    DOWNLOAD_DEADLINE
+}
+
 /// The GitHub API root and whether only HTTPS is allowed.
 fn api_base(args: &SelfUpdateArgs) -> (String, bool) {
     #[cfg(feature = "test-seams")]
@@ -210,6 +238,7 @@ async fn fetch_and_verify(
     asset_name: &str,
     key: &minisign_verify::PublicKey,
     work: &Path,
+    deadline: Duration,
 ) -> Result<PathBuf> {
     let tag = &release.tag_name;
     let asset = release.asset(asset_name).ok_or_else(|| {
@@ -224,16 +253,26 @@ async fn fetch_and_verify(
     let sig_asset = release
         .asset("SHA256SUMS.minisig")
         .ok_or_else(|| anyhow!("release {tag} has no SHA256SUMS.minisig"))?;
-    let sums = client.fetch_small(sums_asset).await?;
-    let sig = client.fetch_small(sig_asset).await?;
-    verify::check_signature(key, &sums, &sig)?;
-    let expected = verify::listed_sha256(&sums, asset_name)?;
-
     let archive = work.join(asset_name);
-    let mut file = std::fs::File::create(&archive)
-        .with_context(|| format!("cannot create {}", archive.display()))?;
-    let actual = verify::hex(&client.download(asset, &mut file).await?);
-    drop(file);
+    let downloads = async {
+        let sums = client.fetch_small(sums_asset).await?;
+        let sig = client.fetch_small(sig_asset).await?;
+        verify::check_signature(key, &sums, &sig)?;
+        let expected = verify::listed_sha256(&sums, asset_name)?;
+        let mut file = std::fs::File::create(&archive)
+            .with_context(|| format!("cannot create {}", archive.display()))?;
+        let actual = verify::hex(&client.download(asset, &mut file).await?);
+        anyhow::Ok((expected, actual))
+    };
+    // `read_timeout` bounds each read; this bounds the whole download.
+    let (expected, actual) = tokio::time::timeout(deadline, downloads)
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "the download of release {tag} took longer than {}s; nothing was changed",
+                deadline.as_secs_f32()
+            )
+        })??;
     if actual != expected {
         bail!(
             "the sha256 of {asset_name} ({actual}) does not match SHA256SUMS ({expected}); \
@@ -260,13 +299,7 @@ fn unpack(archive: &Path, out: &Path) -> Result<()> {
     {
         let mut entry = entry.context("the release asset is not a valid .tar.gz")?;
         let path = entry.path()?.into_owned();
-        let parts: Vec<_> = path.components().collect();
-        let is_binary = path.file_name().is_some_and(|n| n == "ferrite")
-            && parts.len() <= 2
-            && parts
-                .iter()
-                .all(|c| matches!(c, std::path::Component::Normal(_)));
-        if !is_binary {
+        if !is_binary_entry(&path) {
             continue;
         }
         if entry.header().entry_type() != tar::EntryType::Regular {
@@ -276,6 +309,9 @@ fn unpack(archive: &Path, out: &Path) -> Result<()> {
             bail!("the release asset holds more than one ferrite binary");
         }
         found = true;
+        if entry.header().size()? > MAX_BINARY {
+            bail!("the release asset's ferrite is larger than {MAX_BINARY} bytes");
+        }
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -284,12 +320,17 @@ fn unpack(archive: &Path, out: &Path) -> Result<()> {
             .open(out)
             .with_context(|| format!("cannot create {}", out.display()))?;
         let mut buf = [0u8; 64 * 1024];
+        let mut total = 0u64;
         loop {
             let n = entry
                 .read(&mut buf)
                 .context("the release asset is not a valid .tar.gz")?;
             if n == 0 {
                 break;
+            }
+            total += n as u64;
+            if total > MAX_BINARY {
+                bail!("the release asset's ferrite is larger than {MAX_BINARY} bytes");
             }
             dst.write_all(&buf[..n])?;
         }
@@ -301,9 +342,23 @@ fn unpack(archive: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether a tar entry path is the release's binary: a file named `ferrite` at the top
+/// level or one folder down, `./` components ignored (`tar -C dir .` writes them), and
+/// nothing but plain names otherwise (no `..`, no root).
+fn is_binary_entry(path: &Path) -> bool {
+    use std::path::Component;
+    let parts: Vec<Component<'_>> = path
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .collect();
+    (1..=2).contains(&parts.len())
+        && parts.iter().all(|c| matches!(c, Component::Normal(_)))
+        && parts.last() == Some(&Component::Normal(OsStr::new("ferrite")))
+}
+
 /// Runs the new binary with `args` (stdin closed, bounded by [`PROBE_TIMEOUT`]); returns
 /// its exit code and its stdout followed by its stderr.
-async fn probe(binary: &Path, args: &[&str]) -> Result<(Option<i32>, String)> {
+async fn probe(binary: &Path, args: &[&OsStr]) -> Result<(Option<i32>, String)> {
     let child = tokio::process::Command::new(binary)
         .args(args)
         .stdin(Stdio::null())
@@ -311,7 +366,13 @@ async fn probe(binary: &Path, args: &[&str]) -> Result<(Option<i32>, String)> {
         .output();
     let out = tokio::time::timeout(PROBE_TIMEOUT, child)
         .await
-        .map_err(|_| anyhow!("the new binary did not answer `{}` in time", args.join(" ")))?
+        .map_err(|_| {
+            let shown: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
+            anyhow!(
+                "the new binary did not answer `{}` in time",
+                shown.join(" ")
+            )
+        })?
         .with_context(|| format!("cannot run the new binary {}", binary.display()))?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -332,4 +393,33 @@ fn confirm(current: &Path, from: &semver::Version, to: &semver::Version) -> Resu
     let mut line = String::new();
     stdin.read_line(&mut line)?;
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_entry_paths() {
+        for ok in [
+            "ferrite",
+            "./ferrite",
+            "dir/ferrite",
+            "./dir/ferrite",
+            "dir/./ferrite",
+        ] {
+            assert!(is_binary_entry(Path::new(ok)), "{ok}");
+        }
+        for bad in [
+            "a/b/ferrite",
+            "../ferrite",
+            "/ferrite",
+            "dir/../ferrite",
+            "ferrite/README.md",
+            "ferrite.prev",
+            ".",
+        ] {
+            assert!(!is_binary_entry(Path::new(bad)), "{bad}");
+        }
+    }
 }

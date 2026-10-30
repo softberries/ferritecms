@@ -45,6 +45,10 @@ impl Server {
                 let app = axum::Router::new().fallback(move |uri: Uri| {
                     let routes = shared.clone();
                     async move {
+                        // A server that never answers in time.
+                        if uri.path().starts_with("/stall/") {
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        }
                         match routes.lock().unwrap().get(uri.path()) {
                             Some(body) => (StatusCode::OK, body.clone()),
                             None => (StatusCode::NOT_FOUND, b"not found".to_vec()),
@@ -68,12 +72,17 @@ impl Server {
     /// Publishes release `version` with `files` as its assets, as both the latest release
     /// and `tags/v<version>`.
     fn publish(&self, version: &str, files: &[(String, Vec<u8>)]) {
+        self.publish_at(version, files, "/dl/");
+    }
+
+    /// [`Server::publish`] with the download URLs under `prefix` (`/stall/` never answers).
+    fn publish_at(&self, version: &str, files: &[(String, Vec<u8>)], prefix: &str) {
         let assets: Vec<serde_json::Value> = files
             .iter()
             .map(|(name, _)| {
                 serde_json::json!({
                     "name": name,
-                    "browser_download_url": format!("{}/dl/{name}", self.base()),
+                    "browser_download_url": format!("{}{prefix}{name}", self.base()),
                 })
             })
             .collect();
@@ -127,11 +136,16 @@ impl Keys {
 /// A fake `ferrite` binary: prints `ferrite <version>` for `--version`, and a marker line
 /// (exit 2, "pending") for `migrate status --data DIR`.
 fn script(version: &str) -> Vec<u8> {
+    script_with(version, 2)
+}
+
+/// [`script`] whose `migrate status` exits with `migrate_exit`.
+fn script_with(version: &str, migrate_exit: u8) -> Vec<u8> {
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = \"--version\" ]; then echo \"ferrite {version}\"; exit 0; fi\n\
          if [ \"$1\" = \"migrate\" ] && [ \"$2\" = \"status\" ]; then\n\
-           echo \"FAKE MIGRATE STATUS {version} $4\"; exit 2\n\
+           echo \"FAKE MIGRATE STATUS {version} $4\"; exit {migrate_exit}\n\
          fi\n\
          exit 1\n"
     )
@@ -143,6 +157,12 @@ fn asset_name(version: &str) -> String {
 }
 
 fn tarball(version: &str, binary: &[u8]) -> Vec<u8> {
+    tarball_at("", version, binary)
+}
+
+/// [`tarball`] with every entry name starting with `prefix` (e.g. `./`, as `tar -C dir .`
+/// writes). The names are written raw, so the prefix is kept as given.
+fn tarball_at(prefix: &str, version: &str, binary: &[u8]) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut tar = tar::Builder::new(gz);
     let dir = format!("ferrite-{version}-{}", ferrite::binary_target());
@@ -150,13 +170,14 @@ fn tarball(version: &str, binary: &[u8]) -> Vec<u8> {
         ("README.md", b"# FerriteCMS\n".as_slice(), 0o644),
         ("ferrite", binary, 0o755),
     ] {
+        let path = format!("{prefix}{dir}/{name}");
         let mut header = tar::Header::new_gnu();
+        header.as_old_mut().name[..path.len()].copy_from_slice(path.as_bytes());
         header.set_size(bytes.len() as u64);
         header.set_mode(mode);
         header.set_entry_type(tar::EntryType::Regular);
         header.set_cksum();
-        tar.append_data(&mut header, format!("{dir}/{name}"), bytes)
-            .unwrap();
+        tar.append(&header, bytes).unwrap();
     }
     tar.into_inner().unwrap().finish().unwrap()
 }
@@ -456,6 +477,34 @@ fn self_update_keeps_binary_on_failure() {
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
     install.assert_untouched(&out);
 
+    // The new binary's `migrate status` says the schema is incompatible (exit 3).
+    let asset = (asset_name(NEW), tarball(NEW, &script_with(NEW, 3)));
+    server.publish(NEW, &signed(&keys, asset));
+    let data = tempfile::tempdir().unwrap();
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.arg("--yes").arg("--data").arg(data.path());
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exit 3"),
+        "{}",
+        text(&out)
+    );
+    install.assert_untouched(&out);
+
+    // A download that does not finish within the deadline.
+    server.publish_at(NEW, &release(&keys, NEW), "/stall/");
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.args(["--yes", "--test-download-deadline-ms", "500"]);
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("took longer"),
+        "{}",
+        text(&out)
+    );
+    install.assert_untouched(&out);
+
     // A valid release, but no --yes and no terminal.
     server.publish(NEW, &release(&keys, NEW));
     let out = run(self_update(&server, &keys, &install));
@@ -532,4 +581,25 @@ fn self_update_shows_migrate_status_with_data() {
         text(&out)
     );
     assert_eq!(std::fs::read(&install.exe).unwrap(), script(NEW));
+}
+
+#[test]
+fn self_update_accepts_dot_prefixed_archive() {
+    let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
+    let tgz = tarball_at("./", NEW, &script(NEW));
+    // The names really start with `./` (written raw, not normalised by the tar crate).
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&tgz[..]));
+    let names: Vec<Vec<u8>> = archive
+        .entries()
+        .unwrap()
+        .map(|e| e.unwrap().path_bytes().into_owned())
+        .collect();
+    assert!(names.iter().all(|n| n.starts_with(b"./")), "{names:?}");
+    server.publish(NEW, &signed(&keys, (asset_name(NEW), tgz)));
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.arg("--yes");
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(std::fs::read(&install.exe).unwrap(), script(NEW));
+    assert_eq!(std::fs::read(install.prev()).unwrap(), script(CURRENT));
 }

@@ -37,8 +37,8 @@ pub fn install_new(current: &Path, new: &Path) -> Result<()> {
         bail!("{} is not a file", current.display());
     }
     let prev = prev_path(current);
-    let staged = copy_to_temp(new, current, Some(meta.permissions()))?;
-    let kept = copy_to_temp(current, current, None)?;
+    let mut staged = copy_to_temp(new, current, Some(meta.permissions()))?;
+    let mut kept = copy_to_temp(current, current, None)?;
     kept.rename_to(&prev)?;
     staged.rename_to(current)?;
     sync_dir(current);
@@ -48,15 +48,39 @@ pub fn install_new(current: &Path, new: &Path) -> Result<()> {
 /// Exchanges `current` and its [`prev_path`]: afterwards `current` is the former `.prev`
 /// and `.prev` the former `current`. Both are copied to temp files in the folder first and
 /// then renamed into place, so at every moment both paths hold a complete binary.
+///
+/// No binary is lost on failure: when the second rename (into `.prev`) fails, the former
+/// current binary is renamed back to `current` (the state before the call); when that
+/// fails too, its temp copy is kept and the error names it.
 pub fn swap_with_prev(current: &Path) -> Result<()> {
+    swap_with(current, |from, to| fs::rename(from, to))
+}
+
+/// [`swap_with_prev`] with the rename used for moving the temp files into place (a fault
+/// seam for the tests).
+fn swap_with(current: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> Result<()> {
     let prev = prev_path(current);
     if !fs::metadata(&prev).map(|m| m.is_file()).unwrap_or(false) {
         bail!("there is no previous binary at {}", prev.display());
     }
-    let old_current = copy_to_temp(current, current, None)?;
-    let old_prev = copy_to_temp(&prev, current, None)?;
-    old_prev.rename_to(current)?;
-    old_current.rename_to(&prev)?;
+    let mut old_current = copy_to_temp(current, current, None)?;
+    let mut old_prev = copy_to_temp(&prev, current, None)?;
+    old_prev.rename_with(current, &rename)?;
+    if let Err(e) = old_current.rename_with(&prev, &rename) {
+        // `current` holds the former `.prev` and `.prev` is unchanged: put the former
+        // current binary back.
+        if let Err(restore) = old_current.rename_with(current, &rename) {
+            let kept = old_current.keep();
+            bail!(
+                "{e:#}; putting the binary back failed too ({restore:#}): {} now holds the \
+                 previous binary, and the binary that was current is kept at {}",
+                current.display(),
+                kept.display()
+            );
+        }
+        sync_dir(current);
+        bail!("{e:#}; nothing was changed");
+    }
     sync_dir(current);
     Ok(())
 }
@@ -68,8 +92,16 @@ struct Temp {
 }
 
 impl Temp {
-    fn rename_to(mut self, target: &Path) -> Result<()> {
-        fs::rename(&self.path, target).with_context(|| {
+    fn rename_to(&mut self, target: &Path) -> Result<()> {
+        self.rename_with(target, |from, to| fs::rename(from, to))
+    }
+
+    fn rename_with(
+        &mut self,
+        target: &Path,
+        rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<()> {
+        rename(&self.path, target).with_context(|| {
             format!(
                 "cannot rename {} to {}",
                 self.path.display(),
@@ -78,6 +110,12 @@ impl Temp {
         })?;
         self.done = true;
         Ok(())
+    }
+
+    /// Keeps the file (no removal on drop) and returns its path.
+    fn keep(mut self) -> PathBuf {
+        self.done = true;
+        std::mem::take(&mut self.path)
     }
 }
 
@@ -208,6 +246,69 @@ mod tests {
         assert_eq!(entries(tmp.path()), vec!["ferrite", "ferrite.prev"]);
         swap_with_prev(&current).unwrap();
         assert_eq!(fs::read_to_string(&current).unwrap(), "two");
+    }
+
+    /// A rename that fails from call `fail_from` on (1-based).
+    fn failing_rename(fail_from: usize) -> impl Fn(&Path, &Path) -> std::io::Result<()> {
+        let calls = std::cell::Cell::new(0);
+        move |from, to| {
+            calls.set(calls.get() + 1);
+            if calls.get() >= fail_from {
+                Err(std::io::Error::other("injected rename failure"))
+            } else {
+                fs::rename(from, to)
+            }
+        }
+    }
+
+    #[test]
+    fn swap_failing_second_rename_restores_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let current = tmp.path().join("ferrite");
+        write(&current, "two", 0o755);
+        write(&prev_path(&current), "one", 0o755);
+        // Call 1 (prev -> current) works, call 2 (-> .prev) fails, call 3 (restore) works.
+        let calls = std::cell::Cell::new(0);
+        let err = swap_with(&current, |from, to| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                Err(std::io::Error::other("injected rename failure"))
+            } else {
+                fs::rename(from, to)
+            }
+        })
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("nothing was changed"),
+            "{err:#}"
+        );
+        assert_eq!(fs::read_to_string(&current).unwrap(), "two");
+        assert_eq!(fs::read_to_string(prev_path(&current)).unwrap(), "one");
+        assert_eq!(entries(tmp.path()), vec!["ferrite", "ferrite.prev"]);
+    }
+
+    #[test]
+    fn swap_failing_restore_keeps_the_former_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let current = tmp.path().join("ferrite");
+        write(&current, "two", 0o755);
+        write(&prev_path(&current), "one", 0o755);
+        let err = swap_with(&current, failing_rename(2)).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("is kept at"), "{msg}");
+        assert_eq!(fs::read_to_string(&current).unwrap(), "one");
+        assert_eq!(fs::read_to_string(prev_path(&current)).unwrap(), "one");
+        // The former current binary survives in the temp file the error names.
+        let kept: Vec<String> = entries(tmp.path())
+            .into_iter()
+            .filter(|n| n.starts_with(".ferrite.tmp-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{:?}", entries(tmp.path()));
+        assert!(msg.contains(&kept[0]), "{msg}");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(&kept[0])).unwrap(),
+            "two"
+        );
     }
 
     #[test]
