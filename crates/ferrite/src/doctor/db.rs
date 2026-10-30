@@ -20,10 +20,11 @@ use sqlx::Connection;
 
 use super::Finding;
 use super::fs::NO_CONFIG;
-use crate::open::SqliteReadOnly;
+use crate::open::{MissingWalIndex, SqliteReadOnly};
 
 /// How long reaching Postgres (connect, version and schema queries, the store's pool) may
-/// take: not a network check (P51), but it must not hang doctor.
+/// take, and then each later database read: not a network check (P51), but it must not
+/// hang doctor.
 const PG_TIMEOUT: Duration = Duration::from_secs(10);
 /// The oldest Postgres the store opens (`server_version_num`).
 const MIN_PG_SERVER: i32 = 150_000;
@@ -35,30 +36,64 @@ pub(super) const NO_DATABASE: &str = "the database did not open (see db.connect)
 /// The site's database, opened read-only.
 pub(super) enum Database {
     Sqlite(SqliteReadOnly),
-    Postgres(Arc<dyn Store>),
+    /// The store, and its URL (only to scrub it, and its password, out of error text).
+    Postgres {
+        store: Arc<dyn Store>,
+        url: String,
+    },
 }
 
 impl Database {
-    async fn migration_status(&self, binary: &semver::Version) -> anyhow::Result<MigrationStatus> {
-        match self {
-            Database::Sqlite(db) => db.migration_status(binary).await,
-            Database::Postgres(store) => Ok(store.migration_status(binary).await?),
+    /// Runs one database read, bounded by [`PG_TIMEOUT`]; the error is a finding's detail
+    /// (Postgres: with the URL and its password scrubbed out).
+    pub(super) async fn read<T>(
+        &self,
+        read: impl std::future::Future<Output = anyhow::Result<T>>,
+    ) -> Result<T, String> {
+        match tokio::time::timeout(PG_TIMEOUT, read).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(e)) => Err(self.clean(&format!("{e:#}"))),
+            Err(_) => Err(format!(
+                "the database did not answer within {} s",
+                PG_TIMEOUT.as_secs()
+            )),
         }
     }
 
-    /// A `schema_meta` value.
-    pub(super) async fn meta(&self, key: &str) -> anyhow::Result<Option<String>> {
+    /// `message` made safe to print.
+    fn clean(&self, message: &str) -> String {
         match self {
-            Database::Sqlite(db) => db.schema_meta(key).await,
-            Database::Postgres(store) => Ok(store.read().schema_meta().get(key).await?),
+            Database::Sqlite(_) => message.to_owned(),
+            Database::Postgres { url, .. } => scrub(message, url),
         }
+    }
+
+    async fn migration_status(&self, binary: &semver::Version) -> Result<MigrationStatus, String> {
+        self.read(async {
+            match self {
+                Database::Sqlite(db) => db.migration_status(binary).await,
+                Database::Postgres { store, .. } => Ok(store.migration_status(binary).await?),
+            }
+        })
+        .await
+    }
+
+    /// A `schema_meta` value.
+    pub(super) async fn meta(&self, key: &str) -> Result<Option<String>, String> {
+        self.read(async {
+            match self {
+                Database::Sqlite(db) => db.schema_meta(key).await,
+                Database::Postgres { store, .. } => Ok(store.read().schema_meta().get(key).await?),
+            }
+        })
+        .await
     }
 
     /// The Postgres store (the node registry and the database clock live there).
     pub(super) fn postgres(&self) -> Option<&dyn Store> {
         match self {
             Database::Sqlite(_) => None,
-            Database::Postgres(store) => Some(store.as_ref()),
+            Database::Postgres { store, .. } => Some(store.as_ref()),
         }
     }
 }
@@ -87,6 +122,9 @@ pub(super) async fn connect(
             let started = Instant::now();
             let db = match SqliteReadOnly::open(&path).await {
                 Ok(db) => db,
+                Err(e) if e.downcast_ref::<MissingWalIndex>().is_some() => {
+                    return (Finding::warn(ID, format!("{e:#}")), None);
+                }
                 Err(e) => return (Finding::error(ID, format!("{e:#}")), None),
             };
             // One read, as the latency probe.
@@ -99,7 +137,7 @@ pub(super) async fn connect(
             let how = if node_running {
                 "read-only, beside the running node"
             } else if db.immutable() {
-                "read-only (no WAL files: opened immutable)"
+                "read-only (no -wal file: opened immutable)"
             } else {
                 "read-only"
             };
@@ -189,7 +227,10 @@ async fn postgres(url: &str, schema: Option<&str>) -> Result<(String, Database),
             "Postgres {target}, server {version}, {} ms",
             latency.as_millis()
         ),
-        Database::Postgres(Arc::new(store)),
+        Database::Postgres {
+            store: Arc::new(store),
+            url: url.to_owned(),
+        },
     ))
 }
 
@@ -218,7 +259,7 @@ fn pg_target(url: &str, schema: Option<&str>) -> String {
 }
 
 /// `message` with the URL and its password (as written and percent-decoded) replaced.
-pub(super) fn scrub(message: &str, url: &str) -> String {
+fn scrub(message: &str, url: &str) -> String {
     let mut out = message.replace(url, "<database.url>");
     if let Ok(u) = url::Url::parse(url)
         && let Some(password) = u.password().filter(|p| !p.is_empty())
@@ -264,7 +305,7 @@ pub(super) async fn schema(db: Option<&Database>, config: Option<&Config>) -> (F
     };
     let status = match db.migration_status(&binary).await {
         Ok(status) => status,
-        Err(e) => return (Finding::error(ID, format!("{e:#}")), false),
+        Err(e) => return (Finding::error(ID, e), false),
     };
     let (db_v, bin_v) = (status.db_version, status.binary_version);
     let unknown = if status.unknown_applied.is_empty() || status.verdict == Compat::NewerSchemaOk {
@@ -321,7 +362,7 @@ pub(super) async fn identity(db: Option<&Database>, config: Option<&Config>) -> 
         return Finding::skip(ID, unavailable(config));
     };
     let read = async {
-        Ok::<_, anyhow::Error>((
+        Ok::<_, String>((
             db.meta("site_id").await?,
             db.meta(SCHEMA_META_INSTALL_ID).await?,
             db.meta(SCHEMA_META_LAST_BINARY).await?,
@@ -329,7 +370,7 @@ pub(super) async fn identity(db: Option<&Database>, config: Option<&Config>) -> 
     };
     let (site, install, last) = match read.await {
         Ok(values) => values,
-        Err(e) => return Finding::error(ID, format!("{e:#}")),
+        Err(e) => return Finding::error(ID, e),
     };
     let mut errors = Vec::new();
     let mut warnings = Vec::new();

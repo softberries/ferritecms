@@ -1,7 +1,7 @@
 //! `ferrite doctor`: checks a site without changing anything (M4-3a P48–P53).
 //!
 //! One line per check, `<status>  <check-id>  <detail>` with the status padded to five
-//! characters, in the fixed order of [`run`]; then `doctor: N ok, N warn, N error, N skip`.
+//! characters, in the fixed order of P53; then `doctor: N ok, N warn, N error, N skip`.
 //! The exit code is 3 when the database schema is newer than this binary allows, else 1
 //! when a check is an error, else 2 when one is a warning, else 0 ([`Report::exit_code`]).
 //!
@@ -190,20 +190,15 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<ExitCode> {
     let release_api = args.base_url.as_deref();
     #[cfg(not(feature = "test-seams"))]
     let release_api = None;
-    let report = run_with(&args.data, args.offline, release_api).await;
+    let report = run(&args.data, args.offline, release_api).await;
     print!("{report}");
     Ok(ExitCode::from(report.exit_code()))
 }
 
 /// Runs every check against the site in `data`, in the order of P53. With `offline`, no
-/// network connection is made.
-pub async fn run(data: &Path, offline: bool) -> Report {
-    run_with(data, offline, None).await
-}
-
-/// [`run`], with `release_api` (the test seam) replacing the GitHub API root of the
-/// release lookup.
-async fn run_with(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
+/// network connection is made. `release_api` (the test seam) replaces the GitHub API root
+/// of the release lookup.
+async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     let mut findings = vec![version_binary()];
     let (config, loaded) = config_load(data);
     findings.extend(loaded);
@@ -262,18 +257,21 @@ fn running_node(
             net::Node::NotRunning("no node is running on this data folder")
         }
         ferrite_config::DbKind::Postgres { .. } => {
-            match config.cluster.node_name.as_deref().map(str::trim) {
-                Some(name) if !name.is_empty() && registry.has_node(name) => net::Node::Running,
-                Some(name) if !name.is_empty() && registry.was_read() => {
-                    net::Node::NotRunning("no live node has this cluster.node_name")
-                }
-                Some(name) if !name.is_empty() => {
-                    net::Node::NotRunning("the node registry was not read (see db.connect)")
-                }
-                _ => net::Node::NotRunning(
+            let configured = config.cluster.node_name.as_deref();
+            if configured.is_none_or(|n| n.trim().is_empty()) {
+                return net::Node::NotRunning(
                     "cluster.node_name is not set, so doctor cannot tell whether a node runs \
                      for this folder",
-                ),
+                );
+            }
+            // The name as `serve` registers it (trimmed, cut to the registry's limit).
+            let name = ferrite_cluster::node_name(configured);
+            if registry.has_node(&name) {
+                net::Node::Running
+            } else if registry.was_read() {
+                net::Node::NotRunning("no live node has this cluster.node_name")
+            } else {
+                net::Node::NotRunning("the node registry was not read (see db.connect)")
             }
         }
     }

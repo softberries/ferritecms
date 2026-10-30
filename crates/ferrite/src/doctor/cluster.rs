@@ -5,13 +5,13 @@
 
 use std::time::Duration;
 
-use ferrite_cluster::{MAX_CLOCK_SKEW, STALE_AFTER, clock_skew};
+use ferrite_cluster::{MAX_CLOCK_SKEW, STALE_AFTER, clock_skew, is_live};
 use ferrite_config::Config;
 use ferrite_domain::{Node, Timestamp};
 use serde_json::Value;
 
-use super::Finding;
 use super::db::{Database, unavailable};
+use super::{Finding, Status};
 
 /// Above this the skew is an error: TOTP accepts one 30 s step either side (P52).
 const MAX_TOTP_SKEW: Duration = Duration::from_secs(30);
@@ -49,19 +49,27 @@ pub(super) async fn registry(db: Option<&Database>, config: Option<&Config>) -> 
         return Registry::None(SOLO_SQLITE);
     };
     let nodes = store.read().nodes();
-    let read =
-        async { Ok::<_, ferrite_store::StoreError>((nodes.list().await?, nodes.db_now().await?)) };
+    let read = db.read(async { Ok((nodes.list().await?, nodes.db_now().await?)) });
     match read.await {
         Ok((all, now)) => Registry::Live(
             all.into_iter()
-                .filter(|n| {
-                    // A heartbeat in the future (by the database clock) is age zero.
-                    let age = now.as_micros().saturating_sub(n.heartbeat_at.as_micros());
-                    Duration::from_micros(u64::try_from(age).unwrap_or(0)) <= STALE_AFTER
-                })
+                .filter(|n| is_live(now, n.heartbeat_at, STALE_AFTER))
                 .collect(),
         ),
         Err(e) => Registry::Failed(format!("cannot read the node registry: {e}")),
+    }
+}
+
+/// How a measured skew (ms, local minus database) is judged (P52): over 2 s a warning,
+/// over 30 s an error, either sign.
+fn judge_skew(skew_ms: i64) -> Status {
+    let abs = u128::from(skew_ms.unsigned_abs());
+    if abs > MAX_TOTP_SKEW.as_millis() {
+        Status::Error
+    } else if abs > MAX_CLOCK_SKEW.as_millis() {
+        Status::Warn
+    } else {
+        Status::Ok
     }
 }
 
@@ -76,32 +84,35 @@ pub(super) async fn db_skew(db: Option<&Database>, config: Option<&Config>) -> F
         return Finding::skip(ID, "SQLite uses this machine's clock: nothing to compare");
     };
     let before = Timestamp::now();
-    let now = match store.read().nodes().db_now().await {
+    let now = match db
+        .read(async { Ok(store.read().nodes().db_now().await?) })
+        .await
+    {
         Ok(now) => now,
         Err(e) => return Finding::warn(ID, format!("cannot read the database clock: {e}")),
     };
     let skew = clock_skew(before, now, Timestamp::now());
-    let abs = u128::from(skew.unsigned_abs());
     let side = if skew >= 0 { "ahead of" } else { "behind" };
-    let detail = format!("this machine's clock is {abs} ms {side} the database's");
-    if abs > MAX_TOTP_SKEW.as_millis() {
-        Finding::error(
+    let detail = format!(
+        "this machine's clock is {} ms {side} the database's",
+        skew.unsigned_abs()
+    );
+    match judge_skew(skew) {
+        Status::Error => Finding::error(
             ID,
             format!(
                 "{detail}: over {} s, authenticator codes (TOTP) fail; fix the time sync (NTP)",
                 MAX_TOTP_SKEW.as_secs()
             ),
-        )
-    } else if abs > MAX_CLOCK_SKEW.as_millis() {
-        Finding::warn(
+        ),
+        Status::Warn => Finding::warn(
             ID,
             format!(
                 "{detail}: over {} s; check the time sync (NTP)",
                 MAX_CLOCK_SKEW.as_secs()
             ),
-        )
-    } else {
-        Finding::ok(ID, detail)
+        ),
+        _ => Finding::ok(ID, detail),
     }
 }
 
@@ -239,5 +250,22 @@ pub(super) fn site_url(registry: &Registry, config: Option<&Config>) -> Finding 
                 differ.join("; ")
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skew_thresholds_are_over_2_s_and_over_30_s_either_sign() {
+        for sign in [1, -1] {
+            assert_eq!(judge_skew(0), Status::Ok);
+            assert_eq!(judge_skew(sign * 2000), Status::Ok);
+            assert_eq!(judge_skew(sign * 2001), Status::Warn);
+            assert_eq!(judge_skew(sign * 30_000), Status::Warn);
+            assert_eq!(judge_skew(sign * 30_001), Status::Error);
+        }
+        assert_eq!(judge_skew(i64::MIN), Status::Error);
     }
 }

@@ -1,9 +1,16 @@
-//! The media checks of `ferrite doctor`: `media.store` (the write, read and delete probe
-//! `serve` runs at start) and `media.owner` (the GC's owner marker against this database's
-//! install id). The probe object under `tmp/` is the one write doctor makes (P49); a local
-//! root that does not exist is reported, never created. S3 is a network check: skipped with
-//! `--offline` (P51). Keys are never printed.
+//! The media checks of `ferrite doctor`: `media.store` and `media.owner` (the GC's owner
+//! marker against this database's install id).
+//!
+//! - **Local** (X4): no probe object is written. The root (and `tmp/`, if it exists) must
+//!   be folders this process may write in, asked of the kernel with the `fs.*` checks'
+//!   `access(2)` helpers; a missing root is reported, never created, and `tmp/` is never
+//!   created either (so doctor run as root leaves no root-owned folder that would stop
+//!   `serve`'s start probe).
+//! - **S3**: the write, read and delete probe `serve` runs at start, under `tmp/` (P49's
+//!   one write, nothing local). A network check: skipped with `--offline` (P51). Keys, the
+//!   configured ones and `AWS_*` from the environment, are never printed.
 
+use std::path::Path;
 use std::time::Duration;
 
 use ferrite_config::{Config, MediaSection};
@@ -12,45 +19,73 @@ use ferrite_store::SCHEMA_META_INSTALL_ID;
 
 use super::Finding;
 use super::db::{Database, unavailable};
-use super::fs::NO_CONFIG;
+use super::fs::{NO_CONFIG, can_write_in};
 
 /// How long the probe, or reading the owner marker, may take (P51).
 const MEDIA_TIMEOUT: Duration = Duration::from_secs(5);
 /// The detail of `media.owner` when the store was not opened.
 const NO_STORE: &str = "the media store was not checked (see media.store)";
 
-/// `media.store`: a local root must exist; then the probe runs (S3: not with `--offline`).
-/// Returns the store for `media.owner` when the probe passed.
+const ID: &str = "media.store";
+
+/// `media.store`. Returns the store for `media.owner` when it passed.
 pub(super) async fn store(config: Option<&Config>, offline: bool) -> (Finding, Option<MediaStore>) {
-    const ID: &str = "media.store";
     let Some(config) = config else {
         return (Finding::skip(ID, NO_CONFIG), None);
     };
-    // The configured S3 keys, scrubbed from any error text (a server's error body can
-    // name the access key id).
-    let (place, keys): (String, Vec<&str>) = match &config.media {
-        MediaSection::Local { root, .. } => {
-            match std::fs::metadata(root) {
-                Ok(meta) if meta.is_dir() => {}
-                Ok(_) => {
-                    let detail = format!("{} is not a folder", root.display());
-                    return (Finding::error(ID, detail), None);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    let detail = format!(
-                        "the local media root {} does not exist (a missing mount? `serve` \
-                         would start with an empty one)",
-                        root.display()
-                    );
-                    return (Finding::error(ID, detail), None);
-                }
-                Err(e) => {
-                    let detail = format!("cannot read {}: {}", root.display(), e.kind());
-                    return (Finding::error(ID, detail), None);
-                }
-            }
-            (format!("local {}", root.display()), Vec::new())
+    match &config.media {
+        MediaSection::Local { root, .. } => local(config, root),
+        MediaSection::S3 { .. } => s3(config, offline).await,
+    }
+}
+
+/// A local root: it and `tmp/` (if present) are folders this process may write in; nothing
+/// is written or created (X4).
+fn local(config: &Config, root: &Path) -> (Finding, Option<MediaStore>) {
+    let tmp = root.join("tmp");
+    for (dir, missing_is_fine) in [(root, false), (tmp.as_path(), true)] {
+        let problem = match std::fs::metadata(dir) {
+            Ok(meta) if meta.is_dir() && can_write_in(dir) => None,
+            Ok(meta) if meta.is_dir() => Some(format!(
+                "{} is not writable by this user (run doctor as the user that runs `serve`)",
+                dir.display()
+            )),
+            Ok(_) => Some(format!("{} is not a folder", dir.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && missing_is_fine => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(format!(
+                "the local media root {} does not exist (a missing mount? `serve` would \
+                 start with an empty one)",
+                dir.display()
+            )),
+            Err(e) => Some(format!("cannot read {}: {}", dir.display(), e.kind())),
+        };
+        if let Some(problem) = problem {
+            return (Finding::error(ID, problem), None);
         }
+    }
+    // The root exists, so opening it creates nothing.
+    match crate::site::open_media(config) {
+        Ok(media) => (
+            Finding::ok(
+                ID,
+                format!(
+                    "local {}: a writable folder (checked with access(2); no probe written)",
+                    root.display()
+                ),
+            ),
+            Some(media),
+        ),
+        Err(e) => (
+            Finding::error(ID, format!("{}: {e:#}", root.display())),
+            None,
+        ),
+    }
+}
+
+/// An S3 store: the write, read and delete probe (not with `--offline`).
+async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
+    let (place, keys): (String, Vec<String>) = match &config.media {
+        MediaSection::Local { root, .. } => return local(config, root),
         MediaSection::S3 {
             bucket,
             region,
@@ -81,9 +116,13 @@ pub(super) async fn store(config: Option<&Config>, offline: bool) -> (Finding, O
                     None,
                 );
             }
+            // Scrubbed from any error text (a server's error body can name the access key
+            // id): the configured keys and those the store would take from the environment.
             let keys = [
-                access_key_id.as_deref(),
-                secret_access_key.as_ref().map(|s| s.expose()),
+                access_key_id.clone(),
+                secret_access_key.as_ref().map(|s| s.expose().to_owned()),
+                std::env::var("AWS_ACCESS_KEY_ID").ok(),
+                std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
             ];
             (place, keys.into_iter().flatten().collect())
         }
@@ -91,7 +130,7 @@ pub(super) async fn store(config: Option<&Config>, offline: bool) -> (Finding, O
     let clean = |e: String| {
         keys.iter()
             .filter(|k| !k.is_empty())
-            .fold(e, |e, k| e.replace(k, "***"))
+            .fold(e, |e, k| e.replace(k.as_str(), "***"))
     };
     let media = match crate::site::open_media(config) {
         Ok(media) => media,
@@ -153,7 +192,7 @@ pub(super) async fn owner(
     };
     let install = match db.meta(SCHEMA_META_INSTALL_ID).await {
         Ok(install) => install.filter(|s| !s.is_empty()),
-        Err(e) => return Finding::warn(ID, format!("cannot read install_id: {e:#}")),
+        Err(e) => return Finding::warn(ID, format!("cannot read install_id: {e}")),
     };
     let marker = match tokio::time::timeout(MEDIA_TIMEOUT, media.read_owner()).await {
         Ok(Ok(marker)) => marker,

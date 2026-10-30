@@ -163,7 +163,8 @@ pub(super) async fn listen(config: Option<&Config>, node: Node) -> Finding {
                     ID,
                     format!(
                         "{url} answered {status}: the node is up but not ready (it cannot \
-                         reach its database)"
+                         reach its database, or it is starting or draining: retry if a \
+                         restart is in progress)"
                     ),
                 );
             }

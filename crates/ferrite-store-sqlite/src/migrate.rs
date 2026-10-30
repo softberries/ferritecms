@@ -11,6 +11,7 @@ use ferrite_store::{
     SCHEMA_META_MIN_BINARY, StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
+use sqlx::SqliteConnection;
 use sqlx::migrate::{MigrateError, Migrator};
 
 use crate::{KeepSnapshot, SqliteStore, exec::map_db_err};
@@ -29,11 +30,8 @@ fn embedded() -> Result<Vec<(i64, Directives)>, StoreError> {
         .collect()
 }
 
-/// Every embedded migration as a status entry, oldest first: with the applied versions
-/// and `schema_meta.min_binary_version`, [`MigrationStatus::compute`] gives what
-/// [`ferrite_store::Store::migration_status`] does (`ferrite doctor` reads those two over
-/// its own read-only connection while `serve` holds the store).
-pub fn embedded_status() -> Result<Vec<PendingMigration>, StoreError> {
+/// Every embedded migration as a status entry.
+fn embedded_status() -> Result<Vec<PendingMigration>, StoreError> {
     MIGRATOR
         .iter()
         .filter(|m| m.migration_type.is_up_migration())
@@ -74,37 +72,84 @@ struct Applied {
     checksum: Vec<u8>,
 }
 
+async fn table_exists_on(conn: &mut SqliteConnection, name: &str) -> Result<bool, StoreError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
+    )
+    .bind(name)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(map_db_err)
+}
+
+/// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
+async fn applied_on(conn: &mut SqliteConnection) -> Result<Vec<Applied>, StoreError> {
+    if !table_exists_on(conn, "_sqlx_migrations").await? {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(i64, Vec<u8>, bool)> =
+        sqlx::query_as("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(map_db_err)?;
+    if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
+        return Err(StoreError::Migration(format!(
+            "migration {v} failed partway (dirty); repair the database manually"
+        )));
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(version, checksum, _)| Applied { version, checksum })
+        .collect())
+}
+
+/// `schema_meta.min_binary_version`, if the table and key exist.
+async fn min_binary_on(conn: &mut SqliteConnection) -> Result<Option<Version>, StoreError> {
+    if !table_exists_on(conn, "schema_meta").await? {
+        return Ok(None);
+    }
+    let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+        .bind(SCHEMA_META_MIN_BINARY)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(map_db_err)?;
+    raw.map(|s| {
+        Version::parse(&s).map_err(|e| {
+            StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
+        })
+    })
+    .transpose()
+}
+
+/// The migration status of the database behind `conn`, reads only: what
+/// [`ferrite_store::Store::migration_status`] reports for a [`SqliteStore`], which calls this
+/// on a reader connection. `ferrite doctor` calls it on its own read-only connection, which
+/// needs no data-folder lock. A migration recorded as failed (dirty) or an unparsable
+/// `schema_meta.min_binary_version` is a [`StoreError::Migration`].
+pub async fn status_from(
+    conn: &mut SqliteConnection,
+    binary: &Version,
+) -> Result<MigrationStatus, StoreError> {
+    let applied: Vec<i64> = applied_on(conn).await?.iter().map(|a| a.version).collect();
+    let min_binary = min_binary_on(conn).await?;
+    Ok(MigrationStatus::compute(
+        &applied,
+        &embedded_status()?,
+        binary,
+        min_binary,
+    ))
+}
+
 impl SqliteStore {
     async fn table_exists(&self, name: &str) -> Result<bool, StoreError> {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
-        )
-        .bind(name)
-        .fetch_one(&self.reader)
-        .await
-        .map_err(map_db_err)
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        table_exists_on(&mut conn, name).await
     }
 
     /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
     async fn applied(&self) -> Result<Vec<Applied>, StoreError> {
-        if !self.table_exists("_sqlx_migrations").await? {
-            return Ok(Vec::new());
-        }
-        let rows: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
-            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(&self.reader)
-        .await
-        .map_err(map_db_err)?;
-        if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
-            return Err(StoreError::Migration(format!(
-                "migration {v} failed partway (dirty); repair the database manually"
-            )));
-        }
-        Ok(rows
-            .into_iter()
-            .map(|(version, checksum, _)| Applied { version, checksum })
-            .collect())
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        applied_on(&mut conn).await
     }
 
     async fn applied_versions(&self) -> Result<Vec<i64>, StoreError> {
@@ -113,31 +158,13 @@ impl SqliteStore {
 
     /// `schema_meta.min_binary_version`, if the table and key exist.
     async fn stored_min_binary(&self) -> Result<Option<Version>, StoreError> {
-        if !self.table_exists("schema_meta").await? {
-            return Ok(None);
-        }
-        let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
-            .bind(SCHEMA_META_MIN_BINARY)
-            .fetch_optional(&self.reader)
-            .await
-            .map_err(map_db_err)?;
-        raw.map(|s| {
-            Version::parse(&s).map_err(|e| {
-                StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
-            })
-        })
-        .transpose()
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        min_binary_on(&mut conn).await
     }
 
     pub(crate) async fn status(&self, binary: &Version) -> Result<MigrationStatus, StoreError> {
-        let applied = self.applied_versions().await?;
-        let min_binary = self.stored_min_binary().await?;
-        Ok(MigrationStatus::compute(
-            &applied,
-            &embedded_status()?,
-            binary,
-            min_binary,
-        ))
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        status_from(&mut conn, binary).await
     }
 
     pub(crate) async fn up(&self, to: Option<i64>) -> Result<MigrateReport, StoreError> {
@@ -331,6 +358,82 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// A migrated database plus `statements`, then a plain connection to it.
+    async fn migrated_with(
+        dir: &std::path::Path,
+        statements: &[&str],
+    ) -> (SqliteStore, sqlx::SqliteConnection) {
+        use sqlx::Connection;
+        let path = dir.join("ferrite.db");
+        let store = SqliteStore::open(SqliteOptions::new(&path)).await.unwrap();
+        store.migrate_up(None).await.unwrap();
+        for sql in statements {
+            sqlx::query(sqlx::AssertSqlSafe(*sql))
+                .execute(&store.writer)
+                .await
+                .unwrap();
+        }
+        let conn = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .read_only(true),
+        )
+        .await
+        .unwrap();
+        (store, conn)
+    }
+
+    #[tokio::test]
+    async fn status_from_matches_the_store_and_needs_no_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(dir.path(), &[]).await;
+        let binary = semver::Version::new(0, 1, 0);
+        assert_eq!(
+            super::status_from(&mut conn, &binary).await.unwrap(),
+            store.migration_status(&binary).await.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn status_from_refuses_a_dirty_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(
+            dir.path(),
+            &["UPDATE _sqlx_migrations SET success = 0 WHERE version = 2"],
+        )
+        .await;
+        let binary = semver::Version::new(0, 1, 0);
+        for err in [
+            super::status_from(&mut conn, &binary).await.unwrap_err(),
+            store.migration_status(&binary).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, ferrite_store::StoreError::Migration(m) if m.contains("migration 2 failed partway")),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_from_refuses_an_invalid_min_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(
+            dir.path(),
+            &["INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('min_binary_version', 'nope')"],
+        )
+        .await;
+        let binary = semver::Version::new(0, 1, 0);
+        for err in [
+            super::status_from(&mut conn, &binary).await.unwrap_err(),
+            store.migration_status(&binary).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, ferrite_store::StoreError::Migration(m) if m.contains("invalid min_binary_version `nope`")),
+                "{err:?}"
+            );
+        }
     }
 
     #[tokio::test]

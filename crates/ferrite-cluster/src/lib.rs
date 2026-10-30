@@ -17,5 +17,5 @@ pub use jobs::{
 pub use node::{
     CLOCK_SKEW_RECOVERED, ClusterMode, HEARTBEAT_EVERY, JOIN_LOCK_WAIT, JoinTimings, LOCK_JOIN,
     MAX_CLOCK_SKEW, MAX_NODE_NAME, NODE_EXPIRY, NodeIdentity, Registry, SOLO_WAIT, STALE_AFTER,
-    clock_skew, node_name,
+    clock_skew, is_live, node_name,
 };

@@ -101,20 +101,43 @@ pub async fn open_store_url(
     Ok(Arc::new(store))
 }
 
-/// A read-only view of a SQLite database, only for `ferrite doctor` (M4-3a P49/P50): one
-/// connection that takes no data-folder lock, opens no writer, runs no migration and
-/// creates no database, so it works while `serve` holds the store and never stops one
-/// from starting. Being read-only it never checkpoints the WAL; SQLite still updates the
-/// shared-memory index in `-shm` as every reader of a WAL database does. With no `-wal`
-/// or `-shm` file (a clean shutdown removed them) it opens `immutable`, since a read-only
-/// open would create both and leave them; nobody else has the file open then.
+/// A read-only view of a SQLite database, only for `ferrite doctor` (M4-3a P49/P50, X3):
+/// one connection that takes no data-folder lock, opens no writer, runs no migration and
+/// creates no file, so it works while `serve` holds the store and never stops one from
+/// starting. Being read-only it never checkpoints the WAL; SQLite still updates the
+/// shared-memory index in `-shm` as every reader of a WAL database does.
+///
+/// A read-only open of a WAL database creates a missing `-wal` or `-shm` and leaves it, so:
+/// with no `-wal` (every committed page is in the database file, and a running node always
+/// has one) it opens `immutable`, which touches neither; with a `-wal` but no `-shm` it
+/// refuses with [`MissingWalIndex`] rather than create the index.
 pub(crate) struct SqliteReadOnly {
     conn: tokio::sync::Mutex<sqlx::SqliteConnection>,
     immutable: bool,
 }
 
+/// `<db>-wal` exists without `<db>-shm`: a read-only open would create the WAL index
+/// (owned by whoever runs doctor), so [`SqliteReadOnly::open`] does not open the database.
+#[derive(Debug)]
+pub(crate) struct MissingWalIndex(pub(crate) std::path::PathBuf);
+
+impl std::fmt::Display for MissingWalIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} has a -wal file but no -shm (the WAL index is missing): not opened, since \
+             reading it would create the index and doctor creates no file; starting `serve` \
+             as its own user recovers it",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for MissingWalIndex {}
+
 impl SqliteReadOnly {
-    /// Opens the database at `path`, which must exist.
+    /// Opens the database at `path`, which must exist; [`MissingWalIndex`] when its `-wal`
+    /// exists without its `-shm`.
     pub(crate) async fn open(path: &Path) -> anyhow::Result<Self> {
         use sqlx::ConnectOptions;
         if !path.is_file() {
@@ -128,7 +151,10 @@ impl SqliteReadOnly {
             name.push(suffix);
             std::path::PathBuf::from(name).exists()
         };
-        let immutable = !side("-wal") && !side("-shm");
+        let immutable = !side("-wal");
+        if !immutable && !side("-shm") {
+            return Err(MissingWalIndex(path.to_path_buf()).into());
+        }
         let conn = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(path)
             .read_only(true)
@@ -144,71 +170,39 @@ impl SqliteReadOnly {
         })
     }
 
-    /// Whether it was opened `immutable` (no WAL files existed).
+    /// Whether it was opened `immutable` (no `-wal` existed).
     pub(crate) fn immutable(&self) -> bool {
         self.immutable
     }
 
-    /// What [`Store::migration_status`] reports, read the same way: the applied versions
-    /// (a migration recorded as failed is an error) and `schema_meta.min_binary_version`
-    /// against the embedded migrations.
+    /// What [`Store::migration_status`] reports, by the same reads
+    /// ([`ferrite_store_sqlite::status_from`]).
     pub(crate) async fn migration_status(
         &self,
         binary: &semver::Version,
     ) -> anyhow::Result<MigrationStatus> {
         let mut conn = self.conn.lock().await;
-        let applied: Vec<i64> = if table_exists(&mut conn, "_sqlx_migrations").await? {
-            let rows: Vec<(i64, bool)> =
-                sqlx::query_as("SELECT version, success FROM _sqlx_migrations ORDER BY version")
-                    .fetch_all(&mut *conn)
-                    .await?;
-            if let Some((v, _)) = rows.iter().find(|(_, ok)| !ok) {
-                bail!("migration {v} failed partway (dirty); repair the database manually");
-            }
-            rows.into_iter().map(|(v, _)| v).collect()
-        } else {
-            Vec::new()
-        };
-        let min_binary = match meta(&mut conn, ferrite_store::SCHEMA_META_MIN_BINARY).await? {
-            Some(raw) => Some(semver::Version::parse(&raw).with_context(|| {
-                format!("invalid {} `{raw}`", ferrite_store::SCHEMA_META_MIN_BINARY)
-            })?),
-            None => None,
-        };
-        Ok(MigrationStatus::compute(
-            &applied,
-            &ferrite_store_sqlite::embedded_status()?,
-            binary,
-            min_binary,
-        ))
+        Ok(ferrite_store_sqlite::status_from(&mut conn, binary).await?)
     }
 
     /// A `schema_meta` value (`None` without the table or the key).
     pub(crate) async fn schema_meta(&self, key: &str) -> anyhow::Result<Option<String>> {
         let mut conn = self.conn.lock().await;
-        meta(&mut conn, key).await
+        let table: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta')",
+        )
+        .fetch_one(&mut *conn)
+        .await?;
+        if !table {
+            return Ok(None);
+        }
+        Ok(
+            sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+                .bind(key)
+                .fetch_optional(&mut *conn)
+                .await?,
+        )
     }
-}
-
-async fn table_exists(conn: &mut sqlx::SqliteConnection, name: &str) -> anyhow::Result<bool> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
-    )
-    .bind(name)
-    .fetch_one(&mut *conn)
-    .await?)
-}
-
-async fn meta(conn: &mut sqlx::SqliteConnection, key: &str) -> anyhow::Result<Option<String>> {
-    if !table_exists(conn, "schema_meta").await? {
-        return Ok(None);
-    }
-    Ok(
-        sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&mut *conn)
-            .await?,
-    )
 }
 
 /// What the startup check wants done (02 §8).

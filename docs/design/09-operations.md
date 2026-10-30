@@ -1054,16 +1054,20 @@ Doctor never writes. It creates and changes no file, folder, key or schema, and 
 call `keys::site_key`, `gc::install_id` or `TlsCache::prepare`. Permissions are asked of the
 kernel with `access(2)` (the process's own user, ACLs and read-only mounts included) instead
 of writing a probe, and the SQLite lock is only tried and released at once, never created.
-The one write is the media probe object under `tmp/` (a local root gets a `tmp/` folder if
-it had none), which the GC removes if it is ever left. A SQLite database is read over one
-read-only connection that takes no lock, opens no writer and runs no migration, so doctor
-works while `serve` runs and never stops one from starting; being read-only it never
-checkpoints the WAL (SQLite still updates the shared-memory index in `-shm`, as every
-reader does), and with no `-wal`/`-shm` files it opens the database `immutable`, since a
-read-only open would create them. On Postgres doctor first checks over a bare connection
-that the configured schema exists and only then opens the store, whose open would create
-it. Nothing prints a secret: a database or SMTP URL (or its user), an S3 key and
-`secret.key` never appear. `info` means informational or not applicable to this site
+A local media root is checked the same way, with no probe object (M4-3a X4). The one write
+is the S3 probe object under `tmp/` in the bucket, which the GC removes if it is ever left;
+nothing local. A SQLite database is read over one read-only connection that takes no lock,
+opens no writer and runs no migration, so doctor works while `serve` runs and never stops
+one from starting (X3). Being read-only it never checkpoints the WAL; SQLite still updates
+the shared-memory index in `-shm`, as every reader does. A read-only open creates a missing
+`-wal` or `-shm` and leaves it, so: with no `-wal` (every committed page is then in
+`ferrite.db`; a running node always has one) the database is opened `immutable`, touching
+neither file; with a `-wal` but no `-shm` (a copy that dropped it) it is not opened at all:
+`db.connect` is a `warn` ("the WAL index is missing"; starting `serve` as its own user
+recovers it) and the checks that need the database are `skip`. On Postgres doctor first
+checks over a bare connection that the configured schema exists and only then opens the
+store, whose open would create it. Nothing prints a secret: a database or SMTP URL (or its
+user), an S3 key (configured or from `AWS_*`) and `secret.key` never appear. `info` means informational or not applicable to this site
 (Postgres has no `ferrite.lock`, a solo site no cluster); `skip` means the check did not
 run (`--offline`, a configuration that did not load, a database or media store that did
 not open, no running node, or a SQLite site for the clock and cluster checks). Run it as
@@ -1080,11 +1084,11 @@ the user that runs `serve`: a check passes or fails for the user that runs docto
 | `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
 | `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
 | `db.lock_state` | `info`: whether a node is running (it holds `<data>/ferrite.lock`). Tried without waiting and released at once; a missing lock file is not created. |
-| `db.connect` | The database opens read-only (`error` otherwise); reports backend, latency and, for Postgres, `host:port/database (schema S)` and the server version (older than 15 is an `error`). A Postgres schema that does not exist is an `error`, and it is not created. Postgres has 10 s to answer. |
+| `db.connect` | The database opens read-only (`error` otherwise); reports backend, latency and, for Postgres, `host:port/database (schema S)` and the server version (older than 15 is an `error`). A Postgres schema that does not exist is an `error`, and it is not created. SQLite: a `-wal` without its `-shm` is a `warn` and the database is not opened (above). Postgres has 10 s to connect, and each later database read (in every check) 10 s more. |
 | `db.schema` | Migration status, as `migrate status`: up to date or a newer compatible schema is `ok`, pending migrations a `warn` (`migrate up`), an incompatible schema an `error` and exit 3, a migration recorded as failed an `error`. |
 | `db.identity` | `site_id` present (`error`), `install_id` present (`warn`), `last_binary_version` against the binary (`warn` if newer). |
 | `upgrade.record` | `upgrade.json` parses (`warn` if not); on SQLite a provisional record (`snapshot: null` with a schema move: an upgrade that did not finish) and a missing named snapshot are warnings (§1); on Postgres a null snapshot is the normal finished record. |
-| `media.store` | The write, read and delete probe `serve` runs at start (5 s). Local: the root must exist (`error`: a missing mount; doctor does not create it) and the probe runs even with `--offline`. S3: bucket, endpoint and prefix are reported, never keys (`skip` with `--offline`; without configured keys the store uses this shell's `AWS_*`). A failed probe is an `error`. |
+| `media.store` | Local (X4): the root must exist (`error`: a missing mount; doctor does not create it) and, with `tmp/` if that exists, be a folder this user may write in, asked with `access(2)` (`error` otherwise); no probe is written and `tmp/` is never created, also with `--offline`. Run it as the user that runs `serve`. S3: the write, read and delete probe `serve` runs at start (5 s); bucket, endpoint and prefix are reported, never keys (`skip` with `--offline`; without configured keys the store uses this shell's `AWS_*`); a failed probe is an `error`. |
 | `media.owner` | The owner marker against `install_id`: absent is `info` (the first GC pass writes it), this install's `ok`, another install's a `warn` (the GC then deletes nothing; `media gc --claim`), one that cannot be read a `warn`. `skip` when the store or the database did not open. |
 | `clock.db_skew` | Postgres: this machine's clock against the server's `now()` at the midpoint of the round trip, `warn` over 2 s, `error` over 30 s (the TOTP window). SQLite: `skip` (the database uses the local clock). |
 | `clock.peers` | Postgres: `warn` for live nodes (heartbeat within 30 s by the database clock) whose recorded `clock_skew_ms` is over 2 s; no live node is `info`. SQLite: `skip`. |

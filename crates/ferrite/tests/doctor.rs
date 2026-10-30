@@ -933,11 +933,16 @@ fn doctor_changes_nothing_under_the_data_folder() {
     assert_eq!(out.status("fs.secret_key"), "warn");
     assert_eq!(out.status("upgrade.record"), "warn");
     assert_eq!(out.status("backup.target"), "ok");
-    // The database checks ran (read-only) and the media probe ran.
+    // The database checks ran (read-only) and the media root was checked (X4: no probe,
+    // so no `tmp/`).
     assert_eq!(out.status("db.connect"), "ok", "{}", out.stdout);
     assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
     assert_eq!(out.status("db.identity"), "ok", "{}", out.stdout);
     assert_eq!(out.status("media.store"), "ok", "{}", out.stdout);
+    assert!(
+        !tmp.path().join("media/tmp").exists(),
+        "doctor created tmp/"
+    );
     assert_eq!(
         before,
         unchanged_view(tmp.path()),
@@ -956,37 +961,56 @@ fn doctor_changes_nothing_under_the_data_folder() {
         "the data folder changed"
     );
 
-    // A database without its WAL files (a clean shutdown checkpointed them away): the
-    // read-only open must not create them.
+    let wal = tmp.path().join("ferrite.db-wal");
+    let shm = tmp.path().join("ferrite.db-shm");
+
+    // A `-wal` without its `-shm` (a copy that dropped it): not opened, since a read-only
+    // open would create the index. Nothing at all may change, `-shm` mtime included.
+    std::fs::remove_file(&shm).unwrap();
+    let before = snapshot(tmp.path());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.connect"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("db.connect").contains("WAL index is missing"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(out.status("db.schema"), "skip", "{}", out.stdout);
+    assert!(!shm.exists(), "doctor created ferrite.db-shm");
+    assert_eq!(before, snapshot(tmp.path()), "the data folder changed");
+
+    // No WAL files at all (a clean shutdown checkpointed them away): opened immutable.
     let db = tmp.path().join("ferrite.db");
     checkpoint(&db);
-    assert!(!tmp.path().join("ferrite.db-wal").exists());
-    let before = unchanged_view(tmp.path());
+    assert!(!wal.exists() && !shm.exists());
+    let before = snapshot(tmp.path());
     std::thread::sleep(std::time::Duration::from_millis(50));
     let out = offline(tmp.path());
     assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
-    assert_eq!(
-        before,
-        unchanged_view(tmp.path()),
-        "the data folder changed"
-    );
-    assert!(!tmp.path().join("ferrite.db-wal").exists());
-    assert!(!tmp.path().join("ferrite.db-shm").exists());
+    assert_eq!(before, snapshot(tmp.path()), "the data folder changed");
+    assert!(!wal.exists() && !shm.exists());
+
+    // A `-shm` without its `-wal`: every committed page is in the database file, so it is
+    // opened immutable too, and neither file is created or touched.
+    std::fs::write(&shm, b"").unwrap();
+    let before = snapshot(tmp.path());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let out = offline(tmp.path());
+    assert_eq!(out.status("db.connect"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("db.schema"), "ok", "{}", out.stdout);
+    assert_eq!(before, snapshot(tmp.path()), "the data folder changed");
+    assert!(!wal.exists(), "doctor created ferrite.db-wal");
 }
 
-/// [`snapshot`] of a data folder minus what doctor may touch: the media probe's `tmp/`
-/// folder (and the media root's own mtime and size, which change when `tmp/` is first
-/// made), the only write P49 allows; and the mtime of SQLite's `-shm` file, the shared
-/// memory index every reader of a WAL database updates (no data is written).
+/// [`snapshot`] of a data folder with the mtime of SQLite's `-shm` file left out: the
+/// shared-memory index every reader of a WAL database updates (no data is written; its
+/// size and mode still count). Nothing else is excluded.
 fn unchanged_view(root: &Path) -> BTreeMap<PathBuf, (u32, u64, SystemTime)> {
-    let media = root.join("media");
     snapshot(root)
         .into_iter()
-        .filter(|(path, _)| !path.starts_with(media.join("tmp")))
         .map(|(path, (mode, len, mtime))| {
-            if path == media {
-                (path, (mode, 0, SystemTime::UNIX_EPOCH))
-            } else if path.to_string_lossy().ends_with("-shm") {
+            if path.to_string_lossy().ends_with("-shm") {
                 (path, (mode, len, SystemTime::UNIX_EPOCH))
             } else {
                 (path, (mode, len, mtime))
@@ -1417,6 +1441,51 @@ fn a_missing_local_media_root_is_an_error_and_is_not_created() {
     assert!(!tmp.path().join("media").exists(), "doctor created media/");
 }
 
+#[test]
+fn local_media_is_checked_with_access_and_nothing_is_written() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let media = tmp.path().join("media");
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.store"), "ok", "{}", out.stdout);
+    assert!(
+        out.detail("media.store").contains("no probe written"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        std::fs::read_dir(&media).unwrap().count(),
+        0,
+        "media/ stays empty"
+    );
+    // `tmp/`, when it exists, must be writable too; a file there is not a folder.
+    let tmp_dir = media.join("tmp");
+    std::fs::create_dir(&tmp_dir).unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.store"), "ok", "{}", out.stdout);
+    assert_eq!(
+        std::fs::read_dir(&tmp_dir).unwrap().count(),
+        0,
+        "no probe in tmp/"
+    );
+    if !is_root() {
+        chmod(&tmp_dir, 0o500);
+        let out = offline(tmp.path());
+        chmod(&tmp_dir, 0o700);
+        assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+        assert!(out.detail("media.store").contains("tmp"), "{}", out.stdout);
+        chmod(&media, 0o500);
+        let out = offline(tmp.path());
+        chmod(&media, 0o755);
+        assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+        assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
+    }
+    std::fs::remove_dir(&tmp_dir).unwrap();
+    std::fs::write(&tmp_dir, b"x").unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+}
+
 /// An in-process S3 server (s3s-fs) with one bucket, `doctor-test`.
 struct S3 {
     _rt: tokio::runtime::Runtime,
@@ -1495,6 +1564,7 @@ fn media_store_probes_s3_and_never_prints_its_keys() {
     assert_eq!(out.status("media.owner"), "info", "{}", out.stdout);
     for text in [&out.stdout, &out.stderr] {
         assert!(!text.contains(S3_SECRET), "{text}");
+        assert!(!text.contains("test-access"), "{text}");
     }
     // A store doctor cannot use. (s3s-fs creates a missing bucket on the first put, so a
     // wrong bucket name passes here; a wrong secret key is refused like one.)
@@ -1509,6 +1579,26 @@ fn media_store_probes_s3_and_never_prints_its_keys() {
     assert_eq!(out.status("media.owner"), "skip", "{}", out.stdout);
     for text in [&out.stdout, &out.stderr] {
         assert!(!text.contains("hunter2"), "{text}");
+        // The access key id shows as presence only, even in a server's error body.
+        assert!(!text.contains("test-access"), "{text}");
+    }
+    // Keys from the environment (`AWS_*`, none configured), wrong too: scrubbed alike.
+    let mut from_env: Vec<(&str, String)> = s3_env(&s3, "doctor-test")
+        .into_iter()
+        .filter(|(k, _)| !k.contains("ACCESS_KEY"))
+        .collect();
+    from_env.push(("AWS_ACCESS_KEY_ID", "test-access".into()));
+    from_env.push(("AWS_SECRET_ACCESS_KEY", "env-hunter2-key".into()));
+    let out = online(tmp.path(), &from_env);
+    assert_eq!(out.status("media.store"), "error", "{}", out.stdout);
+    assert!(
+        out.detail("media.store").contains("AWS_*"),
+        "{}",
+        out.stdout
+    );
+    for text in [&out.stdout, &out.stderr] {
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("test-access"), "{text}");
     }
     // An endpoint nothing answers on.
     let mut gone = s3_env(&s3, "doctor-test");
@@ -1550,6 +1640,54 @@ fn smtp_connect_failure_is_a_warning_without_credentials() {
     // Mail off.
     let out = online(tmp.path(), &[]);
     assert_eq!(out.status("smtp.connect"), "info", "{}", out.stdout);
+    // A relay that answers (a loopback fake: greeting, EHLO, NOOP, QUIT); no mail is sent.
+    let port = smtp_fake();
+    let env = [
+        ("FERRITE_MAIL__SMTP_URL", format!("smtp://127.0.0.1:{port}")),
+        ("FERRITE_MAIL__FROM", "ops@example.com".to_owned()),
+    ];
+    let out = online(tmp.path(), &env);
+    assert_eq!(out.status("smtp.connect"), "ok", "{}", out.stdout);
+    assert!(
+        out.detail("smtp.connect")
+            .contains(&format!("127.0.0.1:{port} (plain, no TLS)")),
+        "{}",
+        out.stdout
+    );
+}
+
+/// A loopback SMTP server that answers a session (220, 250 to EHLO and everything else,
+/// 221 to QUIT) and refuses nothing; returns its port.
+fn smtp_fake() -> u16 {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let _ = stream.write_all(b"220 fake ESMTP\r\n");
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let command = line.trim_end().to_ascii_uppercase();
+                if command.starts_with("QUIT") {
+                    let _ = stream.write_all(b"221 bye\r\n");
+                    break;
+                }
+                let reply: &[u8] = if command.starts_with("EHLO") {
+                    b"250-fake\r\n250 8BITMIME\r\n"
+                } else {
+                    b"250 OK\r\n"
+                };
+                let _ = stream.write_all(reply);
+            }
+        }
+    });
+    port
 }
 
 #[test]
@@ -1613,6 +1751,15 @@ fn release_latest_warns_on_a_newer_release_and_informs_when_unreachable() {
     let (_rt2, base) = release_server(&format!("v{}", env!("CARGO_PKG_VERSION")));
     let out = doctor_args(tmp.path(), &["--base-url", &base]);
     assert_eq!(out.status("release.latest"), "ok", "{}", out.stdout);
+    // A prerelease is never offered on the stable channel: `info`, not `warn`.
+    let (_rt3, base) = release_server("v9.9.9-rc.1");
+    let out = doctor_args(tmp.path(), &["--base-url", &base]);
+    assert_eq!(out.status("release.latest"), "info", "{}", out.stdout);
+    assert!(
+        out.detail("release.latest").contains("prerelease"),
+        "{}",
+        out.stdout
+    );
     let out = doctor_args(tmp.path(), &["--base-url", &closed_url()]);
     assert_eq!(out.status("release.latest"), "info", "{}", out.stdout);
     assert_eq!(out.code, 0, "{}", out.stdout);
@@ -1660,6 +1807,52 @@ impl PgSchema {
         })
         .join()
         .unwrap()
+    }
+
+    /// Runs `sql` with the site schema on the search path; returns the first column of each
+    /// row as text (none for a statement without rows).
+    fn query(&self, sql: &str) -> Vec<String> {
+        use sqlx::{Connection, Row};
+        let (url, schema, sql) = (self.url.clone(), self.schema.clone(), sql.to_owned());
+        std::thread::spawn(move || {
+            rt().block_on(async move {
+                let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "SET search_path TO \"{schema}\""
+                )))
+                .execute(&mut conn)
+                .await
+                .expect("search_path");
+                let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(&mut conn)
+                    .await
+                    .expect("query");
+                conn.close().await.expect("close");
+                rows.iter()
+                    .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
+                    .collect()
+            })
+        })
+        .join()
+        .unwrap()
+    }
+
+    /// What doctor must leave as it is: the schemas named after this test's, the site
+    /// schema's tables, and its `schema_meta` and `_sqlx_migrations` rows.
+    fn listing(&self) -> Vec<String> {
+        let mut out = self.query(&format!(
+            "SELECT nspname::text FROM pg_namespace WHERE nspname LIKE '{}%' ORDER BY 1",
+            self.schema
+        ));
+        out.extend(self.query(&format!(
+            "SELECT tablename::text FROM pg_tables WHERE schemaname = '{}' ORDER BY 1",
+            self.schema
+        )));
+        out.extend(self.query("SELECT key || '=' || value FROM schema_meta ORDER BY key"));
+        out.extend(self.query(
+            "SELECT version::text || ':' || success::text FROM _sqlx_migrations ORDER BY version",
+        ));
+        out
     }
 
     /// Registers a node row, as a running `serve` would, with `version` and `meta`.
@@ -1732,7 +1925,12 @@ fn postgres_site_checks_and_the_cluster_view() {
     let Some(pg) = PgSchema::new() else { return };
     let tmp = tempfile::tempdir().expect("tempdir");
     init_pg(tmp.path(), &pg);
+    let before = pg.listing();
+    assert!(before.len() > 10, "{before:?}");
     let out = online(tmp.path(), &[]);
+    // Doctor wrote nothing to Postgres: no schema, table, schema_meta or migration row
+    // changed.
+    assert_eq!(before, pg.listing(), "the database changed");
     assert_eq!(out.status("db.connect"), "ok", "{}", out.stdout);
     assert!(
         out.detail("db.connect").contains("Postgres"),
@@ -1753,6 +1951,21 @@ fn postgres_site_checks_and_the_cluster_view() {
     }
     assert_eq!(out.status("net.listen"), "skip", "{}", out.stdout);
     assert_eq!(out.count("error"), 0, "{}", out.stdout);
+
+    // A stale row (a node gone for a minute) is ignored by every cluster check, however
+    // it differs.
+    pg.register(
+        "node-stale",
+        "0.9.0",
+        serde_json::json!({"site_url": "https://stale.example", "mode": "cluster", "clock_skew_ms": 9000}),
+    );
+    pg.query(
+        "UPDATE nodes SET heartbeat_at = now() - interval '1 minute' WHERE name = 'node-stale'",
+    );
+    let out = online(tmp.path(), &[]);
+    for id in ["clock.peers", "cluster.versions", "cluster.site_url"] {
+        assert_eq!(out.status(id), "info", "{id}\n{}", out.stdout);
+    }
 
     // Two live nodes on different versions, one of them for another site URL and with a
     // skewed clock.
@@ -1790,6 +2003,7 @@ fn postgres_site_checks_and_the_cluster_view() {
         "{}",
         out.stdout
     );
+    assert!(!out.stdout.contains("node-stale"), "{}", out.stdout);
     assert_eq!(out.code, 2, "{}", out.stdout);
 
     // A live row with this configuration's node name is this folder's node: net.listen
