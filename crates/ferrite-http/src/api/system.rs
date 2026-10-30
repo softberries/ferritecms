@@ -466,7 +466,7 @@ fn instant(field: &'static str, value: &str) -> Result<Timestamp, Problem> {
     security(("session" = []), ("bearer" = [])),
     params(SeriesParams),
     responses(
-        (status = 200, description = "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (`p95_ms` the largest), zeros where no node wrote a row", body = MetricsSeriesDto),
+        (status = 200, description = "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (the page latency histograms too; `p95_ms` is the p95 of the summed histogram), zeros where no node wrote a row", body = MetricsSeriesDto),
         (status = 400, description = "`validation` (`from`, `to`, `step`, `node` malformed) or `malformed-query` (a parameter missing)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),

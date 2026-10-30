@@ -46,7 +46,7 @@ export function seriesWindow(range: MetricsRange, now: Date): SeriesQuery {
 
 /**
  * `GET /system/metrics/series` (`manage_system`): dense buckets, every node's summed
- * (`p95_ms` the largest) unless `node` is given.
+ * (the page latency histograms too, `p95_ms` computed from the sum) unless `node` is given.
  */
 export function getMetricsSeries(
   query: SeriesQuery,

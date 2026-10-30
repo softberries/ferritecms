@@ -2,33 +2,22 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use ferrite_domain::{MetricCounts, NodeId, SeriesBucket, SeriesStep, Timestamp};
+use ferrite_domain::{
+    MetricCounts, NodeId, PAGE_LATENCY_SLOTS, SeriesBucket, SeriesStep, Timestamp,
+};
 use ferrite_store::{
     NodeMetricsRepo, StoreError, check_node_metrics, check_prune_limit, check_series_range,
     series_bucket_from_db,
 };
+use sqlx::Row;
 
 use super::PgRepos;
-use crate::exec::run;
-
-/// A bucket row: start, the nine sums, the largest p95.
-type BucketRow = (
-    DateTime<Utc>,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-    i64,
-);
+use crate::exec::{map_db_err, run};
 
 /// The series select over `[$1, $2)`, in `date_bin` buckets of `$stride` from the
 /// epoch (independent of the session time zone), then the node filter (`$3`) when
-/// given; sums are cast back from `numeric`.
+/// given: the bucket start, the nine sums and the twelve page latency bucket sums
+/// (M4-2 R7), cast back from `numeric`.
 macro_rules! series_sql {
     ($stride:literal $(, $filter:literal)?) => {
         concat!(
@@ -37,7 +26,11 @@ macro_rules! series_sql {
             "SUM(requests)::bigint, SUM(errors_5xx)::bigint, SUM(page_views)::bigint, ",
             "SUM(cache_hits)::bigint, SUM(cache_misses)::bigint, SUM(plugin_calls)::bigint, ",
             "SUM(plugin_failures)::bigint, SUM(jobs_done)::bigint, SUM(jobs_failed)::bigint, ",
-            "MAX(p95_ms)::bigint FROM node_metrics WHERE minute >= $1 AND minute < $2",
+            "SUM(page_le_5)::bigint, SUM(page_le_10)::bigint, SUM(page_le_25)::bigint, ",
+            "SUM(page_le_50)::bigint, SUM(page_le_100)::bigint, SUM(page_le_250)::bigint, ",
+            "SUM(page_le_500)::bigint, SUM(page_le_1000)::bigint, SUM(page_le_2500)::bigint, ",
+            "SUM(page_le_5000)::bigint, SUM(page_le_10000)::bigint, ",
+            "SUM(page_over_10000)::bigint FROM node_metrics WHERE minute >= $1 AND minute < $2",
             $($filter,)?
             " GROUP BY bucket ORDER BY bucket"
         )
@@ -64,11 +57,15 @@ impl NodeMetricsRepo for PgRepos {
         minute: Timestamp,
         counts: &MetricCounts,
     ) -> Result<(), StoreError> {
-        let (c, p95) = check_node_metrics(minute, counts)?;
+        let (c, l) = check_node_metrics(minute, counts)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO node_metrics (node_id, minute, requests, errors_5xx, page_views, \
              cache_hits, cache_misses, plugin_calls, plugin_failures, jobs_done, \
-             jobs_failed, p95_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             jobs_failed, page_le_5, page_le_10, page_le_25, page_le_50, page_le_100, \
+             page_le_250, page_le_500, page_le_1000, page_le_2500, page_le_5000, \
+             page_le_10000, page_over_10000) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
+             $17, $18, $19, $20, $21, $22, $23) \
              ON CONFLICT (node_id, minute) DO UPDATE SET \
              requests = node_metrics.requests + excluded.requests, \
              errors_5xx = node_metrics.errors_5xx + excluded.errors_5xx, \
@@ -79,7 +76,18 @@ impl NodeMetricsRepo for PgRepos {
              plugin_failures = node_metrics.plugin_failures + excluded.plugin_failures, \
              jobs_done = node_metrics.jobs_done + excluded.jobs_done, \
              jobs_failed = node_metrics.jobs_failed + excluded.jobs_failed, \
-             p95_ms = GREATEST(node_metrics.p95_ms, excluded.p95_ms)"
+             page_le_5 = node_metrics.page_le_5 + excluded.page_le_5, \
+             page_le_10 = node_metrics.page_le_10 + excluded.page_le_10, \
+             page_le_25 = node_metrics.page_le_25 + excluded.page_le_25, \
+             page_le_50 = node_metrics.page_le_50 + excluded.page_le_50, \
+             page_le_100 = node_metrics.page_le_100 + excluded.page_le_100, \
+             page_le_250 = node_metrics.page_le_250 + excluded.page_le_250, \
+             page_le_500 = node_metrics.page_le_500 + excluded.page_le_500, \
+             page_le_1000 = node_metrics.page_le_1000 + excluded.page_le_1000, \
+             page_le_2500 = node_metrics.page_le_2500 + excluded.page_le_2500, \
+             page_le_5000 = node_metrics.page_le_5000 + excluded.page_le_5000, \
+             page_le_10000 = node_metrics.page_le_10000 + excluded.page_le_10000, \
+             page_over_10000 = node_metrics.page_over_10000 + excluded.page_over_10000"
         )
         .bind(node.as_uuid())
         .bind(DateTime::<Utc>::from(minute))
@@ -92,7 +100,18 @@ impl NodeMetricsRepo for PgRepos {
         .bind(c[6])
         .bind(c[7])
         .bind(c[8])
-        .bind(p95)
+        .bind(l[0])
+        .bind(l[1])
+        .bind(l[2])
+        .bind(l[3])
+        .bind(l[4])
+        .bind(l[5])
+        .bind(l[6])
+        .bind(l[7])
+        .bind(l[8])
+        .bind(l[9])
+        .bind(l[10])
+        .bind(l[11])
         .execute(e))?;
         Ok(())
     }
@@ -106,8 +125,8 @@ impl NodeMetricsRepo for PgRepos {
     ) -> Result<Vec<SeriesBucket>, StoreError> {
         check_series_range(from, to)?;
         let sql = series_sql(step, node.is_some());
-        let rows: Vec<BucketRow> = run!(&self.exec, |e| {
-            let q = sqlx::query_as::<_, BucketRow>(sql)
+        let rows = run!(&self.exec, |e| {
+            let q = sqlx::query(sql)
                 .bind(DateTime::<Utc>::from(from))
                 .bind(DateTime::<Utc>::from(to));
             match node {
@@ -116,9 +135,19 @@ impl NodeMetricsRepo for PgRepos {
             }
             .fetch_all(e)
         })?;
-        rows.into_iter()
-            .map(|(start, a, b, c, d, f, g, h, i, j, p95)| {
-                series_bucket_from_db(Timestamp::from(start), [a, b, c, d, f, g, h, i, j], p95)
+        rows.iter()
+            .map(|row| {
+                let get = |i: usize| row.try_get::<i64, _>(i).map_err(map_db_err);
+                let start: DateTime<Utc> = row.try_get(0).map_err(map_db_err)?;
+                let mut sums = [0i64; 9];
+                for (i, slot) in sums.iter_mut().enumerate() {
+                    *slot = get(1 + i)?;
+                }
+                let mut latency = [0i64; PAGE_LATENCY_SLOTS];
+                for (i, slot) in latency.iter_mut().enumerate() {
+                    *slot = get(10 + i)?;
+                }
+                series_bucket_from_db(Timestamp::from(start), sums, latency)
             })
             .collect()
     }

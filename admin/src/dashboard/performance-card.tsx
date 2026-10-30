@@ -1,7 +1,8 @@
 // Performance (`manage_system`, P36): the page-cache hit ratio over the range (hits per
 // lookup, every node's) and the page p95, each as a headline number with an hourly line
-// under it. The p95 is a bucket bound ("≤ 250 ms"), the slowest hour's; hours without
-// lookups or page responses are gaps, not zeros. Two separate charts, never two y-scales.
+// under it. The p95 is a bucket bound ("≤ 250 ms"): the headline's is that of every page
+// response in the range, each hour's that of the hour's; hours without lookups or page
+// responses are gaps, not zeros. Two separate charts, never two y-scales.
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
@@ -140,7 +141,9 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
           label={t("performance.p95")}
           value={totals.p95 === null ? null : p95Text(totals.p95)}
           caption={
-            totals.p95 === null ? t("performance.noPages", { span }) : t("performance.p95Caption")
+            totals.p95 === null
+              ? t("performance.noPages", { span })
+              : t("performance.p95Caption", { span })
           }
         >
           {totals.p95 === null ? null : (

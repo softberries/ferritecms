@@ -178,7 +178,7 @@
     "ratioCaption": "{{hits}} of {{lookups}} lookups",
     "noLookups": "No page cache lookups in {{span}}.",
     "p95": "Page p95",
-    "p95Caption": "95th percentile of the slowest hour",
+    "p95Caption": "95th percentile of the page responses in {{span}}",
     "noPages": "No page responses in {{span}}.",
     "le_ms": "≤ {{value}} ms",
     "le_s": "≤ {{value}} s",

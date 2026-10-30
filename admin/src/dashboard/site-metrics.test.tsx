@@ -28,6 +28,7 @@ function series(
     jobs_done: 0,
     jobs_failed: 0,
     p95_ms: 0,
+    page_latency: Array<number>(12).fill(0),
     ...fill(i),
   }));
   return json({
@@ -37,6 +38,13 @@ function series(
     node: null,
     buckets,
   });
+}
+
+/** A page latency histogram with `pages` responses in `index`. */
+function slot(index: number, pages: number): number[] {
+  const h = Array<number>(12).fill(0);
+  h[index] = pages;
+  return h;
 }
 
 /** The last two hours had traffic: 1,200 + 34 page views, a 5xx, 75 % cache hits. */
@@ -54,9 +62,17 @@ function busy(url: URL) {
         cache_hits: 900,
         cache_misses: 300,
         p95_ms: 250,
+        page_latency: slot(5, 1200),
       };
     if (i === hours - 1)
-      return { requests: 50, page_views: 34, cache_hits: 0, cache_misses: 0, p95_ms: 25 };
+      return {
+        requests: 50,
+        page_views: 34,
+        cache_hits: 0,
+        cache_misses: 0,
+        p95_ms: 25,
+        page_latency: slot(2, 34),
+      };
     return {};
   });
 }
@@ -130,7 +146,9 @@ describe("site-metrics", () => {
     const ratio = within(performance).getByTestId("hit-ratio");
     expect(ratio).toHaveTextContent("75%");
     expect(ratio).toHaveTextContent("900 of 1,200 lookups");
-    expect(within(performance).getByTestId("page-p95")).toHaveTextContent("≤ 250 ms");
+    const p95 = within(performance).getByTestId("page-p95");
+    expect(p95).toHaveTextContent("≤ 250 ms");
+    expect(p95).toHaveTextContent("95th percentile of the page responses in the last 24 hours");
 
     // One request, summed over nodes (no `node`), hourly over exactly 24 hours.
     expect(seen).toHaveLength(1);

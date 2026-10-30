@@ -121,7 +121,8 @@ impl SystemService {
     /// The per-node minute metrics of `[from, to)` summed over nodes (or of `node`
     /// only) into `step` buckets, dense: every bucket of the range is there, zeros where
     /// no row is (M4-2 P35). The range is widened to whole buckets (aligned to the Unix
-    /// epoch, UTC). A bucket's `p95_ms` is the largest of its minutes' and nodes'.
+    /// epoch, UTC). A bucket's page latency histogram is the sum of its minutes' and
+    /// nodes', so its p95 is that of all its page responses (M4-2 R7).
     /// Invalid: `from >= to` (`invalid_field("to")`); a span over
     /// [`SeriesStep::max_span`] (`invalid_field("step")`: minutes cover at most 24 h,
     /// hours and days 7 days).

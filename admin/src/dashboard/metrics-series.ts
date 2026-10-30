@@ -1,7 +1,8 @@
 // The dashboard's view of `GET /system/metrics/series` (P36): chart points per bucket,
 // the range's totals and the 7-day text twin's local days. The buckets are dense and
 // every node's, summed; `p95_ms` is the upper bound of the latency bucket holding the
-// page p95 (the largest of the bucket's minutes and nodes), 0 without page responses.
+// p95 of the bucket's page responses (0 without any), and `page_latency` their
+// histogram, which the range's p95 is computed from (M4-2 R7).
 
 import type { SchemaSeriesBucketDto } from "@/api/schema";
 import type { MetricsRange } from "@/api/system";
@@ -29,8 +30,32 @@ export interface MetricTotals {
   errors: number;
   hits: number;
   misses: number;
-  /** The slowest bucket's p95 bound; `null` when no bucket had page responses. */
+  /**
+   * The p95 bound of every page response in the range (from the summed histograms, not
+   * the slowest bucket's); `null` without page responses.
+   */
   p95: number | null;
+}
+
+/** Upper bounds (ms) of `page_latency`'s first 11 buckets; the 12th holds anything slower. */
+const LATENCY_BOUNDS_MS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000] as const;
+
+/**
+ * The upper bound (ms) of the latency bucket holding the 95th percentile of a page latency
+ * histogram (per-bucket counts), as the server computes `p95_ms`: the first bucket at which
+ * the running total reaches ceil(0.95 × total); the overflow bucket reads 10 000. `null`
+ * without responses.
+ */
+export function histogramP95(counts: readonly number[]): number | null {
+  const total = counts.reduce((sum, n) => sum + n, 0);
+  if (total === 0) return null;
+  const rank = total - Math.floor(total / 20);
+  let seen = 0;
+  for (const [i, n] of counts.entries()) {
+    seen += n;
+    if (seen >= rank) return LATENCY_BOUNDS_MS[i] ?? LAST_BOUND_MS;
+  }
+  return LAST_BOUND_MS;
 }
 
 export function points(buckets: readonly SchemaSeriesBucketDto[]): MetricPoint[] {
@@ -58,14 +83,16 @@ export function summarise(buckets: readonly SchemaSeriesBucketDto[]): MetricTota
     misses: 0,
     p95: null,
   };
+  const latency: number[] = [];
   for (const b of buckets) {
     totals.pageViews += b.page_views;
     totals.requests += b.requests;
     totals.errors += b.errors_5xx;
     totals.hits += b.cache_hits;
     totals.misses += b.cache_misses;
-    if (b.p95_ms > 0) totals.p95 = Math.max(totals.p95 ?? 0, b.p95_ms);
+    for (const [i, n] of b.page_latency.entries()) latency[i] = (latency[i] ?? 0) + n;
   }
+  totals.p95 = histogramP95(latency);
   return totals;
 }
 

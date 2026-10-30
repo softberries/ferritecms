@@ -26,7 +26,7 @@ backend_tests!(
 
 backend_tests!(
     node_metrics_insert_and_series_sum_across_nodes,
-    series_p95_is_max,
+    series_p95_from_combined_histogram,
     prune_older_than_7_days,
 );
 

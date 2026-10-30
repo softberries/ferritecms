@@ -2937,11 +2937,18 @@ export interface components {
             jobs_failed: number;
             /**
              * Format: int32
-             * @description The upper bound (ms) of the latency bucket holding the page p95: the largest of
-             *     the bucket's minutes and nodes; 0 without page responses. Bounds: 5, 10, 25, 50,
-             *     100, 250, 500, 1000, 2500, 5000 and 10000 (also for anything slower).
+             * @description The upper bound (ms) of the latency bucket holding the 95th percentile of the
+             *     bucket's page responses (every minute's and node's together, from the summed
+             *     `page_latency`); 0 without page responses. Bounds: 5, 10, 25, 50, 100, 250, 500,
+             *     1000, 2500, 5000 and 10000 (also for anything slower).
              */
             p95_ms: number;
+            /**
+             * @description Page responses per latency bucket, 12 counts (not cumulative): at most 5, 10, 25,
+             *     50, 100, 250, 500, 1000, 2500, 5000 and 10000 ms, then over 10 s. Summed over
+             *     several buckets they give the p95 of a longer range.
+             */
+            page_latency: number[];
             /**
              * Format: int64
              * @description `200` HTML page views (no bots, previews or logged-in requests).
@@ -8569,7 +8576,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (`p95_ms` the largest), zeros where no node wrote a row */
+            /** @description Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (the page latency histograms too; `p95_ms` is the p95 of the summed histogram), zeros where no node wrote a row */
             200: {
                 headers: {
                     [name: string]: unknown;

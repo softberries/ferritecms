@@ -6792,7 +6792,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (`p95_ms` the largest), zeros where no node wrote a row",
+            "description": "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (the page latency histograms too; `p95_ms` is the p95 of the summed histogram), zeros where no node wrote a row",
             "content": {
               "application/json": {
                 "schema": {
@@ -13255,7 +13255,8 @@
           "plugin_failures",
           "jobs_done",
           "jobs_failed",
-          "p95_ms"
+          "p95_ms",
+          "page_latency"
         ],
         "properties": {
           "cache_hits": {
@@ -13291,8 +13292,19 @@
           "p95_ms": {
             "type": "integer",
             "format": "int32",
-            "description": "The upper bound (ms) of the latency bucket holding the page p95: the largest of\nthe bucket's minutes and nodes; 0 without page responses. Bounds: 5, 10, 25, 50,\n100, 250, 500, 1000, 2500, 5000 and 10000 (also for anything slower).",
+            "description": "The upper bound (ms) of the latency bucket holding the 95th percentile of the\nbucket's page responses (every minute's and node's together, from the summed\n`page_latency`); 0 without page responses. Bounds: 5, 10, 25, 50, 100, 250, 500,\n1000, 2500, 5000 and 10000 (also for anything slower).",
             "minimum": 0
+          },
+          "page_latency": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Page responses per latency bucket, 12 counts (not cumulative): at most 5, 10, 25,\n50, 100, 250, 500, 1000, 2500, 5000 and 10000 ms, then over 10 s. Summed over\nseveral buckets they give the p95 of a longer range.",
+            "maxItems": 12,
+            "minItems": 12
           },
           "page_views": {
             "type": "integer",

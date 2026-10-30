@@ -203,11 +203,10 @@ pub trait Repos: Send + Sync {
 #[async_trait]
 pub trait NodeMetricsRepo: Send + Sync {
     /// Adds `counts` to `node`'s row of `minute` (a whole UTC minute), in one statement:
-    /// the row is created if absent; otherwise its counts are added to and `p95_ms`
-    /// becomes the larger of the two. A writer that flushes the same minute twice (a
-    /// shutdown flush, a write retried after a failure) so never conflicts or loses a
-    /// count. `Invalid`: `minute` before 1970 or not a whole minute, a count above `i64::MAX`, or
-    /// `p95_ms` above `i32::MAX`.
+    /// the row is created if absent; otherwise its counts (the page latency histogram's
+    /// too) are added to. A writer that flushes the same minute twice (a shutdown flush,
+    /// a write retried after a failure) so never conflicts or loses a count. `Invalid`:
+    /// `minute` before 1970 or not a whole minute, or a count above `i64::MAX`.
     async fn insert(
         &self,
         node: NodeId,
@@ -215,8 +214,9 @@ pub trait NodeMetricsRepo: Send + Sync {
         counts: &MetricCounts,
     ) -> Result<(), StoreError>;
     /// The rows whose minute is in `[from, to)` (of `node` only, when given), summed per
-    /// `step` bucket (aligned to the Unix epoch; `p95_ms` the largest): ascending by
-    /// start, only buckets with rows. `Invalid`: `from >= to`.
+    /// `step` bucket (aligned to the Unix epoch; the page latency histograms summed per
+    /// latency bucket, so a bucket's p95 is that of all its page responses, M4-2 R7):
+    /// ascending by start, only buckets with rows. `Invalid`: `from >= to`.
     async fn series(
         &self,
         from: Timestamp,

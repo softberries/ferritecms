@@ -753,15 +753,16 @@ this node's runner, and the page-class latency buckets) that the per-minute
 **As built (M4-2 P35): `node_metrics` and the series.** Every node, solo included, writes
 one row per minute to `node_metrics` (migration `0012_node_metrics`; key `node_id`,
 `minute`; the counts `requests`, `errors_5xx`, `page_views`, `cache_hits`,
-`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and
-`p95_ms`). The writer is a `serve` background task, not a job
+`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and the
+page latency histogram `page_le_5` … `page_le_10000`, `page_over_10000`). The writer is a
+`serve` background task, not a job
 (`crates/ferrite/src/node_metrics.rs`): at every whole UTC minute of the wall clock it
 diffs two registry snapshots and writes the delta under the minute its period started
-in, so the first, partial minute after a boot has a row of its own. `p95_ms` is the upper
-bound (ms) of the latency bucket that holds the 95th percentile of that minute's page
-responses (5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000 or 10000, the last also for
-anything slower; 0 without page responses). A write adds to an existing (node, minute)
-row (counts added, `p95_ms` the larger), so a write that failed is carried by the next
+in, so the first, partial minute after a boot has a row of its own. The histogram counts
+that minute's page responses per latency bucket (at most 5, 10, 25, 50, 100, 250, 500,
+1000, 2500, 5000 and 10000 ms, then over 10 s; not cumulative), so the histograms of
+several minutes and nodes add up (M4-2 R7). A write adds to an existing (node, minute)
+row (every count added, the histogram's too), so a write that failed is carried by the next
 one (still under its own minute; logged) and a repeated minute never conflicts. So
 after a database outage the traffic of the whole outage shows as one spike in the
 outage's first minute followed by zeros: nothing is lost, it is filed late. A periodic
@@ -778,10 +779,16 @@ the database clock only for the prune.
 `GET /api/v1/system/metrics/series?from&to&step=minute|hour|day[&node=<id>]`
 (`manage_system` + `system:read`): `from` and `to` are RFC 3339; the range is widened to
 whole buckets (aligned to the Unix epoch, so days are UTC days) and returned as
-`{from, to, step, node, buckets: [{start, requests, …, p95_ms}]}`, **dense** (every bucket
-of the range, zeros where no node wrote a row) and ascending. Each bucket sums the
-minutes of every node (or of `node` only) and takes the largest `p95_ms`, which is an
-upper bound, not a merged percentile. A minute series spans at most 24 h, hour and day
+`{from, to, step, node, buckets: [{start, requests, …, p95_ms, page_latency}]}`,
+**dense** (every bucket of the range, zeros where no node wrote a row) and ascending.
+Each bucket sums the minutes of every node (or of `node` only), the histogram per latency
+bucket too (`page_latency`: the 12 counts), and `p95_ms` is computed from that sum: the
+upper bound (ms) of the latency bucket holding the 95th percentile of all the bucket's
+page responses (the first bucket whose running total reaches ceil(0.95 × total); 10000
+also for anything slower; 0 without page responses). It is exact to the bucket over any
+range and across nodes, never the largest of the minutes' values (M4-2 R7); summing
+`page_latency` over several buckets gives a longer range's p95 the same way (the
+dashboard's headline). A minute series spans at most 24 h, hour and day
 series 7 days (`422`, field `step`); `to` not after `from` is `422` (field `to`); a
 malformed value is `400`. (Prometheus remains the source of truth for real monitoring.)
 
