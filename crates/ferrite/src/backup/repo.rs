@@ -147,7 +147,7 @@ impl Repo {
             }
             RepoLocation::S3(url) => (url.clone(), None, url.clone()),
         };
-        let blobs = parse_media_url(&url, true)?;
+        let blobs = parse_media_url(&url, create)?;
         Ok(Repo {
             store: blobs.object_store(),
             prefix: blobs.prefix().to_owned(),

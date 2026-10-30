@@ -935,7 +935,8 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   "stable"`) copies its `/src/admin/dist` in and builds `cargo build --release --locked -p
   ferrite`, which embeds it; the runtime is `gcr.io/distroless/cc-debian12:nonroot` (glibc,
   no shell, uid 65532) with the binary at `/ferrite`, an empty `/data` owned by the
-  non-root user, `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
+  non-root user with mode 0750 (`COPY --chmod=0750`: a plain `COPY` of a folder does not keep the
+  source's mode), `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
   "--data", "/data"]`. Every base is pinned as `name:tag@sha256:<multi-arch index
   digest>` (P37; the digests matched their tags on 2026-10-30, `docker buildx imagetools
   inspect`); bump them by hand. CA certificates come with the distroless base.
@@ -1065,7 +1066,7 @@ passes or fails for the user that runs doctor.
 |---|---|
 | `version.binary` | The binary's version and target (`info`). |
 | `config.load` | The configuration loads as `serve` loads it, with the offline checks `serve` runs (`backup.to`, the SQLite database of a scheduled backup). A missing `ferrite.toml` is an `error` (the loader alone would use defaults). Problems are errors, warnings (`config check` prints them to stderr) are warnings. |
-| `fs.data_dir` | The data folder exists, is a folder, is readable and writable by this user (`error` otherwise); a mode with world bits is a `warn` (0750 is documented). |
+| `fs.data_dir` | The data folder exists, is a folder, is readable and writable by this user (`error` otherwise); a mode with world bits is a `warn` (`ferrite init` creates a new folder 0750; the systemd README and the Docker image use 0750 too). |
 | `fs.config_file` | `ferrite.toml` has no group or other bits (`warn`): it can hold the database URL, S3 secret and SMTP credentials. |
 | `fs.secret_key` | With `auth.secret_key[_file]` the key comes from the configuration (`ok`). Otherwise `secret.key` must exist and hold 64 hex characters (`error`; `serve` would create a new key, and data sealed with the old one could not be read) with no group or other bits (`warn`). |
 | `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`. Postgres: `info`. |
@@ -1075,7 +1076,7 @@ passes or fails for the user that runs doctor.
 | `db.connect` | The database opens; reports backend, latency and the Postgres version. |
 | `db.schema` | Migration status, as `migrate status`; an incompatible schema is exit 3. |
 | `db.identity` | `site_id` present (`error`), `install_id` present (`warn`), `last_binary_version` against the binary (`warn` if newer). |
-| `upgrade.record` | `upgrade.json` parses (`warn` if not); a provisional record (an upgrade that did not finish) and a missing named snapshot are warnings (§1). |
+| `upgrade.record` | `upgrade.json` parses (`warn` if not); on SQLite a provisional record (`snapshot: null` with a schema move: an upgrade that did not finish) and a missing named snapshot are warnings (§1); on Postgres a null snapshot is the normal finished record. |
 | `media.store` | Local: the root exists, then the probe runs. S3: the probe runs; endpoint and bucket are reported, never keys. |
 | `media.owner` | The owner marker against `install_id`: absent is `info`, a mismatch a `warn` (the GC then deletes nothing; `media gc --claim`). |
 | `clock.db_skew` | Postgres: skew against the server's `now()`, `warn` over 2 s, `error` over 30 s (the TOTP window). SQLite: `skip` (the database uses the local clock). |
@@ -1307,7 +1308,10 @@ also installs the `ring` rustls default crypto provider at start.
 - **Refuses to overwrite** an existing `ferrite.toml`, and **refuses an existing database**:
   an existing SQLite file, or a Postgres schema that already has applied migrations. Use
   `ferrite migrate` for those.
-- Creates the data folder, `media/` (local media only) and `backups/`, validates the written
+- Creates the data folder with mode `0750` when it does not exist (missing parents are
+  created as usual, the umask can only take more away; an existing folder is never
+  chmodded, so create it with `install -d -m 0750` as the systemd README does, or `chmod`
+  it, when its mode matters; `ferrite doctor` warns about world bits), `media/` (local media only) and `backups/`, validates the written
   config, then creates the database and applies all migrations. If any step fails, it removes
   what this run created (the config file, new folders, and with SQLite the new database and
   lock files) so a retry starts clean.

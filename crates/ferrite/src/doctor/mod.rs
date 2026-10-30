@@ -196,7 +196,7 @@ pub async fn run(data: &Path, offline: bool) -> Report {
     findings.push(fs::themes_dir(data, config));
     findings.push(fs::lock_state(data, config));
     findings.extend(pending(["db.connect", "db.schema", "db.identity"]));
-    findings.push(fs::upgrade_record(data));
+    findings.push(fs::upgrade_record(data, config));
     findings.extend(pending([
         "media.store",
         "media.owner",

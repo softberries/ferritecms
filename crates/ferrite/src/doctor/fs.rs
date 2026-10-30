@@ -17,26 +17,34 @@ const LOCK_FILE: &str = "ferrite.lock";
 
 // ---- what this process may do, and who owns what ----
 
-/// Whether this process may list `dir` (read and enter). The kernel decides, so ACLs,
-/// groups and read-only mounts count; nothing is written.
+/// Whether this process may do `access` to `path`, by the kernel's own check with the
+/// effective uid and gid (as `open` would): ACLs, groups and read-only mounts count, and
+/// nothing is written.
+#[cfg(unix)]
+fn may(path: &Path, access: rustix::fs::Access) -> bool {
+    use rustix::fs::{AtFlags, CWD};
+    rustix::fs::accessat(CWD, path, access, AtFlags::EACCESS).is_ok()
+}
+
+/// Whether this process may list `dir` (read and enter).
 #[cfg(unix)]
 fn can_list(dir: &Path) -> bool {
     use rustix::fs::Access;
-    rustix::fs::access(dir, Access::READ_OK | Access::EXEC_OK).is_ok()
+    may(dir, Access::READ_OK | Access::EXEC_OK)
 }
 
 /// Whether this process may create and delete files in `dir`.
 #[cfg(unix)]
 pub(super) fn can_write_in(dir: &Path) -> bool {
     use rustix::fs::Access;
-    rustix::fs::access(dir, Access::WRITE_OK | Access::EXEC_OK).is_ok()
+    may(dir, Access::WRITE_OK | Access::EXEC_OK)
 }
 
 /// Whether this process may read and write the file `path`.
 #[cfg(unix)]
 fn can_read_write(path: &Path) -> bool {
     use rustix::fs::Access;
-    rustix::fs::access(path, Access::READ_OK | Access::WRITE_OK).is_ok()
+    may(path, Access::READ_OK | Access::WRITE_OK)
 }
 
 /// Without Unix permissions the best answer is the read-only attribute.
@@ -92,7 +100,7 @@ fn has_bits(meta: &Metadata, bits: u32) -> Option<u32> {
 // ---- fs.* ----
 
 /// `fs.data_dir`: exists, is a folder, is readable and writable by this user; a mode with
-/// world bits is a warning (0750 is documented).
+/// world bits is a warning (`init` creates a new folder 0750).
 pub(super) fn data_dir(data: &Path) -> Finding {
     const ID: &str = "fs.data_dir";
     let meta = match std::fs::metadata(data) {
@@ -445,8 +453,10 @@ pub(super) fn lock_state(data: &Path, config: Option<&Config>) -> Finding {
 // ---- upgrade.record ----
 
 /// `upgrade.record` (file part): `upgrade.json` parses (warning if not), is not a provisional
-/// record (an upgrade that did not finish) and its named snapshot exists.
-pub(super) fn upgrade_record(data: &Path) -> Finding {
+/// record (an upgrade that did not finish) and its named snapshot exists. Only SQLite takes
+/// a snapshot: a finished Postgres record has `snapshot: null` (09 §1), so a null snapshot
+/// with a schema move is provisional on SQLite alone.
+pub(super) fn upgrade_record(data: &Path, config: Option<&Config>) -> Finding {
     const ID: &str = "upgrade.record";
     let rec = match crate::upgrade::load(data) {
         Ok(Some(rec)) => rec,
@@ -461,14 +471,15 @@ pub(super) fn upgrade_record(data: &Path) -> Finding {
         rec.schema_to,
         rec.at.to_rfc3339()
     );
+    let sqlite = config.is_some_and(|c| matches!(c.database_kind(), DbKind::Sqlite { .. }));
     match &rec.snapshot {
-        None if rec.schema_from < rec.schema_to => Finding::warn(
+        None if sqlite && rec.schema_from < rec.schema_to => Finding::warn(
             ID,
             format!(
                 "provisional record: the move {moved} did not finish; check `ferrite migrate status`"
             ),
         ),
-        None => Finding::ok(ID, format!("{moved}; no snapshot (none was taken)")),
+        None => Finding::ok(ID, format!("{moved}; no snapshot")),
         Some(snapshot) => {
             // Relative to the data folder; absolute when the backups folder is elsewhere.
             if data.join(snapshot).exists() {

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! `ferrite doctor`: the runner, the output format, the exit codes and the file checks
 //! (M4-3a Task 6; the database, media, cluster, clock and network checks are Task 7).
@@ -16,9 +17,9 @@ fn ferrite() -> Command {
     cmd
 }
 
-/// A fresh site as an operator has it: `init`, then the data folder at the documented
-/// 0750. (The folder as `init` leaves it has the process umask's default mode, 0755 at
-/// umask 022, and doctor warns about that: `world_bits_on_the_data_folder_are_a_warning`.)
+/// A fresh site in the existing temp folder `dir`: `init` leaves an existing folder as it
+/// is (the temp folder's mode depends on the platform), so it is set to 0750 here, the mode
+/// `init` gives a folder it creates (`fresh_init_into_a_new_folder_is_clean`).
 fn init_sqlite(dir: &Path) {
     ferrite()
         .args(["init", "--url", "https://example.com", "--data"])
@@ -295,8 +296,8 @@ fn world_bits_on_the_data_folder_are_a_warning() {
     let out = offline(tmp.path());
     assert_eq!(out.status("fs.data_dir"), "warn", "{}", out.stdout);
     assert_eq!(out.code, 2);
-    // Read access for everyone (the default at umask 022) is already too loose; it is the
-    // only warning on an otherwise fresh site.
+    // Read access for everyone is already too loose; it is the only warning on an
+    // otherwise fresh site.
     chmod(tmp.path(), 0o755);
     let out = offline(tmp.path());
     assert_eq!(out.status("fs.data_dir"), "warn", "{}", out.stdout);
@@ -378,7 +379,7 @@ fn broken_toml_is_an_error_not_a_panic() {
     init_sqlite(tmp.path());
     std::fs::write(
         tmp.path().join("ferrite.toml"),
-        "[site\nurl = \"https://example.com\"\npassword = hunter2\n",
+        "[site]\nurl = https://hunter2.example.com\n",
     )
     .unwrap();
     let out = offline(tmp.path());
@@ -623,6 +624,49 @@ fn upgrade_record_cases() {
     assert_eq!(out.status("upgrade.record"), "warn", "{}", out.stdout);
 }
 
+#[test]
+fn a_finished_postgres_record_without_snapshot_is_ok() {
+    // On Postgres no snapshot is ever taken, so a finished record that moved the schema has
+    // `snapshot: null` (09 §1); only SQLite's null snapshot means an unfinished move.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    std::fs::write(
+        tmp.path().join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n",
+    )
+    .unwrap();
+    chmod(&tmp.path().join("ferrite.toml"), 0o600);
+    write_upgrade(
+        tmp.path(),
+        r#"{"v":1,"from":"0.9.0","to":"0.10.0","schema_from":1,"schema_to":2,
+            "snapshot":null,"at":"2026-10-29T10:00:00Z"}"#,
+    );
+    let mut cmd = ferrite();
+    cmd.arg("doctor")
+        .arg("--data")
+        .arg(tmp.path())
+        .arg("--offline")
+        .env("FERRITE_DATABASE__URL", "postgres://u@db.invalid/x")
+        .env("FERRITE_MEDIA__BACKEND", "s3")
+        .env("FERRITE_MEDIA__S3__BUCKET", "b")
+        .env("FERRITE_MEDIA__S3__REGION", "us-east-1")
+        .env("FERRITE_AUTH__SECRET_KEY", "ab".repeat(32));
+    let out = run(cmd);
+    assert_eq!(out.status("config.load"), "ok", "{}", out.stdout);
+    assert_eq!(out.status("upgrade.record"), "ok", "{}", out.stdout);
+    assert_eq!(out.count("warn"), 0, "{}", out.stdout);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+
+    // The same record on a SQLite site is an upgrade that did not finish.
+    let mut cmd = ferrite();
+    cmd.arg("doctor")
+        .arg("--data")
+        .arg(tmp.path())
+        .arg("--offline");
+    let out = run(cmd);
+    assert_eq!(out.status("upgrade.record"), "warn", "{}", out.stdout);
+}
+
 fn write_acme_config(dir: &Path) {
     std::fs::write(
         dir.join("ferrite.toml"),
@@ -844,7 +888,8 @@ fn doctor_changes_nothing_under_the_data_folder() {
     )
     .unwrap();
     chmod(&tmp.path().join("ferrite.toml"), 0o600);
-    // Loose modes and a missing key: every branch that reports must stay read-only.
+    // A loose key file, a provisional upgrade record and the rest: every branch that
+    // reports must stay read-only.
     chmod(&tmp.path().join("secret.key"), 0o644);
 
     let before = snapshot(tmp.path());
@@ -869,6 +914,49 @@ fn help_documents_exit_codes() {
     assert!(help.contains("--offline"), "{help}");
     assert!(help.contains("--data"), "{help}");
     assert!(help.contains("Exit code"), "{help}");
+}
+
+fn init_into(dir: &Path) {
+    ferrite()
+        .args(["init", "--url", "https://example.com", "--data"])
+        .arg(dir)
+        .assert()
+        .success();
+}
+
+#[test]
+fn init_gives_a_new_data_folder_mode_0750_and_leaves_an_existing_one() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // A new leaf under missing parents: the parents are made as usual, the leaf is 0750
+    // (less if the umask takes more away, never more).
+    let site = tmp.path().join("a").join("b").join("site");
+    init_into(&site);
+    let mode = mode_of(&site);
+    assert_eq!(mode & 0o027, 0, "no group write, no world bits: {mode:o}");
+    assert_eq!(mode & 0o700, 0o700, "{mode:o}");
+    // An existing folder keeps whatever mode it has.
+    let existing = tmp.path().join("existing");
+    std::fs::create_dir(&existing).unwrap();
+    chmod(&existing, 0o755);
+    init_into(&existing);
+    assert_eq!(mode_of(&existing), 0o755);
+    chmod(&existing, 0o775);
+    std::fs::remove_file(existing.join("ferrite.toml")).unwrap();
+    std::fs::remove_file(existing.join("ferrite.db")).unwrap();
+    init_into(&existing);
+    assert_eq!(mode_of(&existing), 0o775);
+}
+
+#[test]
+fn fresh_init_into_a_new_folder_is_clean() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let site = tmp.path().join("site");
+    init_into(&site);
+    let out = offline(&site);
+    assert_eq!(out.count("warn"), 0, "{}", out.stdout);
+    assert_eq!(out.count("error"), 0, "{}", out.stdout);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert_eq!(out.status("fs.data_dir"), "ok", "{}", out.stdout);
 }
 
 #[test]

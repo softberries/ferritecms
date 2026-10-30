@@ -43,7 +43,10 @@ pub(super) async fn target(data: &Path, config: Option<&Config>, offline: bool) 
             match tokio::time::timeout(S3_TIMEOUT, Repo::survey(&location, exports)).await {
                 Err(_) => Finding::warn(
                     ID,
-                    format!("{url}: no answer within {} s", S3_TIMEOUT.as_secs()),
+                    format!(
+                        "{url}: did not finish listing within {} s",
+                        S3_TIMEOUT.as_secs()
+                    ),
                 ),
                 // The backup uses `AWS_*` from the service's environment, which may differ
                 // from this shell's.
@@ -102,12 +105,12 @@ async fn local(dir: &Path, schedule: BackupSchedule, exports: bool) -> Finding {
         ));
     }
     match Repo::survey(&RepoLocation::Dir(dir.to_path_buf()), exports).await {
-        Err(e) => Finding::error(ID, format!("{e:#}")),
+        Err(e) => unusable(format!("{e:#}")),
         Ok(found) => judged(&dir.display().to_string(), found, schedule, exports),
     }
 }
 
-/// The first existing ancestor of `path` (or `/`).
+/// The first existing ancestor of `path` (`.` when none exists, a relative path).
 fn nearest_existing(path: &Path) -> PathBuf {
     path.ancestors()
         .skip(1)
