@@ -614,3 +614,7 @@ analytics README and 05 §12 say a failed listing shows its days as empty; the R
 to an `EnvironmentFile=` with the `systemd-run` form; a reflowed CLAUDE.md line. After it:
 `cargo test -p ferrite-http --test plugins` 255 passed, the analytics unit tests 9 passed,
 clippy on both workspaces ok.
+On m4-3 after the merge (`f034c51`): fmt (both workspaces), clippy (both), rustdoc with
+`-D warnings` ok, and `FERRITE_TEST_PG_URL=… cargo test --workspace --no-fail-fast`: 111 test
+binaries, 3656 passed, 0 failed, 2 ignored, no `SKIP` line (the `cluster` latency case passed
+this time).
