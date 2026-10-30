@@ -267,12 +267,12 @@ fn mail_subject(prefix: &str, subject: &str, message: &str) -> String {
     }
 }
 
-/// `s` on one line: format characters dropped, control characters and line separators made
+/// `s` on one line: stripped format characters ([`form::is_stripped`]) dropped, control characters and line separators made
 /// spaces, runs of whitespace one space.
 fn one_line(s: &str) -> String {
     let spaced: String = s
         .chars()
-        .filter(|&c| !form::is_format(c))
+        .filter(|&c| !form::is_stripped(c))
         .map(|c| if form::is_break_like(c) { ' ' } else { c })
         .collect();
     spaced.split_whitespace().collect::<Vec<_>>().join(" ")

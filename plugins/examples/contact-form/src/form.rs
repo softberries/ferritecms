@@ -91,15 +91,22 @@ fn without_breaks(s: &str) -> String {
     s.chars().filter(|&c| c != '\r' && c != '\n').collect()
 }
 
-/// A one-line field: CR, LF and format characters ([`is_format`]) removed, any other control
-/// character or Unicode line separator made a space, then trimmed.
+/// A one-line field: CR, LF and stripped format characters ([`is_stripped`]) removed, any
+/// other control character or Unicode line separator made a space, then trimmed.
 fn single_line(s: &str) -> String {
     let line: String = s
         .chars()
-        .filter(|&c| c != '\r' && c != '\n' && !is_format(c))
+        .filter(|&c| c != '\r' && c != '\n' && !is_stripped(c))
         .map(|c| if is_break_like(c) { ' ' } else { c })
         .collect();
     line.trim().to_owned()
+}
+
+/// A format character one-line fields drop: every [`is_format`] character except the zero
+/// width non-joiner and joiner (U+200C, U+200D), which Persian and Indic names and emoji
+/// sequences need and which cannot reorder text.
+pub fn is_stripped(c: char) -> bool {
+    is_format(c) && !matches!(c, '\u{200C}' | '\u{200D}')
 }
 
 /// A Unicode format character (General Category Cf, Unicode 16): bidirectional overrides
@@ -222,6 +229,26 @@ mod tests {
         for c in ['a', 'ż', '\u{0301}', ' ', '😀', '\u{2028}'] {
             assert!(!is_format(c), "{c:?}");
         }
+    }
+
+    #[test]
+    fn joiners_stay_in_one_line_fields() {
+        // A Persian name with a ZWNJ and an emoji family with ZWJs keep them.
+        let s = Submission::from_pairs(&pairs(&[
+            (
+                "name",
+                "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}",
+            ),
+            ("subject", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+        ]));
+        assert_eq!(
+            s.name,
+            "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}"
+        );
+        assert_eq!(s.subject, "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}");
+        assert!(is_format('\u{200C}') && !is_stripped('\u{200C}'));
+        assert!(is_format('\u{200D}') && !is_stripped('\u{200D}'));
+        assert!(is_stripped('\u{200B}') && is_stripped('\u{202E}'));
     }
 
     #[test]

@@ -125,10 +125,12 @@ HTML-escaped, although the sandbox would not run a script anyway.
 Lengths count characters, not bytes, after cleaning: CR and LF are removed from every field
 except `message`; in `name` and `subject` any other control character (a tab, say) and the
 Unicode line and paragraph separators become a space, and Unicode format characters (category
-Cf: bidirectional overrides such as U+202E, zero-width characters, the soft hyphen) are
-removed, so a name or subject cannot be made to display as something else; each field is
-trimmed. The message keeps its line breaks, as LF (CR LF and a lone CR become LF), its tabs and
-its format characters (it is only ever shown escaped), and loses any other control character. Repeated keys count their first value; unknown fields are ignored.
+Cf: bidirectional overrides such as U+202E, the zero-width space, the soft hyphen) are
+removed, so a name or subject cannot be made to display as something else. The zero-width
+non-joiner and joiner (U+200C, U+200D) stay: Persian and Indic names and emoji sequences need
+them, and they cannot reorder text. Each field is trimmed. The message keeps its line breaks, as LF (CR LF and a lone CR become LF), its tabs and
+its format characters (it is only ever shown escaped), and loses any other control character.
+Repeated keys count their first value; unknown fields are ignored.
 
 ## The mail
 
