@@ -639,8 +639,9 @@ The first lines of an `.up.sql` may contain ferrite directives, parsed by
   (`snapshot` is that file on SQLite, always `None` on Postgres); the pruning keeps the
   newest five `pre-*.db` **plus** the snapshot `data/upgrade.json` names (09 §1), however
   old, because `ferrite rollback --restore-snapshot` may still need it. The binary reads
-  `upgrade.json` when it opens the store and passes that path as
-  `SqliteOptions::keep_snapshot`; the store crate knows nothing of the file.
+  `upgrade.json` when it opens the store and passes `SqliteOptions::keep_snapshot`:
+  `Keep(path)`, or `KeepAll` (prune nothing) when the file cannot be read; the store
+  crate knows nothing of the file.
 - Postgres: no automatic dump (would require `pg_dump` on the host). Instead the node
   logs the exact schema version transition and refuses to auto-migrate a **contract**
   migration unless `database.allow_contract = true` or it's run explicitly with

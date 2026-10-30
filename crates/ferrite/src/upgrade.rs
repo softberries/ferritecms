@@ -2,20 +2,22 @@
 //! (09 §1, M4-2 P30). `ferrite rollback` reads it.
 //!
 //! The startup check (`serve`, and every other command that migrates on start) and
-//! `ferrite migrate up` call [`record`] under the migrate lock. It compares
+//! `ferrite migrate up` call [`migrate_and_record`] under the migrate lock. It compares
 //! `schema_meta.last_binary_version` with this binary and looks at what `migrate_up`
 //! applied; when either changed it replaces the file, then stores this binary's version.
 //! A database that had no schema before (a new site, `ferrite init`) gets the version but
-//! no file: there is nothing to roll back to.
+//! no file: there is nothing to roll back to. The rules are in [`migrate_and_record`].
 
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, bail};
 use ferrite_domain::Timestamp;
 use ferrite_store::{MigrateReport, SCHEMA_META_LAST_BINARY, Store};
+pub use ferrite_store_sqlite::KeepSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// The file's name inside the data folder.
@@ -47,7 +49,9 @@ pub struct UpgradeRecord {
     pub at: Timestamp,
 }
 
-/// Reads `<data_dir>/upgrade.json`; `None` when there is none.
+/// Reads `<data_dir>/upgrade.json`; `None` when there is none. Strict: an unreadable file
+/// or another format version is an error (`ferrite rollback` refuses on it; the startup
+/// path only warns, see [`keep_snapshot`]).
 pub fn load(data_dir: &Path) -> anyhow::Result<Option<UpgradeRecord>> {
     let path = data_dir.join(UPGRADE_FILE);
     let raw = match std::fs::read(&path) {
@@ -67,20 +71,28 @@ pub fn load(data_dir: &Path) -> anyhow::Result<Option<UpgradeRecord>> {
     Ok(Some(rec))
 }
 
+/// Temp files of [`write`] older than this are swept by the next write (a crash between
+/// creating and renaming one leaves it behind).
+const STALE_TEMP: Duration = Duration::from_secs(24 * 3600);
+const TEMP_PREFIX: &str = ".upgrade.json.";
+const TEMP_SUFFIX: &str = ".tmp";
+
 /// Replaces `<data_dir>/upgrade.json` atomically: a temp file in the same folder, synced,
 /// then renamed over the old one, so a reader sees the old or the new record, never a
-/// partial one.
+/// partial one. Also removes temp files of earlier writes older than a day.
 pub fn write(data_dir: &Path, rec: &UpgradeRecord) -> anyhow::Result<()> {
     let path = data_dir.join(UPGRADE_FILE);
+    sweep_stale_temps(data_dir);
     let mut json = serde_json::to_vec_pretty(rec)?;
     json.push(b'\n');
     let mut tmp = tempfile::Builder::new()
-        .prefix(".upgrade.json.")
-        .suffix(".tmp")
+        .prefix(TEMP_PREFIX)
+        .suffix(TEMP_SUFFIX)
         .tempfile_in(data_dir)
         .with_context(|| format!("cannot create a temp file in {}", data_dir.display()))?;
-    tmp.write_all(&json)?;
-    tmp.as_file().sync_all()?;
+    tmp.write_all(&json)
+        .and_then(|()| tmp.as_file().sync_all())
+        .with_context(|| format!("cannot write {}", tmp.path().display()))?;
     tmp.persist(&path)
         .map_err(|e| e.error)
         .with_context(|| format!("cannot write {}", path.display()))?;
@@ -92,31 +104,163 @@ pub fn write(data_dir: &Path, rec: &UpgradeRecord) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The snapshot `upgrade.json` names, as a path to pass to the store's pruning
-/// (`SqliteOptions::keep_snapshot`).
-pub fn protected_snapshot(data_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    Ok(load(data_dir)?
-        .and_then(|r| r.snapshot)
-        .map(|s| data_dir.join(s)))
+/// Best effort: a temp file that cannot be listed or removed is left for the next write.
+fn sweep_stale_temps(data_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with(TEMP_PREFIX) && name.ends_with(TEMP_SUFFIX)) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STALE_TEMP);
+        if old && let Err(e) = std::fs::remove_file(entry.path()) {
+            tracing::warn!(path = %entry.path().display(), error = %e, "cannot remove a stale temp file");
+        }
+    }
 }
 
-/// Records this start (or `migrate up`) of `binary`: replaces `upgrade.json` when the
-/// stored `last_binary_version` differs from `binary` or `report` applied migrations,
-/// then stores `binary` as the last version. `schema_from` is the schema before
-/// `migrate_up` ran. Returns the record written, if any. Call it under the migrate lock.
+/// What the store's snapshot pruning must spare, from `upgrade.json`: the snapshot it
+/// names; nothing when there is no file or it names none; every snapshot when the file
+/// cannot be read (a stray edit, or a newer binary's format after a binary rollback),
+/// with a warning: keeping all is the safe direction, and the site still opens.
+pub fn keep_snapshot(data_dir: &Path) -> Option<KeepSnapshot> {
+    match load(data_dir) {
+        Ok(rec) => rec
+            .and_then(|r| r.snapshot)
+            .map(|s| KeepSnapshot::Keep(data_dir.join(s))),
+        Err(e) => {
+            tracing::warn!(
+                error = format!("{e:#}"),
+                "keeping every pre-migration snapshot: {UPGRADE_FILE} cannot be read"
+            );
+            Some(KeepSnapshot::KeepAll)
+        }
+    }
+}
+
+/// Whether [`migrate_and_record`] migrates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Migrate {
+    /// Records only (the schema is current, or newer and compatible).
+    No,
+    /// `migrate_up(to)` first.
+    UpTo(Option<i64>),
+}
+
+/// Migrates (per `migrate`) and records the start of `binary`: `upgrade.json` and
+/// `schema_meta.last_binary_version` (M4-2 P30, 09 §1). Call it under the migrate lock.
+/// Returns the migrate report and the record written, if any.
 ///
-/// Not written: for a database that had no schema (nothing to roll back to), and on a
-/// retry after a failed start whose record already names this move (it may name the
-/// snapshot that the retry, having nothing left to migrate, would lose).
-pub async fn record(
+/// Before migrating it writes a provisional record (`schema_to` = the target, `snapshot`
+/// null); after migrating it finalises it with the snapshot. A start that dies in
+/// between leaves the provisional record, and the next start (the same move, nothing left
+/// to apply) finalises it, finding the snapshot by its name
+/// `backups/pre-<schema_from>-to-<schema_to>-*.db`.
+pub async fn migrate_and_record(
     store: &dyn Store,
     data_dir: &Path,
     binary: &semver::Version,
-    schema_from: i64,
+    migrate: Migrate,
+) -> anyhow::Result<(MigrateReport, Option<UpgradeRecord>)> {
+    let status = store.migration_status(binary).await?;
+    let before = status.db_version;
+    let mut report = MigrateReport::default();
+    if let Migrate::UpTo(to) = migrate {
+        let target = status
+            .pending
+            .iter()
+            .map(|p| p.version)
+            .filter(|v| to.is_none_or(|t| *v <= t))
+            .max();
+        if let Some(target) = target {
+            begin(store, data_dir, binary, before, target).await?;
+        }
+        report = store.migrate_up(to).await?;
+        #[cfg(feature = "test-seams")]
+        seams::check_fail_after_migrate()?;
+    }
+    let written = finish(store, data_dir, binary, before, &report).await?;
+    Ok((report, written))
+}
+
+/// The record names this move: same target binary, same previous one.
+fn same_move(rec: &UpgradeRecord, to: &str, stored: Option<&str>) -> bool {
+    rec.to == to && rec.from.as_deref() == stored
+}
+
+/// An earlier attempt at this move stopped partway: the schema is past its start but
+/// short of its target. Its `schema_from` (and snapshot) are the move's real start.
+fn incomplete(rec: &UpgradeRecord, before: i64) -> bool {
+    rec.schema_from < before && before < rec.schema_to
+}
+
+/// The provisional record, written before migrating from `before` (> 0) to `target`.
+async fn begin(
+    store: &dyn Store,
+    data_dir: &Path,
+    binary: &semver::Version,
+    before: i64,
+    target: i64,
+) -> anyhow::Result<()> {
+    if before == 0 {
+        return Ok(());
+    }
+    let stored = store
+        .read()
+        .schema_meta()
+        .get(SCHEMA_META_LAST_BINARY)
+        .await?;
+    let to = binary.to_string();
+    if let Ok(Some(e)) = load(data_dir)
+        && same_move(&e, &to, stored.as_deref())
+        && incomplete(&e, before)
+    {
+        // Keep the earlier attempt's start; `finish` carries it forward.
+        return Ok(());
+    }
+    replace(
+        data_dir,
+        &UpgradeRecord {
+            v: UPGRADE_FORMAT,
+            from: stored,
+            to,
+            schema_from: before,
+            schema_to: target,
+            snapshot: None,
+            at: Timestamp::now(),
+        },
+    )
+}
+
+/// Writes the final record when something changed, then stores `binary` as the last
+/// version. `before` is the schema before `migrate_up` ran.
+///
+/// - Migrations applied: the record of this move, with its snapshot (an incomplete
+///   earlier attempt's start and snapshot are carried forward).
+/// - Nothing applied, and the file already names this move (a retry after a start that
+///   failed after migrating, or a re-upgrade after a binary rollback): kept, and a
+///   provisional one gets its snapshot.
+/// - Nothing applied, another binary: a binary-only record, unless this binary is older
+///   than the stored one (a binary rollback): then the file is kept, so a schema
+///   rollback after it, or the re-upgrade, still finds the move.
+/// - A database that had no schema: no record (nothing to roll back to).
+async fn finish(
+    store: &dyn Store,
+    data_dir: &Path,
+    binary: &semver::Version,
+    before: i64,
     report: &MigrateReport,
 ) -> anyhow::Result<Option<UpgradeRecord>> {
-    let schema_to = store.migration_status(binary).await?.db_version;
-    if schema_to == 0 {
+    let after = store.migration_status(binary).await?.db_version;
+    if after == 0 {
         // No schema_meta table to store the version in.
         return Ok(None);
     }
@@ -124,35 +268,144 @@ pub async fn record(
     let stored = meta.get(SCHEMA_META_LAST_BINARY).await?;
     let to = binary.to_string();
     let version_changed = stored.as_deref() != Some(to.as_str());
-    let mut written = None;
-    if schema_from > 0 && (version_changed || !report.applied.is_empty()) {
-        let retry = report.applied.is_empty()
-            && load(data_dir)?.is_some_and(|old| old.to == to && old.from == stored);
-        if !retry {
-            let rec = UpgradeRecord {
+    let same = load(data_dir)
+        .ok()
+        .flatten()
+        .filter(|e| same_move(e, &to, stored.as_deref()));
+    let mut rec = None;
+    if !report.applied.is_empty() {
+        if before > 0 {
+            let (schema_from, snapshot) = match &same {
+                Some(e) if incomplete(e, before) => (
+                    e.schema_from,
+                    e.snapshot
+                        .clone()
+                        .or_else(|| find_snapshot(data_dir, e.schema_from, e.schema_to)),
+                ),
+                _ => (
+                    before,
+                    report.snapshot.as_ref().map(|s| relative(data_dir, s)),
+                ),
+            };
+            rec = Some(UpgradeRecord {
                 v: UPGRADE_FORMAT,
-                from: stored,
+                from: stored.clone(),
                 to: to.clone(),
                 schema_from,
-                schema_to,
-                snapshot: report.snapshot.as_ref().map(|s| relative(data_dir, s)),
+                schema_to: after,
+                snapshot,
                 at: Timestamp::now(),
-            };
-            write(data_dir, &rec)?;
-            tracing::info!(
-                from = rec.from.as_deref().unwrap_or("unknown"),
-                to = %rec.to,
-                schema_from,
-                schema_to,
-                "wrote {UPGRADE_FILE}"
-            );
-            written = Some(rec);
+            });
         }
+    } else if let Some(e) = same {
+        if e.snapshot.is_none()
+            && e.schema_from < e.schema_to
+            && let Some(snapshot) = find_snapshot(data_dir, e.schema_from, e.schema_to)
+        {
+            rec = Some(UpgradeRecord {
+                snapshot: Some(snapshot),
+                ..e
+            });
+        }
+    } else if version_changed && before > 0 {
+        if is_downgrade(binary, stored.as_deref()) {
+            tracing::info!(
+                stored = stored.as_deref().unwrap_or_default(),
+                this = %binary,
+                "older binary started: {UPGRADE_FILE} kept for the re-upgrade or a schema rollback"
+            );
+        } else {
+            rec = Some(UpgradeRecord {
+                v: UPGRADE_FORMAT,
+                from: stored.clone(),
+                to: to.clone(),
+                schema_from: before,
+                schema_to: after,
+                snapshot: None,
+                at: Timestamp::now(),
+            });
+        }
+    }
+    if let Some(rec) = &rec {
+        replace(data_dir, rec)?;
+        tracing::info!(
+            from = rec.from.as_deref().unwrap_or("unknown"),
+            to = %rec.to,
+            schema_from = rec.schema_from,
+            schema_to = rec.schema_to,
+            "wrote {UPGRADE_FILE}"
+        );
     }
     if version_changed {
         meta.set(SCHEMA_META_LAST_BINARY, &to).await?;
     }
-    Ok(written)
+    Ok(rec)
+}
+
+/// `binary` is older than the stored last version (semver; an unparsable one is not).
+fn is_downgrade(binary: &semver::Version, stored: Option<&str>) -> bool {
+    stored
+        .and_then(|s| semver::Version::parse(s).ok())
+        .is_some_and(|s| *binary < s)
+}
+
+/// [`write`], first moving an unreadable `upgrade.json` aside to
+/// `upgrade.json.invalid-<UTC yyyymmddThhmmssZ>` (never deleted).
+fn replace(data_dir: &Path, rec: &UpgradeRecord) -> anyhow::Result<()> {
+    let path = data_dir.join(UPGRADE_FILE);
+    if path.exists() && load(data_dir).is_err() {
+        let aside = data_dir.join(format!(
+            "{UPGRADE_FILE}.invalid-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+        ));
+        std::fs::rename(&path, &aside).with_context(|| {
+            format!(
+                "cannot move {} aside to {}",
+                path.display(),
+                aside.display()
+            )
+        })?;
+        tracing::warn!(path = %aside.display(), "moved an unreadable {UPGRADE_FILE} aside");
+    }
+    write(data_dir, rec)
+}
+
+/// The newest `backups/pre-<from>-to-<to>-*.db` (relative to `data_dir`), if any.
+fn find_snapshot(data_dir: &Path, from: i64, to: i64) -> Option<PathBuf> {
+    let prefix = format!("pre-{from}-to-{to}-");
+    let dir = data_dir.join("backups");
+    std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(".db")
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.file_name())))
+        .max()
+        .map(|(_, name)| Path::new("backups").join(name))
+}
+
+/// Test seams (feature `test-seams`).
+#[cfg(feature = "test-seams")]
+pub mod seams {
+    tokio::task_local! {
+        static FAIL_AFTER_MIGRATE: ();
+    }
+
+    /// Runs `f` with [`super::migrate_and_record`] failing right after `migrate_up`, before
+    /// the record is finalised: a start that dies in that window. Scoped to this task.
+    pub async fn fail_after_migrate<F: std::future::Future>(f: F) -> F::Output {
+        FAIL_AFTER_MIGRATE.scope((), f).await
+    }
+
+    pub(super) fn check_fail_after_migrate() -> anyhow::Result<()> {
+        if FAIL_AFTER_MIGRATE.try_with(|()| ()).is_ok() {
+            anyhow::bail!("test seam: failing after migrate_up");
+        }
+        Ok(())
+    }
 }
 
 /// `path` relative to `data_dir` when it lies inside it (compared canonically).
@@ -234,8 +487,92 @@ mod tests {
         assert!(v["from"].is_null());
         assert_eq!(v["at"], rec.at.to_rfc3339().replace("+00:00", "Z"));
         assert_eq!(
-            protected_snapshot(dir.path()).unwrap(),
-            Some(dir.path().join("backups/pre-10-to-11-20261030T120000Z.db"))
+            keep_snapshot(dir.path()),
+            Some(KeepSnapshot::Keep(
+                dir.path().join("backups/pre-10-to-11-20261030T120000Z.db")
+            ))
+        );
+    }
+
+    #[test]
+    fn unreadable_file_keeps_every_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(keep_snapshot(dir.path()), None);
+        let mut v = serde_json::to_value(sample("0.2.0")).unwrap();
+        v["v"] = 2.into();
+        std::fs::write(dir.path().join(UPGRADE_FILE), v.to_string()).unwrap();
+        assert_eq!(keep_snapshot(dir.path()), Some(KeepSnapshot::KeepAll));
+        std::fs::write(dir.path().join(UPGRADE_FILE), "{").unwrap();
+        assert_eq!(keep_snapshot(dir.path()), Some(KeepSnapshot::KeepAll));
+    }
+
+    #[test]
+    fn replace_moves_an_unreadable_file_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(UPGRADE_FILE), "{").unwrap();
+        replace(dir.path(), &sample("0.2.0")).unwrap();
+        assert_eq!(load(dir.path()).unwrap().unwrap().to, "0.2.0");
+        let names = entries(dir.path());
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names[1].starts_with("upgrade.json.invalid-"), "{names:?}");
+    }
+
+    #[test]
+    fn write_sweeps_stale_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(".upgrade.json.abc.tmp");
+        let young = dir.path().join(".upgrade.json.def.tmp");
+        let other = dir.path().join(".other.tmp");
+        for p in [&stale, &young, &other] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        let old = std::time::SystemTime::now() - Duration::from_secs(2 * 24 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        write(dir.path(), &sample("0.2.0")).unwrap();
+        assert!(!stale.exists());
+        assert!(young.exists() && other.exists());
+    }
+
+    #[test]
+    fn downgrade_is_semver() {
+        let v = |s| semver::Version::parse(s).unwrap();
+        assert!(is_downgrade(&v("0.9.0"), Some("0.10.0")));
+        assert!(!is_downgrade(&v("0.10.0"), Some("0.9.0")));
+        assert!(!is_downgrade(&v("0.10.0"), Some("0.10.0")));
+        assert!(!is_downgrade(&v("0.10.0"), Some("garbage")));
+        assert!(!is_downgrade(&v("0.10.0"), None));
+    }
+
+    #[test]
+    fn finds_the_newest_snapshot_of_a_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        assert_eq!(find_snapshot(dir.path(), 10, 12), None);
+        let now = std::time::SystemTime::now();
+        for (name, age) in [
+            ("pre-10-to-12-a.db", 60),
+            ("pre-10-to-12-b.db", 0),
+            ("pre-10-to-11-c.db", 0),
+            ("pre-1-to-12-d.db", 0),
+        ] {
+            let f = std::fs::File::create(backups.join(name)).unwrap();
+            f.set_modified(now - Duration::from_secs(age)).unwrap();
+        }
+        assert_eq!(
+            find_snapshot(dir.path(), 10, 12),
+            Some(PathBuf::from("backups/pre-10-to-12-b.db"))
         );
     }
 

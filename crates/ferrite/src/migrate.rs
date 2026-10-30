@@ -88,7 +88,7 @@ pub(crate) async fn up_locked(
 
 /// [`up_locked`] for the site's own database (`ferrite migrate up`, `init`): also records
 /// the change in `<data_dir>/upgrade.json` and `schema_meta.last_binary_version`
-/// ([`crate::upgrade::record`]) under the same lock. Returns the applied versions.
+/// ([`crate::upgrade::migrate_and_record`]) under the same lock. Returns the applied versions.
 pub(crate) async fn up_recorded(
     store: &dyn Store,
     to: Option<i64>,
@@ -98,9 +98,13 @@ pub(crate) async fn up_recorded(
 ) -> anyhow::Result<Vec<i64>> {
     let guard = migrate_lock_with(store, wait).await?;
     let result = async {
-        let schema_from = store.migration_status(binary).await?.db_version;
-        let report = store.migrate_up(to).await?;
-        crate::upgrade::record(store, data_dir, binary, schema_from, &report).await?;
+        let (report, _) = crate::upgrade::migrate_and_record(
+            store,
+            data_dir,
+            binary,
+            crate::upgrade::Migrate::UpTo(to),
+        )
+        .await?;
         anyhow::Ok(report.applied)
     }
     .await;

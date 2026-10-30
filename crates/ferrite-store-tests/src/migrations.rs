@@ -733,9 +733,18 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
     let none = store.migrate_up(None).await.unwrap();
     assert_eq!(none, MigrateReport::default(), "nothing pending");
 
-    assert_eq!(store.migrate_down(9, true).await.unwrap(), vec![11, 10]);
+    // Derived, so a new migration needs no edit here.
+    let l = store
+        .migration_status(&binary())
+        .await
+        .unwrap()
+        .binary_version;
+    assert_eq!(
+        store.migrate_down(l - 2, true).await.unwrap(),
+        vec![l, l - 1]
+    );
     let report = store.migrate_up(None).await.unwrap();
-    assert_eq!(report.applied, vec![10, 11]);
+    assert_eq!(report.applied, vec![l - 1, l]);
     match store.backend() {
         Backend::Sqlite => {
             let snap = report
@@ -744,7 +753,7 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
             assert!(snap.is_file(), "{}", snap.display());
             let name = snap.file_name().unwrap().to_string_lossy().into_owned();
             assert!(
-                name.starts_with("pre-9-to-11-") && name.ends_with(".db"),
+                name.starts_with(&format!("pre-{}-to-{l}-", l - 2)) && name.ends_with(".db"),
                 "{name}"
             );
         }

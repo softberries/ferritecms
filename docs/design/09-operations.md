@@ -23,37 +23,72 @@ ferrite self-update [--version X] [--channel stable]
  "snapshot": "backups/pre-10-to-12-20261030T120000Z.db", "at": "2026-10-30T12:00:00.123456Z"}
 ```
 
-- `from`: `schema_meta.last_binary_version` before this start, `null` when none was stored
-  (a database from before M4-2). `to`: this binary. `schema_from`/`schema_to`: the schema
-  version before and after (equal when only the binary changed). `snapshot`: the SQLite
-  pre-migration snapshot, relative to the data folder, `null` when nothing was migrated
-  and always on Postgres. `at`: RFC 3339, UTC.
-- **Who writes it:** the startup check, i.e. `serve` and every other command that
-  migrates when it starts (`seed`, `user`, `theme`/`plugin` commands, `import
-  wordpress`, `media gc`/`regenerate`), and `ferrite migrate up`. All of them do it
-  under the migrate lock, after the check and any migrations, so concurrent cluster
-  starts write it once.
-- **When:** the stored `last_binary_version` differs from this binary, or migrations were
-  applied. Then `schema_meta.last_binary_version` is set to this binary. A start that
-  changed nothing leaves an existing file alone. A start against a newer schema (an
-  older binary after a rollback swap) also counts as a change and is recorded.
-- **Not written:** for a database that had no schema before (`ferrite init`, a first
-  `serve` or `migrate up` on an empty database): there is nothing to roll back to; the
-  version is still stored, so the next start writes nothing. Not written either on a
-  retry after a start that failed between writing the file and storing the version,
-  when the file already records the same `from` → `to` (it may name the snapshot the
-  retry, with nothing left to migrate, would otherwise drop).
+- **Fields:**
+  - `from`: `schema_meta.last_binary_version` before this start, `null` when none was
+    stored (a database from before M4-2). `to`: this binary.
+  - `schema_from`/`schema_to`: the schema version before and after (equal when only the
+    binary changed).
+  - `snapshot`: the SQLite pre-migration snapshot, relative to the data folder; `null`
+    when nothing was migrated, and always on Postgres.
+  - `at`: RFC 3339, UTC.
+- **Who writes it:** the startup check and `ferrite migrate up`, always under the migrate
+  lock, so concurrent cluster starts write it once. The startup check runs in `serve` and
+  in every other command that migrates when it starts: `seed`, `user`, the
+  `theme`/`plugin` commands, `import wordpress`, `media gc`/`regenerate`.
+- **In two steps around a migration:**
+  1. Before migrating, a provisional record: `schema_to` is the target, `snapshot` is
+     `null`.
+  2. After migrating, the final record with the snapshot.
+
+  A start that dies in between (after the migrations committed) leaves the provisional
+  record. The next start has nothing left to apply and sees the record of this move
+  (same `from` and `to`). It finalises the record with the newest
+  `backups/pre-<schema_from>-to-<schema_to>-*.db`, found by name.
+
+  An attempt that stopped partway leaves the schema between `schema_from` and
+  `schema_to`. The next start keeps that attempt's start and snapshot.
+- **When it changes:** the stored `last_binary_version` differs from this binary, or
+  migrations were applied. Then `last_binary_version` is set to this binary. A start that
+  changed nothing leaves an existing file alone.
+- **A binary rollback keeps it.** When nothing was applied and this binary is **older**
+  (semver) than the stored `last_binary_version`, the file is kept and only the key is
+  updated. This is `ferrite rollback` swapping back to `ferrite.prev`.
+  - A schema rollback afterwards still finds the move.
+  - Re-upgrading (B again) also keeps the file: it already names A → B.
+  - So A → B → A → B ends with the original A → B record and its snapshot.
+- **Not written:**
+  - For a database that had no schema before (`ferrite init`, a first `serve` or
+    `migrate up` on an empty database): there is nothing to roll back to. The version
+    is still stored, so the next start writes nothing either.
+  - On a retry whose file already names this move.
+- **One step only.** Each new move replaces the file, so rollback goes back one step:
+  - an upgrade B → C, even a patch release without migrations (that record has
+    `snapshot: null`), replaces the record of A → B;
+  - the B snapshot then falls back into the normal "newest five" pruning.
+- **`migrate up --to N`, then `serve`.** This writes two records. The second
+  (`schema_from: N`) replaces the first, so a schema rollback from the file reaches only
+  N. Go further down with `ferrite migrate down --to <M>` explicitly.
 - **Atomic:** a temp file in the data folder, synced, renamed over the old file, then the
-  folder is synced. Each change replaces the file: rollback goes back one step only.
-- In a cluster each node writes its own data folder's file; `last_binary_version` is
-  shared, so only the first node of a new version writes one.
-- The pruning of pre-migration snapshots (newest five) never deletes the one this file
-  names (02 §7). To know which, opening a SQLite site reads the file: an unreadable
-  `upgrade.json` (not JSON, or another `v`) stops every command that opens the database
-  until it is fixed or moved aside, rather than risk pruning that snapshot.
-- `import-site` and `db copy` migrate their target without writing the file. `restore`
-  does not migrate; the restored database (with the `last_binary_version` it was backed
-  up with) is recorded by its next start like any other.
+  folder is synced. Write errors name the path. Temp files a crash left behind
+  (`.upgrade.json.*.tmp`) older than a day are removed by the next write.
+- **Snapshots:** the pruning of pre-migration snapshots (newest five) never deletes the
+  one this file names (02 §7); opening a SQLite site reads the file to know which.
+- **An unreadable file** (not JSON, or another `v`, e.g. a newer binary's format after a
+  binary rollback):
+  - The site still opens, with a warning. Pruning keeps **every** snapshot, since it
+    cannot know which one the file names.
+  - The next record moves the bad file aside to `upgrade.json.invalid-<UTC timestamp>`
+    (never deleted) before writing.
+  - Only `ferrite rollback` refuses to work from an unreadable file.
+- **Clusters:** each node writes its own data folder's file. The key is shared, so only
+  the first node to start on a new version (or a CLI run from another machine) writes
+  one. On a cluster the file is informational, and Postgres takes no snapshot. A
+  cluster's schema rollback is an explicit `ferrite migrate down --to <N>` (or provider
+  PITR), per the runbook in §3.
+- **Other commands:** `import-site` and `db copy` migrate their target without writing
+  the file. `restore` does not migrate; the restored database (with the
+  `last_binary_version` it was backed up with) is recorded by its next start like any
+  other.
 
 ### Version skipping
 
@@ -114,6 +149,10 @@ rollback is always driven by the newer binary before swapping back.
 - `ferrite migrate status` prints the compatibility verdict for every version that the
   DB has seen (`schema_meta.min_binary_version`), so operators know whether the old
   image can run.
+- `data/upgrade.json` (§1) is informational on a cluster: only the first node of a new
+  version writes one, into its own folder, and Postgres takes no snapshot. Roll the schema
+  back with an explicit `ferrite migrate down --to <N>` (N from `migrate status` before the
+  deploy), not from that file.
 
 **Rolling deploy, as built (M1.5;
 [04 §9](04-cluster.md#9-rolling-deploys)):**

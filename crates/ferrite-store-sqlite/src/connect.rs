@@ -30,10 +30,20 @@ pub struct SqliteOptions {
     pub lock_dir: Option<PathBuf>,
     /// Where pre-migration snapshots go; default: `<db dir>/backups`.
     pub backups_dir: Option<PathBuf>,
-    /// A pre-migration snapshot the pruning (newest five kept) never deletes: the binary
-    /// passes the one `<data>/upgrade.json` names, which `ferrite rollback
-    /// --restore-snapshot` may still need (M4-2 P30).
-    pub keep_snapshot: Option<PathBuf>,
+    /// What the pruning of pre-migration snapshots (newest five kept) must spare: the
+    /// binary passes the one `<data>/upgrade.json` names, which `ferrite rollback
+    /// --restore-snapshot` may still need, or all of them when that file cannot be read
+    /// (M4-2 P30). `None`: prune normally.
+    pub keep_snapshot: Option<KeepSnapshot>,
+}
+
+/// A pruning exception for pre-migration snapshots ([`SqliteOptions::keep_snapshot`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeepSnapshot {
+    /// Never delete this snapshot.
+    Keep(PathBuf),
+    /// Delete none.
+    KeepAll,
 }
 
 impl SqliteOptions {
