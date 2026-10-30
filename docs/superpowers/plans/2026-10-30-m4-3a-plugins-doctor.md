@@ -140,7 +140,7 @@ Cost if wrong: one more release asset.
 
 **P48: the `ferrite doctor` contract.**
 - Usage: `ferrite doctor --data DIR [--offline]`.
-- Output: one line per check, `<status>  <check-id>  <detail>`, with the status left-padded to 5 characters (`ok`, `info`, `warn`, `error`, `skip`), in a fixed check order. Then a summary line: `doctor: N ok, N warn, N error, N skip`.
+- Output: one line per check, `<status>  <check-id>  <detail>`, with the status left-aligned and padded to 5 characters (`ok`, `info`, `warn`, `error`, `skip`), in a fixed check order. Then a summary line: `doctor: N ok, N warn, N error, N skip`.
 - Exit codes:
   - **3** when `db.schema` reports the database incompatible (newer than this binary allows), as `migrate status` does;
   - else **1** if any check is an error;
