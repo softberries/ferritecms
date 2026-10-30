@@ -373,7 +373,8 @@ async fn schema_down(
 }
 
 /// Sets `schema_meta.last_binary_version` to `older` after a schema rollback. A failure
-/// only warns: the schema is already back, and the next start writes the key again.
+/// only warns: the schema is already back, and a binary from M4-2 on writes the key at its
+/// next start (an older one never does).
 async fn store_older_version(store: &dyn Store, older: Option<&semver::Version>) {
     let Some(older) = older else { return };
     if let Err(e) = store

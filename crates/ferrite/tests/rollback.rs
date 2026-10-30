@@ -578,6 +578,36 @@ fn rollback_schema_stores_the_older_version() {
     );
 }
 
+/// A schema already at `schema_from` (taken down by hand with `migrate down`) has nothing
+/// to revert, and the key still names the older binary afterwards.
+#[test]
+fn rollback_schema_nothing_to_revert_stores_the_older_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bins = Bins::new(tmp.path(), Some(0));
+    let from = latest_schema_version() - 1;
+    let (data, _) = upgraded_site(tmp.path(), from);
+    migrate_down(&data, from);
+    assert_eq!(
+        meta(&data, SCHEMA_META_LAST_BINARY).as_deref(),
+        Some(binary_version().unwrap().to_string().as_str())
+    );
+
+    let out = rollback(&bins.current)
+        .args(["--schema", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("nothing to revert"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(db_version(&data), from);
+    assert_eq!(meta(&data, SCHEMA_META_LAST_BINARY).as_deref(), Some(OLD));
+    bins.assert_swapped();
+}
+
 /// A record from before M4-2 (`from: null`) cannot check the older binary, but a schema
 /// rollback still stores the version it reports, so the next record names it.
 #[test]

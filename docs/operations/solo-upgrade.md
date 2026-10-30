@@ -115,7 +115,9 @@ systemctl start ferrite
   binary rollback, `/usr/local/bin/ferrite.prev` after one (the down migrations ship
   with the newer binary). Any other binary is refused.
 - The binary that runs afterwards must report the record's `from` (checked before
-  anything changes).
+  anything changes), unless `upgrade.json` has no `from` (`null`: the database's first
+  upgrade from a build before M4-2, such as the first move to 0.1.0); then it prints
+  "not checked", so make sure `ferrite.prev` is the binary the site ran before.
 - It runs the down migrations to `schema_from`. A step that loses data refuses unless
   `--allow-lossy` is given; the message offers `--restore-snapshot` instead.
 - Afterwards `upgrade.json` is renamed to `upgrade-rolled-back-<ts>.json`, the binaries

@@ -443,6 +443,26 @@ M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [
 
 - [x] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc` (M4-1; 09 §4 and §8, 02 §10, 03 §6 and §8), plus the scheduled `[backup]` (`site.backup` job; 09 §4).
 - [x] Cluster follow-up (M1.5 ruling R3): waiting for a Postgres named lock holds one connection with `lock_timeout` instead of opening a connection per 250 ms poll (P13), which removes the connect churn while waiting (M4-1 P19, `Store::lock_wait`; 04 §7).
+- [x] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot` (M4-2 P30–P32; 09 §1, §2; run end to end with two real binaries in the exit).
+- [x] ACME TLS (solo) (M4-2 P33; 09 §5; tested against Pebble, not against Let's Encrypt).
+- [x] `/metrics`, `node_metrics`, dashboard charts wired (M4-2 P34–P36; 01 §7, 09 §6, 07 §3).
+- [x] Deferred from M2a-2b (P27): `date` filter time zones (M4-2 P29: jiff with the bundled tzdb; `date(fmt)` formats in `site.timezone`, `tz=` overrides it; permalink dates stay UTC; 06).
+- [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
+- [x] Release workflow for six targets and the GHCR image (publishing waits for the release gate), systemd unit, cluster and solo runbooks (M4-2 P27, P37, P38: `release.yml`, `packaging/systemd/`, `docs/operations/`; 09 §7). Checked locally only: one target (`aarch64-apple-darwin`) built and packed here, no GitHub run, nothing published (see M4-4, "Deferred from M4-2").
+- [x] Backward-compat CI job (M4-2 P38: `ci.yml` job `compat`, `.github/scripts/compat.sh`; it has something to run against from the second tag; run by hand in the exit with the M4-1 binary).
+
+### M4-3 — examples and docs
+
+What the M4 list above already named and M4-1/M4-2 did not build.
+
+- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
+- [ ] Docs site (built with FerriteCMS itself).
+- [ ] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (planned in 09 §8; `config check` covers the configuration today). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+
+### M4-4 — follow-ups
+
+The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
+
 - [ ] Media follow-ups (from M1b):
   - [x] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup). 09 §4a (M4-1 P22); its JSON example's field names are marked not verified.
   - [x] S3 `copy_if_not_exists` config option (M4-1 P16: `[media.s3] copy_if_not_exists`; unset, S3 still takes the head + copy fallback and `ArtifactRef.created` stays advisory; values per provider in 09 §4a).
@@ -453,15 +473,6 @@ M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [
   - [x] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
   - [x] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
   - [x] Optional location-metadata stripping on upload: `[media] strip_metadata = true` removes EXIF and XMP losslessly from JPEG, PNG and WebP originals on upload and import (M4-1 P17; an image whose metadata cannot be removed is refused, R1; 03 §4). Off by default, so the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11).
-- [x] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot` (M4-2 P30–P32; 09 §1, §2; run end to end with two real binaries in the exit).
-- [x] ACME TLS (solo) (M4-2 P33; 09 §5; tested against Pebble, not against Let's Encrypt).
-- [x] `/metrics`, `node_metrics`, dashboard charts wired (M4-2 P34–P36; 01 §7, 09 §6, 07 §3).
-- [x] Deferred from M2a-2b (P27): `date` filter time zones (M4-2 P29: jiff with the bundled tzdb; `date(fmt)` formats in `site.timezone`, `tz=` overrides it; permalink dates stay UTC; 06).
-- [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
-- [x] Release builds for all targets, published Docker image, systemd unit, cluster runbook (M4-2 P27, P37, P38: `release.yml`, `packaging/systemd/`, `docs/operations/`; 09 §7). Written and checked locally only: no GitHub run, nothing published yet (see "Deferred from M4-2").
-- [x] Backward-compat CI job (M4-2 P38: `ci.yml` job `compat`, `.github/scripts/compat.sh`; it has something to run against from the second tag; run by hand in the exit with the M4-1 binary).
-- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
-- [ ] Docs site (built with FerriteCMS itself).
 - [ ] Deferred from M2b-3 ([`m2-exit.md`](superpowers/m2-exit.md) "Open follow-ups"):
   - [ ] Plugin hook latency across the cluster as a time series, with the metrics registry (the Plugins screen shows this node's p95 as a bucket bound, M2b P48).
   - [ ] An index for the redirect `q` substring search if large redirect sets need one (a trigram index is Postgres-only; M2b R43).

@@ -63,8 +63,17 @@ so these commands run next to live nodes.
 1. **Start one node on the new image.** With `database.auto_migrate` (default on) it takes
    the `migrate` advisory lock and applies the pending migrations; nodes starting at the
    same moment wait for the lock and then find nothing to do. Wait until its `/readyz`
-   answers 200 (`ferrite healthcheck --url http://127.0.0.1:8080/readyz` inside the
-   container).
+   answers 200: with the compose example `docker compose -f
+   examples/cluster/docker-compose.yml ps` shows the node `(healthy)` (its health check
+   runs that probe), or ask it directly inside the running container (the binary is
+   `/ferrite`; the distroless image has no `PATH` lookup for it):
+
+   ```sh
+   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite healthcheck --url http://127.0.0.1:8080/readyz
+   ```
+
+   (Not with the one-off `run` above: that is a new container, whose 127.0.0.1 is not
+   the node.)
 2. **Old nodes keep serving** next to it: they ignore new columns, claim only job kinds
    they know (a new kind such as `node_metrics.prune` waits for a new node) and hand back
    job payload versions they do not support without using an attempt.

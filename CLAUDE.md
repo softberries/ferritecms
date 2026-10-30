@@ -73,7 +73,8 @@ series API and the dashboard's Site traffic, `site.timezone` in the `date` filte
 a ring-only build, the release workflow (six targets, minisign, GHCR), the systemd unit,
 the `compat` CI job and the runbooks in `docs/operations/`; migration `0012_node_metrics`.
 Nothing is released: the first tag waits for the release gate in the exit. Next is the rest
-of M4 (M4-3: example plugins, starter themes, docs site; M4-4: follow-ups). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+of M4 as the ROADMAP splits it: M4-3 (example plugins, the `docs`/`business` themes, the docs
+site, `ferrite doctor`), then M4-4 (the follow-up lists). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
 `docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
 `m3.md`, M4: `m4.md`).
 
@@ -113,8 +114,8 @@ by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
 placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: `ferrite
-doctor`, `ferrite plugin new`, the example plugins (SEO, analytics, contact form), the
-`docs`/`business` themes and the docs site (`docs/design/01-architecture.md` §1; API status
+doctor`, the example plugins (SEO, analytics, contact form), the `docs`/`business` themes and
+the docs site (M4-3), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
 per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;

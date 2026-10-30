@@ -417,7 +417,9 @@ and `--all-targets` enable the seams through that dev-dependency anyway.
   `--restore-snapshot` needed nothing: the snapshot predates the start that wrote the newer
   version. Red run: `rollback_schema_stores_the_older_version` (`left: Some("0.1.0")`,
   `right: Some("0.0.1")`) and `rollback_schema_without_from_stores_the_reported_version`
-  (`left: Some("0.1.0")`, `right: Some("0.0.7")`); green: `tests/rollback.rs` 14/14, and
+  (`left: Some("0.1.0")`, `right: Some("0.0.7")`); green: `tests/rollback.rs` 14/14 (15/15 with the fix round's
+  `rollback_schema_nothing_to_revert_stores_the_older_version`, red first with the key
+  write of that branch removed: `left: Some("0.1.0")`, `right: Some("0.0.1")`), and
   the second lifecycle run (§1 a) end to end.
 - Two stale comments about the `other` class (`MetricsSnapshot::requests`,
   `admin/src/dashboard/traffic-card.tsx`) were brought in line with M4-2 R3 as amended.
@@ -448,6 +450,9 @@ and `--all-targets` enable the seams through that dev-dependency anyway.
 | GitHub plan details: rulesets and a "restrict creations" rule for `v*` tags on a private personal repository | the ruleset docs page did not state it for private repositories | — |
 | The bundled tzdb's size (P29 said about 0.5 MB) | not measured | — |
 | Self-update of a dry-run artifact | dry-run binaries embed the placeholder key | a test-seams updater (§1 a) |
+| A `self-update` that replaces its own running binary (`current_exe()`) and checks a release against the embedded key, without `--test-current-exe`, `--base-url` or `FERRITE_TEST_RELEASE_PUBKEY` | M4-1 has no `self-update`, so every update in §1 a ran the test-seams updater on the installed file; a real run needs a published release | `tests/self_update.rs` (the swap and verification code paths), §1 a (the files swapped) |
+| `rollback --schema` on Postgres end to end, and X1 there (the key write after the down, and the "nothing to revert" path) | the lifecycle ran on SQLite | `rollback_schema_downs_on_postgres` (the down only); X1 is tested on SQLite (`tests/rollback.rs`: three tests) |
+| The admin E2E after M4-2 beyond the two dashboard specs: the full suite, `chromium-pg`, Firefox, WebKit | only the specs whose fixtures changed were run (§1 d) | Task 9's runs; the admin unit tests (§2) |
 
 ## 6. Release gate (the user's actions, in order)
 
@@ -464,7 +469,10 @@ None of these was done here; each needs the repository owner.
 
    Keep `release.key` and its password offline. The workflow refuses to publish while
    `release.pub` is the placeholder, and checks its own signature against the committed
-   key. `cargo test` passes with a real key (`embedded_key_file_parses`).
+   key. `cargo test` passes with a real key: run here with the throwaway key copied over
+   `crates/ferrite/release.pub` (then restored), `cargo test -p ferrite --lib
+   update::verify` (5 passed, `embedded_key_file_parses` among them) and `cargo test -p
+   ferrite --features test-seams --test self_update` (11 passed).
 3. **The GitHub environment `release`** (Settings → Environments):
    - deployment branches and tags: only tags matching `v*`;
    - required reviewers if the plan allows: GitHub's docs (read 2026-10-30) say required
@@ -488,7 +496,7 @@ None of these was done here; each needs the repository owner.
 
 ## 7. Open follow-ups
 
-In [ROADMAP](../ROADMAP.md), M4, "Deferred from M4-2" (parked ledger items, final-review
+In [ROADMAP](../ROADMAP.md), M4-4, "Deferred from M4-2" (parked ledger items, final-review
 minors, the metrics follow-ups, rollback without hard links, the release gate).
 
 ## 8. Verified claims
