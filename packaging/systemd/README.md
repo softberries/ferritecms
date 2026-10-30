@@ -56,6 +56,11 @@ root on a systemd Linux host (Debian, Ubuntu, Fedora and the like).
    journalctl -u ferrite -f
    ```
 
+   A start that fails is retried every 5 s (`Restart=on-failure`), at most five times in
+   ten minutes (`StartLimitIntervalSec=600`, `StartLimitBurst=5`); then the unit stays
+   failed, so a broken upgrade does not loop. Fix the cause (`journalctl -u ferrite`),
+   then `systemctl reset-failed ferrite && systemctl start ferrite`.
+
    Local changes (a different `MemoryMax`, environment overrides such as
    `Environment=FERRITE_LOG=debug`) belong in a drop-in, `systemctl edit ferrite`, so a
    newer copy of the unit can replace the file.

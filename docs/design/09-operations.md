@@ -105,7 +105,8 @@ that carries the new `release.pub`.
 
   A `migrate_up` that fails without moving the schema leaves the file as it was: the
   record that was there is written back, or the provisional one is removed when there
-  was none.
+  was none. When that start had carried an unfinished move's start, the record written
+  back names the snapshot found for it (M4-2 R9).
 - **When it changes:** the stored `last_binary_version` differs from this binary, or
   migrations were applied. Then `last_binary_version` is set to this binary. A start that
   changed nothing leaves an existing file alone.
@@ -131,7 +132,13 @@ that carries the new `release.pub`.
   folder is synced. Write errors name the path. Temp files a crash left behind
   (`.upgrade.json.*.tmp`) older than a day are removed by the next write.
 - **Snapshots:** the pruning of pre-migration snapshots (newest five) never deletes the
-  one this file names (02 §7); opening a SQLite site reads the file to know which.
+  one this file names (02 §7); opening a SQLite site reads the file to know which. A
+  provisional record (`snapshot: null`, `schema_from < schema_to`) protects the newest
+  `backups/pre-<schema_from>-to-<schema_to>-*.db` instead (M4-2 R9): an upgrade that
+  applies some migrations and then fails on every start (a restart loop) takes a new
+  snapshot each time, and must not prune the one from before the move. This lookup by
+  name is for pruning only; `rollback --restore-snapshot` still refuses a record without
+  a snapshot. The systemd unit stops restarting after five failed starts in ten minutes.
 - **An unreadable file** (not JSON, or another `v`, e.g. a newer binary's format after a
   binary rollback):
   - The site still opens, with a warning. Pruning keeps **every** snapshot, since it
