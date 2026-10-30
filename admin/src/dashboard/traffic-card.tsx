@@ -1,6 +1,6 @@
 // Traffic (`manage_system`, P36): page views and all requests per hour as two areas
-// ("All requests" is every route class but health checks and the comment form: assets,
-// the API and the admin too, this dashboard's own polling included; R6), the
+// ("All requests" is every route class but health checks: assets, the API, the admin
+// and the comment form too, this dashboard's own polling included; R3, R6), the
 // 5xx errors as their own bar strip under them (a count of a different size on one axis
 // would lie flat; red beside the ember page views fails the colour check), and the
 // range's totals above, which double as the legend: each names its series' line key

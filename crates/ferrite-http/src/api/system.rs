@@ -24,8 +24,9 @@
 //!   call totals since it started, and the site's job counts (P20).
 //! * `GET /system/metrics/series?from&to&step=minute|hour|day[&node]`: the nodes'
 //!   per-minute figures (`node_metrics`, M4-2 P35) summed into dense, epoch-aligned
-//!   buckets with the page p95 the largest; minute series span at most 24 h, hour and
-//!   day series 7 days (`422`, field `step`).
+//!   buckets, each with the page latency histogram summed and the page p95 computed from
+//!   that sum (M4-2 R7); minute series span at most 24 h, hour and day series 7 days
+//!   (`422`, field `step`).
 //! * `POST /system/mail/test` (`system:write`): one test mail to the actor's own address
 //!   through the node's queue (P49); 3 per 10 minutes per user; audited `mail.test`.
 

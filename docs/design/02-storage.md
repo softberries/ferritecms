@@ -403,7 +403,8 @@ Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
 `0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
-`0009_import` / `0010_import_jobs` / `0011_artifact_gc` on both backends.
+`0009_import` / `0010_import_jobs` / `0011_artifact_gc` / `0012_node_metrics` on both
+backends.
 
 ### Content
 
@@ -603,6 +604,8 @@ crates/ferrite-store-postgres/migrations/
     0010_import_jobs.down.sql
     0011_artifact_gc.up.sql         # M4-1, phase expand: artifacts.orphaned_at + index
     0011_artifact_gc.down.sql
+    0012_node_metrics.up.sql        # M4-2, phase expand: node_metrics (P35, R7)
+    0012_node_metrics.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -613,8 +616,12 @@ crates/ferrite-store-postgres/migrations/
   are resolved at merge time, which is fine for a single-repo project.
 - Every migration has a `.down.sql`. No exceptions; a lossy down is marked (below).
 - **Editable until the first release tag (R10).** Nothing is deployed yet, so
-  `0001_init` (and `0002_search`) may be edited in place and dev databases re-created.
-  From the first tag on, applied migrations are immutable and changes need a new version.
+  migrations may be edited in place and dev databases re-created (M4-2 R7 changed
+  `0012_node_metrics` that way; a dev database migrated before then fails
+  `verify_migrations` with a checksum mismatch and needs a fresh `init`). From the first
+  tag on, applied migrations are immutable (sqlx checks their checksums) and changes need
+  a new version: the first tag, `v0.1.0` (the release gate in
+  `docs/superpowers/m4-2-exit.md`), freezes `0001`–`0012`.
 
 ### Header directives (ours, in SQL comments)
 
@@ -742,9 +749,17 @@ silently remove the guard.
   `ferrite_store::migrate::expand_lint`). One `DROP` passes since M3-2: a `DROP CONSTRAINT`
   that re-adds the same name as a `CHECK (col IN (<string literals>))` whose list is a
   strict superset of the one the down restores (a widening; Postgres `0010`, ruling R56).
-- *Backward-compat test*: CI checks out the previous release tag, builds it, and runs
-  its integration tests against a database migrated by the current branch.
-  (Starts mattering from the first tagged release.)
+- *Backward-compat check* (as built, M4-2 P38: `ci.yml` job `compat`,
+  `.github/scripts/compat.sh`): CI finds the newest `v*` tag before `HEAD`, builds that
+  tag's `ferrite` (debug, in its own worktree and target folder) and this commit's; the
+  current binary creates a site (`init` and `seed demo`, so it migrates to its schema) on
+  SQLite and on Postgres (schema `ferrite_compat` in the `postgres:18` service), then the
+  old binary must report the schema compatible (`migrate status` exit 0: "newer schema,
+  compatible"), `serve` it, and answer `/` and `/healthz` with 200. With no previous tag
+  it prints a notice and succeeds, so it starts running with the second tag. (This
+  replaces the earlier plan of running the old tag's integration tests, which conflict
+  with per-test schemas.) The script was run by hand in the M4-2 exit with the M4-1
+  binary (schema 11) against schema 12, on both backends.
 
 ## 9. Contract tests
 

@@ -65,20 +65,30 @@ canonical and robots fields, `permalink.redirects` for permalink-structure chang
 `restore` and the scheduled `[backup]` (`site.backup` job), `media sync|gc|regenerate` and the
 daily `artifacts.gc` job, the S3 `copy_if_not_exists` / `conditional_put` options,
 `media.strip_metadata` and `media.gc_grace_days`, the Postgres `lock_wait`, an atomic
-`seed demo`, the cluster example on RustFS; migration `0011_artifact_gc`. Next is the rest of
-M4 (ops and release). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
+`seed demo`, the cluster example on RustFS; migration `0011_artifact_gc`. M4-2 (release) is
+done too (`m4-2-exit.md`): signed `self-update` and `rollback` (`--schema`,
+`--restore-snapshot`) with `upgrade.json`, built-in ACME TLS for solo sites, the metrics
+registry with `/metrics` on `server.metrics_listen`, per-minute `node_metrics` rows, the
+series API and the dashboard's Site traffic, `site.timezone` in the `date` filter (jiff),
+a ring-only build, the release workflow (six targets, minisign, GHCR), the systemd unit,
+the `compat` CI job and the runbooks in `docs/operations/`; migration `0012_node_metrics`.
+Nothing is released: the first tag waits for the release gate in the exit. Next is the rest
+of M4 as the ROADMAP splits it: M4-3 (example plugins, the `docs`/`business` themes, the docs
+site, `ferrite doctor`), then M4-4 (the follow-up lists). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
 `docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
 `m3.md`, M4: `m4.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
 M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
 copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
-`jobs/{gc,backup}.rs`) -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
+`jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
+`rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
+(the minute writer), `build.rs` (target triple), `release.pub` (embedded key)) -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
 wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
 SMTP mailer, the extension install pipeline `extensions::Installer`, `import_fetch` (the
 importer's SSRF-checked `--fetch-media` source), `import_blobs` (import reports over the
-media store); the REST API in
-`src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress
+media store), `metrics` (the registry, `/metrics` text), `tls` (HSTS, the redirect app); the
+REST API in `src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress
 importer: WXR parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`,
 `ferrite-media`),
 `ferrite-cache` (page cache + outbox invalidation
@@ -93,16 +103,20 @@ marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
 `jobs/import.rs`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
-prune jobs) -> `ferrite-store` (traits; `catalogue`, `export` reader and `import_writer` for
-the portable copies); `ferrite-core` -> `ferrite-store` (traits) <-
+prune jobs incl. `node_metrics.prune`) -> `ferrite-store` (traits; `catalogue`, `export`
+reader and `import_writer` for the portable copies; `NodeMetricsRepo`, `node_metrics` skipped
+by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
-`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
+`ferrite-domain` (types; `metrics`: counts, series buckets, page p95), `ferrite-config`,
+`ferrite-sdk` (guest SDK). Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/
+{ci,release}.yml` and `.github/scripts/` (package, sums, verify-sig, newest, compat). Starter theme:
 `themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
 `wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: metrics,
-self-update/rollback, ACME and the other M4 operations (`docs/design/01-architecture.md` §1; API status per
-endpoint in 07 §1, admin status per screen in 07 §3).
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: `ferrite
+doctor`, the example plugins (SEO, analytics, contact form), the `docs`/`business` themes and
+the docs site (M4-3), and `ferrite plugin new` (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
+per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
 needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
@@ -170,6 +184,21 @@ writes export archives). Config: `[media] strip_metadata`, `gc_grace_days` (1..=
 each database has an install id (`schema_meta.install_id`; `restore`, `import-site` and `db
 copy` give the copy its own), and the GC deletes only from a store whose
 `ferrite-owner.json` names it (`media gc --claim` after a restore in place).
+Update and roll back (09 §1–§2, runbook `docs/operations/solo-upgrade.md`): `ferrite
+self-update [--version X] [--check] [--yes] [--data DIR]` (0 updated or up to date, 2 newer
+release with `--check`, 1 error; clap usage errors are 2 too; a repository build has no
+release key and refuses), `ferrite rollback [--data DIR] [--schema] [--allow-lossy]
+[--restore-snapshot] [--yes]` (0, 3 the kept binary cannot open the schema, 1; `--schema`
+runs as the record's `to`). A test-seams binary for local release tests: `cargo build -p
+ferrite --features test-seams` (not `--features ferrite/test-seams`, which with `-p ferrite`
+names the self dev-dependency and enables nothing), then `--base-url`, `--test-current-exe`
+and `FERRITE_TEST_RELEASE_PUBKEY`. HTTPS for solo sites: `[server.tls] mode = "acme"`,
+`contact = "mailto:…"`, `directory = "staging"` first (09 §5; `FERRITE_TEST_PEBBLE=1 cargo
+test -p ferrite --test tls` runs Pebble in Docker). Metrics: `[server] metrics_listen =
+"127.0.0.1:9464"` serves `GET /metrics`; `GET /api/v1/system/metrics/series?from&to&step=
+minute|hour|day[&node]` (`system:read`). Release: `.github/workflows/release.yml` (a manual
+run is a dry run with a throwaway key; publishing needs the release gate in
+`m4-2-exit.md`); systemd: `packaging/systemd/` (README there).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with

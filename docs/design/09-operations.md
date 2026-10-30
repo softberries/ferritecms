@@ -58,11 +58,37 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
 7. The new binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
    writes `data/upgrade.json` (`{v, from, to, schema_from, schema_to, snapshot, at}`, P30).
 
+**Restart between two updates.** `ferrite.prev` is always the binary that was installed
+before the last swap, not the one the site last ran. Two `self-update`s before a restart
+(A → B → C) leave `ferrite.prev` = B, a binary this site never ran, and A is gone; C's
+`upgrade.json` then says `from: A`, so `rollback --schema` refuses (the kept binary is not
+the record's `from`) and A has to be fetched by hand. Nothing warns about this (the
+`last_binary_version` it would compare with needs the database, which `serve` locks on
+SQLite): restart after each update.
+
 `--check` only reports: exit 2 when a newer release exists (with a note when it has no asset
 for this target), 0 when not; it needs no release key. Exit codes: 0 updated or up to date,
 2 an update is available (`--check`), 1 any error. It works the same with Postgres; a cluster
 deploys images instead (§3). The release key is rotated by a release signed with the old key
 that carries the new `release.pub`.
+
+**The release key** (once, by a maintainer, before the first tag; the release gate in
+`docs/superpowers/m4-2-exit.md`):
+
+```sh
+minisign -G -p release.pub -s release.key      # asks for a password twice
+cp release.pub crates/ferrite/release.pub       # replaces the placeholder; commit it
+```
+
+`crates/ferrite/release.pub` then holds minisign's two lines (`untrusted comment: …` and
+the base64 key); the binaries embed it at build time. The secret key never enters the
+repository: the contents of `release.key` and its password go into the GitHub
+environment `release` as the secrets `MINISIGN_SECRET_KEY` and `MINISIGN_PASSWORD` (§7);
+keep an offline copy of both. The release workflow refuses to publish while
+`release.pub` is the placeholder, and checks the signature it made against the committed
+key (`.github/scripts/verify-sig.sh`), so a secret key that does not match fails the run
+before anything is published. A binary built before the key was committed has no key and
+can never self-update; install a release build.
 
 ### `upgrade.json` (as built, M4-2 P30)
 
@@ -237,7 +263,15 @@ not hold here.
    `migrate_down(schema_from, allow_lossy)`. A schema already at or below `schema_from`
    has nothing to revert. A lossy step without `--allow-lossy` refuses before any step
    runs, names `--allow-lossy` and `--restore-snapshot` (on Postgres: PITR), and changes
-   nothing. The install id stays.
+   nothing. The install id stays. Afterwards `schema_meta.last_binary_version` is set to
+   the binary that runs next (the record's `from`; for a record without one, what that
+   binary's `--version` reports), since the database is that binary's again. So a
+   re-upgrade that runs before the older binary ever starts (a `self-update` straight
+   after the rollback), or after an older binary that does not write the key (any build
+   before M4-2), records `from: <older>` and can itself be rolled back. (Found by the
+   M4-2 exit's two-binary run: without it the next record said `from: <newer>` and its
+   `rollback --schema` refused `ferrite.prev`.) `--restore-snapshot` needs no such step:
+   the snapshot was taken before the start that wrote the newer version.
 3. **`--restore-snapshot`** (SQLite only) puts the pre-upgrade snapshot back instead of
    running down migrations:
    - Only the path the record names is used, never one found by name. A record with
@@ -250,8 +284,11 @@ not hold here.
      without a terminal `--yes` is required.
    - It copies the snapshot beside the database first and, on unix, gives the copy the
      current database's owner, group and mode (M4-2 R11: a root-run rollback leaves a
-     database the service user can open; a `chown` it may not make refuses before anything
-     moves). Then it moves `ferrite.db-wal`, `ferrite.db-shm` and
+     database the service user can open). A `chown` it may not make refuses before
+     anything moves. That includes one rare case: run as a non-root owner whose
+     `ferrite.db` has a group they are not a member of, the copy gets their own group and
+     cannot be given the database's; run it as root or fix the group first. Then it moves
+     `ferrite.db-wal`, `ferrite.db-shm` and
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
      sits beside another database file). Then it renames the copy into place. Each move is
      a hard link plus an unlink, so an existing file is never replaced. A failed move puts
@@ -261,7 +298,19 @@ not hold here.
      SQLite would roll it back into the snapshot.
    - The database must be on the data folder's filesystem (the moves into `backups/` are
      links). A `database.url` pointing to another filesystem refuses with a message to
-     move the files aside and copy the snapshot by hand.
+     move the files aside and copy the snapshot by hand. A filesystem without hard links
+     (some FUSE, SMB or exFAT mounts) refuses too ("cannot move …" with the filesystem's
+     error), with nothing moved; there is no rename fallback yet (ROADMAP, "Deferred from
+     M4-2"). The record's rename in step 4 is a link too. After down migrations (the
+     default) a failed link there only warns ("rename it by hand") and leaves
+     `upgrade.json` in place: rename it by hand, so no later rollback reads a move that
+     was already undone.
+   - **Media uploaded since the upgrade** is referenced only by the moved-aside database.
+     The install id is unchanged, so the daily `artifacts.gc` (03 §6) treats those blobs as
+     unreferenced and deletes them after `media.gc_grace_days` (default 7). To keep the
+     option of recovering that content from `backups/rolled-back-<ts>.db`, copy the media
+     folder (or the bucket) aside before then, or raise `gc_grace_days` for the time
+     being.
    - The restored database is the same install: its `install_id` is the one the snapshot
      was taken with.
 4. **Record**: once the database step succeeded, `upgrade.json` is renamed to
@@ -272,12 +321,14 @@ not hold here.
 
 Exit codes: 0 rolled back, 3 the previous binary cannot open this schema (binary
 rollback with `--data`), 1 any other error. Refusals before the database step change
-nothing.
+nothing. A usage error (clap: `--schema` without `--data`, `--restore-snapshot` with
+`--allow-lossy`, an unknown flag) exits 2 before anything runs.
 
 ## 3. Upgrade & rollback (cluster / Postgres)
 
 - Deploy is the operator's (container image tag, systemd, k8s). Recommended runbook,
-  shipped in docs:
+  shipped in docs as [`docs/operations/cluster-runbook.md`](../operations/cluster-runbook.md)
+  (the solo profile's is [`docs/operations/solo-upgrade.md`](../operations/solo-upgrade.md)):
   1. Take a provider snapshot (or rely on PITR; note the timestamp).
   2. `ferrite migrate status` with the new image → review.
   3. Roll nodes ([04 §9](04-cluster.md#9-rolling-deploys)); first new node migrates.
@@ -659,13 +710,19 @@ more, not as lost ones.
     TLS (and redirect) listener is bound with `server.listen` before any background task,
     so a busy port stops startup. The ACME client then runs as a background task: it
     deploys the cached certificate at once, otherwise orders one (until then TLS
-    handshakes fail and the plain listener still answers), renews when a third of the validity is left (30 days for Let's Encrypt's 90),
-    and backs off after failures (logged as warnings).
+    handshakes fail and the plain listener still answers), renews when a third of the
+    validity is left (rustls-acme 0.15.4; 30 days of today's 90-day Let's Encrypt
+    certificates; Let's Encrypt's default becomes 64 days on 2027-02-10 and 45 days in
+    2028, which the client follows without a change, as it reads each certificate's
+    validity), and backs off after failures (logged as warnings). There is no ACME
+    Renewal Info (ARI) support in that crate, so renewals are ordinary orders.
   - **Storage:** `<data>/tls/` (created 0700 at startup, existing files tightened to
     0600): `account-<hash>.pem` (the account key) and `cert-<hash>.pem` (key and chain),
     each written 0600 to a temporary file and renamed into place. The hash covers the
     contact or domains and the directory URL, so a changed config starts a new account
-    or order. Backups (§4) do not include the folder; a restored site orders again.
+    or order: the account file is keyed by `contact` and the directory, the certificate
+    file by `domains` and the directory (`crates/ferrite/src/tls.rs`, `TlsCache::name`).
+    Backups (§4) do not include the folder; a restored site orders again.
   - **Listeners:** `server.listen` keeps serving plain HTTP: bind it to loopback
     (`127.0.0.1:8080`, the default), which is what `ferrite healthcheck` (http only)
     uses. The TLS listener serves the same site (h2 and HTTP/1.1 by ALPN); handshakes run
@@ -682,14 +739,17 @@ more, not as lost ones.
     (its rate-limits page, checked 2026-10-30) 5 authorization failures per identifier per
     account an hour, 5 certificates for the exact same set of names every 7 days, 50
     certificates per registered domain every 7 days and 300 new orders per account every 3
-    hours; the client retries a failure after 1, 2, 4, 8 … s (doubling up to 2^16 s, about 18 h), so a broken setup reaches the
-    failure limit within a minute and then waits it out. Switching back to `production`
-    orders afresh (the cache files are per directory). `<data>/tls/` is not in backups,
-    and a changed `contact` or `domains` starts a new account or order, so every restore
-    or such change orders a new certificate and counts against the 5-per-7-days duplicate
-    limit: restoring or re-creating a site more than a few times a week can leave it
-    without a certificate until the window passes (copy `<data>/tls/` along by hand to
-    avoid that).
+    hours. The client retries a failure after 1, 2, 4, 8 … s (doubling up to 2^16 s,
+    about 18 h), so a broken setup can use up the 5 failures an hour within a few
+    minutes (derived from those waits plus order polling, not measured) and then waits.
+    Switching back to `production` orders afresh (the cache files are per directory).
+    `<data>/tls/` is not in backups, so every restore, and every change of `domains`,
+    orders a new certificate, which counts against the 5-per-7-days duplicate limit:
+    restoring or re-creating a site more than a few times a week can leave it without a
+    certificate until the window passes (copy `<data>/tls/` along by hand to avoid that).
+    A changed `contact` only registers a new account (10 per IP address every 3 hours):
+    the cached certificate for the same `domains` and directory keeps being served and is
+    renewed under the new account.
   - **Ports below 1024** need `CAP_NET_BIND_SERVICE` (systemd `AmbientCapabilities=`) or
     a port mapping (Docker `-p 443:8443` with `listen = "0.0.0.0:8443"`).
   - **Verified** by `crates/ferrite/tests/tls.rs`: HSTS only on TLS, the redirect
@@ -804,24 +864,103 @@ malformed value is `400`. (Prometheus remains the source of truth for real monit
 
 ## 7. Packaging
 
-- Release targets: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`,
-  `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`,
-  `x86_64-apple-darwin` (wasmtime/cranelift support for all to verify in CI).
-- **Docker image (as built, M1.5; admin stage M2b-1):** `Dockerfile` at the repository
-  root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g pnpm@10.28.2`,
-  `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA; `rust:1-bookworm`
-  (current stable, matching `rust-toolchain.toml`'s `channel = "stable"`) copies its
-  `/src/admin/dist` in and builds `cargo build --release --locked -p ferrite`, which embeds
-  it; the runtime is
-  `gcr.io/distroless/cc-debian12:nonroot` (glibc, no shell, uid 65532) with the binary at
-  `/ferrite`, an empty `/data` owned by the non-root user, `VOLUME /data`, `EXPOSE 8080`,
-  `ENTRYPOINT ["/ferrite"]`, `CMD ["serve", "--data", "/data"]`. CA certificates come with
-  the distroless base. `.dockerignore` keeps `target/`, `.git`, docs, examples and the admin's local
-  `node_modules`, `dist`, `test-results`, `e2e/.auth` and `.tanstack` out of the build context. Health checks use `ferrite healthcheck` (§8), because the image has
-  no shell, curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs
-  `config check` in it; publishing images is M4.
-- systemd unit with hardening (`ProtectSystem=strict`, `ReadWritePaths=/var/lib/ferrite`,
-  `NoNewPrivileges`, `MemoryMax`) (M4).
+**As built (M4-2 P25, P27, P37, P38; rulings M4-2 R4, R5).** Nothing has been published
+yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
+
+- **Release targets and runners** (`.github/workflows/release.yml`, job `build`; each on a
+  native runner, so wasmtime is never cross-compiled; R4):
+
+  | Target | Runner | Notes |
+  |---|---|---|
+  | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | needs glibc 2.35 or newer |
+  | `aarch64-unknown-linux-gnu` | `ubuntu-22.04-arm` | needs glibc 2.35 or newer |
+  | `x86_64-unknown-linux-musl` | `ubuntu-24.04` | static (`musl-tools`; checked with `readelf`/`file`) |
+  | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | static, as above |
+  | `aarch64-apple-darwin` | `macos-15` | |
+  | `x86_64-apple-darwin` | `macos-15-intel` | |
+
+  Each runs `cargo build --release --locked -p ferrite --target <triple>` over the admin
+  built once (`pnpm -C admin build`, job `admin`), checks that `--version` prints
+  `ferrite <version>`, and packs `ferrite-<version>-<target>.tar.gz`
+  (`.github/scripts/package.sh`: a folder `ferrite-<version>-<target>/` with `ferrite`
+  0755, `README.md` and any `LICENSE*`). The crypto is ring only (P28: no cmake or clang);
+  the musl builds compile the bundled C code (SQLite, zstd) with `musl-gcc` and need the
+  host's CA certificates at run time (`packaging/systemd/README.md`). The release profile
+  is `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"` (P27); the
+  `aarch64-apple-darwin` binary is 53.5 MB (M4-2 exit). Only `aarch64-apple-darwin` has
+  been built and packed outside GitHub (the exit); the other five are first proven by a
+  real run.
+- **The release workflow** (`release.yml`, every action pinned by commit SHA): a `v*` tag
+  push publishes; `workflow_dispatch` is a dry run by default (the same builds, signed
+  with a throwaway key made in the job, uploaded as workflow artifacts only; its binaries
+  embed the placeholder key, so they can only be self-update-tested with a `test-seams`
+  build). Jobs:
+  - `meta`: the version from `Cargo.toml` (the tag must be `v<version>`), whether it is
+    a prerelease (`X.Y.Z-…`), whether this run publishes, and from
+    `.github/scripts/newest.sh` whether it is the newest stable version overall
+    (`latest`) and of its `X.Y` line (`minor_latest`); a publishing run refuses while
+    `crates/ferrite/release.pub` is the placeholder.
+  - `admin`, then `build` (the matrix above).
+  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the six assets
+    (`.github/scripts/sums.sh` refuses any other count), signed with minisign
+    (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and
+    `MINISIGN_PASSWORD`, then checked against the committed key
+    (`.github/scripts/verify-sig.sh`). `sign-dry-run` does the same with a throwaway key.
+  - `release` (environment `release`): a draft GitHub Release (a draft left by a failed
+    run of the same tag is reused; an already published one stops the run), the eight
+    assets uploaded and counted, then published, marked "latest" only when `latest`
+    (so a backport never becomes the release `self-update` installs; prereleases are
+    marked as such).
+  - `image` and `image-tags` (environment `release`, `packages: write`): the image built
+    natively per platform (`linux/amd64` on `ubuntu-24.04`, `linux/arm64` on
+    `ubuntu-24.04-arm`, no QEMU; R5), pushed by digest with the OCI labels `source`
+    (which links the package to the repository), `version` and `revision`, then joined
+    with `docker buildx imagetools create` under `ghcr.io/<owner>/<repo>:<X.Y.Z>`, plus
+    `:<X.Y>` when `minor_latest` and `:latest` when `latest`.
+
+  The environment `release` (deployment policy: `v*` tags only; required reviewers where
+  the plan allows) is what keeps the signing key from a branch with an edited workflow;
+  the repository's settings are the user's (release gate). In a private repository
+  environments and their secrets need GitHub Pro or Team, and required reviewers are not
+  available there below GitHub Enterprise (GitHub's docs, read 2026-10-30). A new GHCR package is private until made
+  public. Not yet done: image signing or provenance (cosign, GitHub attestations).
+- **CI checks** (`ci.yml`): job `packaging` greps `Cargo.lock` for `aws-lc` (stricter
+  than `cargo tree`: dev dependencies too, P28), runs `systemd-analyze verify` and
+  `systemd-analyze security --offline=true` on the unit, and `shellcheck` on
+  `.github/scripts/*.sh`; job `compat` is the backward-compatibility check (02 §8).
+- **Docker image (as built, M1.5; admin stage M2b-1; digests M4-2):** `Dockerfile` at the
+  repository root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g
+  pnpm@10.28.2`, `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA;
+  `rust:1-bookworm` (current stable, matching `rust-toolchain.toml`'s `channel =
+  "stable"`) copies its `/src/admin/dist` in and builds `cargo build --release --locked -p
+  ferrite`, which embeds it; the runtime is `gcr.io/distroless/cc-debian12:nonroot` (glibc,
+  no shell, uid 65532) with the binary at `/ferrite`, an empty `/data` owned by the
+  non-root user, `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
+  "--data", "/data"]`. Every base is pinned as `name:tag@sha256:<multi-arch index
+  digest>` (P37; the digests matched their tags on 2026-10-30, `docker buildx imagetools
+  inspect`); bump them by hand. CA certificates come with the distroless base.
+  `.dockerignore` keeps `target/`, `.git`, docs, examples and the admin's local
+  `node_modules`, `dist`, `test-results`, `e2e/.auth` and `.tanstack` out of the build
+  context. Health checks use `ferrite healthcheck` (§8), because the image has no shell,
+  curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs `config
+  check` in it. `self-update` and `rollback` do not apply in a container (the binary is
+  not writable there): deploy a new image tag instead (§3).
+- **systemd (as built, M4-2 P37):** `packaging/systemd/ferrite.service` and its install
+  guide `packaging/systemd/README.md`. The unit runs `ferrite serve --data
+  /var/lib/ferrite` as `User=ferrite`; `Restart=on-failure`, `RestartSec=5`, at most five
+  starts in ten minutes (`StartLimitIntervalSec=600`, `StartLimitBurst=5`, M4-2 R9: a
+  failing upgrade does not loop, each start taking another snapshot);
+  `TimeoutStopSec=30`; `UMask=0027`; `MemoryMax=1G`, `LimitNOFILE=65536`;
+  `CAP_NET_BIND_SERVICE` as the only capability (ACME on 443/80); `ProtectSystem=strict`
+  with `ReadWritePaths=/var/lib/ferrite` (a local `[backup] to` or `[media] root` outside
+  it needs a drop-in), `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`,
+  the `Protect*` kernel, clock and hostname settings, `Restrict*`, `LockPersonality`,
+  `SystemCallArchitectures=native`; no `MemoryDenyWriteExecute` (wasmtime compiles
+  WebAssembly at run time). The binary is root-owned and read-only to the unit, so
+  `self-update` and `rollback` run as root outside it, then `systemctl restart ferrite`
+  ([solo-upgrade runbook](../operations/solo-upgrade.md)). `systemd-analyze verify`
+  passes with systemd 255 (Ubuntu 24.04 container, M4-2 exit; `security` rates it 3.2,
+  "OK").
 - **Cluster example (as built, M1.5):** `examples/cluster/` — `docker-compose.yml`,
   `ferrite.toml`, `ferrite.env`, `Caddyfile`. Usage (also in the compose file's header):
 
@@ -905,7 +1044,10 @@ equal is refused: use `rollback`); `--check` only reports; `--yes` skips the con
 Exit 0 updated or up to date, 2 a newer release exists (`--check`), 1 on any error (a bad
 signature or sha256, no asset for this target, a new binary that does not report the
 release's version, an unwritable binary folder, a build without a release key); every
-refusal leaves the binary untouched. Test seams (`test-seams` builds only): a hidden
+refusal leaves the binary untouched. A usage error (clap: an unknown flag, a missing
+value) exits 2 too, before anything runs, so a wrapper around `--check` must not read 2
+alone as "an update is available" (check for the `a newer release is available` line).
+Test seams (`test-seams` builds only): a hidden
 `--base-url` replaces the GitHub API root (plain HTTP allowed), a hidden
 `--test-current-exe PATH` the running binary's path, a hidden `--test-download-deadline-ms`
 the 10-minute download bound, and `FERRITE_TEST_RELEASE_PUBKEY` the embedded key.
@@ -922,8 +1064,9 @@ confirmation (`--yes` without a terminal), moving `ferrite.db[-wal|-shm]` to
 `upgrade-rolled-back-<ts>.json`. Exit 0 rolled back, 3 the previous binary cannot open this
 schema, 1 any other error (no `ferrite.prev`, no or unreadable `upgrade.json`, the wrong
 binary, a lossy step without `--allow-lossy`, Postgres or no recorded snapshot with
-`--restore-snapshot`, no confirmation, the folder locked). Test seam (`test-seams` builds
-only): a hidden `--test-current-exe PATH`.
+`--restore-snapshot`, no confirmation, the folder locked); a usage error (clap) exits 2.
+After a schema rollback `schema_meta.last_binary_version` names the older binary (§2 b).
+Test seam (`test-seams` builds only): a hidden `--test-current-exe PATH`.
 
 **`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
 WXR file as the active admin `--as` names (default: the first active admin). Writes
@@ -946,7 +1089,9 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
 `ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (`mode`
-is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `metrics` the `server.metrics_listen` address, `backup` the `[backup] schedule`), exit
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail`
+whether `[mail]` is set, `metrics` the `server.metrics_listen` address, `tls` the
+`[server.tls] mode`, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.
@@ -1138,7 +1283,9 @@ also installs the `ring` rustls default crypto provider at start.
   up to date or newer-but-compatible schema, **2** migrations pending, **3** schema
   incompatible with this binary, **1** any error (bad config, missing database, connection
   failure, and so on).
-- `up [--to N]` applies pending migrations (all, or up to version `N`).
+- `up [--to N]` applies pending migrations (all, or up to version `N`), under the migrate
+  lock, and records the move like a `serve` start: `<data>/upgrade.json` and
+  `schema_meta.last_binary_version` (§1; `crate::upgrade::migrate_and_record`).
 - `down --to N` reverts everything above version `N`. Migrations whose down loses data need
   `--allow-lossy`. It asks for typed confirmation (`yes`) on a terminal and refuses to run
   without `--yes` when stdin is not a terminal.
@@ -1169,16 +1316,25 @@ also installs the `ring` rustls default crypto provider at start.
   and check them against the registered types and taxonomies; load the active theme (at
   startup a broken one falls back to the embedded `blog`, 06 §7); install the enabled plugins
   (a broken row is skipped, 05 §7a); build the route table; bind `server.listen` (default
-  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one) and, with
-  `[server.tls] mode = "acme"`, `server.tls.listen` and `redirect_http` (§5); start
-  the background tasks (with TLS also the ACME client): the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
-  hot-reload task, the plugin-failure flusher (every 5 s), the `request.served` flusher
-  (every 10 s or 1 000 events, M2a-2a), the job runner (`cluster.workers` handlers; prune
-  jobs, scheduled publishing, `plugin.action`, `plugin.purge`), the periodic scheduler
-  (every 10 s: the prune jobs hourly, `content.publish_due` every 30 s,
-  `plugin.purge_sweep` daily) and the heartbeat (every 10 s); print
-  `Listening on http://<addr>` on stdout. A failure after joining the registry removes the
-  node's row again.
+  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one),
+  `server.metrics_listen` when set (§6), and with `[server.tls] mode = "acme"`
+  `server.tls.listen` and `redirect_http` (§5; `<data>/tls/` is created 0700 here), all
+  before any background task, so a busy port fails startup and releases what was bound;
+  start the background tasks (with TLS also the ACME client): the invalidation loop (with
+  `LISTEN` wake-ups in cluster mode) and the hot-reload task, the plugin-failure flusher
+  (every 5 s), the `request.served` flusher (every 10 s or 1 000 events, M2a-2a), the
+  redirect-hits flusher (every 10 s), the job runner (`cluster.workers` handlers; prune
+  jobs including `node_metrics.prune`, scheduled publishing, `plugin.action`,
+  `plugin.purge`, `media.variants`, `permalink.redirects`, `import.wordpress`,
+  `artifacts.gc`, `site.backup`), the periodic scheduler (every 10 s: the prune jobs
+  hourly, `content.publish_due` every 30 s, `plugin.purge_sweep` and `artifacts.gc`
+  daily, `site.backup` when `[backup]` is on), the heartbeat (every 10 s) and the
+  `node_metrics` minute writer (one row per whole UTC minute, §6); print `Listening on
+  http://<addr>` on stdout, and with TLS `Listening on https://<addr>` too. `/metrics` is
+  served on `server.metrics_listen` only. A failure after joining the registry removes
+  the node's row again. The migration check also records the start (§1): it writes
+  `upgrade.json` when the binary or the schema changed and sets
+  `schema_meta.last_binary_version`.
 - **Hot swap** (ruling P18, 04 §8): `theme.changed`, `plugins.changed`, `plugin.disabled`
   (the plugin stops on this node at once) and `options.changed` for `permalink.post` /
   `permalink.page` make one background task re-read the theme, the plugins or the permalink
@@ -1199,9 +1355,12 @@ also installs the `ring` rustls default crypto provider at start.
 - **Shutdown** on SIGINT or SIGTERM: stop accepting connections and stop the job runner at
   once; open requests get up to 10 s while running jobs get 9 s, after which the runner
   releases the rest without using an attempt (another node takes them at once; the runner
-  is abandoned after 12 s, ruling R6); then the background tasks stop (the failure flusher
-  writes once more, the `request.served` buffer is flushed into jobs once more, mail sends
-  still running are cancelled) and the node deregisters, together within 1 s; the database pools close
+  is abandoned after 12 s, ruling R6); every listener (plain, TLS, redirect) drains in the
+  same 10 s; then the background tasks stop (the failure flusher writes once more, the
+  `request.served` buffer is flushed into jobs once more, the redirect hits are written
+  once more, the partial minute's `node_metrics` row is flushed (at most 500 ms), the
+  ACME task and the `/metrics` listener stop, mail sends still running are cancelled) and
+  the node deregisters, together within 1 s; the database pools close
   (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
   the runtime down with a 1 s grace, dropping connection tasks still running. A clean
   shutdown exits 0; the process is gone at most 14 s after the first signal. A signal
@@ -1210,7 +1369,9 @@ also installs the `ring` rustls default crypto provider at start.
 - **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
   2 s and the startup migration check passed, else `503`.
 - **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
-  `server.trusted_proxies` (§5), `cache.max_bytes` (default 256 MB), `cache.poll_interval_ms`
+  `server.trusted_proxies` (§5), `server.metrics_listen` (§6), `[server.tls]` (`mode`,
+  `domains`, `contact`, `directory`, `listen`, `redirect_http`; §5), `site.timezone`
+  (the themes' `date` filter, 06), `[backup]` (§4), `cache.max_bytes` (default 256 MB), `cache.poll_interval_ms`
   (default 250; how often the invalidation loop reads the event outbox),
   `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,

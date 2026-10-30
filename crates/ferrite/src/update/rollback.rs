@@ -19,7 +19,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use ferrite_config::{Config, DbKind};
-use ferrite_store::Store;
+use ferrite_store::{SCHEMA_META_LAST_BINARY, Store};
 
 use super::{probe, swap};
 use crate::open::{OpenMode, migrate_lock, open_store, release_migrate_lock};
@@ -220,7 +220,7 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
         bins.require_prev()?;
     }
     // The binary that runs after the rollback must be the one the record names as `from`.
-    check_older(
+    let older = check_older(
         if swap_after {
             &bins.prev
         } else {
@@ -234,7 +234,7 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     if args.restore_snapshot {
         restore_snapshot(args, &config, &rec, &ts)?;
     } else {
-        schema_down(args, &config, &rec, &me).await?;
+        schema_down(args, &config, &rec, &me, older.as_ref()).await?;
     }
 
     // The database step used the record: set it aside so the older binary's start sees no
@@ -281,21 +281,29 @@ const OLDER_CONFIG_NOTE: &str = "An older binary refuses config keys it does not
     their FERRITE_SERVER__* overrides, which older builds lack).";
 
 /// Refuses, before anything changes, when `older --version` is not the record's `from`. A
-/// record without `from` (a database from before M4-2) cannot be checked.
-async fn check_older(older: &Path, rec: &UpgradeRecord) -> Result<()> {
+/// record without `from` (a database from before M4-2) cannot be checked. Returns the
+/// version `older` runs as: the record's `from`, or for a record without one what `older`
+/// reports (`None` when it reports nothing usable).
+async fn check_older(older: &Path, rec: &UpgradeRecord) -> Result<Option<semver::Version>> {
+    let reported = |code: Option<i32>, out: &str| {
+        out.split_whitespace()
+            .last()
+            .and_then(|v| semver::Version::parse(v).ok())
+            .filter(|_| code == Some(0))
+    };
     let Some(from) = rec.from.as_deref() else {
         println!(
             "note: {UPGRADE_FILE} does not record the previous version, so {} is not checked",
             older.display()
         );
-        return Ok(());
+        return Ok(probe(older, &[OsStr::new("--version")])
+            .await
+            .ok()
+            .and_then(|(code, out)| reported(code, &out)));
     };
     let (code, out) = probe(older, &[OsStr::new("--version")]).await?;
-    let reported = out
-        .split_whitespace()
-        .last()
-        .and_then(|v| semver::Version::parse(v).ok());
-    if code != Some(0) || reported.is_none() || reported != semver::Version::parse(from).ok() {
+    let version = reported(code, &out);
+    if version.is_none() || version != semver::Version::parse(from).ok() {
         bail!(
             "{} reports {:?} (exit {code:?}), but {UPGRADE_FILE} records the upgrade from \
              {from}: the schema goes back for ferrite {from}, so put that binary at {} and \
@@ -305,16 +313,20 @@ async fn check_older(older: &Path, rec: &UpgradeRecord) -> Result<()> {
             older.display()
         );
     }
-    Ok(())
+    Ok(version)
 }
 
 /// Down migrations to `rec.schema_from` under the migrate lock (SQLite: opening takes the
-/// data-folder lock, so `serve` must be stopped).
+/// data-folder lock, so `serve` must be stopped). Then `schema_meta.last_binary_version`
+/// names `older` (the binary that runs next, when known): the database is that binary's
+/// again, so the next upgrade records `from: <older>` even when `older` never starts in
+/// between (or is a build from before M4-2, which does not write the key).
 async fn schema_down(
     args: &RollbackArgs,
     config: &Config,
     rec: &UpgradeRecord,
     me: &semver::Version,
+    older: Option<&semver::Version>,
 ) -> Result<()> {
     let store = open_store(config, OpenMode::MustExist)
         .await
@@ -325,6 +337,7 @@ async fn schema_down(
             "the schema is at {before}, not above {}: nothing to revert",
             rec.schema_from
         );
+        store_older_version(store.as_ref(), older).await;
         return Ok(());
     }
     let reverted = down(store.as_ref(), rec.schema_from, args.allow_lossy).await;
@@ -355,7 +368,26 @@ async fn schema_down(
         shown.join(", "),
         rec.schema_from
     );
+    store_older_version(store.as_ref(), older).await;
     Ok(())
+}
+
+/// Sets `schema_meta.last_binary_version` to `older` after a schema rollback. A failure
+/// only warns: the schema is already back, and a binary from M4-2 on writes the key at its
+/// next start (an older one never does).
+async fn store_older_version(store: &dyn Store, older: Option<&semver::Version>) {
+    let Some(older) = older else { return };
+    if let Err(e) = store
+        .read()
+        .schema_meta()
+        .set(SCHEMA_META_LAST_BINARY, &older.to_string())
+        .await
+    {
+        eprintln!(
+            "warning: cannot record {older} as the database's last binary version ({e}); \
+             the next upgrade's {UPGRADE_FILE} may name the wrong previous version"
+        );
+    }
 }
 
 async fn down(store: &dyn Store, to: i64, allow_lossy: bool) -> Result<Vec<i64>> {
