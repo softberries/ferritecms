@@ -100,6 +100,15 @@ stopped (`systemctl stop ferrite`), and run as the `ferrite` user (`sudo -u ferr
 the files stay its own. A running site is backed up by `[backup]` in `ferrite.toml` (see
 above for a local `to`).
 
+`ferrite doctor` checks the site while it runs (it changes nothing and needs no stop). Run it
+as the service user and with the unit's environment, since an override in a drop-in is not
+in your shell's (design 09 §8):
+
+```sh
+sudo -u ferrite env $(systemctl show ferrite --property=Environment --value) \
+  /usr/local/bin/ferrite doctor --data /var/lib/ferrite
+```
+
 ## Update and roll back
 
 The binary is root-owned and `ProtectSystem=strict` makes `/usr/local/bin` read-only to the

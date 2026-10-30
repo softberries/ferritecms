@@ -5,6 +5,14 @@
 #   open http://localhost:8080
 #   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite seed demo --data /data
 #   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite config check --data /data
+#   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite doctor --data /data
+#
+# `doctor` exits 2 here: fs.config_file warns because the bind-mounted ./ferrite.toml keeps
+# the checkout's mode 0644. It holds no secret (the site key and the S3 keys come from
+# ferrite.env), so the warning is expected; a file with credentials must not be mounted
+# like this. On Linux, `sudo chown 65532 examples/cluster/ferrite.toml && sudo chmod 600
+# examples/cluster/ferrite.toml` clears it and keeps it readable by the image's user (git
+# keeps neither). Design 09 §7.
 #
 # Both nodes start at once on an empty database; one applies the migrations under the
 # `migrate` advisory lock, the other waits for it (design 04 §9). Changes saved through

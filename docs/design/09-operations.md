@@ -987,7 +987,16 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   docker compose -f examples/cluster/docker-compose.yml up --build
   open http://localhost:8080
   docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite seed demo --data /data
+  docker compose -f examples/cluster/docker-compose.yml exec node1 /ferrite doctor --data /data
   ```
+
+  `doctor` on the example exits 2: `fs.config_file` warns because the bind-mounted
+  `./ferrite.toml` keeps the checkout's mode 0644 (a bind mount shows the host file's mode).
+  That file holds no secret here (the site key and the S3 keys come from `ferrite.env`), so
+  the warning is expected. A file with credentials must not be mounted that way. To clear
+  it on Linux the file must stay readable by the image's user, uid 65532:
+  `sudo chown 65532 examples/cluster/ferrite.toml && sudo chmod 600
+  examples/cluster/ferrite.toml` (git keeps neither; not checked on Docker Desktop).
 
   Services: `postgres` (`postgres:18`, `pg_isready` health check, data volume at
   `/var/lib/postgresql`), `rustfs` (`rustfs/rustfs:1.0.4`, an S3-compatible
@@ -1075,8 +1084,11 @@ of writing a probe, and the SQLite lock is only tried and released at once, neve
 A local media root is checked the same way, with no probe object (M4-3a X4). The one write
 is the S3 probe object under `tmp/` in the bucket, which the GC removes if it is ever left;
 nothing local. A SQLite database is read over one read-only connection that takes no lock,
-opens no writer and runs no migration, so doctor works while `serve` runs and never stops
-one from starting (X3). Being read-only it never checkpoints the WAL; SQLite still updates
+opens no writer and runs no migration, so doctor works while `serve` runs and takes no
+lasting lock (X3). `db.lock_state` takes the exclusive lock for a moment to see whether it
+is free: a `serve` (or a scheduled `ferrite backup`) that tries it in that instant fails with
+"data folder is in use", and systemd's or Docker's restart recovers it (a shared lock would
+conflict the same way). Being read-only it never checkpoints the WAL; SQLite still updates
 the shared-memory index in `-shm`, as every reader does. A read-only open creates a missing
 `-wal` or `-shm` and leaves it, so: with no `-wal` (every committed page is then in
 `ferrite.db`; a running node always has one) the database is opened `immutable`, touching
@@ -1085,12 +1097,34 @@ neither file; with a `-wal` but no `-shm` (a copy that dropped it) it is not ope
 recovers it) and the checks that need the database are `skip`. On Postgres doctor first
 checks over a bare connection that the configured schema exists and only then opens the
 store, whose open would create it. Nothing prints a secret: a database or SMTP URL (or its
-user), an S3 key (configured or from `AWS_*`) and `secret.key` never appear. `info` means
-informational or not applicable to this site (Postgres has no `ferrite.lock`, a solo site no
-cluster); `skip` means the check did not
-run (`--offline`, a configuration that did not load, a database or media store that did
-not open, no running node, or a SQLite site for the clock and cluster checks). Run it as
-the user that runs `serve`: a check passes or fails for the user that runs doctor.
+user), an S3 key (configured or from `AWS_*`, scrubbed from every S3 error: `media.store`,
+`media.owner`, `backup.target`) and `secret.key` never appear. `info` means informational
+or not applicable to this site (Postgres has no `ferrite.lock`, a site without `[mail]`);
+`skip` means the check did not run (`--offline`, a configuration that did not load, a
+database or media store that did not open, no running node or a lock doctor cannot try for
+`net.listen`, or a SQLite site for the clock and cluster checks). Run it as the user that
+runs `serve`: a check passes or fails for the user that runs doctor.
+
+Doctor reads the configuration as `serve` does, from `ferrite.toml` and the `FERRITE_*`
+environment, and S3 credentials from `AWS_*`: the environment of the shell that runs it,
+not the service's. Under systemd the overrides live in the unit (a drop-in's
+`Environment=`, `packaging/systemd/README.md`), so `sudo -u ferrite ferrite doctor` alone
+checks a different configuration whenever one touches `database.url`, `auth.secret_key`
+or `server.listen` (a key set only in the drop-in gives a false `error fs.secret_key`).
+Run it with the unit's environment:
+
+```sh
+sudo -u ferrite env $(systemctl show ferrite --property=Environment --value) \
+  /usr/local/bin/ferrite doctor --data /var/lib/ferrite
+```
+
+`systemctl show` prints the unit's `Environment=` assignments, drop-ins included, separated
+by spaces; a value that holds a space comes out quoted and does not survive the shell's
+splitting (URLs and keys hold none). Variables from an `EnvironmentFile=` are not in that
+property: source the file into the same command (`set -a; . FILE; set +a` as a user who may
+read it) or pass it to a transient unit, `systemd-run --pipe --wait --collect -p User=ferrite
+-p EnvironmentFile=FILE /usr/local/bin/ferrite doctor --data /var/lib/ferrite`. In Docker,
+`docker compose exec` inherits the container's environment.
 
 | Check | What it checks |
 |---|---|
@@ -1102,7 +1136,7 @@ the user that runs `serve`: a check passes or fails for the user that runs docto
 | `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`. Postgres: `info`. |
 | `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
 | `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
-| `db.lock_state` | `info`: whether a node is running (it holds `<data>/ferrite.lock`). Tried without waiting and released at once; a missing lock file is not created. |
+| `db.lock_state` | `info`: whether `<data>/ferrite.lock` is held, by a running node or by another command that opens the database (`backup`, `migrate`, `user`, …), or that doctor cannot tell (a lock file this user cannot open). Tried without waiting and released at once; a missing lock file is not created. |
 | `db.connect` | The database opens read-only (`error` otherwise); reports backend, latency and, for Postgres, `host:port/database (schema S)` and the server version (older than 15 is an `error`). A Postgres schema that does not exist is an `error`, and it is not created. SQLite: a `-wal` without its `-shm` is a `warn` and the database is not opened (above). Postgres has 10 s to connect, and each later database read (in every check) 10 s more. |
 | `db.schema` | Migration status, as `migrate status`: up to date or a newer compatible schema is `ok`, pending migrations a `warn` (`migrate up`), an incompatible schema an `error` and exit 3, a migration recorded as failed an `error`. |
 | `db.identity` | `site_id` present (`error`), `install_id` present (`warn`), `last_binary_version` against the binary (`warn` if newer). |
@@ -1116,8 +1150,8 @@ the user that runs `serve`: a check passes or fails for the user that runs docto
 | `smtp.connect` | With `[mail]`: connect, TLS or STARTTLS, EHLO and AUTH as a send would, then `NOOP`, without sending mail (5 s); host, port and TLS mode are reported, never the URL or its user (`warn` on failure, `skip` with `--offline`). Mail off is `info`. |
 | `tls.dir` | ACME mode: `<data>/tls/` is 0700 and its files 0600 (`warn`; `serve` tightens them at start). Otherwise `info`. |
 | `tls.acme_directory` | ACME mode: a GET of the directory URL returns an ACME directory (JSON naming `newNonce`) within 5 s (`warn` otherwise: certificates cannot be issued or renewed; `skip` with `--offline`). TLS off is `info`. |
-| `net.listen` | With a node running (SQLite: the lock is held; Postgres: a live node row has this configuration's `cluster.node_name`), `/healthz` and `/readyz` on `server.listen` (a wildcard address is probed on loopback) and, with `metrics_listen`, `/metrics` answer 200 within 5 s each. Nothing answering is a `warn` (the lock may be held by another command); a non-200 `/healthz` or `/readyz` an `error`; a failing `/metrics` a `warn`. No running node, Postgres without `cluster.node_name`, or a listen port of 0: `skip`. |
-| `backup.target` | With `[backup] to`: a local folder exists (or its nearest existing parent is writable, for the first backup to create it) and is writable (`error` with a schedule on, `warn` with it off), is empty or a repository (marker `ferrite-backup-repo.json`), and its newest snapshot is not older than twice the schedule's period (`warn`); a Postgres site's repository is read for export archives. An S3 target is listed with a 5 s timeout (`warn` on failure) and is `skip` with `--offline`. No target is `info`. |
+| `net.listen` | With a node running (SQLite: the lock is held; Postgres: a live node row has this configuration's `cluster.node_name`), `/healthz` and `/readyz` on `server.listen` (a wildcard address is probed on loopback) and, with `metrics_listen`, `/metrics` answer 200 within 5 s each. Nothing answering is a `warn` (the lock may be held by another command); a non-200 `/healthz` or `/readyz` an `error`; a failing `/metrics` a `warn`. No running node, a lock doctor cannot try ("cannot tell", as `db.lock_state` says), Postgres without `cluster.node_name`, or a listen port of 0: `skip`. |
+| `backup.target` | With `[backup] to`: a local target is a folder that exists (or its nearest existing parent is writable, for the first backup to create it) and is writable, and it is empty or a repository (marker `ferrite-backup-repo.json`); any of these failing is an `error` with a schedule on and a `warn` with it off. Its newest snapshot is not older than twice the schedule's period (`warn`); a Postgres site's repository is read for export archives. An S3 target is listed with a 5 s timeout (`warn` on failure, the `AWS_*` keys scrubbed from the error) and is `skip` with `--offline`. No target is `info`. |
 | `release.latest` | The newest stable release, looked up as `self-update --check` does (no download, no release key): newer is a `warn`, the same or older `ok`, a prerelease and an unreachable or failed lookup `info`, never `error`. |
 
 The network checks (an S3 media store or backup target, `smtp.connect`,

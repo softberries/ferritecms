@@ -393,7 +393,9 @@ As built:
   cut: the request target may carry a raw `"`, `\`, space, control or non-ASCII byte, and
   the JSON payload would double a `\` or `"` and make a guest pay for it (M4-3a X5; 1000
   events of 508 backslashes trapped the `analytics` example at the default fuel). An
-  existing `%XX` is kept, and the cut never splits one. `referrer_host` is the
+  existing `%XX` (two hex digits, either case) is kept as it is; a `%` that starts no such
+  escape is itself encoded, as `%25`. The cut never splits an escape: a `%` or `%X` it
+  would leave at the end is dropped. `referrer_host` is the
   lowercased ASCII host of a single absolute `Referer` (≤ 253 bytes), else `null`.
   `ua_class`: `bot` if the user agent contains `bot`, `crawl`, `spider` or `slurp`
   (ASCII case-insensitive), else `browser` if it starts with `Mozilla/`, else `other`.
@@ -682,7 +684,11 @@ under real concurrent load in M1.
   `mail` 1 per call; exceeding → the import
   returns an error, the guest decides. In M0, `meta`, `options` and `settings` calls also
   count against the `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
-  limits (`list-posts`, `kv.list-keys`) are clamped to 100.
+  limits (`list-posts`, `kv.list-keys`) are clamped to 100. Across calls a plugin's `kv`
+  holds at most 10 MiB of values and 10 000 keys (`KV_MAX_BYTES`, `KV_MAX_KEYS` in
+  `ferrite-http`; one statement checks the totals with the key's old value replaced, so a
+  write that shrinks a value always fits); past that `kv.set` answers
+  `kv quota exceeded (…)`.
 - **StoreLimits (measured in M0)**: `instances = 3`, `tables = 2`, `memories = 1`,
   `table_elements = 10_000`. A `wasm32-wasip2` component built by Rust instantiates
   several core instances (main module plus WASI adapter shims), so `instances = 1`
@@ -1108,7 +1114,9 @@ ferrite_sdk::export_plugin! {
   matching route returns a 404.
 - Helpers added in M4-3a (M4 P42): guest-side source only, no WIT or host change, and the
   existing public names stay. Pure logic is unit-tested natively (`cargo test -p
-  ferrite-sdk`).
+  ferrite-sdk`). Each helper module is used by its path (`settings::text`,
+  `viewers::allow`, `form::parse_urlencoded`); the crate root re-exports only the WIT types
+  and the core handles (`Ctx`, `Kv`, `Http`, `Head`; final review A-9).
   - `form::parse_urlencoded(body) -> Result<Vec<(String, String)>, FormError>`: `+` is a
     space, `%XX` is decoded, empty segments are skipped, and a key with no `=` gets an
     empty value. A bad escape, invalid UTF-8 or more than 100 pairs is an error.
@@ -1125,13 +1133,20 @@ ferrite_sdk::export_plugin! {
     store read for `site.title` fails.
     The unescape is minimal (`\" \\ \/ \b \f \n \r \t \uXXXX` with surrogate pairs), so the
     SDK needs no JSON crate; a plugin that wants a number or object reads the raw text
-    through the bindings.
+    through the bindings. Only JSON whitespace (space, tab, LF, CR) may surround the value.
+  - `settings::{text, bool, number}(key)`: one of the plugin's own settings as a JSON
+    string (decoded, not trimmed), bool or number (`f64`; one too large for it is `None`),
+    by the same exact decoding; `None` when unset or of another type, so the plugin applies
+    its default (final review A-2; the three examples use them).
+  - `time::{unix_now, days_from_civil, civil_from_days}`: the wall clock in Unix seconds
+    and Hinnant's UTC calendar conversions (used by `analytics` and `contact-form`).
   - `mail::notify_admins(subject, body) -> Result<(), String>` (`mail = "admins"`).
-  - `viewers_allow(setting, user) -> bool`: true when `user` is one of the ids in the
+  - `viewers::allow(setting, user) -> bool`: true when `user` is one of the ids in the
     `viewers` setting (separated by commas or whitespace, compared exactly); an empty or
     absent setting or user allows nobody (M4 P46).
-  - `route::html(status, body)` and `route::text(status, body)`: a `RouteResponse` with
-    `Content-Type` `text/html; charset=utf-8` or `text/plain; charset=utf-8`.
+  - `route::html(status, body)`: a `RouteResponse` with `Content-Type`
+    `text/html; charset=utf-8` (`route::text` was removed in the final review: no plugin
+    used it).
 - Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
   with an explicit `--target` produces a component directly; `cargo component` is not
   needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
@@ -1195,23 +1210,44 @@ the 1 MiB a call may write, is what limits a batch: it is counted in guest instr
 reading a day blob and the events costs in proportion to the entries and bytes. A `BTreeMap`
 of paths was many times slower than the default 50 million allows for 90 days, so the plugin
 counts in a `HashMap` (randomly seeded from the linked `wasi:random`); it stores a path cut to
-200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 130 KB; a
+200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 137 KB; a
 batch decodes and re-encodes at most 150 000 bytes of blobs (the newest touched day always, an
 older one only if it fits, else it is skipped and logged); and the stats page decodes the newest
 day in full plus at most three more within 150 000 bytes, the older days giving their totals
 alone, read from the front of the blob.
 
+A fourth limit is storage (ruling X7, final review A-I1): a plugin may keep 10 MiB of values
+(§6, the host-import budgets), and 366 days of full blobs could need 50 MB, so a full store would fail every batch and
+auto-disable the plugin. The plugin keeps two tiers: the newest `detail_days` (default 30,
+at most 60, never more than `retention_days`) whole under `day:YYYY-MM-DD`, older days
+compacted to their counts under `totals:YYYY-MM-DD`. Worst case, both settings at their
+maximum, with every map full, every key as long as the cut allows and every count 20 digits:
+60 × 137 098 + 366 × 212 = 8 303 472 bytes (7.92 MiB); with the four full blobs that can
+exist for a moment (tomorrow's, and three days a batch counts below the window before the
+next batch compacts them), 64 × 137 098 + 366 × 212 = 8 851 864 bytes (8.44 MiB), under the
+quota; the unit test `the_worst_case_footprint_fits_the_quota` builds the blobs and checks
+the sum stays under 9 MiB. Every batch prunes and compacts before it counts, keeping the
+operations its counting needs (at most eight compactions, each reading only the counts at
+the head of the blob), so a refused write never stops the prune, and a compaction whose
+write is refused deletes the full blob first and writes again: lowering a setting frees
+space at the next batch. The stats page lists the window's keys (one listing per month and
+tier) and reads only those, so a read that fails is reported, not shown as an empty day.
+
 Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit), as the range
-between a limit that traps and one that passes, against the default 50 million. The most
-expensive batches, 1000 events with 508-byte paths and 253-byte hosts: onto one full day, 23
-to 26 million; across midnight onto a full older day with the newest day new, 26 to 30; over
-three days with a full oldest day, 26 to 30; only adding to the keys of a full day, 26 to 30
-(about 1.7 to 1.9x headroom at worst). Across midnight with both days full the older one is
-skipped, 20 to 23. 1000 backslash or quote paths needed 80 to 90 million as the raw path
-reached the payload (the 404s alone) and 16 to 20 million once core percent-encodes it (X5).
-The page over 90 full days or over the largest blob, 11 to 14 million; over 90 days of 33 KB
-blobs, 15 to 18, and of short distinct keys, 12 to 15; 1000 ordinary events onto two 33 KB
-days, 14 to 17. No limit above the default is requested.
+between a limit that traps and one that passes, against the default 50 million (final review,
+solo profile, after the events were read in place instead of copied). The most expensive
+batches, 1000 events with 508-byte paths and 253-byte hosts: across midnight onto a full
+older day with the newest day new, 27 to 28 million; over three days with a full oldest day,
+26 to 27; the same with the most maintenance a batch does (30 expired days deleted, eight
+full days compacted, 100 compacted days listed and 19 deleted), 26 to 27; only adding to the
+keys of a full day, 24 to 26; onto one full day, 20 to 22 (about 1.8x headroom at worst;
+before the final review the same cases needed 29 to 30). Across midnight with both days full
+the older one is skipped, 18 to 20. 1000 backslash or quote paths needed 80 to 90 million as
+the raw path reached the payload (the 404s alone) and 16 to 18 million once core
+percent-encodes it (X5). The page over the largest blob (`days=1` and 90 days), 10 to 12
+million; over 90 days of 33 KB blobs, 16 to 18, and of short distinct keys, 14 to 16; with a
+230 KB newest day, 22 to 24; 1000 ordinary events onto two 33 KB days, 12 to 14. No limit
+above the default is requested.
 M4-3a also adds the shipped example `contact-form` (`plugins/examples/contact-form`, P45 and
 P46, `README.md`): a sandboxed form page `GET /`, `POST /submit` (`cross_origin`, because a
 form on a plugin page posts with `Origin: null`; `rate_limit = "10/h"`) that themes post their

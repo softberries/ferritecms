@@ -11,7 +11,9 @@ SQLite and Postgres with credentials checked absent, and runs the full gates.*
 
 **Result (2026-10-30, branch `m4-3a-exit` from `m4-3` at `9d3ccd0`):** every exit check
 passed on macOS (arm64) with local PostgreSQL 17.11 (port 54329). Nothing was found that
-needed a code fix. Nothing was pushed, tagged or published.
+needed a code fix. Nothing was pushed, tagged or published. The final whole-branch review
+that followed found one Important issue (analytics could outgrow its KV quota) and Minors;
+they are fixed on `m4-3a-final-fixes` (§9).
 
 | Exit check | Verified by | Result |
 |---|---|---|
@@ -22,7 +24,8 @@ needed a code fix. Nothing was pushed, tagged or published.
 ## What shipped
 
 Per task (merges into `m4-3`; rulings in [`rulings/m4.md`](rulings/m4.md), "M4-3a plan
-rulings" P41–P53 and "M4-3a execution rulings" R-pf1 and X1–X6):
+rulings" P41–P53 and "M4-3a execution rulings" R-pf1 and X1–X7; the final review's changes,
+X7 among them, are in §9):
 
 1. **SDK helpers** (`9b8796b`, P42): guest-side source only, no WIT or host change —
    `form` (`parse_urlencoded`), `html::escape`, `options::get`, `mail::notify_admins`,
@@ -145,7 +148,9 @@ installed plugin contact-form 0.1.0 (enabled)
 `google_verification`, `bing_verification`; analytics and contact-form `viewers = <me's
 id>`.
 
-**SEO.** `GET /welcome-to-ferritecms/` → 200. Head tags (core's first, then the plugin's):
+**SEO.** `GET /welcome-to-ferritecms/` → 200. Head tags in document order (the head is
+rendered grouped by kind, metas, then links, then scripts, so core's `canonical` link comes
+after the plugin's metas):
 
 ```
 <meta property="og:title" content="Welcome to FerriteCMS">
@@ -413,7 +418,8 @@ about `sums.sh` now says its default is 7.
   delivery can lose or double-count (P44, the `counter` caveat R19); a node running the
   batch whose clock is more than a day behind the serving node's drops those events (logged
   at `warn`); the most expensive measured
-  batch needs 26–30 M of the default 50 M fuel (05 §12).
+  batch needs 27–28 M of the default 50 M fuel after the final review (05 §12; 29–30 M
+  before it).
 - The contact form has no per-message delete and no Reply-To; the inbox keeps the newest
   100 messages within 900 KiB (as few as 40 of the largest, X6).
 - The viewer pages use a list of user ids, not roles (P46).
@@ -428,7 +434,7 @@ about `sums.sh` now says its default is 7.
 | A GitHub run of `release.yml`'s `plugins` job, the `sign` job over seven assets, and the CI `packaging` steps that build and check the plugins asset | never pushed or tagged (rule) | `package-plugins.sh` run here on macOS (bsdtar) and the asset installed (§1 a); Task 5's local run of the CI check |
 | The packaging script under GNU tar on Linux | macOS host | the script's options are common to both (`-C`, `-czf`, `-tzvf`) |
 | A real SMTP provider (TLS, `smtps://`, `?tls=required`, real authentication) for the contact form and doctor's `smtp.connect` | no provider used | a local plain-SMTP sink (§1 a, b); the mailer's TLS modes are M2a-2a's |
-| Doctor's `tls.acme_directory` success path (an ACME directory that answers) | not run; Pebble was not started | `tests/doctor.rs` covers TLS off, `--offline` and the `tls.dir` modes; the ACME client itself is M4-2's (Pebble) |
+| Doctor's `tls.acme_directory` success path (an ACME directory that answers) | not run; Pebble was not started | `tests/doctor.rs` covers TLS off, `--offline`, the failure path (`acme_directory_that_does_not_answer_is_a_warning`) and the `tls.dir` modes; the ACME client itself is M4-2's (Pebble) |
 | `release.latest` reporting a newer stable release from GitHub | no release is published | `tests/doctor.rs` against a local fake API (a newer release `warn`; a prerelease and an unreachable API `info`) |
 | Doctor's S3 checks (`media.store` probe, `backup.target` on `s3://`) against a real provider | no S3 here | `tests/doctor.rs` against `s3s-fs` (Task 7) |
 | Doctor in cluster mode with several nodes and a real clock skew | one node per site here | `tests/doctor.rs` on Postgres (a stale registry row aged by `UPDATE` is ignored; `clock.db_skew` against the server's `now()`); the skew thresholds unit-tested (`judge_skew`) |
@@ -437,13 +443,18 @@ about `sums.sh` now says its default is 7.
 | A real browser posting the sandboxed form (`Origin: null`) | curl only | the route test with `Origin: null` (Task 4) and the `route-flood` hostile plugin |
 | The admin E2E (Playwright) after M4-3a | no admin change in M4-3a | the admin unit tests, lint and typecheck (§2) |
 | Byte-for-byte reproducibility of the asset | not a goal (P47); the tar is not normalised | — |
+| Any M4-3a code on Linux: every test, doctor and `init` mode check, and the exit's runs happened on macOS (arm64) only, and the Linux CI jobs have not run this code | macOS host; nothing pushed | the mode-based tests run on any Unix; CI's Linux jobs once pushed |
+| Doctor's `fs.*` checks and the Docker image's mode on Linux: the `faccessat2` path (rustix `accessat` with `AtFlags::EACCESS`) and its `EPERM` fallback (Task 6 N1); `access(2)` on a read-only mount or with ACLs (only mode bits are tested); the non-Unix fallbacks (not compiled); the real `Dockerfile`'s `COPY --chmod=0750 /data-empty /data` (only a two-stage stand-in image was built, so the image's `/data` mode and the BuildKit requirement are unchecked) | macOS host, no Linux container run | the mode-based unit and integration tests (`tests/doctor.rs`); CI's Linux jobs and `docker build`; "Deferred from M4-3a" has the follow-up |
 
 ## 6. For the user
 
 Nothing new in the release gate beyond M4-2's ([`m4-2-exit.md`](m4-2-exit.md) §6: license,
 release key, the `release` environment and tag ruleset, GHCR visibility), except that the
 plugins asset `ferrite-plugins-<version>.tar.gz` is now the seventh asset, listed in and
-signed with `SHA256SUMS`. A release bumps the `version` of the three
+signed with `SHA256SUMS`. M4-2's step 5, the first dry run of `release.yml`, is now also the
+first GitHub run of the `plugins` job and of `sums.sh` over seven assets (`sign-dry-run`
+needs `plugins`): it must show the `plugins` job green and `ferrite-plugins-<version>.tar.gz`
+listed in `SHA256SUMS`. A release bumps the `version` of the three
 `plugins/examples/{seo,analytics,contact-form}/ferrite-plugin.toml` together with the
 workspace version (`package-plugins.sh` and the CI check refuse otherwise).
 
@@ -464,4 +475,132 @@ doctor items left out). Next: M4-3b (the template helpers for a docs theme, the 
 | Doctor has 25 checks (ROADMAP, CLAUDE.md) | P53's list; 25 lines per run (§1 b) | verified |
 | `sums.sh` expects 7 assets by default (ROADMAP) | `.github/scripts/sums.sh` header | verified (code) |
 | The plugin READMEs name the world gaps listed under Later: no modified date, no role, no `kv.incr`, no Reply-To, no admin pages, no IndexNow/robots/sitemap changes | `grep` of the three READMEs | verified |
-| The host answers a failed `kv.get` as `None` and a failed `kv.list` as an empty list (ROADMAP Later) | analytics README "Failed reads"; Task 3 re-review 2 (`ferrite-http/src/plugins/services.rs`) | verified there, not re-read |
+| The host answers a failed `kv.get` as `None` and a failed `kv.list` as an empty list (ROADMAP Later) | analytics README "Failed reads"; Task 3 re-review 2; `ferrite-http/src/plugins/services.rs` `kv_get` (`Err` → `None`) and `kv_list` (`Err` → `Vec::new()`) | verified (re-read in the final review) |
+| Analytics' worst-case footprint fits its 10 MiB quota (README "Storage", 05 §12, X7) | `the_worst_case_footprint_fits_the_quota` builds the largest full blob (137 098 bytes) and the largest compacted one (212) and checks 64 × 137 098 + 366 × 212 = 8 851 864 bytes < 9 MiB | verified (final review) |
+| Analytics' fuel figures (README, 05 §12) | `ANALYTICS_FUEL` brackets, §9 | verified (final review) |
+
+## 9. Final review
+
+The final whole-branch review (`final-review-A.md`: plugins, SDK, host, release;
+`final-review-B.md`: doctor and ops; with the Task 8 review) found 0 Critical, 1 Important
+(A-I1) and the Minors fixed below, on branch `m4-3a-final-fixes` from `m4-3a-exit`
+(`982b929`).
+
+**Fixed.**
+
+- **A-I1, ruling X7: analytics stays inside its KV quota.** A plugin may keep 10 MiB of
+  values; a day blob reaches 137 KB, so 90 days could exceed it, and then every batch failed
+  before its prune and the plugin disabled itself for good. Now the newest `detail_days`
+  (new setting, default 30, 1 to 60, at most `retention_days`) keep their blob under `day:`,
+  older days are compacted to their counts under `totals:`, and every batch prunes and
+  compacts before it counts (at most eight compactions, each reading only the counts at the
+  head of the blob). A compaction whose write is refused deletes the full blob first and
+  writes again. Worst case 8.44 MiB (§8). Tests: `an_old_day_is_compacted_to_its_totals`,
+  `detail_days_follows_the_setting_and_a_backlog_clears`,
+  `a_straggler_for_a_compacted_day_is_merged_into_it`, `the_prune_runs_before_counting`,
+  `a_refused_write_still_prunes_and_the_next_batch_succeeds` and
+  `compaction_makes_room_when_the_store_is_full` (a `HostServices` wrapper, `Flaky`, that
+  applies the store's own quota statement with a smaller limit), the footprint unit test.
+- **A-1:** the stats page lists the window's keys (one listing per month and tier, at most
+  eight operations) and reads only those; a listed day whose read fails is reported, and a
+  period that cannot be read at all says so instead of "No data yet"
+  (`the_page_says_which_days_could_not_be_read`).
+- **A-2, A-9:** `ferrite_sdk::settings::{text, bool, number}` on the SDK's exact JSON
+  decoding (only JSON whitespace around a value now, also for `options::get`) and
+  `ferrite_sdk::time::{unix_now, days_from_civil, civil_from_days}`, used by all three
+  plugins (the civil-date code is no longer copied); every helper module is used by its path
+  (`viewers::allow` replaces `viewers_allow`, `form::parse_urlencoded` and `FormError` are no
+  longer re-exported at the root); `route::text` is removed.
+- **A-3:** the contact form's `/inbox` takes 30 requests a minute, as the stats page does
+  (`the_inbox_takes_thirty_requests_a_minute`). The permission report now says
+  `! routes: answer GET requests at /_p/contact-form/inbox (at most 30/min per visitor) [GET]`
+  (`ferrite plugin check` on the rebuilt plugin; the report in §1 (a) predates it).
+- **A-4 to A-8 (docs):** write amplification (contact-form "Spam and abuse", analytics
+  "Storage"); the SEO README's publisher claim (`organization_name` still names one); the
+  analytics README on percent-encoded paths and `exclude_paths` entries typed encoded; the
+  page shows paths decoded when that is readable UTF-8 (still escaped), and a stored path is
+  never cut inside an escape (`encoded_paths_are_cut_whole_and_shown_decoded`); 05 §4a on a
+  stray `%` becoming `%25`; the three READMEs check the asset against `SHA256SUMS` and its
+  minisign signature before unpacking it.
+- **Fuel:** events are read in place (borrowed from the payload) and counting allocates no
+  key it does not insert, which more than pays for the maintenance: the worst batch went
+  from 29–30 M to 27–28 M.
+- **B-1:** one `scrub_s3_keys` helper for `media.store`, `media.owner` and `backup.target`
+  (`backup_target_on_s3_never_prints_its_keys`).
+- **B-2:** 09 §8 no longer gives "a solo site no cluster" as `info` (those are `skip`), and
+  `Status::Skip`'s doc lists the reasons it is used for.
+- **B-3:** the lock state reaches `db.connect` and `net.listen` as free, held or unknown; a
+  lock doctor cannot try is "cannot tell" in `net.listen` too
+  (`a_lock_doctor_cannot_try_is_not_reported_as_no_node`); a held lock is described as held
+  by a node or another command.
+- **B-4:** the unreachable cluster-without-key branch of `fs.secret_key` is removed.
+- **B-5:** a `[backup] to` that is not a folder follows the schedule
+  (`backup_target_that_is_a_file_follows_the_schedule`).
+- **B-6:** one `sqlite_side_file`, `ferrite_store_sqlite::table_exists` shared, `NO_CONFIG`
+  reused, one `NETWORK_TIMEOUT`.
+- **B-7:** 09 §8 says doctor reads `FERRITE_*` and `AWS_*` from the shell that runs it and
+  gives the systemd command (`sudo -u ferrite env $(systemctl show ferrite
+  --property=Environment --value) /usr/local/bin/ferrite doctor --data /var/lib/ferrite`);
+  the systemd README's "While it runs" points at it.
+- **B-8:** 09 §7 and the compose file's header say the cluster example's doctor exits 2 on
+  `fs.config_file` (the 0644 bind mount, which holds no secret) and how to clear it.
+- **B-9:** 09 §8: doctor "takes no lasting lock" (`db.lock_state` takes it for a moment).
+- **Task 8 review:** I1 (§5's Linux rows and the Deferred follow-up) and its seven Minors:
+  "read-only" wording, the ACME coverage, the release-gate note (§6), §8's last row, the
+  ledger omissions in the ROADMAP's Deferred list, the head-tag order wording, CLAUDE.md's
+  long lines.
+
+**Red, then green.** The new host tests were first run against the plugin and SDK code of
+`m4-3a-exit` (the old sources checked out over a temporary commit, then restored): all nine
+analytics and contact-form cases failed. The three new doctor tests against the old doctor:
+the lock and backup-file cases failed; `backup_target_on_s3_never_prints_its_keys` passed,
+as the review predicted (a HEAD answer has no body, so wrong credentials fail before a
+listing could echo a key), so it pins the guarantee rather than proving the scrub.
+
+**Fuel, measured** (`ANALYTICS_FUEL`, solo profile, default 50 M; traps at, passes at):
+
+| Case | Traps | Passes | Headroom |
+|---|---|---|---|
+| Midnight: 500 long views onto a new newest day, 500 onto a maximal older day | 27 M | 28 M | 1.8× |
+| Three days, oldest maximal, 1000 long views | 26 M | 27 M | 1.85× |
+| The same plus the most maintenance: 30 expired days deleted, 8 maximal days compacted, 100 compacted days listed, 19 deleted | 26 M | 27 M | 1.85× |
+| 1000 views only adding to a maximal day's keys | 24 M | 26 M | 1.9× |
+| 1000 long views onto one maximal day | 20 M | 22 M | 2.3× |
+| Midnight with both days maximal (older skipped) | 18 M | 20 M | 2.5× |
+| 1000 hostile 404s and views (backslash, quote paths) | 16 M | 18 M | 2.8× |
+| Page, newest day a 230 KB foreign blob | 22 M | 24 M | 2.1× |
+| Page, 90 days of 33 KB blobs | 16 M | 18 M | 2.8× |
+| Page, 90 days of short distinct keys | 14 M | 16 M | 3.1× |
+| Page, largest blob (`days=1` and `days=90`) | 10 M | 12 M | 4.2× |
+| Page with two compacted days (`an_old_day_is_compacted_to_its_totals`) | 10 M | 12 M | 4.2× |
+| 1000 ordinary events onto two 33 KB days | 12 M | 14 M | 3.6× |
+
+Measured the same way, the code before the fix trapped at 29 M and passed at 30 M in the
+three worst cases (five runs each); the new code's worst passes at 28 M in every run. The
+contact form's worst cases still pass at half the default limit (its suite).
+
+**Not verified (final review).**
+
+| Item | Why | Covered instead by |
+|---|---|---|
+| The systemd doctor command (`systemctl show … --property=Environment --value` in `env`) | macOS host, no systemd | systemd's documented `show` output (space-separated assignments); 09 §8 states the quoting limit |
+| The cluster example's `chown 65532` + `chmod 600` instruction | no Docker run | the image's user (65532, Dockerfile) and the bind-mount behaviour on Linux |
+| Compaction with two nodes running batches at once | one node per test | the read-modify-write caveat (R19) covers it; a delete that fails silently can count a day twice (README) |
+| A real S3 error body that names the access key reaching `backup.target` | the test server's HEAD answer has no body | the shared helper is the one `media.store`'s test exercises with a body |
+
+**Gates** (at the branch head; logs in the scratchpad):
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check`, and for `plugins/` | ok, ok |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ok |
+| `cargo clippy --manifest-path plugins/Cargo.toml --target wasm32-wasip2 -- -D warnings` | ok |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | ok |
+| `cargo build --release --target wasm32-wasip2 --manifest-path plugins/Cargo.toml --locked` | ok |
+| `cargo test --manifest-path plugins/Cargo.toml -p analytics -p contact-form -p seo`; `cargo test -p ferrite-sdk` | 9, 16 and 0 passed; 39 passed |
+| `FERRITE_TEST_PG_URL=… cargo test -p ferrite-http --test plugins` (both profiles) | 253 passed, 0 failed |
+| `FERRITE_TEST_PG_URL=… cargo test -p ferrite --features test-seams --test doctor` | 49 passed, 0 failed |
+| `FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test cargo test --workspace --no-fail-fast` | 111 test binaries, 3653 passed, 1 failed, 2 ignored, no `SKIP` line. The failure was `cluster` `invalidation_latency_under_1s` (the listener-cut case took 4.76 s against its 1 s bound while the machine was loaded); the `cluster` binary re-run alone: 13 passed. No code it covers changed (cache, cluster). The second ignored test is the new `settings` doc example (`ignore`: it needs the wasm bindings). |
+
+The admin is unchanged (no admin gate re-run).
+

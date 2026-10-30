@@ -89,8 +89,8 @@ ferritecms/
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate);
-│                                 #   M4-3a: `form`, `html`, `options`, `mail`, `route`,
-│                                 #   `viewers_allow` and `Head` additions (05 §10)
+│                                 #   M4-3a: `form`, `html`, `options`, `settings`, `time`,
+│                                 #   `mail`, `route`, `viewers` and `Head` additions (05 §10)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
 ├── admin/                        # (built, M2b-1 to M2b-3) admin SPA: one pnpm package (not a

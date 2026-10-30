@@ -75,11 +75,12 @@ the `compat` CI job and the runbooks in `docs/operations/`; migration `0012_node
 Nothing is released: the first tag waits for the release gate in the exit. M4-3a is done
 too (`m4-3a-exit.md`): the example plugins `seo`, `analytics` and `contact-form` (SDK
 helpers, the host answering `options.get("site.url"|"site.title")`, percent-encoded
-`request.served` paths) shipped as the release asset `ferrite-plugins-<version>.tar.gz`, and
-`ferrite doctor`; no migration. Next is M4-3b (the template helpers a docs theme needs, the
-`docs`/`business` themes, Markdown import, the docs site), then M4-4 (the follow-up lists). Work top-down in `docs/ROADMAP.md`; per-milestone rulings are in
-`docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
-`m3.md`, M4: `m4.md`).
+`request.served` paths, analytics' two storage tiers under the KV quota, X7) shipped as the
+release asset `ferrite-plugins-<version>.tar.gz`, and `ferrite doctor`; no migration. Next is
+M4-3b (the template helpers a docs theme needs, the `docs`/`business` themes, Markdown
+import, the docs site), then M4-4 (the follow-up lists). Work top-down in
+`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
 M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
@@ -87,14 +88,14 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
-`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
-wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
-SMTP mailer, the extension install pipeline `extensions::Installer`, `import_fetch` (the
-importer's SSRF-checked `--fetch-media` source), `import_blobs` (import reports over the
-media store), `metrics` (the registry, `/metrics` text), `tls` (HSTS, the redirect app); the
-REST API in `src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress
-importer: WXR parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`,
-`ferrite-media`),
+`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
+previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
+plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
+`extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
+source), `import_blobs` (import reports over the media store), `metrics` (the registry,
+`/metrics` text), `tls` (HSTS, the redirect app); the REST API in `src/api/` with its
+OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress importer: WXR
+parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
 `ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
 renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService` +
@@ -112,10 +113,11 @@ reader and `import_writer` for the portable copies; `NodeMetricsRepo`, `node_met
 by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
 `ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
 `ferrite-domain` (types; `metrics`: counts, series buckets, page p95), `ferrite-config`,
-`ferrite-sdk` (guest SDK; M4-3a: `form`, `html::escape`, `options`, `mail`, `viewers_allow`,
-`route::html`, `Head` additions). Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/
-{ci,release}.yml` and `.github/scripts/` (package, package-plugins, sums, verify-sig, newest,
-compat). Starter theme: `themes/blog` (embedded). Plugins: `plugins/examples/` (own workspace,
+`ferrite-sdk` (guest SDK; M4-3a: `form`, `html::escape`, `options`, `settings`, `time`,
+`mail`, `viewers::allow`, `route::html`, `Head` additions; helpers used by module path).
+Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/{ci,release}.yml` and
+`.github/scripts/` (package, package-plugins, sums, verify-sig, newest, compat). Starter
+theme: `themes/blog` (embedded). Plugins: `plugins/examples/` (own workspace,
 built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
 each), the rest test fixtures. Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
@@ -157,8 +159,8 @@ the admin's Appearance and Plugins screens. The example plugins: unpack the rele
 inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
-Check a site: `ferrite doctor --data DIR [--offline]` (25 read-only checks, `<status>
-<check-id> <detail>` lines, then a count; works while `serve` runs; `--offline` skips the S3,
+Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
+S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve` runs; `--offline` skips the S3,
 SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors, 3 schema incompatible; 09 §8).
 Import a WordPress site (Tools → Export in WordPress gives the WXR file): `cargo run -p
 ferrite -- import wordpress export.xml --data /tmp/site [--uploads <copy of
