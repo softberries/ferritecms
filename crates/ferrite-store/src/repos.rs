@@ -1290,4 +1290,14 @@ pub trait ImportRepo: Send + Sync {
     ) -> Result<Option<ImportMapRow>, StoreError>;
     /// Inserts or replaces the row of (`source`, `kind`, `wp_id`).
     async fn map_put(&self, row: &ImportMapRow) -> Result<(), StoreError>;
+    /// Up to `limit` (1 through `MAX_PAGE`) rows of (`source`, `kind`) by `wp_id`
+    /// ascending, after `wp_id` `after` when given: what a run lists as no longer in
+    /// its source (M4-3b P62).
+    async fn map_list(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        after: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ImportMapRow>, StoreError>;
 }

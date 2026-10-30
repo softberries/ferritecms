@@ -36,6 +36,7 @@ backend_tests!(
     abandon_stale_only_when_still_stale,
     abandon_stale_for_job_spares_live_jobs,
     import_map_upsert_and_get,
+    import_map_list_pages_by_wp_id,
     content_insert_keeps_explicit_timestamps,
     import_run_job_link_and_step,
     import_run_report_hash,

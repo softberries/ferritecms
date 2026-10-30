@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ferrite_core::import::{ImportBatch, ImportMedia, Written};
+use ferrite_core::import::{ImportBatch, ImportMedia, WP_ID_META, Written};
 use ferrite_core::{MAX_MEDIA_ALT, MAX_MEDIA_TITLE, NewUpload, check_file_name};
 use ferrite_domain::{Artifact, ArtifactKind, ContentId, ImportMapKind, Timestamp, UserId};
 use ferrite_media::ingest::stage_stream;
@@ -356,6 +356,7 @@ async fn write_batch(
         let outcome = b
             .media(ImportMedia {
                 wp_id: s.item.wp_id,
+                id_meta: WP_ID_META,
                 hash: s.hash.clone(),
                 upload: s.upload.clone(),
                 author,

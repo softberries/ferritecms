@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     ImportBatch,
-    batch::{WP_ID_META, check_meta_key},
+    batch::{ID_METAS, MD_ID_META, check_meta_key},
 };
 use crate::{
     CoreError, blocks,
@@ -32,8 +32,10 @@ use crate::{
     slug,
 };
 
-/// The note on the revision an imported write makes.
+/// The note on the revision a WordPress import's write makes.
 const REVISION_NOTE: &str = "WordPress import";
+/// The note on the revision a Markdown import's write makes.
+const MD_REVISION_NOTE: &str = "Markdown import";
 
 /// One WXR item converted for the import. Parent, author and terms are already mapped
 /// to FerriteCMS ids; `status` is already mapped from WP's (P7), with WP `future` as
@@ -41,6 +43,9 @@ const REVISION_NOTE: &str = "WordPress import";
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportContent {
     pub wp_id: i64,
+    /// The meta key `wp_id` is stored under: [`WP_ID_META`](super::WP_ID_META) for the
+    /// WordPress import, [`MD_ID_META`] for the Markdown import (else `InvalidKey`).
+    pub id_meta: &'static str,
     /// SHA-256 of the item's IR record (P3, P4).
     pub hash: String,
     pub kind: String,
@@ -123,7 +128,7 @@ impl ImportBatch<'_> {
     ///
     /// The WP slug is kept when free; a taken or reserved one gets core's `-N` (as a
     /// generated slug would, never an error) and is reported in `slug_changed`. The
-    /// meta [`WP_ID_META`] (`c.wp_id`) and `c.meta` are written; the map row
+    /// meta `c.id_meta` (`c.wp_id`) and `c.meta` are written; the map row
     /// (`content`, `c.wp_id`) records `c.hash` and the version written.
     ///
     /// **Errors.** Any `Err` leaves the batch unusable: rows of the item may already be
@@ -165,6 +170,12 @@ impl ImportBatch<'_> {
                 Some(item)
             }
         };
+        if !ID_METAS.contains(&c.id_meta) {
+            return Err(CoreError::invalid_key(
+                c.id_meta,
+                "an imported item's id meta must be import.wp.id or import.md.id",
+            ));
+        }
         check_body(&c.body)?;
         if let Some(seo) = &c.seo {
             seo.check()?;
@@ -195,7 +206,7 @@ impl ImportBatch<'_> {
         if let Some(seo) = &c.seo {
             seo.apply(self.tx.as_ref(), id).await?;
         }
-        self.tx.meta().set(id, WP_ID_META, &json!(c.wp_id)).await?;
+        self.tx.meta().set(id, c.id_meta, &json!(c.wp_id)).await?;
         for (key, value) in &c.meta {
             self.tx.meta().set(id, key, value).await?;
         }
@@ -204,7 +215,14 @@ impl ImportBatch<'_> {
             repos,
             &self.handle.actor,
             &saved,
-            Some(REVISION_NOTE.to_owned()),
+            Some(
+                if c.id_meta == MD_ID_META {
+                    MD_REVISION_NOTE
+                } else {
+                    REVISION_NOTE
+                }
+                .to_owned(),
+            ),
         )
         .await?;
         match saved.status {

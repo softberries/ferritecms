@@ -1060,6 +1060,8 @@ ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]           
 ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
+ferrite import markdown DIR --data DATA [--as LOGIN] [--type page] [--front-page]
+    [--dry-run] [--source NAME]                                                   # M4-3b
 ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
 ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ferrite doctor         --data DIR [--offline]                                    # M4-3a
@@ -1207,6 +1209,25 @@ or refused media, 3 another import running (`--takeover` takes over one with no 
 for 120 s), 1 on any error (a run that failed after it started still writes its partial
 report, M3-2). With SQLite `serve` holds the data folder's lock: stop it first. Media
 variants are made by the next `serve` (the `media.variants` jobs).
+
+**`ferrite import markdown`** (`crates/ferrite/src/import_cmd.rs`, `crates/ferrite-import-md`;
+M4-3b P62, design 08 §8): imports the folder `DIR` of Markdown files as pages of `--type`
+(default `page`) as the active admin `--as` names (default: the first active admin). It is an
+import run of source `markdown:<NAME>` (`--source`, default the folder's name) under the same
+lock and run fence as the WordPress import, so a re-run of the same name updates what changed in
+the files and keeps what was edited here. `--front-page` makes the root `index.md` (or
+`README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it).
+`--dry-run` runs everything in one transaction and rolls it back; its images are staged under
+`<data>/import/<run-id>/` and deleted. There is no report file: it prints
+`created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
+when set, then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
+`too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
+`refused-image`, `broken-link`, `other-type`, `no-front-page`, and the notices
+`synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`). Exit
+0 done (notices only), 2 done with skipped files, missing or refused images or broken links,
+3 another import running, 1 on any error (`--front-page` with another type, a folder that is
+not a folder; the run is marked `failed`). With SQLite `serve` holds the data folder's lock:
+stop it first. Media variants are made by the next `serve`.
 
 **Imports through the admin and the API** (M3-2; design 08 §1): with `serve` running, an
 admin uploads the WXR file and, optionally, a zip of the uploads on the admin's Import

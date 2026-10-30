@@ -5,7 +5,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ferrite_import_md::{FORMAT, MAX_FILE_BYTES, MdDoc, MdError, Problem, Target, resolve, scan};
+use ferrite_import_md::{
+    FORMAT, MAX_FILE_BYTES, MdDoc, MdError, Miss, Problem, Target, locate, resolve, scan,
+};
 use sha2::{Digest, Sha256};
 
 fn fixture() -> PathBuf {
@@ -344,8 +346,170 @@ fn resolve_stays_inside_the_folder() {
         ".hidden/x.png",
         "img/missing.png",
         "img\\..\\..\\outside.png",
-        "%2e%2e/outside.png",
+        "%2e%2e/%2e%2e/outside.png",
+        "..%2f..%2foutside.png",
+        "../%2e%2e/outside.png",
     ] {
         assert_eq!(resolve(&dir, "guides/a.md", bad), None, "{bad}");
     }
+}
+
+/// One `..` from `guides/a.md` stays inside: with a decoy `site/outside.png` it is found,
+/// encoded or not, while two climb above the folder to the real `outside.png` and are
+/// refused as outside, not as missing.
+#[test]
+fn one_level_up_is_inside_two_are_outside() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "site/guides/a.md", b"a");
+    write(root.path(), "site/outside.png", b"decoy");
+    write(root.path(), "outside.png", b"o");
+    let dir = root.path().join("site");
+    let decoy = dir.canonicalize().unwrap().join("outside.png");
+    for inside in ["../outside.png", "%2e%2e/outside.png", ".%2e/outside.png"] {
+        let t = resolve(&dir, "guides/a.md", inside).unwrap_or_else(|| panic!("{inside}"));
+        assert_eq!(
+            (t.path, t.rel.as_str()),
+            (decoy.clone(), "outside.png"),
+            "{inside}"
+        );
+    }
+    for outside in [
+        "../../outside.png",
+        "%2e%2e/%2e%2e/outside.png",
+        "..%2f..%2foutside.png",
+        "guides/../../../outside.png",
+        "img\\..\\..\\outside.png",
+    ] {
+        assert_eq!(
+            locate(&dir, "guides/a.md", outside),
+            Err(Miss::Outside),
+            "{outside}"
+        );
+    }
+    assert_eq!(locate(&dir, "guides/a.md", "nope.png"), Err(Miss::Missing));
+    assert_eq!(
+        locate(&dir, "guides/a.md", "../.hidden.png"),
+        Err(Miss::Missing)
+    );
+    for not_relative in [
+        "/etc/passwd",
+        "https://example.com/a.png",
+        "file:///x",
+        "#top",
+    ] {
+        assert_eq!(
+            locate(&dir, "guides/a.md", not_relative),
+            Err(Miss::NotRelative),
+            "{not_relative}"
+        );
+    }
+}
+
+/// An unreadable `.md` file or subfolder is reported and skipped; the rest is scanned.
+#[cfg(unix)]
+#[test]
+fn unreadable_entries_are_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "ok.md", b"# Ok\n");
+    write(dir.path(), "locked.md", b"# Locked\n");
+    write(dir.path(), "closed/inner.md", b"# Inner\n");
+    let mode = |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+    mode(&dir.path().join("locked.md"), 0o000);
+    mode(&dir.path().join("closed"), 0o000);
+    // Root reads anything: nothing to check then.
+    let readable = fs::File::open(dir.path().join("locked.md")).is_ok();
+    let s = scan(dir.path());
+    mode(&dir.path().join("closed"), 0o755);
+    mode(&dir.path().join("locked.md"), 0o644);
+    if readable {
+        return;
+    }
+    let s = s.unwrap();
+    let rels: Vec<&str> = s.docs.iter().map(|d| d.rel.as_str()).collect();
+    assert_eq!(rels, ["ok.md"]);
+    let files: Vec<&str> = s
+        .problems
+        .iter()
+        .map(|p| match p {
+            Problem::Unreadable { file, message } => {
+                assert!(!message.is_empty());
+                file.as_str()
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(files, ["closed", "locked.md"]);
+}
+
+/// Folders nest at most 64 deep (core's parent chain limit); deeper ones are reported
+/// and skipped.
+#[test]
+fn folders_nest_at_most_64_deep() {
+    let dir = tempfile::tempdir().unwrap();
+    let deep = |n: usize| vec!["d"; n].join("/");
+    write(dir.path(), &format!("{}/ok.md", deep(64)), b"ok");
+    write(dir.path(), &format!("{}/far.md", deep(65)), b"far");
+    let s = scan(dir.path()).unwrap();
+    assert!(
+        s.docs
+            .iter()
+            .any(|d| d.rel == format!("{}/ok.md", deep(64)))
+    );
+    assert!(!s.docs.iter().any(|d| d.rel.ends_with("far.md")));
+    assert!(s.problems.contains(&Problem::TooDeep { dir: deep(65) }));
+    let ok = doc(&s.docs, &format!("{}/ok.md", deep(64)));
+    // 64 synthesized folder pages above it.
+    let mut depth = 0;
+    let mut at = ok.parent.clone();
+    while let Some(p) = at {
+        depth += 1;
+        at = doc(&s.docs, &p).parent.clone();
+    }
+    assert_eq!(depth, 64);
+}
+
+/// `Index.md` and `readme.md` are a folder's page too; `index.md` wins over `README.md`
+/// whatever the case.
+#[test]
+fn index_names_ignore_case() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a/Index.md", b"# A\n");
+    write(dir.path(), "a/README.md", b"# Readme\n");
+    write(dir.path(), "a/child.md", b"# Child\n");
+    write(dir.path(), "b/readme.md", b"# B\n");
+    write(dir.path(), "b/child.md", b"# Child\n");
+    let s = scan(dir.path()).unwrap();
+    let a = doc(&s.docs, "a/Index.md");
+    assert_eq!((a.slug.as_str(), a.folder.as_deref()), ("a", Some("a")));
+    assert_eq!(
+        doc(&s.docs, "a/child.md").parent.as_deref(),
+        Some("a/Index.md")
+    );
+    // The other index-like file is an ordinary child.
+    assert_eq!(
+        doc(&s.docs, "a/README.md").parent.as_deref(),
+        Some("a/Index.md")
+    );
+    let b = doc(&s.docs, "b/readme.md");
+    assert_eq!((b.slug.as_str(), b.fallback_title.as_str()), ("b", "B"));
+    assert_eq!(
+        doc(&s.docs, "b/child.md").parent.as_deref(),
+        Some("b/readme.md")
+    );
+    assert!(s.problems.is_empty(), "{:?}", s.problems);
+}
+
+/// Every page knows the folder it stands for: the root index `""`, a folder's index or
+/// synthesized page that folder; other files none.
+#[test]
+fn folder_pages_name_their_folder() {
+    let s = scan(&fixture()).unwrap();
+    let folder = |rel: &str| doc(&s.docs, rel).folder.clone();
+    assert_eq!(folder("index.md").as_deref(), Some(""));
+    assert_eq!(folder("03-reference").as_deref(), Some("03-reference"));
+    assert_eq!(folder("guides/README.md").as_deref(), Some("guides"));
+    assert_eq!(folder("01-install.md"), None);
+    assert_eq!(folder("guides/writing.md"), None);
 }

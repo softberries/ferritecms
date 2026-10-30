@@ -196,3 +196,54 @@ unreferenced for the grace period (03 §6).
   -p ferrite-import-wp --test corpus_real` imports both into a fresh site; without the
   variable the test prints `SKIP`.
 - No anonymised production export was used in M3-1.
+
+## 8. Markdown import
+
+`ferrite import markdown DIR` (M4-3b P62, rulings R-b4 to R-b6; CLI in 09 §8; crate
+`ferrite-import-md`) imports a folder of Markdown files as pages. It does not use the WXR
+pipeline above, but it shares the run and map rules:
+
+- **Run.** An import run of source `markdown:<NAME>` (`--source`, default the folder's
+  name), started with `ImportService::start` under the same lock and fence as a WordPress
+  run, so exit 3 means another import is running (any source). It records no steps and has
+  no work file or report file: the report is printed.
+- **Map key.** `import_map.wp_id` is the first 8 bytes of SHA-256 of the file's path
+  relative to `DIR` (`/` separators) as a big-endian `i64`, masked to be non-negative; kind
+  `content` for a page (a folder without an index uses the folder's path), `media` for an
+  image (the image's path). Pages and media also get the meta `import.md.id` with that key
+  (`ImportContent.id_meta`; WordPress items keep `import.wp.id`).
+- **Map hash.** A page: SHA-256 over the file's bytes and the format version `md1` (a
+  synthesized folder page: `md1` and the folder's path), then the parent's path (R-b6), so
+  a file whose parent page changed (a new `index.md` in its folder) is updated and moves.
+  An image: SHA-256 over its bytes and `md1`.
+- **Re-runs**, as for WordPress items (§2, P4):
+
+  | The file since the last run | The page since the import wrote it | Outcome |
+  |---|---|---|
+  | unchanged (same hash) | any | `unchanged`: nothing written |
+  | changed | not edited (same version) | `updated` in place |
+  | changed | edited here | `kept (edited here)`: nothing written |
+  | renamed or deleted | any | stays on the site, reported `not-in-source` |
+  | new | none | `created` |
+
+  A mapped image is not read again; one whose bytes changed keeps the file it was
+  imported with (core does not replace a media item's file) and is reported
+  `image-changed`.
+- **Passes.** 1 media, 2 content (parents first; relative links kept as written; then the
+  front page), 3 links: every page created, updated or unchanged (not one kept, nor one
+  edited here since) is converted again with its links pointing at the target pages'
+  paths, and written with `ImportBatch::set_body_and_fields` only when that body differs
+  from the stored one. That write moves the map row's version with the item's, so it does
+  not count as an edit here on the next run; a page whose own file did not change still
+  gets the new path of a target whose slug changed. Batches commit one by one (at most 500
+  items); a dry run uses one transaction for the whole run and rolls it back.
+- **Slugs.** A sibling's taken slug gets core's `-N` (the later file in name order;
+  `01-install.md` before `install.md`, folder `guides/` before `guides.md`), reported
+  `slug-changed`; links resolve to each page's real path.
+- **Front page.** `--front-page` writes `reading.front_page` (map kind `option`, id 1, the
+  value's hash) on the first run, and on a re-run only while the site still holds what
+  the import last set; else the site's choice is kept, reported `front-page-kept`.
+- **Never read:** a path above `DIR`, through a symlink (files are opened with
+  `O_NOFOLLOW` on unix), rooted or absolute, or hidden. Such images are reported `outside`
+  or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the
+  folder still imports (exit 2).

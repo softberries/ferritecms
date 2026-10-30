@@ -41,7 +41,7 @@ use ferrite_domain::{
 use ferrite_store::{LOCK_IMPORT, LockGuard, Store, StoreError};
 use serde_json::{Value, json};
 
-pub use batch::{ImportBatch, Mapped, TypeWritten, WP_ID_META};
+pub use batch::{ImportBatch, MD_ID_META, Mapped, TypeWritten, WP_ID_META};
 pub use comments::{CommentOutcome, ImportComment};
 pub use content::{ContentOutcome, ImportContent, Written};
 pub use jobs::{ENQUEUE_LOCK_WAIT, ImportJobView, ImportRunView, MAX_REPORT_BYTES, ReportFormat};

@@ -83,8 +83,8 @@ fn next_line(text: &str, start: usize) -> (&str, usize) {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
-    title: Option<String>,
-    slug: Option<String>,
+    title: Option<toml::Spanned<String>>,
+    slug: Option<toml::Spanned<String>>,
     order: Option<i32>,
     #[serde(default)]
     draft: bool,
@@ -118,13 +118,29 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
         }
     };
     Ok(FrontMatter {
-        title: raw.title,
-        slug: raw.slug,
+        title: not_blank("title", raw.title, block)?,
+        slug: not_blank("slug", raw.slug, block)?,
         order: raw.order,
         draft: raw.draft,
         date,
         description: raw.description,
     })
+}
+
+/// `value` unless it is empty or only whitespace: then the offset of `key`'s value and
+/// what is wrong.
+fn not_blank(
+    key: &str,
+    value: Option<toml::Spanned<String>>,
+    block: &str,
+) -> Result<Option<String>, (usize, String)> {
+    match value {
+        Some(v) if v.get_ref().trim().is_empty() => Err((
+            v.span().start.min(block.len()),
+            format!("`{key}` must not be empty (leave the key out instead)"),
+        )),
+        v => Ok(v.map(toml::Spanned::into_inner)),
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +238,16 @@ mod tests {
         assert_eq!(line, 2);
         let (line, _) = line_of(split("+++\ndraft = \"yes\"\n+++\n").unwrap_err());
         assert_eq!(line, 2);
+    }
+
+    #[test]
+    fn empty_title_or_slug_is_refused() {
+        let (line, msg) = line_of(split("+++\norder = 1\ntitle = \"\"\n+++\n").unwrap_err());
+        assert_eq!(line, 3);
+        assert!(msg.contains("title"), "{msg}");
+        let (line, msg) = line_of(split("+++\nslug = \"  \"\n+++\n").unwrap_err());
+        assert_eq!(line, 2);
+        assert!(msg.contains("slug"), "{msg}");
     }
 
     #[test]
