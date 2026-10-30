@@ -1092,6 +1092,28 @@ ferrite_sdk::export_plugin! {
   macro dispatches on the incoming `filter-value` variant and a mismatch yields
   `invalid-input`. Unknown hook names yield `invalid-input`; `handle_request` with no
   matching route returns a 404.
+- Helpers added in M4-3a (M4 P42): guest-side source only, no WIT or host change, and the
+  existing public names stay. Pure logic is unit-tested natively (`cargo test -p
+  ferrite-sdk`).
+  - `form::parse_urlencoded(body) -> Result<Vec<(String, String)>, FormError>`: `+` is a
+    space, `%XX` is decoded, empty segments are skipped, and a key with no `=` gets an
+    empty value. A bad escape, invalid UTF-8 or more than 100 pairs is an error.
+  - `html::escape(s)`: escapes `& < > " '`.
+  - `Head`: `json_ld(json)` (a `script-tag` with only `json-ld`; the host re-serialises it
+    and escapes `<`, `>`, `&`, and drops invalid JSON), `link_typed(rel, href, kind)`, and
+    the queries `has_meta_name`, `has_meta_property` and `meta_property`, so a filter can
+    check what core already emitted before adding a tag.
+  - `options::get(key) -> Option<String>` (`options.read`): the decoded value when the
+    option is a JSON string; `None` when it is unset, not granted or any other JSON type.
+    The unescape is minimal (`\" \\ \/ \b \f \n \r \t \uXXXX` with surrogate pairs), so the
+    SDK needs no JSON crate; a plugin that wants a number or object reads the raw text
+    through the bindings.
+  - `mail::notify_admins(subject, body) -> Result<(), String>` (`mail = "admins"`).
+  - `viewers_allow(setting, user) -> bool`: true when `user` is one of the ids in the
+    `viewers` setting (separated by commas or whitespace, compared exactly); an empty or
+    absent setting or user allows nobody (M4 P46).
+  - `route::html(status, body)` and `route::text(status, body)`: a `RouteResponse` with
+    `Content-Type` `text/html; charset=utf-8` or `text/plain; charset=utf-8`.
 - Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
   with an explicit `--target` produces a component directly; `cargo component` is not
   needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
