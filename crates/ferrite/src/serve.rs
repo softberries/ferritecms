@@ -470,7 +470,7 @@ async fn boot(
     let metrics = {
         let jobs = job_counters.clone();
         Arc::new(
-            Metrics::new(&binary_version()?.to_string(), &build_target())
+            Metrics::new(&binary_version()?.to_string(), crate::binary_target())
                 .with_cache(cache.clone())
                 .with_plugins(host.clone())
                 .with_store(store.clone(), STALE_AFTER)
@@ -886,11 +886,6 @@ impl RunningNode {
     }
 }
 
-/// The target the binary was built for, for `ferrite_build_info` (`<arch>-<os>`).
-fn build_target() -> String {
-    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-}
-
 /// Awaits `task` until `deadline`, then aborts it.
 async fn join_until(name: &'static str, mut task: JoinHandle<()>, deadline: Instant) {
     match tokio::time::timeout_at(deadline, &mut task).await {
@@ -981,6 +976,7 @@ fn http_config(config: &Config) -> HttpConfig {
         &config.site.title,
         &config.site.locale,
     );
+    http.timezone = config.site.timezone.clone();
     http.trusted_proxies = config.server.trusted_proxies.clone();
     http.render_budget = Duration::from_millis(config.plugins.render_budget_ms);
     http.search_ttl = Duration::from_secs(config.cache.search_ttl_secs);

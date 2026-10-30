@@ -202,6 +202,14 @@ fn parse_site(cx: &mut Cx, root: &mut Table) -> Option<SiteConfig> {
     let title = cx.string(&mut t, "site", "title").unwrap_or_default();
     let locale = non_empty(cx, &mut t, "site", "locale", "en");
     let timezone = non_empty(cx, &mut t, "site", "timezone", "UTC");
+    // The theme `date` filter formats in this zone; the binary bundles the IANA database
+    // (jiff `tzdb-bundle-always`), so this check does not depend on the host.
+    if let Err(e) = jiff::tz::TimeZone::get(&timezone) {
+        cx.push(
+            "site.timezone",
+            format!("`{timezone}` is not an IANA time zone name such as `Europe/Warsaw`: {e}"),
+        );
+    }
     cx.unknown(t, "site");
     Some(SiteConfig {
         url: url?,

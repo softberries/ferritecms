@@ -176,7 +176,6 @@ mod tests {
 
     #[test]
     fn urls_follow_the_address_and_scheme_rules() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let source = HttpSource::new("0.0.0").unwrap();
         for ok in [
             "http://example.org/wp-content/uploads/a.png",
@@ -228,7 +227,6 @@ mod tests {
     /// (too large, not missing).
     #[tokio::test]
     async fn content_length_over_the_cap_is_refused_early() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let app =
             axum::Router::new().route("/big.png", axum::routing::get(|| async { vec![0u8; 4096] }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -257,7 +255,6 @@ mod tests {
     /// file is missing, not fetched.
     #[tokio::test]
     async fn names_of_internal_addresses_are_missing() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let source = HttpSource::new("0.0.0").unwrap();
         let got = source
             .open("a.png", "http://localhost/a.png", 1 << 20)

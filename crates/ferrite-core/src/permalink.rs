@@ -747,6 +747,16 @@ mod tests {
         assert_eq!(by_cat.path(&page), "/p/a/b/leaf/");
     }
 
+    /// M4-2 P29: `site.timezone` formats theme dates only; the permalink month is UTC
+    /// (ruling R4). 23:30 UTC on New Year's Eve is already 2025 in Warsaw.
+    #[test]
+    fn permalinks_stay_utc() {
+        let dated = PermalinkRules::from_options(Some("/%year%/%month%/%slug%/"), None).unwrap();
+        let mut post = item("post", "hi");
+        post.published_at = Some(Timestamp::from_micros(1_735_687_800_000_000).unwrap());
+        assert_eq!(dated.path(&input(post)), "/2024/12/hi/");
+    }
+
     #[test]
     fn segments_are_percent_encoded() {
         let rules = PermalinkRules::default();

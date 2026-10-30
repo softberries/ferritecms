@@ -1367,3 +1367,15 @@ fn metrics_listen_template_is_commented() {
         Some("127.0.0.1:9464".parse().unwrap())
     );
 }
+
+#[test]
+fn invalid_timezone_is_config_error() {
+    for bad in ["Mars/Base", "Europe/Warsw", "not a zone", "+02:00"] {
+        let src = format!("{MIN}timezone = \"{bad}\"\n");
+        let (_dir, r) = run(Some(&src), &[]);
+        let e = r.unwrap_err();
+        assert!(paths(&e).contains(&"site.timezone"), "{bad}: {e:?}");
+    }
+    let (_dir, r) = run(Some(&format!("{MIN}timezone = \"Europe/Warsaw\"\n")), &[]);
+    assert_eq!(r.unwrap().site.timezone, "Europe/Warsaw");
+}

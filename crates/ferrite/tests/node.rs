@@ -1367,7 +1367,8 @@ async fn metrics_not_on_public_listener(db: Arc<TestDb>) {
     let version = env!("CARGO_PKG_VERSION");
     assert!(
         body.contains(&format!(
-            "ferrite_build_info{{version=\"{version}\",target="
+            "ferrite_build_info{{version=\"{version}\",target=\"{}\"}} 1\n",
+            ferrite::binary_target()
         )),
         "{body}"
     );
