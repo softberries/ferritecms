@@ -15,7 +15,7 @@ root on a systemd Linux host (Debian, Ubuntu, Fedora and the like).
    curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/ferrite-$VERSION-$TARGET.tar.gz
    curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/SHA256SUMS
    curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/SHA256SUMS.minisig
-   minisign -Vm SHA256SUMS -P <the release public key, from crates/ferrite/release.pub>
+   minisign -Vm SHA256SUMS -p release.pub   # release.pub: crates/ferrite/release.pub at that tag
    sha256sum --check --ignore-missing SHA256SUMS
    tar -xzf ferrite-$VERSION-$TARGET.tar.gz
    install -o root -g root -m 0755 ferrite-$VERSION-$TARGET/ferrite /usr/local/bin/ferrite
@@ -127,7 +127,9 @@ ferrite rollback --data /var/lib/ferrite
 systemctl start ferrite
 ```
 
-`ferrite rollback --schema` also takes the schema back (09 §2).
+`ferrite rollback --schema` also takes the schema back (09 §2). The step-by-step runbook,
+with the rollback modes and the first ACME setup, is
+[`docs/operations/solo-upgrade.md`](../../docs/operations/solo-upgrade.md).
 
 Every root command given `--data` opens the site's database: `self-update --data`,
 `rollback --data` and `rollback --schema`. On SQLite it can leave files owned by root in

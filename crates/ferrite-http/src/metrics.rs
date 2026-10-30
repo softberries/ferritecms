@@ -189,9 +189,9 @@ impl Histogram {
 /// give that minute's figures ([`since`](Self::since)).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
-    /// Responses of every class but [`RouteClass::Other`] (health checks, the comment
-    /// form, other methods: load-balancer probes would swamp a quiet site's figures;
-    /// ruling R3). `/metrics` still counts every class.
+    /// Responses of every class but [`RouteClass::Other`] (`/healthz` and `/readyz`:
+    /// load-balancer probes would swamp a quiet site's figures; M4-2 R3). `/metrics`
+    /// still counts every class.
     pub requests: u64,
     /// Those of [`requests`](Self::requests) with a 5xx status.
     pub errors_5xx: u64,
