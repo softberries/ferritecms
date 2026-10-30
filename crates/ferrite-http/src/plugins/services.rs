@@ -20,9 +20,9 @@ use ferrite_store::Store;
 use super::apply::{mark_degraded, record, scoped_preview};
 use super::egress::Egress;
 
-/// Most value bytes one plugin may keep in `kv` (design 05 §3).
+/// Most value bytes one plugin may keep in `kv` (design 05 §6).
 pub const KV_MAX_BYTES: u64 = 10 * 1024 * 1024;
-/// Most keys one plugin may keep in `kv` (design 05 §3).
+/// Most keys one plugin may keep in `kv` (design 05 §6).
 pub const KV_MAX_KEYS: u64 = 10_000;
 /// Error text for any storage failure; details go to the log, not to the guest.
 const STORAGE_ERROR: &str = "storage error";

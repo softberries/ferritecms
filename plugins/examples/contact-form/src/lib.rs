@@ -28,9 +28,9 @@ mod form;
 mod inbox;
 mod page;
 
+use ferrite_sdk::form::{FormError, parse_urlencoded};
 use ferrite_sdk::{
-    Ctx, FormError, Kv, Level, Result, RouteRequest, RouteResponse, mail, options,
-    parse_urlencoded, route, viewers_allow,
+    Ctx, Kv, Level, Result, RouteRequest, RouteResponse, mail, options, route, settings, viewers,
 };
 
 use form::Submission;
@@ -62,16 +62,9 @@ fn html(status: u16, body: String) -> RouteResponse {
 
 // ---- settings -------------------------------------------------------------------------
 
-/// A text setting; `None` when unset or not a string.
-fn setting_string(ctx: &Ctx, key: &str) -> Option<String> {
-    serde_json::from_str::<String>(&ctx.setting(key)?).ok()
-}
-
 /// `store_messages`: true unless set to `false`.
-fn store_messages(ctx: &Ctx) -> bool {
-    ctx.setting("store_messages")
-        .and_then(|json| serde_json::from_str::<bool>(&json).ok())
-        .unwrap_or(true)
+fn store_messages() -> bool {
+    settings::bool("store_messages").unwrap_or(true)
 }
 
 fn site_title() -> String {
@@ -120,7 +113,7 @@ fn submit(req: RouteRequest, ctx: &Ctx) -> Result<RouteResponse> {
     let sub = Submission::from_pairs(&pairs);
     let back = sub.back.clone().unwrap_or_else(|| "/".to_owned());
     let thanks = || {
-        let text = setting_string(ctx, "success_message")
+        let text = settings::text("success_message")
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| page::DEFAULT_THANKS.to_owned());
         html(200, page::thanks(&text, &back))
@@ -144,8 +137,8 @@ fn submit(req: RouteRequest, ctx: &Ctx) -> Result<RouteResponse> {
         subject: sub.subject,
         message: sub.message,
     };
-    let stored = store_messages(ctx) && store(&ctx.kv(), &message);
-    let mailed = send_mail(ctx, &message);
+    let stored = store_messages() && store(&ctx.kv(), &message);
+    let mailed = send_mail(&message);
     if !stored && !mailed {
         return Ok(html(
             503,
@@ -215,8 +208,8 @@ fn store(kv: &Kv, message: &Message) -> bool {
 
 /// Mail `message` to the admins. False (and logged) when the host refused it: mail not
 /// configured, the hourly limit, a full queue.
-fn send_mail(ctx: &Ctx, message: &Message) -> bool {
-    let prefix = setting_string(ctx, "subject_prefix").unwrap_or_else(|| DEFAULT_PREFIX.into());
+fn send_mail(message: &Message) -> bool {
+    let prefix = settings::text("subject_prefix").unwrap_or_else(|| DEFAULT_PREFIX.into());
     let subject = mail_subject(&prefix, &message.subject, &message.message);
     let body = format!(
         "A message was sent with the contact form.\n\n\
@@ -293,8 +286,8 @@ fn inbox_page(req: RouteRequest, ctx: &Ctx) -> Result<RouteResponse> {
     let Some(user) = req.user.as_deref() else {
         return Ok(html(403, page::sign_in_required()));
     };
-    let viewers = setting_string(ctx, "viewers");
-    if !viewers_allow(viewers.as_deref(), Some(user)) {
+    let allowed = settings::text("viewers");
+    if !viewers::allow(allowed.as_deref(), Some(user)) {
         return Ok(html(403, page::not_a_viewer(user)));
     }
     let kv = ctx.kv();

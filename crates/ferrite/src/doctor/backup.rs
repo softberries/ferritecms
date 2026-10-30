@@ -8,18 +8,16 @@ use std::time::Duration;
 use chrono::{NaiveDateTime, Utc};
 use ferrite_config::{BackupSchedule, Config, DbKind};
 
-use super::Finding;
-use super::fs::can_write_in;
+use super::fs::{NO_CONFIG, can_write_in};
+use super::{Finding, NETWORK_TIMEOUT, scrub_s3_keys};
 use crate::backup::repo::{Repo, SNAPSHOT_FORMAT};
 use crate::backup::target::{RepoLocation, Target};
 
 const ID: &str = "backup.target";
-/// How long listing an S3 prefix may take (P51).
-const S3_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) async fn target(data: &Path, config: Option<&Config>, offline: bool) -> Finding {
     let Some(config) = config else {
-        return Finding::skip(ID, "the configuration did not load (see config.load)");
+        return Finding::skip(ID, NO_CONFIG);
     };
     let Some(to) = config.backup.to.as_deref() else {
         return Finding::info(ID, "no [backup] target configured");
@@ -40,19 +38,23 @@ pub(super) async fn target(data: &Path, config: Option<&Config>, offline: bool) 
             if offline {
                 return Finding::skip(ID, format!("{url} is not probed (--offline)"));
             }
-            match tokio::time::timeout(S3_TIMEOUT, Repo::survey(&location, exports)).await {
+            match tokio::time::timeout(NETWORK_TIMEOUT, Repo::survey(&location, exports)).await {
                 Err(_) => Finding::warn(
                     ID,
                     format!(
                         "{url}: did not finish listing within {} s",
-                        S3_TIMEOUT.as_secs()
+                        NETWORK_TIMEOUT.as_secs()
                     ),
                 ),
                 // The backup uses `AWS_*` from the service's environment, which may differ
                 // from this shell's.
-                Ok(Err(e)) => {
-                    Finding::warn(ID, format!("{url}: {e:#} (is AWS_* set for this shell?)"))
-                }
+                Ok(Err(e)) => Finding::warn(
+                    ID,
+                    scrub_s3_keys(
+                        format!("{url}: {e:#} (is AWS_* set for this shell?)"),
+                        Some(config),
+                    ),
+                ),
                 Ok(Ok(found)) => judged(url, found, schedule, exports),
             }
         }
@@ -72,9 +74,7 @@ async fn local(dir: &Path, schedule: BackupSchedule, exports: bool) -> Finding {
     };
     match std::fs::metadata(dir) {
         Ok(meta) if meta.is_dir() => {}
-        Ok(_) => {
-            return Finding::error(ID, format!("{} exists and is not a folder", dir.display()));
-        }
+        Ok(_) => return unusable(format!("{} exists and is not a folder", dir.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // The first backup creates it, so the nearest folder that exists must be writable.
             let parent = nearest_existing(dir);

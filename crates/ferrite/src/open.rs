@@ -101,10 +101,17 @@ pub async fn open_store_url(
     Ok(Arc::new(store))
 }
 
+/// `<db><suffix>`: SQLite's `-wal` and `-shm` files beside the database file `db`.
+pub(crate) fn sqlite_side_file(db: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = db.as_os_str().to_owned();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
 /// A read-only view of a SQLite database, only for `ferrite doctor` (M4-3a P49/P50, X3):
 /// one connection that takes no data-folder lock, opens no writer, runs no migration and
-/// creates no file, so it works while `serve` holds the store and never stops one from
-/// starting. Being read-only it never checkpoints the WAL; SQLite still updates the
+/// creates no file, so it works while `serve` holds the store and takes no lock that would
+/// stop one from starting. Being read-only it never checkpoints the WAL; SQLite still updates the
 /// shared-memory index in `-shm` as every reader of a WAL database does.
 ///
 /// A read-only open of a WAL database creates a missing `-wal` or `-shm` and leaves it, so:
@@ -146,11 +153,7 @@ impl SqliteReadOnly {
                 path.display()
             );
         }
-        let side = |suffix: &str| {
-            let mut name = path.as_os_str().to_owned();
-            name.push(suffix);
-            std::path::PathBuf::from(name).exists()
-        };
+        let side = |suffix: &str| sqlite_side_file(path, suffix).exists();
         let immutable = !side("-wal");
         if !immutable && !side("-shm") {
             return Err(MissingWalIndex(path.to_path_buf()).into());
@@ -188,12 +191,7 @@ impl SqliteReadOnly {
     /// A `schema_meta` value (`None` without the table or the key).
     pub(crate) async fn schema_meta(&self, key: &str) -> anyhow::Result<Option<String>> {
         let mut conn = self.conn.lock().await;
-        let table: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_meta')",
-        )
-        .fetch_one(&mut *conn)
-        .await?;
-        if !table {
+        if !ferrite_store_sqlite::table_exists(&mut conn, "schema_meta").await? {
             return Ok(None);
         }
         Ok(

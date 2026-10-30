@@ -54,8 +54,23 @@ cp plugins/examples/seo/ferrite-plugin.toml seo-plugin/
 cp plugins/target/wasm32-wasip2/release/seo.wasm seo-plugin/
 ```
 
-With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its `seo/`
-folder where the commands below say `seo-plugin`. Then, with `serve` stopped if the site uses SQLite:
+With the release asset, check it before you unpack it, as for the binary (design 09 §1): the
+release's `SHA256SUMS` lists the asset and is signed with the release key
+(`crates/ferrite/release.pub` at that tag).
+
+```sh
+VERSION=X.Y.Z
+BASE=https://github.com/softberries/ferritecms/releases/download/v$VERSION
+curl -LO $BASE/ferrite-plugins-$VERSION.tar.gz
+curl -LO $BASE/SHA256SUMS
+curl -LO $BASE/SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -p release.pub
+sha256sum --check --ignore-missing SHA256SUMS   # macOS: shasum -a 256 --check --ignore-missing SHA256SUMS
+tar xzf ferrite-plugins-$VERSION.tar.gz
+```
+
+Then use its `seo/` folder where the commands below say `seo-plugin`. With `serve`
+stopped if the site uses SQLite:
 
 ```sh
 ferrite plugin check   --data /path/to/site --dir seo-plugin   # prints the permission report
@@ -105,8 +120,9 @@ The plugin runs in world `ferrite:plugin/plugin@0.1.0`, which constrains it:
 - **Site URL and title come from the host's options.** `site.url` is the configured site URL
   and `site.title` is the stored title, else the one in `ferrite.toml`. If you narrow the
   grant so that one of them cannot be read, the tags that need it are left out: without
-  `site.title`, no `og:site_name` and no publisher name; without `site.url`, no `WebSite`
-  JSON-LD and no RSS link.
+  `site.title`, no `og:site_name`, no `name` in the `WebSite` JSON-LD, and no `publisher`
+  unless `organization_name` is set (it names the publisher on its own); without `site.url`,
+  no `WebSite` JSON-LD and no RSS link.
 - **Posts only.** The plugin reads `post` items. For other types or custom taxonomies, extend
   `content.read` in the manifest and the code.
 - **No IndexNow, no robots or sitemap changes, no content analysis.** Plugins cannot serve

@@ -7,7 +7,8 @@ world       = "ferrite:plugin/plugin@0.1.0"
 license     = "MIT"
 
 # Counts page views from the batched `request.served` events (no cookies, no IP, no user
-# agent, no query string) into one JSON blob per UTC day in the plugin's own storage, and
+# agent, no query string) into one JSON blob per UTC day in the plugin's own storage (the
+# last `detail_days` with their path and referrer lists, older days as totals only), and
 # shows them on `/_p/analytics/` to the signed-in users listed in the `viewers` setting.
 # `site.url` is answered by the host: it names the site's own host, so a visit that comes
 # from the site itself is not a referral.
@@ -25,4 +26,5 @@ options.read = ["site.url"]
 [settings]
 viewers        = { type = "textarea", label = "Viewers: ids of the users who may open the stats page (separated by commas or new lines; empty means nobody)" }
 retention_days = { type = "number", label = "Days of statistics to keep (1 to 366)", default = 90 }
+detail_days    = { type = "number", label = "Days that keep their path and referrer lists (1 to 60); older days keep their totals only", default = 30 }
 exclude_paths  = { type = "text", label = "Paths not counted: comma-separated prefixes", default = "/admin,/_p" }

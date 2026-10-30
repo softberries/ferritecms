@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -22,7 +23,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::analytics::FailingGet;
+use crate::analytics::Flaky;
 use crate::common::{SITE_URL, Site, plugin_manifest, plugin_wasm};
 use crate::mail::{GRACE, MAIL_SITE_TITLE, WAIT, inside_one_hour_window, mail_services};
 use crate::profile_tests;
@@ -39,6 +40,7 @@ profile_tests!(
     only_urlencoded_bodies_are_accepted,
     malformed_and_oversized_bodies_are_refused,
     the_eleventh_post_in_an_hour_is_429,
+    the_inbox_takes_thirty_requests_a_minute,
     the_inbox_keeps_the_newest_hundred,
     a_mail_failure_still_thanks_and_stores,
     store_messages_off_mails_only,
@@ -735,6 +737,28 @@ async fn the_eleventh_post_in_an_hour_is_429(site: Site) -> Site {
     site
 }
 
+/// The inbox's `30/min` (final review A-3, the same as the analytics stats page): through
+/// the public app, thirty requests in a minute from one client reach the plugin (a 403 for
+/// a visitor who is not signed in) and the 31st is 429.
+async fn the_inbox_takes_thirty_requests_a_minute(site: Site) -> Site {
+    let site = without_mail(site).await;
+    let app = app(&site).await;
+    // The window is the clock's minute: start well inside one.
+    let into = chrono::Utc::now().timestamp().rem_euclid(60);
+    if into > 40 {
+        tokio::time::sleep(Duration::from_secs(61 - into.unsigned_abs())).await;
+    }
+    for i in 0..30 {
+        let (status, _, html) =
+            send(&app, Method::GET, "/_p/contact-form/inbox", &[], vec![]).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "request {i}: {html}");
+    }
+    let (status, headers, _) = send(&app, Method::GET, "/_p/contact-form/inbox", &[], vec![]).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(headers.get(header::RETRY_AFTER).is_some());
+    site
+}
+
 /// P45: the inbox holds the latest 100 messages, newest first.
 async fn the_inbox_keeps_the_newest_hundred(site: Site) -> Site {
     let site = without_mail(site).await;
@@ -939,10 +963,7 @@ async fn a_failed_read_never_overwrites_the_inbox(site: Site) -> Site {
     let existing = blob(vec![message(0, "an earlier message")]);
     kv_set(&site, &existing).await;
     let (services, mailer) = mail_services(&site, MAIL_SITE_TITLE);
-    let flaky = Arc::new(FailingGet {
-        inner: services,
-        key: "inbox".into(),
-    });
+    let flaky = Arc::new(Flaky::failing_get(services, "inbox"));
     let host = PluginHost::new(HostConfig::default(), flaky).unwrap();
     host.install(
         Manifest::parse(&plugin_manifest(PLUGIN)).unwrap(),

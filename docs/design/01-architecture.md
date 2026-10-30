@@ -26,7 +26,8 @@ ferritecms/
 │   │                             #   `upgrade` (`upgrade.json`, `last_binary_version`), `tls`
 │   │                             #   (ACME via rustls-acme, the TLS and redirect listeners),
 │   │                             #   `node_metrics` (the minute writer), `build.rs` (the target
-│   │                             #   triple) and `release.pub` (the embedded release key)
+│   │                             #   triple) and `release.pub` (the embedded release key).
+│   │                             #   M4-3a: `doctor/` (`ferrite doctor`, 09 §8)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
 │   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
@@ -87,7 +88,9 @@ ferritecms/
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
-│                                 #   lives in the crate; there is no separate macros crate)
+│                                 #   lives in the crate; there is no separate macros crate);
+│                                 #   M4-3a: `form`, `html`, `options`, `settings`, `time`,
+│                                 #   `mail`, `route`, `viewers` and `Head` additions (05 §10)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
 ├── admin/                        # (built, M2b-1 to M2b-3) admin SPA: one pnpm package (not a

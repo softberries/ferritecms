@@ -76,6 +76,18 @@ pub fn not_a_viewer(user: &str) -> String {
     )
 }
 
+/// The page when every stored day of the period failed to read.
+pub fn unreadable(period: u32) -> String {
+    let (days, s) = (period, if period == 1 { "" } else { "s" });
+    document(
+        "Analytics",
+        &format!(
+            "<h1>Analytics</h1><p>The statistics for the last {days} day{s} could not be read \
+             right now. Try again in a moment.</p>"
+        ),
+    )
+}
+
 /// The page when the period holds no data.
 pub fn no_data(period: u32) -> String {
     let (days, s) = (period, if period == 1 { "" } else { "s" });
@@ -88,12 +100,26 @@ pub fn no_data(period: u32) -> String {
     )
 }
 
-/// One day of the window. `totals` is `None` for a day nothing was stored for.
+/// One day of the window. `totals` is `None` for a day nothing was read for.
 pub struct Slot {
     pub day: Day,
     pub totals: Option<Totals>,
-    /// Whether `totals` came with its `paths` and `referrers`.
-    pub full: bool,
+    /// What `totals` holds besides the counts.
+    pub detail: Detail,
+    /// A stored blob of this day was listed but could not be read (the host answers a
+    /// failed read as a missing key): the figures leave it out.
+    pub unread: bool,
+}
+
+/// Whether a day's `paths` and `referrers` are in its [`Slot::totals`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    /// Decoded with its lists.
+    Lists,
+    /// Its blob has lists, but the page's decode budget was spent: counts only.
+    Skipped,
+    /// Compacted (older than `detail_days`): it has counts only.
+    TotalsOnly,
 }
 
 /// The stats page for `slots` (oldest first).
@@ -141,23 +167,58 @@ pub fn stats(slots: &[Slot], periods: &[u32], period: u32) -> String {
     }
     out.push_str("</div>");
 
-    let with_data = slots.iter().filter(|s| s.totals.is_some()).count();
-    let listed = slots
+    let with_data: Vec<Detail> = slots
         .iter()
-        .filter(|s| s.totals.is_some() && s.full)
-        .count();
-    if listed < with_data {
+        .filter(|s| s.totals.is_some())
+        .map(|s| s.detail)
+        .collect();
+    let count = |d: Detail| with_data.iter().filter(|&&x| x == d).count();
+    let (listed, skipped, compacted) = (
+        count(Detail::Lists),
+        count(Detail::Skipped),
+        count(Detail::TotalsOnly),
+    );
+    if listed < with_data.len() {
         let _ = write!(
             out,
             "<p class=\"muted\" data-note=\"partial\">The lists below cover the newest {listed} \
-             of the {with_data} days with data: reading more would exceed what the plugin may \
-             compute in one request. Choose a shorter period to include every day.</p>"
+             of the {} days with data.",
+            with_data.len()
+        );
+        if skipped > 0 {
+            out.push_str(
+                " Reading more would exceed what the plugin may compute in one request: \
+                 choose a shorter period to include more days.",
+            );
+        }
+        if compacted > 0 {
+            let _ = write!(
+                out,
+                " {compacted} older {} only {} totals (see the <code>detail_days</code> setting).",
+                if compacted == 1 {
+                    "day keeps"
+                } else {
+                    "days keep"
+                },
+                if compacted == 1 { "its" } else { "their" }
+            );
+        }
+        out.push_str("</p>");
+    }
+    let unread = slots.iter().filter(|s| s.unread).count();
+    if unread > 0 {
+        let _ = write!(
+            out,
+            "<p class=\"muted\" data-note=\"unread\">{unread} {} could not be read right now \
+             and {} left out of these figures. Reload the page in a moment.</p>",
+            if unread == 1 { "day" } else { "days" },
+            if unread == 1 { "is" } else { "are" }
         );
     }
     out.push_str("<h2>Top pages</h2>");
-    top(&mut out, "Path", &sum.paths);
+    top(&mut out, "Path", &sum.paths, true);
     out.push_str("<h2>Top referrers</h2>");
-    top(&mut out, "Host", &sum.referrers);
+    top(&mut out, "Host", &sum.referrers, false);
     document("Analytics", &out)
 }
 
@@ -244,8 +305,9 @@ fn chart(out: &mut String, slots: &[Slot]) {
     );
 }
 
-/// The `TOP` biggest keys of `counts`, then the overflow bucket.
-fn top(out: &mut String, heading: &str, counts: &Counts) {
+/// The `TOP` biggest keys of `counts`, then the overflow bucket. With `decode`, a key is
+/// shown percent-decoded where that gives readable text ([`readable_path`]).
+fn top(out: &mut String, heading: &str, counts: &Counts, decode: bool) {
     let mut rows: Vec<(&String, u64)> = counts
         .iter()
         .filter(|(k, _)| k.as_str() != OTHER)
@@ -269,10 +331,15 @@ fn top(out: &mut String, heading: &str, counts: &Counts) {
         escape(heading)
     );
     for (key, n) in rows.into_iter().take(TOP) {
+        let shown = if decode {
+            readable_path(key)
+        } else {
+            key.clone()
+        };
         let _ = write!(
             out,
             "<tr><td class=\"k\"><code>{}</code></td><td class=\"n\">{n}</td></tr>",
-            escape(&clip(key))
+            escape(&clip(&shown))
         );
     }
     if let Some(n) = rest {
@@ -285,10 +352,78 @@ fn top(out: &mut String, heading: &str, counts: &Counts) {
     out.push_str("</tbody></table>");
 }
 
+/// A stored path for display: core sends paths percent-encoded (`/caf%C3%A9/`), so it is
+/// shown decoded (`/café/`) when the decoded bytes are UTF-8 without control characters,
+/// and as stored otherwise. Display only: the stored key, `exclude_paths` and the counts
+/// stay encoded, and the result is escaped like any other text.
+pub fn readable_path(path: &str) -> String {
+    if !path.contains('%') {
+        return path.to_owned();
+    }
+    let hex = |c: u8| (c as char).to_digit(16);
+    let b = path.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                b.get(i + 1).copied().and_then(hex),
+                b.get(i + 2).copied().and_then(hex),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    match String::from_utf8(out) {
+        Ok(text) if !text.chars().any(|c| c.is_control() || is_bidi_control(c)) => text,
+        _ => path.to_owned(),
+    }
+}
+
+/// A bidirectional control (U+061C, U+200E, U+200F, U+202A..U+202E, U+2066..U+2069): decoded,
+/// it would make the row display reordered.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// `s` cut to [`SHOWN_CHARS`] characters, with an ellipsis when it was longer.
 fn clip(s: &str) -> String {
     match s.char_indices().nth(SHOWN_CHARS) {
         Some((end, _)) => format!("{}…", &s[..end]),
         None => s.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_path;
+
+    #[test]
+    fn encoded_paths_are_shown_decoded_when_readable() {
+        assert_eq!(readable_path("/caf%C3%A9/"), "/café/");
+        assert_eq!(readable_path("/%D0%B0%D0%B1/"), "/аб/");
+        assert_eq!(readable_path("/a%20b/%3Cx%3E"), "/a b/<x>");
+        assert_eq!(readable_path("/plain/"), "/plain/");
+        // Lowercase hex decodes too.
+        assert_eq!(readable_path("/caf%c3%a9"), "/café");
+    }
+
+    #[test]
+    fn unreadable_paths_are_shown_as_stored() {
+        // Not UTF-8 once decoded: a lone lead byte, a cut sequence.
+        assert_eq!(readable_path("/%FF/"), "/%FF/");
+        assert_eq!(readable_path("/caf%C3"), "/caf%C3");
+        // Control characters stay encoded.
+        assert_eq!(readable_path("/a%00b"), "/a%00b");
+        assert_eq!(readable_path("/a%0Ab"), "/a%0Ab");
+        // Bidi controls stay encoded, so a row cannot display reordered.
+        assert_eq!(readable_path("/a%E2%80%AEb"), "/a%E2%80%AEb");
+        assert_eq!(readable_path("/a%E2%81%A6b"), "/a%E2%81%A6b");
+        // A `%` that starts no escape is kept as it is.
+        assert_eq!(readable_path("/100%/x%4"), "/100%/x%4");
     }
 }

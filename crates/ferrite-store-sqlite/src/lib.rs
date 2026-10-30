@@ -22,7 +22,7 @@ use sqlx::SqlitePool;
 
 pub use connect::{KeepSnapshot, SqliteOptions};
 use exec::map_db_err;
-pub use migrate::{latest_schema_version, status_from};
+pub use migrate::{latest_schema_version, status_from, table_exists};
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
 use repos::{SqliteRepos, SqliteTx};
 

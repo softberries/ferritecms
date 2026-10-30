@@ -1,7 +1,9 @@
 //! The `analytics` example plugin through a real host (M4-3a Task 3, plan P44 and P46):
 //! batches of `request.served` events become one KV blob per UTC day, the stats page
 //! shows them to the listed viewers only, retention prunes back from today, the maps are
-//! capped, and a hostile path or referrer is escaped (Review Focus 2).
+//! capped, and a hostile path or referrer is escaped (Review Focus 2). Ruling X7: days past
+//! `detail_days` are compacted to their totals, and the prune and the compaction run before
+//! counting, so a store at its quota recovers.
 
 use std::sync::Arc;
 
@@ -10,6 +12,7 @@ use ferrite_plugin_host::{
     ActionEvent, Grant, HostConfig, HostServices, KindOk, Manifest, PluginHost, Post, RouteRequest,
     RouteResponse, SettingSpec,
 };
+use ferrite_store::Store;
 use serde_json::{Value, json};
 
 use crate::common::{Site, plugin_manifest, plugin_wasm};
@@ -44,6 +47,16 @@ profile_tests!(
     a_thousand_hostile_paths_stay_inside_the_default_fuel,
     stored_blobs_that_are_corrupt_or_newer_are_handled,
     a_malformed_payload_is_ignored,
+    an_old_day_is_compacted_to_its_totals,
+    detail_days_follows_the_setting_and_a_backlog_clears,
+    a_straggler_for_a_compacted_day_is_merged_into_it,
+    the_prune_runs_before_counting,
+    a_refused_write_still_prunes_and_the_next_batch_succeeds,
+    compaction_makes_room_when_the_store_is_full,
+    a_compaction_refused_for_another_reason_keeps_the_full_day,
+    the_page_says_which_days_could_not_be_read,
+    encoded_paths_are_cut_whole_and_shown_decoded,
+    the_worst_batch_with_maintenance_fits_the_default_fuel,
 );
 
 const PLUGIN: &str = "analytics";
@@ -180,6 +193,35 @@ async fn days(site: &Site) -> Vec<String> {
         .into_iter()
         .map(|k| k.strip_prefix("day:").unwrap().to_owned())
         .collect()
+}
+
+/// The compacted days (`totals:` keys) without their prefix, ascending.
+async fn totals_days(site: &Site) -> Vec<String> {
+    site.store
+        .read()
+        .plugin_kv()
+        .list_keys(PLUGIN, "totals:", 200)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|k| k.strip_prefix("totals:").unwrap().to_owned())
+        .collect()
+}
+
+/// Every day with a blob, full or compacted, ascending.
+async fn stored_days(site: &Site) -> Vec<String> {
+    let mut all = days(site).await;
+    all.extend(totals_days(site).await);
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// The decoded compacted blob of `day`.
+async fn totals(site: &Site, day: &str) -> Option<Value> {
+    kv_get(site, &format!("totals:{day}"))
+        .await
+        .map(|b| serde_json::from_slice(&b).unwrap())
 }
 
 fn request(user: Option<&str>, query: &[(&str, &str)]) -> RouteRequest {
@@ -770,7 +812,8 @@ async fn a_future_event_cannot_push_history_out(site: Site) -> Site {
     for n in [80, 3, 2, 1] {
         kv_set(&site, &format!("day:{}", ago(n)), STUB).await;
     }
-    // Only future events: nothing is written or deleted, and the call is fine.
+    // Only future events: nothing is counted or deleted (day 80 is past the detail window,
+    // so it is compacted, its count kept), and the call is fine.
     feed(
         &site,
         vec![
@@ -780,13 +823,18 @@ async fn a_future_event_cannot_push_history_out(site: Site) -> Site {
         ],
     )
     .await;
-    assert_eq!(days(&site).await, [ago(80), ago(3), ago(2), ago(1)]);
+    assert_eq!(days(&site).await, [ago(3), ago(2), ago(1)]);
+    assert_eq!(totals_days(&site).await, [ago(80)]);
     // With a real event in the same batch, only that one is counted.
     feed(&site, vec![view(ago(-400), "/"), view(ago(0), "/")]).await;
-    assert_eq!(days(&site).await, [ago(80), ago(3), ago(2), ago(1), ago(0)]);
-    for n in [80, 3, 2, 1] {
+    assert_eq!(
+        stored_days(&site).await,
+        [ago(80), ago(3), ago(2), ago(1), ago(0)]
+    );
+    for n in [3, 2, 1] {
         assert_eq!(day(&site, ago(n)).await.unwrap()["views"], 5, "{}", ago(n));
     }
+    assert_eq!(totals(&site, ago(80)).await.unwrap()["views"], 5);
     assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 1);
     site
 }
@@ -795,56 +843,55 @@ async fn a_future_event_cannot_push_history_out(site: Site) -> Site {
 async fn retention_setting_is_clamped_and_defaults_to_ninety(site: Site) -> Site {
     let site = site_with_analytics(site).await;
 
-    // Unset: the manifest default, 90 days, so the 89th day back is the oldest kept.
+    // Unset: the manifest default, 90 days, so the 89th day back is the oldest kept (and
+    // compacted: it is past the 30 days of detail).
     seed_days(&site, &[90, 89]).await;
     feed(&site, vec![view(ago(0), "/")]).await;
-    assert_eq!(days(&site).await, [ago(89), ago(0)]);
+    assert_eq!(stored_days(&site).await, [ago(89), ago(0)]);
 
     // Not a number: 90 again.
     setting(&site, "retention_days", json!("many")).await;
     seed_days(&site, &[90]).await;
     feed(&site, vec![view(ago(0), "/")]).await;
-    assert_eq!(days(&site).await, [ago(89), ago(0)]);
+    assert_eq!(stored_days(&site).await, [ago(89), ago(0)]);
 
     // 5000 is 366: the 365th day back is kept, the 366th goes.
     setting(&site, "retention_days", json!(5000)).await;
     seed_days(&site, &[366, 365]).await;
     feed(&site, vec![view(ago(0), "/")]).await;
-    assert_eq!(days(&site).await, [ago(365), ago(89), ago(0)]);
+    assert_eq!(stored_days(&site).await, [ago(365), ago(89), ago(0)]);
+    assert_eq!(totals_days(&site).await, [ago(365), ago(89)]);
 
-    // 0 and negative are 1: only today stays.
+    // 0 and negative are 1: only today stays, full and compacted days alike.
     for v in [json!(0), json!(-7)] {
         setting(&site, "retention_days", v).await;
         seed_days(&site, &[89, 1]).await;
         feed(&site, vec![view(ago(0), "/")]).await;
-        assert_eq!(days(&site).await, [ago(0)]);
+        assert_eq!(stored_days(&site).await, [ago(0)]);
     }
     site
 }
 
-/// A prune deletes with what is left of the 100 operations of the call, and the next
-/// batches finish the job.
+/// The prune deletes with what the call's 100 operations leave, and the next batches
+/// finish the job.
 async fn prune_uses_the_rest_of_the_call_budget(site: Site) -> Site {
     let site = site_with_analytics(site).await;
     setting(&site, "retention_days", json!(5)).await;
-    let mut old = Vec::new();
-    for month in 1..=12 {
-        for d in 1..=28 {
-            old.push(format!("2020-{month:02}-{d:02}"));
-        }
-    }
-    old.truncate(130);
+    // 130 days long expired, oldest first.
+    let old: Vec<&str> = (0..130).map(|i| ago(1129 - i)).collect();
     for d in &old {
         kv_set(&site, &format!("day:{d}"), br#"{"v":1}"#).await;
     }
-    // Four operations go to counting (the day's blob in, the check that a missing blob is
-    // really missing, the blob out, the listing): 96 deletes of the 130 old days.
+    // Of the 100 operations: the listing of the full days, then deletes while more than 10
+    // are left (room for one compaction, 6, the listing of the compacted days, 1, and
+    // counting one day, 3: its blob in, the check that a missing blob is really missing,
+    // the blob out): 89 deletes. The listing and the counting take 4 of the 10.
     feed(&site, vec![view(ago(0), "/")]).await;
     let left = days(&site).await;
-    assert_eq!(left.len(), 130 - 96 + 1, "{left:?}");
+    assert_eq!(left.len(), 130 - 89 + 1, "{left:?}");
     assert!(left.contains(&ago(0).to_owned()));
     // The oldest go first.
-    assert_eq!(left[0], old[96]);
+    assert_eq!(left[0], old[89]);
 
     feed(&site, vec![view(ago(0), "/")]).await;
     assert_eq!(days(&site).await, [ago(0)]);
@@ -1200,16 +1247,43 @@ async fn the_largest_blob_after_truncation_fits_the_stats_page(site: Site) -> Si
     site
 }
 
-/// [`StoreHostServices`] whose `kv_get` of one key answers `None`, as the host does for a
-/// store read that failed (it cannot tell that from a missing key). Also used by the
-/// `contact-form` cases.
-pub(crate) struct FailingGet {
+/// [`StoreHostServices`] with faults: `kv_get` of the keys in `failing_get` answers `None`,
+/// as the host does for a store read that failed (it cannot tell that from a missing key),
+/// and with `quota` set, `kv_set` refuses a write that would take the plugin's stored bytes
+/// past that many, as the host does at its 10 MiB (the same store call, a smaller limit).
+/// Writes of a key starting with one of `failing_set` answer the host's "storage error".
+/// Also used by the `contact-form` cases.
+pub(crate) struct Flaky {
     pub(crate) inner: Arc<StoreHostServices>,
-    pub(crate) key: String,
+    pub(crate) failing_get: Vec<String>,
+    pub(crate) failing_set: Vec<String>,
+    pub(crate) quota: Option<(Arc<dyn Store>, u64)>,
+}
+
+impl Flaky {
+    /// Reads of `key` fail.
+    pub(crate) fn failing_get(inner: Arc<StoreHostServices>, key: &str) -> Self {
+        Self {
+            inner,
+            failing_get: vec![key.to_owned()],
+            failing_set: Vec::new(),
+            quota: None,
+        }
+    }
+
+    /// Writes past `bytes` in all are refused.
+    fn quota(site: &Site, bytes: u64) -> Self {
+        Self {
+            inner: site.services.clone(),
+            failing_get: Vec::new(),
+            failing_set: Vec::new(),
+            quota: Some((site.store.clone(), bytes)),
+        }
+    }
 }
 
 #[async_trait::async_trait]
-impl HostServices for FailingGet {
+impl HostServices for Flaky {
     async fn get_post(&self, id: &str, kind_ok: &KindOk) -> Option<Post> {
         self.inner.get_post(id, kind_ok).await
     }
@@ -1232,13 +1306,28 @@ impl HostServices for FailingGet {
         self.inner.option_get(key).await
     }
     async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
-        if key == self.key {
+        if self.failing_get.iter().any(|k| k == key) {
             return None;
         }
         self.inner.kv_get(plugin, key).await
     }
     async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
-        self.inner.kv_set(plugin, key, value).await
+        if self.failing_set.iter().any(|k| key.starts_with(k.as_str())) {
+            return Err("storage error".into());
+        }
+        let Some((store, bytes)) = &self.quota else {
+            return self.inner.kv_set(plugin, key, value).await;
+        };
+        match store
+            .read()
+            .plugin_kv()
+            .set_with_quota(plugin, key, &value, *bytes, 10_000)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("kv quota exceeded ({bytes} bytes, 10000 keys)")),
+            Err(_) => Err("storage error".into()),
+        }
     }
     async fn kv_delete(&self, plugin: &str, key: &str) {
         self.inner.kv_delete(plugin, key).await;
@@ -1254,6 +1343,14 @@ impl HostServices for FailingGet {
     }
 }
 
+/// A host of its own over `services`, with the plugin installed (default limits).
+fn host_over(services: Flaky) -> PluginHost {
+    let host = PluginHost::new(HostConfig::default(), Arc::new(services)).unwrap();
+    let manifest = Manifest::parse(&plugin_manifest(PLUGIN)).unwrap();
+    host.install(manifest, &plugin_wasm(PLUGIN)).unwrap();
+    host
+}
+
 /// When the read of a day answers `None` but the key is there (the read failed), the day
 /// is left alone: writing a fresh blob would replace a whole day's counts with one batch.
 async fn a_failed_read_never_overwrites_a_stored_day(site: Site) -> Site {
@@ -1261,13 +1358,10 @@ async fn a_failed_read_never_overwrites_a_stored_day(site: Site) -> Site {
     let stored = br#"{"v":1,"views":5}"#;
     kv_set(&site, &format!("day:{}", d1()), stored).await;
 
-    let flaky = Arc::new(FailingGet {
-        inner: site.services.clone(),
-        key: format!("day:{}", d1()),
-    });
-    let host = PluginHost::new(HostConfig::default(), flaky).unwrap();
-    let manifest = Manifest::parse(&plugin_manifest(PLUGIN)).unwrap();
-    host.install(manifest, &plugin_wasm(PLUGIN)).unwrap();
+    let host = host_over(Flaky::failing_get(
+        site.services.clone(),
+        &format!("day:{}", d1()),
+    ));
     host.dispatch_action(
         PLUGIN,
         "request.served",
@@ -1395,5 +1489,339 @@ async fn a_batch_over_three_days_with_a_maximal_oldest(site: Site) -> Site {
         day(&site, ago(4)).await.is_none(),
         "a fourth day is dropped"
     );
+    site
+}
+
+// ---- X7: compaction, prune before count, the quota --------------------------------------
+
+/// The plugin's value bytes in the store.
+async fn usage(site: &Site) -> u64 {
+    site.store.read().plugin_kv().usage(PLUGIN).await.unwrap().0
+}
+
+/// A day past `detail_days` (default 30) is compacted: its counts move to `totals:<day>`
+/// (no `paths`, no `referrers`), the full blob goes. The last day of the window keeps its
+/// lists. The page sums compacted days into the totals and the chart, lists none of them,
+/// and says why.
+async fn an_old_day_is_compacted_to_its_totals(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    for n in [29, 30, 45] {
+        kv_set(&site, &format!("day:{}", ago(n)), &maximal_blob()).await;
+    }
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(29), ago(0)]);
+    assert_eq!(totals_days(&site).await, [ago(45), ago(30)]);
+    for n in [30, 45] {
+        let blob = kv_get(&site, &format!("totals:{}", ago(n))).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&blob).unwrap(),
+            json!({"v": 1, "views": 1500, "bots": 10, "other": 5,
+                   "status": {"2xx": 1600, "4xx": 7}}),
+            "{}",
+            ago(n)
+        );
+        assert!(blob.len() < 256, "{}", blob.len());
+    }
+    assert_eq!(
+        day(&site, ago(29)).await.unwrap()["paths"]
+            .as_object()
+            .unwrap()
+            .len(),
+        500
+    );
+
+    let (status, html) = stats(&site, &[("days", "90")]).await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 3 * 1500 + 1);
+    assert_eq!(stat(&html, "status-4xx"), 3 * 7);
+    assert!(
+        html.contains("cover the newest 2 of the 4 days with data."),
+        "{html}"
+    );
+    assert!(
+        html.contains("2 older days keep only their totals"),
+        "{html}"
+    );
+    assert!(!html.contains("Reading more would exceed"), "{html}");
+    site
+}
+
+/// `detail_days` is clamped to 1..=60 (30 when unset or not a number) and never exceeds
+/// `retention_days`. A backlog (a lowered setting) is compacted at most eight days a
+/// batch, oldest first.
+async fn detail_days_follows_the_setting_and_a_backlog_clears(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    seed_days(&site, &(1..=12).collect::<Vec<_>>()).await;
+    // 2 days of detail: days 2 to 12 (eleven) are due; the oldest eight go in one batch.
+    setting(&site, "detail_days", json!(2)).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    let want: Vec<&str> = (5..=12).rev().map(ago).collect();
+    assert_eq!(totals_days(&site).await, want);
+    assert_eq!(days(&site).await, [ago(4), ago(3), ago(2), ago(1), ago(0)]);
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(1), ago(0)]);
+    assert_eq!(totals_days(&site).await.len(), 11);
+
+    // 0 is 1: only today keeps its lists.
+    setting(&site, "detail_days", json!(0)).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0)]);
+
+    // 500 is 60: day 59 keeps its lists, days 61 and 70 are compacted.
+    seed_days(&site, &[70, 61, 59, 4]).await;
+    setting(&site, "detail_days", json!(500)).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(59), ago(4), ago(0)]);
+    assert!(totals_days(&site).await.contains(&ago(70).to_owned()));
+    // But never more than the retention: with 5 days kept, everything older goes,
+    // compacted or not, and the 5 days keep their lists.
+    setting(&site, "retention_days", json!(5)).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(4), ago(0)]);
+    assert_eq!(totals_days(&site).await, [ago(4), ago(3), ago(2), ago(1)]);
+
+    // Not a number: 30 again.
+    setting(&site, "retention_days", json!(90)).await;
+    setting(&site, "detail_days", json!("lots")).await;
+    seed_days(&site, &[31, 29]).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert!(totals_days(&site).await.contains(&ago(31).to_owned()));
+    assert!(days(&site).await.contains(&ago(29).to_owned()));
+    site
+}
+
+/// An event for a day already compacted (a node whose clock is behind, a short detail
+/// window at midnight) is counted into a full blob of that day, and the next batch adds
+/// its counts to the compacted ones.
+async fn a_straggler_for_a_compacted_day_is_merged_into_it(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    setting(&site, "detail_days", json!(1)).await;
+    seed_days(&site, &[2]).await;
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(totals(&site, ago(2)).await.unwrap()["views"], 5);
+    // The straggler: counted into `day:` (after this batch's compaction).
+    feed(&site, vec![view(ago(2), "/late/"), view(ago(0), "/")]).await;
+    assert_eq!(day(&site, ago(2)).await.unwrap()["views"], 1);
+    // The next batch merges it.
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert!(day(&site, ago(2)).await.is_none());
+    assert_eq!(totals(&site, ago(2)).await.unwrap()["views"], 6);
+    site
+}
+
+/// The prune runs before counting: a store whose quota is full of expired days takes the
+/// batch's write, because the expired days were deleted first.
+async fn the_prune_runs_before_counting(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    setting(&site, "retention_days", json!(10)).await;
+    for n in [20, 21, 22] {
+        kv_set(&site, &format!("day:{}", ago(n)), &maximal_blob()).await;
+    }
+    kv_set(&site, &format!("day:{}", ago(1)), STUB).await;
+    // Room for nothing new.
+    let host = host_over(Flaky::quota(&site, usage(&site).await));
+    host.dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap();
+    assert_eq!(days(&site).await, [ago(1), ago(0)]);
+    assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 1);
+    site
+}
+
+/// A write refused on the quota fails the batch (the job is retried), but the prune has
+/// run: the expired day is gone. Lowering the retention frees enough for the next batch.
+async fn a_refused_write_still_prunes_and_the_next_batch_succeeds(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    setting(&site, "retention_days", json!(10)).await;
+    kv_set(&site, &format!("day:{}", ago(15)), STUB).await;
+    for n in 1..=3 {
+        kv_set(&site, &format!("day:{}", ago(n)), &maximal_blob()).await;
+    }
+    let host = host_over(Flaky::quota(&site, usage(&site).await));
+    let err = host
+        .dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("quota"), "{err:?}");
+    assert_eq!(
+        days(&site).await,
+        [ago(3), ago(2), ago(1)],
+        "pruned, not counted"
+    );
+
+    // Two days kept: days 2 and 3 go before the count, which then fits.
+    setting(&site, "retention_days", json!(2)).await;
+    host.dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap();
+    assert_eq!(days(&site).await, [ago(1), ago(0)]);
+    assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 1);
+    assert!(host.is_enabled(PLUGIN));
+    site
+}
+
+/// With the store exactly full, a compaction's small write is refused at first: the
+/// full blob is deleted to make room and the totals written again, so the day keeps its
+/// counts and the batch's own write fits after it.
+async fn compaction_makes_room_when_the_store_is_full(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", ago(40)), &maximal_blob()).await;
+    kv_set(&site, &format!("day:{}", ago(1)), &maximal_blob()).await;
+    let host = host_over(Flaky::quota(&site, usage(&site).await));
+    host.dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap();
+    assert_eq!(days(&site).await, [ago(1), ago(0)]);
+    assert_eq!(totals(&site, ago(40)).await.unwrap()["views"], 1500);
+    assert_eq!(day(&site, ago(0)).await.unwrap()["views"], 1);
+    site
+}
+
+/// A compaction write refused for a reason other than the quota (a store error, which may
+/// pass) keeps the full blob for a later batch rather than deleting it to make room.
+async fn a_compaction_refused_for_another_reason_keeps_the_full_day(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    kv_set(&site, &format!("day:{}", ago(40)), &maximal_blob()).await;
+    let host = host_over(Flaky {
+        inner: site.services.clone(),
+        failing_get: Vec::new(),
+        failing_set: vec!["totals:".to_owned()],
+        quota: None,
+    });
+    host.dispatch_action(PLUGIN, "request.served", payload(vec![view(ago(0), "/")]))
+        .await
+        .unwrap();
+    assert_eq!(days(&site).await, [ago(40), ago(0)]);
+    assert!(totals(&site, ago(40)).await.is_none());
+
+    // With the store working again, the next batch compacts it.
+    feed(&site, vec![view(ago(0), "/")]).await;
+    assert_eq!(days(&site).await, [ago(0)]);
+    assert_eq!(totals(&site, ago(40)).await.unwrap()["views"], 1500);
+    site
+}
+
+/// A-1: the page lists which days have a blob and reads only those; a listed day whose
+/// read answers `None` failed to read, and the page says so instead of counting it as
+/// empty. With every stored day unreadable it says the statistics could not be read.
+async fn the_page_says_which_days_could_not_be_read(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    feed(
+        &site,
+        vec![view(d1(), "/"), view(d2(), "/"), view(d2(), "/")],
+    )
+    .await;
+    let host = host_over(Flaky::failing_get(
+        site.services.clone(),
+        &format!("day:{}", d1()),
+    ));
+    let page = |days: &'static str| {
+        let host = &host;
+        async move {
+            let res = host
+                .handle_route(PLUGIN, request(Some("v"), &[("days", days)]))
+                .await
+                .unwrap();
+            (res.status, String::from_utf8(res.body).unwrap())
+        }
+    };
+    let (status, html) = page("7").await;
+    assert_eq!(status, 200);
+    assert_eq!(stat(&html, "views"), 2);
+    assert!(
+        html.contains("1 day could not be read right now and is left out"),
+        "{html}"
+    );
+
+    // Every stored day unreadable.
+    let host = host_over(Flaky {
+        inner: site.services.clone(),
+        failing_get: vec![format!("day:{}", d1()), format!("day:{}", d2())],
+        failing_set: Vec::new(),
+        quota: None,
+    });
+    let res = host
+        .handle_route(PLUGIN, request(Some("v"), &[("days", "7")]))
+        .await
+        .unwrap();
+    let html = String::from_utf8(res.body).unwrap();
+    assert!(html.contains("could not be read right now"), "{html}");
+    assert!(!html.contains("No data yet"), "{html}");
+    assert!(!html.contains("data-stat"), "{html}");
+
+    // The plugin's own host, reading normally: no note.
+    let (_, html) = stats(&site, &[("days", "7")]).await;
+    assert_eq!(stat(&html, "views"), 3);
+    assert!(!html.contains("data-note=\"unread\""), "{html}");
+    site
+}
+
+/// A-6: core sends paths percent-encoded; the 200-byte cut never leaves half an escape at
+/// the end of a key, and the page shows a path decoded when that is readable text (still
+/// escaped), and as stored when it is not.
+async fn encoded_paths_are_cut_whole_and_shown_decoded(site: Site) -> Site {
+    let site = viewer_site(site).await;
+    // 4 + 6 x 32 = 196 bytes, then `%D0%` up to byte 200: cut back to `%D0`.
+    feed(&site, vec![long_view(d2(), 7)]).await;
+    feed(
+        &site,
+        vec![
+            core_event("/café/", 200),
+            core_event("/a<b>/", 200),
+            core_event("/x/%FF/", 200),
+        ],
+    )
+    .await;
+    let blob = day(&site, d2()).await.unwrap();
+    let key = blob["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(key.len(), 199, "{key}");
+    assert!(key.ends_with("%D0"), "{key}");
+    let today = day(&site, ago(0)).await.unwrap();
+    let paths = today["paths"].as_object().unwrap();
+    assert!(paths.contains_key("/caf%C3%A9/"), "{paths:?}");
+    assert!(paths.contains_key("/a%3Cb%3E/"), "{paths:?}");
+
+    let (_, html) = stats(&site, &[("days", "7")]).await;
+    assert!(html.contains("<code>/café/</code>"), "{html}");
+    assert!(html.contains("<code>/a&lt;b&gt;/</code>"), "{html}");
+    assert!(!html.contains("<b>"), "{html}");
+    // Not UTF-8 once decoded: shown as stored.
+    assert!(html.contains("<code>/x/%FF/</code>"), "{html}");
+    site
+}
+
+/// The dearest batch with the most maintenance: 30 expired full days to delete, the eight
+/// compactions of maximal blobs a batch may do, 100 expired compacted days to list (and as
+/// many deleted as operations allow), then 1000 long views over three days whose oldest
+/// holds a maximal blob. At the default fuel (`ANALYTICS_FUEL` brackets it).
+async fn the_worst_batch_with_maintenance_fits_the_default_fuel(site: Site) -> Site {
+    let site = site_with_analytics(site).await;
+    for n in 0..30 {
+        kv_set(&site, &format!("day:{}", ago(100 + n)), STUB).await;
+    }
+    for n in 31..=38 {
+        kv_set(&site, &format!("day:{}", ago(n)), &maximal_blob()).await;
+    }
+    for n in 0..100 {
+        kv_set(&site, &format!("totals:{}", ago(200 + n)), STUB).await;
+    }
+    kv_set(&site, &format!("day:{}", ago(3)), &maximal_blob()).await;
+    let events = (0..1000)
+        .map(|i| long_view(ago([1, 2, 3, 4][i % 4]), i))
+        .collect();
+    feed(&site, events).await;
+    assert_eq!(day(&site, ago(3)).await.unwrap()["views"], 1500 + 250);
+    assert_eq!(day(&site, ago(1)).await.unwrap()["views"], 250);
+    let compacted = totals_days(&site).await;
+    for n in 31..=38 {
+        assert!(compacted.contains(&ago(n).to_owned()), "{}", ago(n));
+    }
+    assert!(days(&site).await.iter().all(|d| d.as_str() > ago(39)));
     site
 }

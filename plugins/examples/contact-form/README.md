@@ -25,8 +25,22 @@ cp plugins/examples/contact-form/ferrite-plugin.toml contact-form-plugin/
 cp plugins/target/wasm32-wasip2/release/contact_form.wasm contact-form-plugin/
 ```
 
-With the release asset, unpack it (`tar xzf ferrite-plugins-<version>.tar.gz`) and use its
-`contact-form/` folder where the commands below say `contact-form-plugin`. Then, with `serve`
+With the release asset, check it before you unpack it, as for the binary (design 09 §1): the
+release's `SHA256SUMS` lists the asset and is signed with the release key
+(`crates/ferrite/release.pub` at that tag).
+
+```sh
+VERSION=X.Y.Z
+BASE=https://github.com/softberries/ferritecms/releases/download/v$VERSION
+curl -LO $BASE/ferrite-plugins-$VERSION.tar.gz
+curl -LO $BASE/SHA256SUMS
+curl -LO $BASE/SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -p release.pub
+sha256sum --check --ignore-missing SHA256SUMS   # macOS: shasum -a 256 --check --ignore-missing SHA256SUMS
+tar xzf ferrite-plugins-$VERSION.tar.gz
+```
+
+Then use its `contact-form/` folder where the commands below say `contact-form-plugin`. With `serve`
 stopped if the site uses SQLite:
 
 ```sh
@@ -46,8 +60,9 @@ messages are stored, and each post logs that the mail was not sent.
 
 The report lists these, and the plugin asks for nothing else:
 
-- `routes` (high, as every route is): answer the three routes above. `/` and `/inbox` take the
-  default limit of 10 requests a minute per visitor; `/submit` takes **10 posts an hour per
+- `routes` (high, as every route is): answer the three routes above. `/` takes the default
+  limit of 10 requests a minute per visitor, and `/inbox` 30 a minute (as the analytics stats
+  page does: a viewer pages through up to ten pages); `/submit` takes **10 posts an hour per
   visitor** and accepts posts from any origin (`cross_origin`, see below).
 - `kv` (low): keep the inbox in the plugin's own key/value store.
 - `mail = "admins"` (high): mail the site's active admins. The plugin never sees their
@@ -130,8 +145,8 @@ Unicode line and paragraph separators become a space, and Unicode format charact
 Cf: bidirectional overrides such as U+202E, the zero-width space, the soft hyphen) are
 removed, so a name or subject cannot be made to display as something else. The zero-width
 non-joiner and joiner (U+200C, U+200D) stay: Persian and Indic names and emoji sequences need
-them, and they cannot reorder text. Each field is trimmed. The message keeps its line breaks, as LF (CR LF and a lone CR become LF), its tabs and
-its format characters (it is only ever shown escaped), and loses any other control character.
+them, and they cannot reorder text. Each field is trimmed. The message keeps its line breaks,
+as LF (CR LF and a lone CR become LF), its tabs and its format characters (it is only ever shown escaped), and loses any other control character.
 Repeated keys count their first value; unknown fields are ignored.
 
 ## The mail
@@ -236,6 +251,11 @@ line, then one message per line, newest first:
   subject with any control character as a second check.
 - There is no CAPTCHA and no content filter: a person, or a bot that leaves the honeypot alone,
   gets through.
+- **Write amplification.** Every stored message rewrites the whole inbox blob, up to 900 KiB,
+  in the site's database. With the limit counted per address, posts from many addresses can
+  each cause such a write: the inbox's size stays capped, but the database writes add up (on
+  SQLite, a busy WAL; on Postgres, table bloat until vacuum). The one-blob layout keeps the
+  fuel of a submit low (ruling X6); turn `store_messages` off if the mail alone is enough.
 
 ## Fuel
 

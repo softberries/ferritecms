@@ -4,15 +4,17 @@
 //! and wires them to hooks with [`export_plugin!`]; hook priorities live in the
 //! plugin's `ferrite-plugin.toml`, not in code.
 
+// The helper modules are used by path (`settings::text`, `viewers::allow`, …); the root
+// re-exports only the WIT types and the core handles.
 pub mod form;
 pub mod html;
+mod json;
 pub mod mail;
 pub mod options;
 pub mod route;
-mod viewers;
-
-pub use form::{FormError, parse_urlencoded};
-pub use viewers::viewers_allow;
+pub mod settings;
+pub mod time;
+pub mod viewers;
 
 pub mod bindings {
     //! Raw `wit-bindgen` output for the `ferrite:plugin/plugin@0.1.0` world.
@@ -26,7 +28,7 @@ pub mod bindings {
 
 use bindings::ferrite::plugin::types as wit;
 use bindings::ferrite::plugin::{
-    content, http as wit_http, kv as wit_kv, log as wit_log, settings,
+    content, http as wit_http, kv as wit_kv, log as wit_log, settings as wit_settings,
 };
 
 pub use bindings::exports::ferrite::plugin::guest::Guest;
@@ -86,9 +88,10 @@ impl Ctx {
         Http(())
     }
 
-    /// One of this plugin's own settings, as JSON text.
+    /// One of this plugin's own settings, as JSON text ([`settings`] decodes the scalar
+    /// types).
     pub fn setting(&self, key: &str) -> Option<String> {
-        settings::get(key)
+        wit_settings::get(key)
     }
 }
 

@@ -3,7 +3,7 @@
 //! (`access(2)`); they create, change and delete nothing (P49).
 
 use std::fs::{File, Metadata, TryLockError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ferrite_config::{ClusterMode, Config, DbKind};
 
@@ -185,9 +185,11 @@ pub(super) fn config_file(data: &Path) -> Finding {
     }
 }
 
-/// `fs.secret_key`: with `auth.secret_key` configured there is no key file to check; solo
+/// `fs.secret_key`: with `auth.secret_key` configured there is no key file to check;
 /// without it, `secret.key` must exist and be well formed (error) and must have no group
 /// or other bits (warning). Reads the file; never creates the key `serve` would create.
+/// (Cluster mode without `auth.secret_key` does not get here: the configuration does not
+/// load, see `ferrite_config::load`.)
 pub(super) fn secret_key(data: &Path, config: Option<&Config>) -> Finding {
     const ID: &str = "fs.secret_key";
     let Some(config) = config else {
@@ -197,12 +199,6 @@ pub(super) fn secret_key(data: &Path, config: Option<&Config>) -> Finding {
         return Finding::ok(
             ID,
             "the key comes from the configuration (auth.secret_key[_file]); secret.key is not used",
-        );
-    }
-    if config.effective_cluster_mode() == ClusterMode::Cluster {
-        return Finding::error(
-            ID,
-            "cluster mode needs auth.secret_key (every node must use the same key)",
         );
     }
     let path = data.join(SECRET_KEY_FILE);
@@ -248,8 +244,8 @@ pub(super) fn database_files(data: &Path, config: Option<&Config>) -> Finding {
     let dir_owner = std::fs::metadata(data).ok().as_ref().and_then(owner);
     let candidates = [
         path.clone(),
-        suffixed(&path, "-wal"),
-        suffixed(&path, "-shm"),
+        crate::open::sqlite_side_file(&path, "-wal"),
+        crate::open::sqlite_side_file(&path, "-shm"),
         data.join(LOCK_FILE),
     ];
     let mut present = Vec::new();
@@ -297,13 +293,6 @@ pub(super) fn database_files(data: &Path, config: Option<&Config>) -> Finding {
         ID,
         format!("{} are readable and writable", present.join(", ")),
     )
-}
-
-/// `<path>-wal` for `<path>`.
-fn suffixed(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
 }
 
 /// `fs.backups_dir`: SQLite's pre-migration snapshots go to `<data>/backups/`; if it
@@ -407,10 +396,12 @@ pub(super) fn themes_dir(data: &Path, config: Option<&Config>) -> Finding {
 // ---- db.lock_state ----
 
 /// Whether another process holds `<data>/ferrite.lock`.
-enum Lock {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lock {
     /// Nobody holds it (or there is no lock file yet).
     Free,
-    /// A running node holds it.
+    /// A running node holds it, or another command that opens the database (`backup`,
+    /// `migrate`, `user`, …).
     Held,
     /// The file could not be opened or locked.
     Unknown(std::io::ErrorKind),
@@ -434,37 +425,35 @@ fn lock(data: &Path) -> Lock {
     }
 }
 
-/// `db.lock_state` (P50): whether a node is running on this data folder, and `true` when
-/// the lock is held (`net.listen` then probes the node). Only SQLite has a data-folder
-/// lock.
-pub(super) fn lock_state(data: &Path, config: Option<&Config>) -> (Finding, bool) {
+/// `db.lock_state` (P50): whether a node is running on this data folder, and the lock's
+/// state (`net.listen` probes the node when it is held). `None` without a data-folder lock
+/// to try: the configuration did not load, or Postgres (only SQLite has one).
+pub(super) fn lock_state(data: &Path, config: Option<&Config>) -> (Finding, Option<Lock>) {
     const ID: &str = "db.lock_state";
     let Some(config) = config else {
-        return (Finding::skip(ID, NO_CONFIG), false);
+        return (Finding::skip(ID, NO_CONFIG), None);
     };
     if !matches!(config.database_kind(), DbKind::Sqlite { .. }) {
         return (
             Finding::info(ID, "Postgres: there is no data-folder lock"),
-            false,
+            None,
         );
     }
-    match lock(data) {
-        Lock::Free => (
-            Finding::info(ID, "no node is running on this data folder"),
-            false,
-        ),
-        Lock::Held => (
-            Finding::info(
-                ID,
-                format!("a node is running (it holds {LOCK_FILE} in the data folder)"),
+    let state = lock(data);
+    let finding = match state {
+        Lock::Free => Finding::info(ID, "no node is running on this data folder"),
+        Lock::Held => Finding::info(
+            ID,
+            format!(
+                "{LOCK_FILE} is held: a node is running on this data folder, or another \
+                 command that opens the database (`backup`, `migrate`, `user`, …) is"
             ),
-            true,
         ),
-        Lock::Unknown(kind) => (
-            Finding::info(ID, format!("cannot tell whether a node is running: {kind}")),
-            false,
-        ),
-    }
+        Lock::Unknown(kind) => {
+            Finding::info(ID, format!("cannot tell whether a node is running: {kind}"))
+        }
+    };
+    (finding, Some(state))
 }
 
 // ---- upgrade.record ----
