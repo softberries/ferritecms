@@ -3,18 +3,52 @@
 ## 1. Upgrade (solo)
 
 ```
-ferrite self-update [--version X] [--channel stable]
+ferrite self-update [--version X] [--check] [--yes] [--data DIR]
 ```
 
-1. Download release for this target + signature; verify (minisign/ed25519 public key
-   embedded in the binary).
-2. Run the **new** binary's `ferrite migrate status --data …` to show what will happen.
-3. Copy current binary to `ferrite.prev` (alongside, same dir).
-4. Atomically replace the binary.
-5. Restart (systemd: `Restart=always` + exit with a dedicated code, or print the
-   command when not under a supervisor).
-6. New binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
-   writes `data/upgrade.json` (`{from, to, schema_from, schema_to, snapshot, at}`).
+As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
+
+1. **Lookup.** The newest stable release (`GET https://api.github.com/repos/softberries/ferritecms/releases/latest`,
+   which skips drafts and prereleases; `--channel stable` is the only channel, so there is no
+   flag for it), or `releases/tags/vX` for `--version X`. A `--version` that is older than or
+   equal to this binary is refused before any download (exit 1, "use `ferrite rollback`").
+   When the newest release is not newer, it prints `… is up to date` and exits 0.
+2. **Download and verify.** The release must carry this target's asset
+   `ferrite-<X.Y.Z>-<target>.tar.gz` (the target is the triple the binary was built for,
+   `ferrite::binary_target()`), `SHA256SUMS` and `SHA256SUMS.minisig`; a missing one is
+   refused. The minisign signature over `SHA256SUMS` is checked first with the public key
+   embedded at build time from `crates/ferrite/release.pub` (pure-Rust `minisign-verify`;
+   only prehashed signatures, minisign's default), then the asset's sha256 against the line
+   `SHA256SUMS` lists for it. The repository's `release.pub` is a comment-only placeholder:
+   a binary built from it refuses with "this build has no release key". Downloads are
+   HTTPS-only (redirects included) and capped (1 MiB for the two small files, 1 GiB for the
+   asset).
+3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
+   it is also the writability check: an unwritable folder is refused with the hint to run as
+   the binary's owner, outside the systemd sandbox). Only the archive's `ferrite` file (top
+   level or one folder down) is extracted, mode 0755. The new binary's `--version` must
+   report the release's version. With `--data DIR` its `migrate status --data DIR` runs too
+   and its output is shown: exit 0 or 2 (pending migrations) go on, 3 (the schema is
+   incompatible with the new binary) refuses, any other result is a warning (with SQLite the
+   status cannot be read while `serve` holds the data folder lock).
+4. **Confirm.** `Replace … ? [y/N]` on a terminal; without one, `--yes` is required.
+5. **Swap.** The running binary (symlinks resolved) is copied to `<name>.prev` beside it
+   (`ferrite.prev`, replacing an older one), then the new binary, given the running binary's
+   permission bits, is renamed over it. Both steps go through temp files in the same folder
+   and a `rename`, so the binary's path never goes missing or holds a partial file
+   (`update::swap::install_new`; `rollback` uses `update::swap::swap_with_prev`). Every
+   refusal before this step leaves the binary and its folder as they were.
+6. **No restart.** It prints the restart command (`systemctl restart ferrite`, or stop and
+   start `ferrite serve`); `serve` never updates itself, so there is no dedicated exit code
+   (P31 corrects the earlier plan here).
+7. The new binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
+   writes `data/upgrade.json` (`{v, from, to, schema_from, schema_to, snapshot, at}`, P30).
+
+`--check` only reports: exit 2 when a newer release exists (with a note when it has no asset
+for this target), 0 when not; it needs no release key. Exit codes: 0 updated or up to date,
+2 an update is available (`--check`), 1 any error. It works the same with Postgres; a cluster
+deploys images instead (§3). The release key is rotated by a release signed with the old key
+that carries the new `release.pub`.
 
 ### Version skipping
 
@@ -526,7 +560,7 @@ of truth for real monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1 to M4-1: `crates/ferrite`)
+### Implemented (M1c-1 to M4-2: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -561,7 +595,21 @@ ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]           
 ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
+ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
 ```
+
+**`ferrite self-update`** (`crates/ferrite/src/update/`; §1): replaces the running binary
+with a newer signed release of this target, keeping the old one as `ferrite.prev`, and
+prints the restart command (it restarts nothing). `--version X` picks a release (older or
+equal is refused: use `rollback`); `--check` only reports; `--yes` skips the confirmation
+(required without a terminal); `--data DIR` also shows the new binary's `migrate status`.
+Exit 0 updated or up to date, 2 a newer release exists (`--check`), 1 on any error (a bad
+signature or sha256, no asset for this target, a new binary that does not report the
+release's version, an unwritable binary folder, a build without a release key); every
+refusal leaves the binary untouched. Test seams (`test-seams` builds only): a hidden
+`--base-url` replaces the GitHub API root (plain HTTP allowed), a hidden
+`--test-current-exe PATH` the running binary's path, and `FERRITE_TEST_RELEASE_PUBKEY` the
+embedded key.
 
 **`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
 WXR file as the active admin `--as` names (default: the first active admin). Writes
@@ -947,6 +995,6 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
-ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
+ferrite rollback [--schema] [--restore-snapshot]                # M4-2
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```
