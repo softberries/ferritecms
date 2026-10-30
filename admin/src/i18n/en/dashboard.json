@@ -134,5 +134,52 @@
       "capped_one": "Shows the first {{count}} enabled plugin.",
       "capped_other": "Shows the first {{count}} enabled plugins."
     }
+  },
+  "metrics": {
+    "title": "Site traffic",
+    "description": "Every node's figures, summed, recorded once a minute",
+    "range": "Time range",
+    "ranges": {
+      "24h": "24 hours",
+      "7d": "7 days"
+    },
+    "span": {
+      "24h": "the last 24 hours",
+      "7d": "the last 7 days"
+    },
+    "allNodes": "All nodes",
+    "stale": "Couldn't refresh. These are the figures from {{time}}."
+  },
+  "traffic": {
+    "title": "Traffic",
+    "description": "Page views and requests per hour, {{span}}",
+    "totals": "Totals",
+    "pageViews": "Page views",
+    "requests": "Requests",
+    "errors": "5xx errors",
+    "errorRate": "{{rate}} of requests",
+    "errorsChart": "5xx errors per hour",
+    "noErrors": "No 5xx errors in {{span}}.",
+    "emptyTitle": "No traffic in {{span}}",
+    "emptyBody": "Each node records its requests once a minute; they show up here shortly after the first visits.",
+    "tableCaptionHours": "Page views, requests and 5xx errors per hour, {{span}}",
+    "tableCaptionDays": "Page views, requests and 5xx errors per day, {{span}}",
+    "hour": "Hour",
+    "day": "Day"
+  },
+  "performance": {
+    "title": "Performance",
+    "description": "Page cache and page response times, {{span}}",
+    "ratio": "Cache hit ratio",
+    "ratioCaption": "{{hits}} of {{lookups}} lookups",
+    "noLookups": "No page cache lookups in {{span}}.",
+    "p95": "Page p95",
+    "p95Caption": "95th percentile of the slowest hour",
+    "noPages": "No page responses in {{span}}.",
+    "le_ms": "≤ {{value}} ms",
+    "le_s": "≤ {{value}} s",
+    "over_s": "> {{value}} s",
+    "emptyTitle": "No performance data in {{span}}",
+    "emptyBody": "The cache hit ratio and page response times show up here once pages are served."
   }
 }

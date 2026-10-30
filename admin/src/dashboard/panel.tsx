@@ -3,9 +3,12 @@
 // down (07 §3; the rest of the dashboard keeps working).
 
 import { cn } from "cn";
+import { CircleAlertIcon } from "lucide-react";
 import { useId, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/kit/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { uiLocale } from "@/lib/locale";
 
 export interface PanelProps {
   title: string;
@@ -72,6 +75,21 @@ export function ScopeBadge({ children }: { children: ReactNode }) {
 /** A panel's failed load, sized for a card (the page around it keeps working). */
 export function PanelError({ error, retry }: { error: unknown; retry: () => void }) {
   return <ErrorState error={error} retry={retry} className="flex-1 border-dashed py-8" />;
+}
+
+/**
+ * A refresh failed but earlier figures are still shown: says from when (a polling card
+ * keeps its chart rather than turning into an error every minute).
+ */
+export function StaleNote({ at }: { at: number }) {
+  const { t } = useTranslation("dashboard");
+  const time = new Intl.DateTimeFormat(uiLocale(), { hour: "numeric", minute: "2-digit" });
+  return (
+    <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+      <CircleAlertIcon aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+      {t("metrics.stale", { time: time.format(new Date(at)) })}
+    </p>
+  );
 }
 
 /** Skeleton rows shaped like a list panel. */
