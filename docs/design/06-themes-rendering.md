@@ -437,7 +437,7 @@ The block renderer (`crates/ferrite-core/src/blocks/anchor.rs`) gives every `hea
 `id` by GitHub's rule, so links written for GitHub (`#install-the-binary`) keep working
 after an import:
 
-1. take the heading's text (all text descendants, marks ignored) and lowercase it
+1. take the heading's text (all text descendants, marks ignored, a line break read as a space, trimmed at both ends) and lowercase it
    (Unicode `to_lowercase`);
 2. keep alphanumeric characters (Unicode), `-`, `_` and the space, and drop the rest;
 3. turn each space into `-`; runs are not collapsed (`"a  b"` is `a--b`).

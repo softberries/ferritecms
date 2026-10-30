@@ -1,5 +1,5 @@
 use super::anchor::{Anchors, TocEntry};
-use super::text::collect_text;
+use super::text::{collect_text, heading_text};
 use super::url::{ImageSrc, embed_id, image_src, safe_href};
 use super::{InlineImage, MAX_DEPTH, RenderCtx};
 use ferrite_domain::html::{
@@ -100,8 +100,7 @@ fn render_object(
             .and_then(Value::as_u64)
         {
             Some(l @ 1..=6) => {
-                let mut text = String::new();
-                collect_text(node, &mut text);
+                let text = heading_text(node);
                 let id = walk.anchors.id(&text);
                 let attrs = format!(" id=\"{}\"", encode_double_quoted_attribute(&id));
                 // `l` is 1..=6, so the cast cannot truncate.
@@ -422,6 +421,20 @@ mod tests {
             entries,
             vec![entry(2, "install-the-binary", "Install the binary")]
         );
+    }
+
+    #[test]
+    fn heading_text_is_trimmed_and_breaks_are_spaces() {
+        let d = doc(vec![
+            json!({"type":"heading","attrs":{"level":2},"content":[t("Setup ")]}),
+            json!({"type":"heading","attrs":{"level":2},"content":[
+                t("a"), {"type":"hardBreak"}, t("b")]}),
+        ]);
+        let (html, entries) = toc(&d);
+        assert!(html.contains(r#"<h2 id="setup">"#), "{html}");
+        assert!(html.contains(r#"<h2 id="a-b">"#), "{html}");
+        assert_eq!(entries[0].text, "Setup");
+        assert_eq!(entries[1].text, "a b");
     }
 
     #[test]
