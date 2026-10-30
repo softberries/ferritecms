@@ -1,0 +1,4 @@
+# FerriteCMS release public key (minisign), embedded by `ferrite self-update` (M4-2 P26).
+# This is a placeholder and holds no key: a binary built from it refuses to self-update.
+# Before the first release, replace these lines with the two lines of the minisign public
+# key file (`untrusted comment: …` and the base64 key); see docs/design/09-operations.md §1.

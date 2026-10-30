@@ -14,8 +14,8 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
-    check_lock_name,
+    Backend, Channel, LockGuard, MigrationStatus, PoolStats, Repos, Store, StoreError,
+    Subscription, Tx, check_lock_name,
 };
 use sqlx::{PgPool, postgres::PgConnectOptions};
 
@@ -44,6 +44,14 @@ pub struct PgStore {
 impl Store for PgStore {
     fn backend(&self) -> Backend {
         Backend::Postgres
+    }
+
+    fn pool_stats(&self) -> PoolStats {
+        let idle = self.pool.num_idle() as u64;
+        PoolStats {
+            idle,
+            used: u64::from(self.pool.size()).saturating_sub(idle),
+        }
     }
 
     fn read(&self) -> &dyn Repos {
@@ -98,7 +106,10 @@ impl Store for PgStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 

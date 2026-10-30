@@ -488,7 +488,7 @@ pub async fn media_variants_backfill(db: &TestDb) {
             .any(|o| o.contains("media_variants"))
     );
     assert_eq!(
-        store.migrate_up(None).await.unwrap(),
+        store.migrate_up(None).await.unwrap().applied,
         vec![3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     let repo = store.read().media();

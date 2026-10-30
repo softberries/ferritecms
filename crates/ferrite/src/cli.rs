@@ -7,7 +7,7 @@ use crate::config_cmd::ConfigCommand;
 use crate::ext_cmd::{PluginCommand, ThemeCommand};
 use crate::{
     backup, config_cmd, export_cmd, ext_cmd, healthcheck, import_cmd, init, media_cmd, migrate,
-    seed, serve, user_cmd,
+    seed, serve, update, user_cmd,
 };
 
 #[derive(Debug, Parser)]
@@ -112,6 +112,41 @@ pub enum Command {
     /// Install and manage plugins (the operator path: no login needed).
     #[command(subcommand)]
     Plugin(PluginCommand),
+    /// Update this binary to a newer signed release (it does not restart anything).
+    ///
+    /// Looks up the newest stable release (or `--version X`) of softberries/ferritecms on
+    /// GitHub, downloads this target's asset with `SHA256SUMS` and `SHA256SUMS.minisig`,
+    /// checks the minisign signature with the key built into this binary, then the asset's
+    /// sha256, unpacks it beside the binary and runs the new binary's `--version` (with
+    /// `--data`, also its `migrate status`). After confirmation (`--yes` without a
+    /// terminal) the running binary is copied to `ferrite.prev` and the new one is renamed
+    /// over it. Restart the service afterwards. Any refusal leaves the binary untouched; a
+    /// build without a release key refuses.
+    ///
+    /// Exit code: 0 updated or already up to date, 2 a newer release exists (`--check`),
+    /// 1 on any error (an older or equal `--version`: use `ferrite rollback`).
+    SelfUpdate(update::SelfUpdateArgs),
+    /// Go back to the previous binary (`ferrite.prev`), and with `--schema` the schema too.
+    ///
+    /// Without `--schema` it swaps `ferrite` and `ferrite.prev` (run it with either; running
+    /// it again re-upgrades). With `--data` it first runs the kept binary's `migrate status`
+    /// and refuses (exit 3) when that binary cannot open the schema: roll the schema back
+    /// with `--schema` first.
+    ///
+    /// `--schema` (needs `--data`) reverts to the `schema_from` of `<data>/upgrade.json` and
+    /// must run as the binary the record names as `to` (after a binary rollback that is
+    /// `ferrite.prev`). It runs the down migrations under the migrate lock (with SQLite
+    /// `serve` must be stopped); a lossy step needs `--allow-lossy`. With
+    /// `--restore-snapshot` (SQLite only) the recorded pre-upgrade snapshot replaces the
+    /// database instead: everything written since the upgrade is lost, so it asks first
+    /// (`--yes` without a terminal), and the current database with its `-wal`/`-shm` is
+    /// moved to `backups/rolled-back-<ts>.db`, never deleted. Then it swaps the binaries
+    /// (unless run as `ferrite.prev`) and renames `upgrade.json` to
+    /// `upgrade-rolled-back-<ts>.json`. It restarts nothing.
+    ///
+    /// Exit code: 0 rolled back, 3 the previous binary cannot open this schema, 1 on any
+    /// other error (nothing changed, unless the message says otherwise).
+    Rollback(update::rollback::RollbackArgs),
     /// Probe a node's HTTP endpoint (for container health checks): exit 0 on 200, else 1.
     Healthcheck(healthcheck::HealthcheckArgs),
 }
@@ -172,6 +207,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Restore(args) => backup::run_restore(args).await,
         Command::Config(cmd) => config_cmd::run(cmd),
         Command::Healthcheck(args) => healthcheck::run(args).await,
+        Command::SelfUpdate(args) => update::run(args).await,
+        Command::Rollback(args) => update::rollback::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::Plugin(cmd) => ext_cmd::run_plugin(cmd).await.map(|()| ExitCode::SUCCESS),
         Command::User(cmd) => user_cmd::run(cmd).await.map(|()| ExitCode::SUCCESS),

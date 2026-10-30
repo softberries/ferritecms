@@ -739,6 +739,9 @@ impl Store for FailingStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         self.inner.read()
     }
@@ -762,7 +765,10 @@ impl Store for FailingStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {

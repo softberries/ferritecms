@@ -15,7 +15,8 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_cluster::{
-    ClusterError, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler, builtin,
+    ClusterError, JobCounters, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler,
+    builtin,
 };
 use ferrite_domain::{
     ApiToken, ApiTokenId, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Job,
@@ -229,6 +230,42 @@ pub async fn runner_retries_then_dead(db: Arc<TestDb>) {
     assert_eq!(job.attempts, 2);
     assert_eq!(job.last_error.as_deref(), Some("boom"));
     assert_eq!(calls(&log), vec![id, id]);
+}
+
+/// M4-2 P35: the runner counts the jobs it completed and the attempts that failed
+/// (retry or permanent), never a `Busy` release.
+pub async fn runner_counts_finished_jobs(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    for outcome in ["ok", "ok", "retry", "permanent", "busy"] {
+        let mut new = NewJob::new(KIND, json!({"v": 1, "outcome": outcome}));
+        new.max_attempts = 1;
+        enqueue(store.as_ref(), new).await;
+    }
+    let (handler, _log) = TestHandler::new(KIND, |job| async move {
+        match job.payload["outcome"].as_str() {
+            Some("ok") => Ok(()),
+            Some("retry") => Err(JobError::Retry("again".into())),
+            Some("busy") => Err(JobError::Busy("later".into())),
+            _ => Err(JobError::Permanent("never".into())),
+        }
+    })
+    .build();
+    let counters = Arc::new(JobCounters::default());
+    let stop = CancellationToken::new();
+    let handle = JobRunner::new(
+        store.clone(),
+        RunnerConfig::new(NodeId::new(), 2),
+        vec![handler],
+    )
+    .unwrap()
+    .with_counters(counters.clone())
+    .spawn(stop.clone());
+    wait_for(Duration::from_secs(5), "jobs counted", || async {
+        (counters.done() == 2 && counters.failed() == 2).then_some(())
+    })
+    .await;
+    stop_runner(stop, handle).await;
+    assert_eq!((counters.done(), counters.failed()), (2, 2));
 }
 
 /// R20(3): `Busy` puts the job back with the attempt refunded, due again after the
@@ -507,6 +544,9 @@ impl Store for FaultyStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         &self.repos
     }
@@ -528,7 +568,10 @@ impl Store for FaultyStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -1344,6 +1387,7 @@ pub async fn prune_removes_old_keys(db: Arc<TestDb>) {
 
 backend_tests_spawning!(
     runner_runs_and_completes,
+    runner_counts_finished_jobs,
     runner_retries_then_dead,
     runner_busy_refunds_the_attempt,
     runner_permanent_error_is_dead_at_once,

@@ -292,14 +292,37 @@ fn parse_server(cx: &mut Cx, root: &mut Table, site_url: Option<&url::Url>) -> S
             }
         }
     }
+    // `/metrics` on a listener of its own (P34); a clash with `listen` is refused here
+    // rather than as a bind error (port 0 asks for a free port each time, so no clash).
+    let metrics_listen = match cx.string(&mut t, "server", "metrics_listen") {
+        Some(s) => match s.parse::<SocketAddr>() {
+            Ok(a) if clashes(a, listen) => {
+                cx.push(
+                    "server.metrics_listen",
+                    "must not share server.listen's port on the same or an unspecified (0.0.0.0, ::) address: metrics are never on the public listener",
+                );
+                None
+            }
+            Ok(a) => Some(a),
+            Err(_) => {
+                cx.push(
+                    "server.metrics_listen",
+                    "must be a socket address such as \"127.0.0.1:9464\"",
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let tls = match cx.section(&mut t, "server", "tls") {
-        Some(tls) => parse_tls(cx, tls, listen, site_url),
+        Some(tls) => parse_tls(cx, tls, listen, metrics_listen, site_url),
         None => TlsConfig::Off,
     };
     cx.unknown(t, "server");
     ServerConfig {
         listen,
         trusted_proxies,
+        metrics_listen,
         tls,
     }
 }
@@ -307,7 +330,13 @@ fn parse_server(cx: &mut Cx, root: &mut Table, site_url: Option<&url::Url>) -> S
 /// `[server.tls]` (M4-2 P33). Every key is shape-checked; `acme` also needs an https
 /// `site.url` (`None` when it is itself invalid: not reported twice) whose host is among
 /// the domains, and a `mailto:` contact. The cluster refusal is in [`load`].
-fn parse_tls(cx: &mut Cx, mut t: Table, listen: SocketAddr, site_url: Option<&url::Url>) -> TlsConfig {
+fn parse_tls(
+    cx: &mut Cx,
+    mut t: Table,
+    listen: SocketAddr,
+    metrics_listen: Option<SocketAddr>,
+    site_url: Option<&url::Url>,
+) -> TlsConfig {
     const BASE: &str = "server.tls";
     let acme = match cx.string(&mut t, BASE, "mode").as_deref() {
         None | Some("off") => false,
@@ -441,18 +470,19 @@ fn parse_tls(cx: &mut Cx, mut t: Table, listen: SocketAddr, site_url: Option<&ur
             Vec::new()
         }
     };
-    if tls_listen == listen {
+    let taken = |a: SocketAddr, b: Option<SocketAddr>| b.is_some_and(|b| clashes(a, b));
+    if clashes(tls_listen, listen) || taken(tls_listen, metrics_listen) {
         cx.push(
             "server.tls.listen",
-            "must differ from server.listen (which keeps serving plain HTTP)",
+            "must not share a socket with server.listen (which keeps serving plain HTTP) or server.metrics_listen",
         );
     }
     if let Some(r) = redirect_http
-        && (r == tls_listen || r == listen)
+        && (clashes(r, tls_listen) || clashes(r, listen) || taken(r, metrics_listen))
     {
         cx.push(
             "server.tls.redirect_http",
-            "must differ from server.tls.listen and server.listen",
+            "must not share a socket with server.tls.listen, server.listen or server.metrics_listen",
         );
     }
     TlsConfig::Acme(AcmeTls {
@@ -499,6 +529,17 @@ fn parse_net(s: &str) -> Option<IpNet> {
     s.parse::<IpNet>()
         .ok()
         .or_else(|| s.parse::<std::net::IpAddr>().ok().map(IpNet::from))
+}
+
+/// Whether `metrics` and `listen` would take the same socket: the same non-zero port on
+/// the same address, or on any address when either is unspecified (`0.0.0.0`, `::`),
+/// which binds every interface.
+fn clashes(metrics: SocketAddr, listen: SocketAddr) -> bool {
+    metrics.port() != 0
+        && metrics.port() == listen.port()
+        && (metrics.ip() == listen.ip()
+            || metrics.ip().is_unspecified()
+            || listen.ip().is_unspecified())
 }
 
 fn default_listen() -> SocketAddr {
@@ -1267,7 +1308,9 @@ pub fn render_default_toml(
     out.push_str(&format!("url = {}\n", q(site_url)));
     out.push_str(&format!("title = {}\n", q(title)));
     out.push_str("locale = \"en\"\ntimezone = \"UTC\"\n\n");
-    out.push_str("[server]\nlisten = \"127.0.0.1:8080\"\ntrusted_proxies = []\n\n");
+    out.push_str("[server]\nlisten = \"127.0.0.1:8080\"\ntrusted_proxies = []\n");
+    out.push_str("# Serve GET /metrics (Prometheus text, no auth) on this separate address; off when unset.\n");
+    out.push_str("# metrics_listen = \"127.0.0.1:9464\"\n\n");
     out.push_str(TLS_TEMPLATE);
     out.push_str("[database]\n");
     out.push_str(&format!(

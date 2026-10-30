@@ -276,6 +276,7 @@ timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. 
 [server]
 listen     = "127.0.0.1:8080"          # default; a socket address
 trusted_proxies = []                   # CIDRs or bare IPs
+# metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must not share listen's port (same or 0.0.0.0/:: address)
 # tls = ...                            # planned (M4: ACME); rejected as an unknown key today
 
 [database]
@@ -479,7 +480,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes
@@ -510,9 +511,37 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 - `tracing` with JSON output in production, pretty in dev. Spans: `http.request`,
   `render`, `plugin.hook{plugin,hook}`, `db.query{repo,op}`, `job{kind}`.
-- `/metrics` (Prometheus text): request latency histograms by route class, cache
-  hit/miss, plugin hook duration/fuel/failures by plugin+hook, job queue depth/latency,
-  DB pool usage, node count.
+- `/metrics` (Prometheus text format 0.0.4; as built in M4-2, P34): served only on the
+  separate listener `server.metrics_listen` (off by default; no auth, so bind it to a
+  private address; never on the public listener), `GET /metrics` alone. The registry is
+  hand-rolled (`crates/ferrite-http/src/metrics.rs`, no dependency): atomics per route
+  class and status class on the request path, gauges read at scrape time. Families:
+  - `ferrite_build_info{version,target}` 1;
+  - `ferrite_http_requests_total{class,status}`: `class` is
+    `page|api|admin|media|plugin|preview|other` (`/api/v1`, `/admin`, `/_media` and
+    `/_theme`, `/_p`, `/_preview`; health checks, the comment form and other methods
+    are `other`; everything else GET/HEAD is `page`), `status` is `2xx|3xx|4xx|5xx`
+    (every series is present, zeros included);
+  - `ferrite_http_request_duration_seconds{class}` (time to the response headers),
+    buckets .005 .01 .025 .05 .1 .25 .5 1 2.5 5 10;
+  - `ferrite_page_cache_hits_total`, `ferrite_page_cache_misses_total` (page cache
+    lookups), `ferrite_page_cache_entries`, `ferrite_page_cache_bytes`;
+  - `ferrite_plugin_hook_calls_total{plugin,hook}`,
+    `ferrite_plugin_hook_failures_total{plugin,hook}`,
+    `ferrite_plugin_hook_duration_seconds{plugin,hook}` with the host's buckets .001
+    .005 .025 .1 .5; labels are plugin and hook names only: every plugin route call is
+    the hook `route` (no request path in a label), and the host tracks at most 64 hooks
+    per plugin. There is no fuel family (the host keeps no fuel counter; follow-up);
+  - `ferrite_jobs{status}` (the site's jobs, one `GROUP BY`);
+  - `ferrite_db_pool_connections{state="idle|used"}` (this node's pools; SQLite: reader
+    plus writer; dedicated `LISTEN`/lock connections are not pooled);
+  - `ferrite_nodes` (live nodes: heartbeat within 30 s of the database clock);
+  - `ferrite_page_views_total`: `200` `GET`s of public HTML pages that are not previews
+    or logged-in requests and whose `User-Agent` does not match
+    `bot|crawler|spider|slurp|preview` (case-insensitive); nothing per visitor is kept.
+
+  A store read that fails or takes over 2 s leaves its family out of that scrape. Job
+  queue latency (named in the original design) is not exported: P34 does not list it.
 - `/healthz` (process alive) and `/readyz` (DB reachable, migrations compatible, theme
   loaded) for load balancers.
 

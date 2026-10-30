@@ -23,6 +23,7 @@ use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
 use crate::admin::{AdminAssets, AdminHeaders, EmbeddedAdmin, InvalidAdminHeader};
+use crate::metrics::Metrics;
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
@@ -197,6 +198,9 @@ pub struct AppState {
     /// Counts redirect hits (bounded, flushed by `serve`); `None` (no
     /// [`with_hits`](Self::with_hits)): hits are not counted.
     pub(crate) hits: Option<Arc<HitCounter>>,
+    /// Counts every response and the page views (M4-2 P34); `None` (no
+    /// [`with_metrics`](Self::with_metrics)): nothing is counted.
+    pub(crate) metrics: Option<Arc<Metrics>>,
     /// Takes theme-form comments (`POST /_comment`, P12); `None` (no
     /// [`with_comments`](Self::with_comments)): the form answers `503`.
     pub(crate) comments: Option<Arc<CommentService>>,
@@ -222,6 +226,7 @@ impl AppState {
             auth: None,
             served: None,
             hits: None,
+            metrics: None,
             comments: None,
             admin: Arc::new(EmbeddedAdmin),
             admin_headers,
@@ -269,6 +274,19 @@ impl AppState {
     pub fn with_hits(mut self, hits: Arc<HitCounter>) -> Self {
         self.hits = Some(hits);
         self
+    }
+
+    /// Every response of the site ([`build_app`](crate::build_app),
+    /// [`build_site`](crate::build_site)) is counted into `metrics` by route class and
+    /// status class, and the public handler counts page views there (P34).
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// The registry of [`with_metrics`](Self::with_metrics), if any.
+    pub fn metrics(&self) -> Option<&Arc<Metrics>> {
+        self.metrics.as_ref()
     }
 
     /// Theme-form comments (`POST /_comment`) go to `comments`, the node's one

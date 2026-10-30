@@ -98,6 +98,9 @@ pub struct ServerConfig {
     /// Plain HTTP. With TLS on it keeps serving; bind it to loopback (healthcheck).
     pub listen: SocketAddr,
     pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// Where `GET /metrics` (Prometheus text) is served, on a listener of its own
+    /// (M4-2 P34); `None` (the default): no metrics listener. Never on `listen`.
+    pub metrics_listen: Option<SocketAddr>,
     /// `[server.tls]` (M4-2 P33).
     pub tls: TlsConfig,
 }
