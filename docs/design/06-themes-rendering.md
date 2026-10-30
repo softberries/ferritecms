@@ -654,11 +654,11 @@ Plain CSS, system font stacks, no font files or images, light and dark from
 - **Layout.** A header (site title, the `primary` menu's top level, a search form; sticky
   from 60rem); the page tree on the left; breadcrumbs, title, body, "Updated" date and a
   previous/next pager in the centre (46rem wide at most); "On this page" on the right from
-  80rem. Under 60rem one column, the tree inside a `<details>` labelled "Pages", closed.
-  From 60rem the same `<details>` shows as the sidebar while closed, through
-  `::details-content` (inside `@supports selector(::details-content)`); a browser without
-  it shows the "Pages" toggle, and `docs.js` opens it on wide screens. The `footer` menu
-  sits in the footer.
+  80rem. Under 60rem one column, and the tree's `<nav>` is hidden until the
+  `<details>` "Pages" right before it (a sibling holding only its `<summary>`, closed) is
+  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`). From 60rem the
+  disclosure is hidden and the nav always shows, so the sidebar needs no script and no
+  `::details-content` in any engine. The `footer` menu sits in the footer.
 - **Data.** `base.html` reads `page_tree(post=post, kind=nav_type)` once (one bridge
   call), so the sidebar, breadcrumbs and pager share one value; on search, archive and
   404 pages (no `post`) the tree shows with nothing current, and the 404 body stays
@@ -678,11 +678,14 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   author and date archives), `search`, `404`, `500`; partials `sidebar`, `toc`,
   `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
   shared by page, single and index) and `listing`.
-- **Fixed ids** are reserved ones only (`content`, `nav`, `toc`, `search`; 06 §4), so no
-  heading id can collide with them.
+- **Fixed ids** are reserved ones (`content`, `nav`, `toc`, `search`; 06 §4) or start
+  with `docs-` (`docs-search-page`, `docs-search-error`), so no heading id can collide
+  with them (test `fixed_ids_are_reserved_or_prefixed`).
 - **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
-  pages work without it) appends `<a class="heading-anchor" href="#id" aria-label="Link
-  to this section">#</a>` to each body heading with an id and, where
+  pages work without it; a second run adds nothing) puts each body heading with an id
+  in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link
+  to this section">#</a>`, a sibling, so the heading's accessible name stays its text,
+  and, where
   `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
   button that reports through a visually hidden `role="status"` text. No syntax
   highlighting (Later).

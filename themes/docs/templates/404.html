@@ -13,7 +13,7 @@
   <h1 class="docs-title">Page not found</h1>
   <p>There is nothing at this address. It may have moved, or the link may be mistyped. Search the documentation or pick a page from the list.</p>
   {%- endif %}
-  {% with form_id = "search-error", form_label = "Search the documentation" %}{% include "partials/search-form.html" %}{% endwith %}
+  {% with form_id = "docs-search-error", form_label = "Search the documentation" %}{% include "partials/search-form.html" %}{% endwith %}
   <p><a href="/">Go to the home page</a></p>
 </div>
 {% endblock %}

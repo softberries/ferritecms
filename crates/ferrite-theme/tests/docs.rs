@@ -257,10 +257,69 @@ fn assert_frame(theme: &Theme, html: &str) {
         let tag = &html[i..i + html[i..].find('>').unwrap()];
         assert!(tag.contains("aria-label=\""), "unlabelled {tag}");
     }
-    assert!(
-        !html.contains(">True<") && !html.contains(">None<"),
-        "{html}"
-    );
+    // No boolean or none printed anywhere, text or attribute (no fixture string holds
+    // these words).
+    for word in ["True", "False", "None"] {
+        assert!(!html.contains(word), "{word} in:\n{html}");
+    }
+}
+
+/// The `id` attribute values in `html`.
+fn ids(html: &str) -> Vec<String> {
+    html.match_indices(" id=\"")
+        .map(|(i, m)| {
+            let rest = &html[i + m.len()..];
+            rest[..rest.find('"').unwrap()].to_owned()
+        })
+        .collect()
+}
+
+/// The theme's own ids are reserved ones (06 §4) or start with `docs-`, so no heading
+/// id from a body can collide with them.
+#[test]
+fn fixed_ids_are_reserved_or_prefixed() {
+    let t = docs();
+    let f = fixture();
+    let ok = |id: &str| {
+        ferrite_domain::html::RESERVED_FRAGMENT_IDS.contains(&id) || id.starts_with("docs-")
+    };
+    let mut pages = Vec::new();
+    let mut c = ctx(&t, "/database/");
+    let mut it = page(f.database.id, "Database");
+    it.html = String::new();
+    c.item = Some(it);
+    pages.push(render(
+        &t,
+        "page.html",
+        c,
+        bridge_with(f.nodes.clone(), false),
+    ));
+    let mut c = ctx(&t, "/");
+    c.request.query_s = Some("x".into());
+    pages.push(render(
+        &t,
+        "search.html",
+        c,
+        bridge_with(f.nodes.clone(), false),
+    ));
+    let mut c = ctx(&t, "");
+    c.status = 404;
+    pages.push(render(
+        &t,
+        "404.html",
+        c,
+        bridge_with(f.nodes.clone(), false),
+    ));
+    for html in pages {
+        let found = ids(&html);
+        assert!(found.contains(&"content".to_owned()), "{found:?}");
+        for id in found {
+            assert!(
+                ok(&id),
+                "theme id {id:?} is neither reserved nor docs-prefixed"
+            );
+        }
+    }
 }
 
 #[test]
@@ -315,6 +374,10 @@ fn loads_cleanly() {
         "heading-anchor",
         "Link to this section",
         "navigator.clipboard",
+        // Runs once: a second run adds nothing.
+        "if (root.dataset.docsJs) return;",
+        // The anchor goes after the heading, outside its accessible name.
+        "row.append(h, a);",
         "Copy",
     ] {
         assert!(js.contains(needle), "docs.js lacks {needle}");
@@ -404,9 +467,9 @@ fn page_shows_sidebar_breadcrumbs_toc_and_pager() {
     let html = render_page(&t, ctx(&t, "/database/"), &f);
     assert_frame(&t, &html);
     for needle in [
-        // The sidebar, in a "Pages" disclosure.
-        "<summary class=\"docs-sidebar__toggle\">Pages</summary>",
-        "<nav class=\"docs-nav\" id=\"nav\" aria-label=\"Pages\">",
+        // The sidebar: a "Pages" disclosure right before the nav, not around it, so the
+        // nav never depends on a closed <details> (or a script) to show.
+        "<div class=\"docs-sidebar\">\n<details class=\"docs-pages-toggle\"><summary>Pages</summary></details>\n<nav class=\"docs-nav\" id=\"nav\" aria-label=\"Pages\">",
         "<a class=\"tree__link\" href=\"&#x2f;database&#x2f;\" aria-current=\"page\">Database</a>",
         "<a class=\"tree__link\" href=\"&#x2f;guides&#x2f;\">Guides</a>",
         "<a class=\"tree__link\" href=\"&#x2f;reference&#x2f;\">Reference</a>",
