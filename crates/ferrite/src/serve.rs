@@ -21,8 +21,10 @@
 //!    only, 06 §7); the enabled plugins (a broken one is skipped); the route table. A
 //!    fallback or a skipped plugin is retried by the reload task with the R14 backoff
 //!    (R17);
-//! 8. bind `server.listen` (before any background task starts, so a busy port fails
-//!    cleanly);
+//! 8. bind `server.listen`, `server.metrics_listen` when set, and with
+//!    `[server.tls] mode = "acme"` `server.tls.listen` and `redirect_http` (before any
+//!    background task starts, so a busy port fails cleanly; `<data>/tls/` is created
+//!    0700 here);
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
 //!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
@@ -32,19 +34,30 @@
 //!    actions, `media.variants` bounded by `media.image_workers`, and the caller's
 //!    handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s, `artifacts.gc` daily, `site.backup` daily or weekly
-//!    when `[backup]` is on) and the heartbeat (`nodes.meta` carries the
-//!    theme, plugin and permalink state; the reloader beats after every reload);
+//!    when `[backup]` is on), the heartbeat (`nodes.meta` carries the
+//!    theme, plugin and permalink state; the reloader beats after every reload) and the
+//!    `node_metrics` writer (one row per whole minute from the registry's deltas, P35);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
 //!     services and the site key are set up in step 7, so a missing or bad key stops
-//!     startup); [`run`] prints `Listening on http://<addr>` on stdout.
+//!     startup); [`run`] prints `Listening on http://<addr>` on stdout. With
+//!     `server.metrics_listen`, `GET /metrics` (Prometheus text, P34) is served there and
+//!     only there, until the background tasks stop. The node's metrics registry counts
+//!     every response of the site and reads the page cache, the plugin host, the job
+//!     runner's counters and the store at scrape time. With TLS on (P33, [`crate::tls`]),
+//!     the same site is also served over HTTPS on `server.tls.listen`, every response
+//!     there with `Strict-Transport-Security`, while `server.listen` keeps serving plain
+//!     HTTP (bind it to loopback); the ACME client runs as a background task;
+//!     `redirect_http` answers only `301` to the https site. [`run`] then also prints
+//!     `Listening on https://<addr>`. The listeners drain together at shutdown.
 //!
 //! Shutdown ([`RunningNode::shutdown`]; SIGINT or SIGTERM in [`run`]): stop accepting
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
 //! running jobs get 9 s (P10) to finish, after which the runner releases the rest
 //! without using an attempt (the runner is abandoned after 12 s, R6). Then the
 //! background tasks stop (the failure flusher writes once more, the `request.served`
-//! buffer is flushed into jobs once more, for the next runner to claim, and the buffered
-//! redirect hits are written once more, before the pools close), mail sends still
+//! buffer is flushed into jobs once more, for the next runner to claim, the buffered
+//! redirect hits are written once more, and the partial minute's `node_metrics` row,
+//! before the pools close), mail sends still
 //! running (`[mail]`) are cancelled, and the node leaves the registry, together within
 //! 1 s; [`run`] closes the database pools (up to 2 s, cut so that the steps so far end
 //! within 13 s of the signal), and `main` shuts the runtime
@@ -57,12 +70,13 @@
 use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
+use axum::serve::ListenerExt;
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_cluster::{
-    ClusterMode as NodeMode, JobRunner, NodeIdentity, Registry, RunnerConfig, SCHEDULER_TICK,
-    Scheduler, builtin, node_name,
+    ClusterMode as NodeMode, JobCounters, JobRunner, NodeIdentity, Registry, RunnerConfig,
+    SCHEDULER_TICK, STALE_AFTER, Scheduler, builtin, node_name,
 };
-use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig};
+use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig, TlsConfig};
 use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
@@ -82,6 +96,7 @@ use ferrite_http::{
     load_route_table,
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
+    metrics::{Metrics, metrics_router},
     plugins::egress::Egress,
 };
 use ferrite_media::MediaStore;
@@ -101,6 +116,7 @@ use crate::{
     jobs::{self, MediaVariantsHandler},
     keys, load_config,
     node::{NodeStatus, node_mode},
+    node_metrics::MinuteWriter,
     open::{OpenMode, open_store, startup_check},
     reload::{ReloadContext, Reloader},
     site::{load_theme, media_backend_name, open_media, permalink_rules},
@@ -159,6 +175,10 @@ pub struct NodeOptions {
     /// 10 s).
     #[cfg(feature = "test-seams")]
     pub served_flush: Option<Duration>,
+    /// Test seam: the `node_metrics` writer writes every this long from the start
+    /// instead of at every whole minute (P35).
+    #[cfg(feature = "test-seams")]
+    pub metrics_tick: Option<Duration>,
     /// Test seam: whether the invalidation loop and the job runner use `LISTEN`
     /// wake-ups (default: in cluster mode). `Some(false)` leaves the node on polling only.
     #[cfg(feature = "test-seams")]
@@ -174,6 +194,9 @@ pub struct NodeOptions {
     /// batches.
     #[cfg(feature = "test-seams")]
     pub import_fail_after_batches: Option<u32>,
+    /// Test seam: the TLS listener's (extra ACME roots, or a fixed certificate).
+    #[cfg(feature = "test-seams")]
+    pub tls: crate::tls::TlsSeams,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -233,10 +256,18 @@ impl BootGate {
 /// its tasks running.
 pub struct RunningNode {
     pub addr: SocketAddr,
+    /// Where `/metrics` is served (`server.metrics_listen`); `None` when it is off.
+    pub metrics_addr: Option<SocketAddr>,
+    /// The HTTPS listener (`[server.tls]` on); `None` when TLS is off.
+    pub tls_addr: Option<SocketAddr>,
+    /// The redirect listener (`server.tls.redirect_http`); `None` when it is off.
+    pub redirect_addr: Option<SocketAddr>,
     pub node_id: NodeId,
     pub state: Arc<AppState>,
     /// The API's state (its services).
     pub api: Arc<ApiState>,
+    /// The node's metrics registry (P34); the per-minute writer reads its snapshots.
+    pub metrics: Arc<Metrics>,
     server: Option<JoinHandle<std::io::Result<()>>>,
     /// The server's result when it ended before shutdown.
     server_result: Option<Result<std::io::Result<()>, JoinError>>,
@@ -245,7 +276,8 @@ pub struct RunningNode {
     runner: JoinHandle<()>,
     background: CancellationToken,
     /// Reloader, invalidation loop, failure flusher, `request.served` flusher, redirect
-    /// hits flusher, scheduler, heartbeat.
+    /// hits flusher, scheduler, heartbeat, `node_metrics` writer, and the metrics
+    /// listener when configured.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
     /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
     mail: Option<Arc<MailQueue>>,
@@ -284,7 +316,7 @@ async fn join(
         let NodeOptions {} = opts;
         binary_version()?
     };
-    startup_check(store.as_ref(), &version, &config.database).await?;
+    startup_check(store.as_ref(), &version, &config.database, &config.data_dir).await?;
     let schema_version = store
         .migration_status(&version)
         .await
@@ -455,6 +487,19 @@ async fn boot(
         auth.clone(),
         dyn_permalinks.clone(),
     ));
+    // The node's metrics registry (P34): every response, page views, and at scrape time
+    // the page cache, the plugin host, the jobs, the nodes and the pools.
+    let job_counters = Arc::new(JobCounters::default());
+    let metrics = {
+        let jobs = job_counters.clone();
+        Arc::new(
+            Metrics::new(&binary_version()?.to_string(), crate::binary_target())
+                .with_cache(cache.clone())
+                .with_plugins(host.clone())
+                .with_store(store.clone(), STALE_AFTER)
+                .with_job_totals(move || (jobs.done(), jobs.failed())),
+        )
+    };
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),
@@ -471,7 +516,8 @@ async fn boot(
         .with_auth(auth.clone())
         .with_served(served.clone())
         .with_hits(hits.clone())
-        .with_comments(comments.clone()),
+        .with_comments(comments.clone())
+        .with_metrics(metrics.clone()),
     );
 
     let status = Arc::new(NodeStatus::default());
@@ -617,7 +663,8 @@ async fn boot(
     }
     runner_config.listen = listen;
     let runner = JobRunner::new(store.clone(), runner_config, handlers)
-        .context("cannot set up the job runner")?;
+        .context("cannot set up the job runner")?
+        .with_counters(job_counters);
     let mut periodics = builtin::periodics();
     periodics.extend(jobs::core_periodics());
     periodics.extend(backup_periodic);
@@ -633,6 +680,32 @@ async fn boot(
         .await
         .with_context(|| format!("cannot listen on {}", config.server.listen))?;
     let addr = listener.local_addr()?;
+    // `/metrics` only on its own listener, when configured (P34).
+    let metrics_listener = match config.server.metrics_listen {
+        Some(at) => Some(
+            TcpListener::bind(at)
+                .await
+                .with_context(|| format!("cannot listen on {at} (server.metrics_listen)"))?,
+        ),
+        None => None,
+    };
+    let metrics_addr = metrics_listener
+        .as_ref()
+        .map(TcpListener::local_addr)
+        .transpose()?;
+    // Built-in TLS (P33): the config refuses it in cluster mode.
+    #[cfg(feature = "test-seams")]
+    let tls_seams = opts.tls;
+    #[cfg(not(feature = "test-seams"))]
+    let tls_seams = crate::tls::TlsSeams::default();
+    let tls = match &config.server.tls {
+        TlsConfig::Acme(acme) => Some(crate::tls::bind(acme, &config.data_dir, tls_seams).await?),
+        TlsConfig::Off => None,
+    };
+    let tls_addr = tls.as_ref().map(|t| t.addr);
+    let redirect_addr = tls
+        .as_ref()
+        .and_then(|t| t.redirect.as_ref().map(|(_, a)| *a));
 
     // Nothing below fails: start the background tasks.
     let background = CancellationToken::new();
@@ -671,40 +744,118 @@ async fn boot(
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
     let heartbeat = registry.spawn_heartbeat(status.meta_fn(), background.clone());
+    // One `node_metrics` row per minute (P35); flushed once more at shutdown.
+    let metrics_every: Option<Duration> = None;
+    #[cfg(feature = "test-seams")]
+    let metrics_every = opts.metrics_tick.or(metrics_every);
+    let minute_writer = MinuteWriter::new(
+        Arc::new(store.clone()),
+        registry.id(),
+        metrics.clone(),
+        metrics_every,
+    )
+    .spawn(background.clone());
+    // Served until the background tasks stop, so the drain can still be scraped.
+    let metrics_server = metrics_listener.map(|listener| {
+        let app = metrics_router(metrics.clone());
+        let stop = background.clone();
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(stop.cancelled_owned())
+                .await
+            {
+                tracing::warn!(error = %e, "the metrics listener failed");
+            }
+        })
+    });
     // The row was registered without the node's state; publish it now.
     registry.beat_now();
 
     let stop_accepting = CancellationToken::new();
-    let server = tokio::spawn(
-        axum::serve(
-            listener,
-            build_site(state.clone(), api.clone())
-                .into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
-        .into_future(),
-    );
+    let plain = axum::serve(
+        listener,
+        build_site(state.clone(), api.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+    .into_future();
+    // With TLS: the HTTPS and redirect listeners, served and drained with the plain one;
+    // the ACME client runs until the background tasks stop.
+    let mut acme_task = None;
+    let secure = match tls {
+        Some(crate::tls::Bound {
+            listener: tls_listener,
+            redirect,
+            acme,
+            ..
+        }) => {
+            acme_task = acme.map(|state| crate::tls::spawn_acme(state, background.clone()));
+            // `tap_io` gives the listener axum's `ConnectInfo<SocketAddr>`.
+            let https = axum::serve(
+                tls_listener.tap_io(|_| {}),
+                ferrite_http::tls::with_hsts(build_site(state.clone(), api.clone()))
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+            .into_future();
+            let redirect = redirect.map(|(l, _)| {
+                let origin = config.site.url.origin().ascii_serialization();
+                axum::serve(l, ferrite_http::tls::redirect_app(&origin))
+                    .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+                    .into_future()
+            });
+            Some(async move {
+                match redirect {
+                    Some(redirect) => tokio::try_join!(https, redirect).map(|_| ()),
+                    None => https.await,
+                }
+            })
+        }
+        None => None,
+    };
+    let server = tokio::spawn(async move {
+        match secure {
+            Some(secure) => tokio::try_join!(plain, secure).map(|_| ()),
+            None => plain.await,
+        }
+    });
     tracing::info!(listen = %format!("http://{addr}"), site = %state.config.site_url, node = %registry.id(), "serving");
+    if let Some(at) = tls_addr {
+        tracing::info!(listen = %format!("https://{at}"), "serving over TLS");
+    }
+    if let Some(at) = redirect_addr {
+        tracing::info!(listen = %format!("http://{at}"), "redirecting to https");
+    }
+    if let Some(at) = metrics_addr {
+        tracing::info!(listen = %format!("http://{at}/metrics"), "serving metrics");
+    }
+    let mut tasks = vec![
+        ("reloader", reload_task),
+        ("invalidation loop", poller),
+        ("plugin failure flusher", flusher),
+        ("request.served flusher", served_flusher),
+        ("redirect hits flusher", hits_flusher),
+        ("scheduler", scheduler),
+        ("heartbeat", heartbeat),
+        ("node metrics writer", minute_writer),
+    ];
+    tasks.extend(metrics_server.map(|task| ("metrics listener", task)));
+    tasks.extend(acme_task.map(|task| ("acme client", task)));
     Ok(RunningNode {
         addr,
+        metrics_addr,
+        tls_addr,
+        redirect_addr,
         node_id: registry.id(),
         state,
         api,
+        metrics,
         server: Some(server),
         server_result: None,
         stop_accepting,
         runner_stop,
         runner,
         background,
-        tasks: vec![
-            ("reloader", reload_task),
-            ("invalidation loop", poller),
-            ("plugin failure flusher", flusher),
-            ("request.served flusher", served_flusher),
-            ("redirect hits flusher", hits_flusher),
-            ("scheduler", scheduler),
-            ("heartbeat", heartbeat),
-        ],
+        tasks,
         mail,
         hits,
         registry,
@@ -888,6 +1039,9 @@ async fn serve(
         Err(e) => return (Err(e), Instant::now() + CLOSE_TIMEOUT),
     };
     println!("Listening on http://{}", node.addr);
+    if let Some(at) = node.tls_addr {
+        println!("Listening on https://{at}");
+    }
     match node.wait(signals).await {
         Some(signal) => tracing::info!(
             signal = signal.name(),
@@ -919,6 +1073,7 @@ fn http_config(config: &Config) -> HttpConfig {
         &config.site.title,
         &config.site.locale,
     );
+    http.timezone = config.site.timezone.clone();
     http.trusted_proxies = config.server.trusted_proxies.clone();
     http.render_budget = Duration::from_millis(config.plugins.render_budget_ms);
     http.search_ttl = Duration::from_secs(config.cache.search_ttl_secs);

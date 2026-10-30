@@ -403,7 +403,8 @@ Same logical schema on both backends. Physical type mapping is in §5.
 Tables marked *not yet created* are planned; the milestone in the mark adds them in a
 new migration. Everything else exists in `0001_init` / `0002_search` / `0003_media_variants` /
 `0004_cluster` / `0005_auth` / `0006_media_comments` / `0007_autosaves` / `0008_autosave_seo` /
-`0009_import` / `0010_import_jobs` / `0011_artifact_gc` on both backends.
+`0009_import` / `0010_import_jobs` / `0011_artifact_gc` / `0012_node_metrics` on both
+backends.
 
 ### Content
 
@@ -461,7 +462,8 @@ new migration. Everything else exists in `0001_init` / `0002_search` / `0003_med
 | `nodes` *(since `0004_cluster`)* | `id` PK (`nodes_pkey`), `name`, `version`, `schema_version` bigint, `started_at`, `heartbeat_at` (index `nodes_heartbeat_idx`), `meta` json object default `{}` | `NodeRepo`: `register`/`heartbeat`/`deregister`/`list` (≤ 1000, by `started_at`, `id`)/`db_now`/`prune`, times from the database clock. Stale after 3× heartbeat interval |
 | `events` | `seq` PK (autoincrement / bigserial), `kind`, `keys` json, `origin_node`, `created_at` | Transactional outbox for invalidation; pruned after 24 h by `events.prune`, except the newest row (R9). On Postgres `append` notifies `ferrite_events[_<schema>]` in the same statement (P2) |
 | `jobs` *(since `0004_cluster`)* | `id` PK (`jobs_pkey`), `kind`, `payload` json (an object), `unique_key` null (`jobs_unique_key_uq`, NULLs distinct), `run_at`, `priority` int default 0, `status` (`queued`/`running`/`done`/`dead`, CHECK; no `failed`, P8), `attempts` int default 0, `max_attempts` int default 5 (≥ 1), `locked_by` (node id text), `locked_until`, `last_error` (≤ 1024 bytes), `created_at`, `finished_at`; indexes `jobs_finished_idx (finished_at)`, `jobs_lease_idx (locked_until) WHERE status = 'running'` (expired leases: reaper, SQLite pre-check), and for due jobs Postgres `jobs_claim_idx (priority DESC, run_at, id) WHERE status IN ('queued','running')` (the claim's ORDER BY, scanned up to LIMIT; R1; since M3-2 the Postgres claim is a `UNION ALL` of the due branch on this index and the expired-lease branch on `jobs_lease_idx`, P31) / SQLite `jobs_due_idx (run_at) WHERE status = 'queued'` (no ORDER BY index: SQLite's planner does not use one for the claim after ANALYZE; since `0006` the SQLite claim is a `UNION ALL` of the due branch on `jobs_due_idx` and the expired-lease branch on `jobs_lease_idx`, each named with `INDEXED BY`, sorted by `priority DESC, run_at, id` and limited across the union; the pre-check and the reaper name their index the same way, and the prune names `jobs_finished_idx`), and since `0006_media_comments` `jobs_status_created_idx (status, created_at, id)`, `jobs_created_idx (created_at, id)` and `jobs_kind_created_idx (kind, created_at, id)` (the admin jobs list by status, by kind or all, F26) | `JobRepo`: claim by kind with lease (Postgres `FOR UPDATE SKIP LOCKED` per `UNION ALL` branch in a `MATERIALIZED` CTE; SQLite on the single writer, reader-pool `EXISTS` pre-check), expired lease at `max_attempts` → `dead` (P7), lease-holder writes conditional on `(id, node, attempts)` (P6); a counted `release` of the final attempt goes `dead` ("released after final attempt"). See [04](04-cluster.md#job-queue) |
-| `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `site_id`, `install_id` (M4-1 R16: this database's own id, written by the migrations when absent, never exported, left out of backup snapshots, renewed by `ferrite restore`; delete the row to make a clone a new install; key/value, so no migration) |
+| `schema_meta` | `key` PK, `value` | `min_binary_version`, `created_by_version`, `last_binary_version` (M4-2 P30: the binary that last started here; written by the startup check and `migrate up`, see 09 §1), `site_id`, `install_id` (M4-1 R16: this database's own id, written by the migrations when absent, never exported, left out of backup snapshots, renewed by `ferrite restore`; delete the row to make a clone a new install; key/value, so no migration) |
+| `node_metrics` *(since `0012_node_metrics`)* | `node_id` (no FK), `minute` (a whole UTC minute), `requests`, `errors_5xx`, `page_views`, `cache_hits`, `cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, the page latency histogram `page_le_5`, `page_le_10`, `page_le_25`, `page_le_50`, `page_le_100`, `page_le_250`, `page_le_500`, `page_le_1000`, `page_le_2500`, `page_le_5000`, `page_le_10000`, `page_over_10000` (bigint; per-bucket counts, not cumulative, M4-2 R7); PK (`node_id`, `minute`) `node_metrics_pkey`; index `node_metrics_minute_idx (minute)` | One row per node and minute (M4-2 P35, 09 §6; `NodeMetricsRepo`: `insert` adds to an existing row, the histogram too, `series` sums per minute/hour/day bucket (the p95 is computed from the summed histogram), `prune` in batches); pruned after 7 days by `node_metrics.prune`; not exported; the `0012` down drops it (not declared lossy: transient) |
 
 ### Search
 
@@ -577,6 +579,8 @@ crates/ferrite-store-sqlite/migrations/
                                     #   `import` artifacts, run job_id/step/report_hash
     0011_artifact_gc.up.sql         # M4-1, phase expand, not lossy: artifacts.orphaned_at
     0011_artifact_gc.down.sql       #   and its partial index (P11, R3)
+    0012_node_metrics.up.sql        # M4-2, phase expand, not lossy: node_metrics (P35)
+    0012_node_metrics.down.sql
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -600,6 +604,8 @@ crates/ferrite-store-postgres/migrations/
     0010_import_jobs.down.sql
     0011_artifact_gc.up.sql         # M4-1, phase expand: artifacts.orphaned_at + index
     0011_artifact_gc.down.sql
+    0012_node_metrics.up.sql        # M4-2, phase expand: node_metrics (P35, R7)
+    0012_node_metrics.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -610,8 +616,12 @@ crates/ferrite-store-postgres/migrations/
   are resolved at merge time, which is fine for a single-repo project.
 - Every migration has a `.down.sql`. No exceptions; a lossy down is marked (below).
 - **Editable until the first release tag (R10).** Nothing is deployed yet, so
-  `0001_init` (and `0002_search`) may be edited in place and dev databases re-created.
-  From the first tag on, applied migrations are immutable and changes need a new version.
+  migrations may be edited in place and dev databases re-created (M4-2 R7 changed
+  `0012_node_metrics` that way; a dev database migrated before then fails
+  `verify_migrations` with a checksum mismatch and needs a fresh `init`). From the first
+  tag on, applied migrations are immutable (sqlx checks their checksums) and changes need
+  a new version: the first tag, `v0.1.0` (the release gate in
+  `docs/superpowers/m4-2-exit.md`), freezes `0001`–`0012`.
 
 ### Header directives (ours, in SQL comments)
 
@@ -635,6 +645,13 @@ The first lines of an `.up.sql` may contain ferrite directives, parsed by
   node migrates; others block on the lock, then see nothing pending.
 - SQLite: before applying any migration, a **pre-migration snapshot** is written to
   `data/backups/pre-<from>-to-<to>-<timestamp>.db` via `VACUUM INTO` (keeps last 5).
+  As built (M4-2 P30): `Store::migrate_up` returns `MigrateReport { applied, snapshot }`
+  (`snapshot` is that file on SQLite, always `None` on Postgres); the pruning keeps the
+  newest five `pre-*.db` **plus** the snapshot `data/upgrade.json` names (09 §1), however
+  old, because `ferrite rollback --restore-snapshot` may still need it. The binary reads
+  `upgrade.json` when it opens the store and passes `SqliteOptions::keep_snapshot`:
+  `Keep(path)`, or `KeepAll` (prune nothing) when the file cannot be read; the store
+  crate knows nothing of the file.
 - Postgres: no automatic dump (would require `pg_dump` on the host). Instead the node
   logs the exact schema version transition and refuses to auto-migrate a **contract**
   migration unless `database.allow_contract = true` or it's run explicitly with
@@ -732,9 +749,17 @@ silently remove the guard.
   `ferrite_store::migrate::expand_lint`). One `DROP` passes since M3-2: a `DROP CONSTRAINT`
   that re-adds the same name as a `CHECK (col IN (<string literals>))` whose list is a
   strict superset of the one the down restores (a widening; Postgres `0010`, ruling R56).
-- *Backward-compat test*: CI checks out the previous release tag, builds it, and runs
-  its integration tests against a database migrated by the current branch.
-  (Starts mattering from the first tagged release.)
+- *Backward-compat check* (as built, M4-2 P38: `ci.yml` job `compat`,
+  `.github/scripts/compat.sh`): CI finds the newest `v*` tag before `HEAD`, builds that
+  tag's `ferrite` (debug, in its own worktree and target folder) and this commit's; the
+  current binary creates a site (`init` and `seed demo`, so it migrates to its schema) on
+  SQLite and on Postgres (schema `ferrite_compat` in the `postgres:18` service), then the
+  old binary must report the schema compatible (`migrate status` exit 0: "newer schema,
+  compatible"), `serve` it, and answer `/` and `/healthz` with 200. With no previous tag
+  it prints a notice and succeeds, so it starts running with the second tag. (This
+  replaces the earlier plan of running the old tag's integration tests, which conflict
+  with per-test schemas.) The script was run by hand in the M4-2 exit with the M4-1
+  binary (schema 11) against schema 12, on both backends.
 
 ## 9. Contract tests
 
@@ -817,7 +842,7 @@ token hashes, sealed TOTP secrets and sealed plugin/theme settings. The keys of 
 sorted, so the same data gives the same bytes on both backends.
 
 **What is exported:** every table except the transient or derived ones: `sessions`,
-`rate_limits`, `events`, `nodes`, `idempotency_keys`, `plugin_failures`, `jobs` (all of
+`rate_limits`, `events`, `nodes`, `idempotency_keys`, `plugin_failures`, `node_metrics`, `jobs` (all of
 them: queued plugin actions and variant jobs are lost; `ferrite media regenerate`
 remakes missing variants) and `search_docs` (SQLite's `search_fts*` and
 `_sqlx_migrations` are not catalogue tables). Of `schema_meta` only `site_id` travels;

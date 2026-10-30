@@ -3,18 +3,189 @@
 ## 1. Upgrade (solo)
 
 ```
-ferrite self-update [--version X] [--channel stable]
+ferrite self-update [--version X] [--check] [--yes] [--data DIR]
 ```
 
-1. Download release for this target + signature; verify (minisign/ed25519 public key
-   embedded in the binary).
-2. Run the **new** binary's `ferrite migrate status --data …` to show what will happen.
-3. Copy current binary to `ferrite.prev` (alongside, same dir).
-4. Atomically replace the binary.
-5. Restart (systemd: `Restart=always` + exit with a dedicated code, or print the
-   command when not under a supervisor).
-6. New binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
-   writes `data/upgrade.json` (`{from, to, schema_from, schema_to, snapshot, at}`).
+As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
+
+1. **Lookup.** The newest stable release (`GET https://api.github.com/repos/softberries/ferritecms/releases/latest`,
+   which skips drafts and prereleases; `--channel stable` is the only channel, so there is no
+   flag for it), or `releases/tags/vX` for `--version X` (which may name a prerelease,
+   `X.Y.Z-rc.N`, see step 2). A `--version` that is older than or
+   equal to this binary is refused before any download (exit 1, "use `ferrite rollback`").
+   When the newest release is not newer, it prints `… is up to date` and exits 0.
+2. **Download and verify.** The release must carry this target's asset
+   `ferrite-<X.Y.Z>-<target>.tar.gz` (the target is the triple the binary was built for,
+   `ferrite::binary_target()`), `SHA256SUMS` and `SHA256SUMS.minisig`; a missing one is
+   refused. The minisign signature over `SHA256SUMS` is checked first with the public key
+   embedded at build time from `crates/ferrite/release.pub` (pure-Rust `minisign-verify`;
+   only prehashed signatures, minisign's default), then the asset's sha256 against the line
+   `SHA256SUMS` lists for it. The repository's `release.pub` is a comment-only placeholder:
+   a binary built from it refuses with "this build has no release key". Downloads are
+   HTTPS-only (redirects included), capped (1 MiB for the two small files, 1 GiB for the
+   asset) and bounded: 30 s to connect, 60 s per read and 10 minutes for the whole download.
+   **What the signature binds:** the version and the target, through the asset name that
+   `SHA256SUMS` lists and the new binary's `--version`. The API's `prerelease` flag is not
+   signed, so the channel is bound through the version instead (M4-2 R10): without
+   `--version`, a release whose version has a semver prerelease part (`X.Y.Z-rc.N`) is
+   refused even when the API calls it stable (`--check` too), and a prerelease installs only
+   when `--version` names exactly that version. Prerelease builds may therefore be signed
+   with the release key.
+3. **Unpack and check.** The work folder is a hidden temp folder beside the binary (creating
+   it is also the writability check: an unwritable folder is refused with the hint to run as
+   the binary's owner, outside the systemd sandbox). Before it is created, what a killed
+   run left there (`.ferrite-update-*` work folders and `.ferrite.tmp-*` copies of the
+   binary, older than a day) is removed; `rollback` does the same before its swap. Only the archive's `ferrite` file (top
+   level or one folder down; `./` components are ignored, so `tar -C dir .` archives work;
+   at most 512 MiB) is extracted, mode 0755. The new binary's `--version` must
+   report the release's version. With `--data DIR` its `migrate status --data DIR` runs too
+   and its output is shown: exit 0 or 2 (pending migrations) go on, 3 (the schema is
+   incompatible with the new binary) refuses, any other result is a warning (with SQLite the
+   status cannot be read while `serve` holds the data folder lock, and the warning points at
+   the output shown).
+4. **Confirm.** `Replace … ? [y/N]` on a terminal; without one, `--yes` is required.
+5. **Swap.** The running binary (symlinks resolved) is copied to `<name>.prev` beside it
+   (`ferrite.prev`, replacing an older one), then the new binary, given the running binary's
+   permission bits, is renamed over it. Both steps go through temp files in the same folder
+   and a `rename`, so the binary's path never goes missing or holds a partial file
+   (`update::swap::install_new`; `rollback` uses `update::swap::swap_with_prev`, which on a
+   failed second rename puts the former binary back, or when that fails too keeps its temp
+   copy and names it in the error, so no binary is lost). Every refusal before this step
+   leaves the binary and its folder as they were.
+6. **No restart.** It prints the restart command (`systemctl restart ferrite`, or stop and
+   start `ferrite serve`); `serve` never updates itself, so there is no dedicated exit code
+   (P31 corrects the earlier plan here).
+7. The new binary starts → pre-migration snapshot (`VACUUM INTO`) → applies migrations →
+   writes `data/upgrade.json` (`{v, from, to, schema_from, schema_to, snapshot, at}`, P30).
+
+**Restart between two updates.** `ferrite.prev` is always the binary that was installed
+before the last swap, not the one the site last ran. Two `self-update`s before a restart
+(A → B → C) leave `ferrite.prev` = B, a binary this site never ran, and A is gone; C's
+`upgrade.json` then says `from: A`, so `rollback --schema` refuses (the kept binary is not
+the record's `from`) and A has to be fetched by hand. Nothing warns about this (the
+`last_binary_version` it would compare with needs the database, which `serve` locks on
+SQLite): restart after each update.
+
+`--check` only reports: exit 2 when a newer release exists (with a note when it has no asset
+for this target), 0 when not; it needs no release key. Exit codes: 0 updated or up to date,
+2 an update is available (`--check`), 1 any error. It works the same with Postgres; a cluster
+deploys images instead (§3). The release key is rotated by a release signed with the old key
+that carries the new `release.pub`.
+
+**The release key** (once, by a maintainer, before the first tag; the release gate in
+`docs/superpowers/m4-2-exit.md`):
+
+```sh
+minisign -G -p release.pub -s release.key      # asks for a password twice
+cp release.pub crates/ferrite/release.pub       # replaces the placeholder; commit it
+```
+
+`crates/ferrite/release.pub` then holds minisign's two lines (`untrusted comment: …` and
+the base64 key); the binaries embed it at build time. The secret key never enters the
+repository: the contents of `release.key` and its password go into the GitHub
+environment `release` as the secrets `MINISIGN_SECRET_KEY` and `MINISIGN_PASSWORD` (§7);
+keep an offline copy of both. The release workflow refuses to publish while
+`release.pub` is the placeholder, and checks the signature it made against the committed
+key (`.github/scripts/verify-sig.sh`), so a secret key that does not match fails the run
+before anything is published. A binary built before the key was committed has no key and
+can never self-update; install a release build.
+
+### `upgrade.json` (as built, M4-2 P30)
+
+```json
+{"v": 1, "from": "0.1.0", "to": "0.2.0", "schema_from": 10, "schema_to": 12,
+ "snapshot": "backups/pre-10-to-12-20261030T120000Z.db", "at": "2026-10-30T12:00:00.123456Z"}
+```
+
+- **Fields:**
+  - `from`: `schema_meta.last_binary_version` before this start, `null` when none was
+    stored (a database from before M4-2). `to`: this binary.
+  - `schema_from`/`schema_to`: the schema version before and after (equal when only the
+    binary changed).
+  - `snapshot`: the SQLite pre-migration snapshot, relative to the data folder; `null`
+    when nothing was migrated, and always on Postgres.
+  - `at`: RFC 3339, UTC.
+- **Who writes it:** the startup check and `ferrite migrate up`, always under the migrate
+  lock, so concurrent cluster starts write it once. The startup check runs in `serve` and
+  in every other command that migrates when it starts: `seed`, `user`, the
+  `theme`/`plugin` commands, `import wordpress`, `media gc`/`regenerate`.
+- **In two steps around a migration:**
+  1. Before migrating, a provisional record: `schema_to` is the target, `snapshot` is
+     `null`.
+  2. After migrating, the final record with the snapshot.
+
+  A start that dies in between (after the migrations committed) leaves the provisional
+  record. The next start has nothing left to apply and sees the record of this move
+  (same `from` and `to`). It finalises the record with the newest
+  `backups/pre-<schema_from>-to-<schema_to>-*.db`, found by name.
+
+  An unfinished earlier move is carried forward: the next move keeps its `schema_from`
+  and snapshot. That covers two cases:
+  - an attempt at the same move that stopped partway (the schema between its
+    `schema_from` and `schema_to`);
+  - a move from the stored binary to another one that died after migrating (A→B
+    crashed, then C starts: C's record is `from: A` with A→B's start and snapshot).
+
+  Only an unfinished record is carried: one whose `schema_to` lies beyond the current
+  schema, or a provisional one (`snapshot: null` with `schema_from < schema_to`). A
+  finished A→B that a binary rollback to A kept is not carried. A later A→C records its
+  own start and snapshot (`pre-<B's schema>-to-<C's>`), so `--restore-snapshot` loses no
+  more than needed. On Postgres a finished record also has `snapshot: null`, so
+  A→B→(rollback)A→C there does carry A→B's `schema_from`. There is no snapshot to
+  restore, and `migrate down` reaches the older start.
+
+  A `migrate_up` that fails without moving the schema leaves the file as it was: the
+  record that was there is written back, or the provisional one is removed when there
+  was none. When that start had carried an unfinished move's start, the record written
+  back names the snapshot found for it (M4-2 R9).
+- **When it changes:** the stored `last_binary_version` differs from this binary, or
+  migrations were applied. Then `last_binary_version` is set to this binary. A start that
+  changed nothing leaves an existing file alone.
+- **A binary rollback keeps it.** When nothing was applied and this binary is **older**
+  (semver) than the stored `last_binary_version`, the file is kept and only the key is
+  updated. This is `ferrite rollback` swapping back to `ferrite.prev`.
+  - A schema rollback afterwards still finds the move.
+  - Re-upgrading (B again) also keeps the file: it already names A → B.
+  - So A → B → A → B ends with the original A → B record and its snapshot.
+- **Not written:**
+  - For a database that had no schema before (`ferrite init`, a first `serve` or
+    `migrate up` on an empty database): there is nothing to roll back to. The version
+    is still stored, so the next start writes nothing either.
+  - On a retry whose file already names this move.
+- **One step only.** Each new move replaces the file, so rollback goes back one step:
+  - an upgrade B → C, even a patch release without migrations (that record has
+    `snapshot: null`), replaces the record of A → B;
+  - the B snapshot then falls back into the normal "newest five" pruning.
+- **`migrate up --to N`, then `serve`.** This writes two records. The second
+  (`schema_from: N`) replaces the first, so a schema rollback from the file reaches only
+  N. Go further down with `ferrite migrate down --to <M>` explicitly.
+- **Atomic:** a temp file in the data folder, synced, renamed over the old file, then the
+  folder is synced. Write errors name the path. Temp files a crash left behind
+  (`.upgrade.json.*.tmp`) older than a day are removed by the next write.
+- **Snapshots:** the pruning of pre-migration snapshots (newest five) never deletes the
+  one this file names (02 §7); opening a SQLite site reads the file to know which. A
+  provisional record (`snapshot: null`, `schema_from < schema_to`) protects the newest
+  `backups/pre-<schema_from>-to-<schema_to>-*.db` instead (M4-2 R9): an upgrade that
+  applies some migrations and then fails on every start (a restart loop) takes a new
+  snapshot each time, and must not prune the one from before the move. This lookup by
+  name is for pruning only; `rollback --restore-snapshot` still refuses a record without
+  a snapshot. The systemd unit stops restarting after five failed starts in ten minutes.
+- **An unreadable file** (not JSON, or another `v`, e.g. a newer binary's format after a
+  binary rollback):
+  - The site still opens, with a warning. Pruning keeps **every** snapshot, since it
+    cannot know which one the file names.
+  - The next record moves the bad file aside to `upgrade.json.invalid-<UTC timestamp>`
+    (never deleted) before writing.
+  - Only `ferrite rollback` refuses to work from an unreadable file.
+- **Clusters:** each node writes its own data folder's file. The key is shared, so only
+  the first node to start on a new version (or a CLI run from another machine) writes
+  one. On a cluster the file is informational, and Postgres takes no snapshot. A
+  cluster's schema rollback is an explicit `ferrite migrate down --to <N>` (or provider
+  PITR), per the runbook in §3.
+- **Other commands:** `import-site` and `db copy` migrate their target without writing
+  the file. `restore` does not migrate; the restored database (with the
+  `last_binary_version` it was backed up with) is recorded by its next start like any
+  other.
 
 ### Version skipping
 
@@ -28,7 +199,14 @@ ferrite self-update [--version X] [--channel stable]
 
 ## 2. Rollback (priority #1 per D3)
 
-There are two cases, both supported:
+```
+ferrite rollback [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]
+```
+
+As built in M4-2 (`crates/ferrite/src/update/rollback.rs`; ruling P32). There are two
+cases, both supported. Rollback goes back **one step**: to the binary kept as
+`ferrite.prev` and the move `upgrade.json` records (§1). It restarts nothing; like
+`self-update` it prints the restart command.
 
 ### a) Expand-only upgrade (the normal case)
 
@@ -36,10 +214,27 @@ Because of expand/contract ([02 §8](02-storage.md#8-upgrade-compatibility-expan
 the previous binary runs against the new schema. Rolling back the binary is enough:
 
 ```
-ferrite rollback            # run with either binary
+ferrite rollback [--data DIR]      # run with either binary
 ```
 
-- Swaps `ferrite.prev` ↔ `ferrite` and restarts. No schema change. Instant.
+- It needs `ferrite.prev` beside the binary (symlinks resolved; `self-update` keeps it);
+  without one it refuses (exit 1).
+- Run as `ferrite` or as `ferrite.prev`, it swaps the two (`update::swap::swap_with_prev`:
+  both are copied to temp files in the folder and renamed into place, so neither path is
+  ever missing). Running it again re-upgrades.
+- With `--data DIR` it first runs the binary that will become `ferrite` with
+  `migrate status --data DIR` and shows the output. Exit 0 or 2 goes on; exit 3 (that
+  binary cannot open the schema, e.g. a contract migration raised `min_binary_version`)
+  refuses with **exit 3** and says to run `rollback --schema` with the newer binary first;
+  any other result refuses (exit 1; with SQLite the status cannot be read while `serve`
+  holds the folder lock: stop it, or leave out `--data` to skip the check). Another cause
+  is the config: an older binary refuses keys it does not know, such as `[server.tls]`
+  and `server.metrics_listen` (and their `FERRITE_SERVER__*` overrides), which builds
+  before M4-2 lack. The refusal says to remove them first; without `--data` the swap
+  prints the same note, since nothing was checked.
+- It does not touch `upgrade.json` or `schema_meta.last_binary_version`. The older binary's
+  next start keeps the record and updates the key (§1), so a schema rollback afterwards
+  still finds the move.
 
 ### b) Schema must go back too
 
@@ -47,25 +242,93 @@ Needed when the upgrade included a contract migration, or the operator wants the
 old schema:
 
 ```
-ferrite rollback --schema   # must be run with the NEWER binary (it holds the down migrations)
+ferrite rollback --schema --data DIR [--allow-lossy | --restore-snapshot [--yes]]
 ```
 
-1. Read `data/upgrade.json`.
-2. Run `down` migrations to `schema_from` (refuses lossy steps unless `--allow-lossy`;
-   instead offers `--restore-snapshot`).
-3. `--restore-snapshot`: stop-the-world restore of the pre-upgrade SQLite snapshot
-   (current DB moved to `backups/rolled-back-<ts>.db`, never deleted automatically).
-   Content written since the upgrade is lost in this mode — the tool says so and asks
-   for confirmation.
-4. Swap binaries, restart.
+The **down migrations ship with the newer binary**, so `--schema` must run as the binary
+`upgrade.json` names as `to`. A binary rollback can run first; then `to` is
+`ferrite.prev` and the record still says `to: <newer>`. Any other binary is refused
+(exit 1, naming the version and `ferrite.prev`). The "run with either binary" of (a) does
+not hold here.
 
-The important ordering point: **down migrations ship with the newer binary**, so schema
-rollback is always driven by the newer binary before swapping back.
+1. **Read `upgrade.json`** strictly (`upgrade::load`). No file, an unreadable one or another
+   format version refuses (exit 1); for a schema rollback without a record use
+   `ferrite migrate down --to N`. When run as `ferrite` (no binary rollback yet) it needs
+   `ferrite.prev` before changing anything. The binary that will run afterwards
+   (`ferrite.prev`, or `ferrite` after a binary rollback) must report the record's `from`
+   on `--version`; otherwise it refuses before any change (a record with `from: null`
+   is not checked).
+2. **Down migrations** (the default): it opens the store (with SQLite this takes the
+   data-folder lock, so `serve` must be stopped) and, under the migrate lock, runs
+   `migrate_down(schema_from, allow_lossy)`. A schema already at or below `schema_from`
+   has nothing to revert. A lossy step without `--allow-lossy` refuses before any step
+   runs, names `--allow-lossy` and `--restore-snapshot` (on Postgres: PITR), and changes
+   nothing. The install id stays. Afterwards `schema_meta.last_binary_version` is set to
+   the binary that runs next (the record's `from`; for a record without one, what that
+   binary's `--version` reports), since the database is that binary's again. So a
+   re-upgrade that runs before the older binary ever starts (a `self-update` straight
+   after the rollback), or after an older binary that does not write the key (any build
+   before M4-2), records `from: <older>` and can itself be rolled back. (Found by the
+   M4-2 exit's two-binary run: without it the next record said `from: <newer>` and its
+   `rollback --schema` refused `ferrite.prev`.) `--restore-snapshot` needs no such step:
+   the snapshot was taken before the start that wrote the newer version.
+3. **`--restore-snapshot`** (SQLite only) puts the pre-upgrade snapshot back instead of
+   running down migrations:
+   - Only the path the record names is used, never one found by name. A record with
+     `snapshot: null` (nothing migrated, an unfinished upgrade, always on Postgres)
+     refuses. On Postgres it refuses with a pointer to the provider's point-in-time
+     recovery (PITR).
+   - The snapshot must be a SQLite file. The tool shows the upgrade time (`at`) and the
+     snapshot's modification time, and says that everything written since is lost.
+   - It takes `ferrite.lock` (refused while `serve` runs), then asks (`Type 'yes'`);
+     without a terminal `--yes` is required.
+   - It copies the snapshot beside the database first and, on unix, gives the copy the
+     current database's owner, group and mode (M4-2 R11: a root-run rollback leaves a
+     database the service user can open). A `chown` it may not make refuses before
+     anything moves. That includes one rare case: run as a non-root owner whose
+     `ferrite.db` has a group they are not a member of, the copy gets their own group and
+     cannot be given the database's; run it as root or fix the group first. Then it moves
+     `ferrite.db-wal`, `ferrite.db-shm` and
+     `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
+     sits beside another database file). Then it renames the copy into place. Each move is
+     a hard link plus an unlink, so an existing file is never replaced. A failed move puts
+     the moved files back; when that fails too, the error names where the database is.
+     Nothing is deleted; the snapshot itself stays. The folders are synced afterwards.
+   - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
+     SQLite would roll it back into the snapshot.
+   - The database must be on the data folder's filesystem (the moves into `backups/` are
+     links). A `database.url` pointing to another filesystem refuses with a message to
+     move the files aside and copy the snapshot by hand. A filesystem without hard links
+     (some FUSE, SMB or exFAT mounts) refuses too ("cannot move …" with the filesystem's
+     error), with nothing moved; there is no rename fallback yet (ROADMAP, "Deferred from
+     M4-2"). The record's rename in step 4 is a link too. After down migrations (the
+     default) a failed link there only warns ("rename it by hand") and leaves
+     `upgrade.json` in place: rename it by hand, so no later rollback reads a move that
+     was already undone.
+   - **Media uploaded since the upgrade** is referenced only by the moved-aside database.
+     The install id is unchanged, so the daily `artifacts.gc` (03 §6) treats those blobs as
+     unreferenced and deletes them after `media.gc_grace_days` (default 7). To keep the
+     option of recovering that content from `backups/rolled-back-<ts>.db`, copy the media
+     folder (or the bucket) aside before then, or raise `gc_grace_days` for the time
+     being.
+   - The restored database is the same install: its `install_id` is the one the snapshot
+     was taken with.
+4. **Record**: once the database step succeeded, `upgrade.json` is renamed to
+   `upgrade-rolled-back-<ts>.json` (never deleted).
+5. **Swap**: run as `ferrite`, it then swaps the binaries as in (a). Run as `ferrite.prev`
+   (after a binary rollback), they are already swapped and stay so. When the swap fails
+   after the database step, the error says so: run `ferrite rollback` to swap them.
+
+Exit codes: 0 rolled back, 3 the previous binary cannot open this schema (binary
+rollback with `--data`), 1 any other error. Refusals before the database step change
+nothing. A usage error (clap: `--schema` without `--data`, `--restore-snapshot` with
+`--allow-lossy`, an unknown flag) exits 2 before anything runs.
 
 ## 3. Upgrade & rollback (cluster / Postgres)
 
 - Deploy is the operator's (container image tag, systemd, k8s). Recommended runbook,
-  shipped in docs:
+  shipped in docs as [`docs/operations/cluster-runbook.md`](../operations/cluster-runbook.md)
+  (the solo profile's is [`docs/operations/solo-upgrade.md`](../operations/solo-upgrade.md)):
   1. Take a provider snapshot (or rely on PITR; note the timestamp).
   2. `ferrite migrate status` with the new image → review.
   3. Roll nodes ([04 §9](04-cluster.md#9-rolling-deploys)); first new node migrates.
@@ -75,6 +338,10 @@ rollback is always driven by the newer binary before swapping back.
 - `ferrite migrate status` prints the compatibility verdict for every version that the
   DB has seen (`schema_meta.min_binary_version`), so operators know whether the old
   image can run.
+- `data/upgrade.json` (§1) is informational on a cluster: only the first node of a new
+  version writes one, into its own folder, and Postgres takes no snapshot. Roll the schema
+  back with an explicit `ferrite migrate down --to <N>` (N from `migrate status` before the
+  deploy), not from that file.
 
 **Rolling deploy, as built (M1.5;
 [04 §9](04-cluster.md#9-rolling-deploys)):**
@@ -98,6 +365,7 @@ rollback is always driven by the newer binary before swapping back.
   (another node claims them at once) and deregisters it; give the process manager at
   least 15 s before SIGKILL (shutdown is bounded at 14 s; the compose example uses
   `stop_grace_period: 20s`).
+- `site.timezone` is config only: during a rolling restart nodes briefly render dates in different zones, and cached pages are in memory, so a restart clears them. Change it on all nodes in the same deploy.
 - `site.url` must not change during a rolling deploy: a node whose `site.url` differs from
   a live node's refuses to start (P15). Change it with all nodes stopped (or 30 s after the
   last one stopped).
@@ -426,10 +694,71 @@ more, not as lost ones.
   and the page-cache host is pinned to it (R25), so a TLS-terminating proxy cannot change
   the scheme (not needed while `site.url` is set to the public `https://` URL).
   `crates/ferrite-http/src/app/client.rs`.
-- Built-in ACME (solo only in v1): rustls + an ACME client crate (`instant-acme` or
-  `rustls-acme` — choose in M4), HTTP-01 on :80 or TLS-ALPN-01. Certificates stored in
-  `data/tls/`. In cluster mode ACME would need shared challenge state — out of scope;
-  use the LB.
+- **Built-in ACME (as built, M4-2 P33; solo only).** `[server.tls] mode = "acme"` (keys
+  in [01 §4](01-architecture.md#4-configuration)) serves the site over HTTPS with
+  certificates from an ACME CA (Let's Encrypt by default; `directory = "staging"` or any
+  `https://` directory URL). Crate: `rustls-acme` 0.15 on the `ring` provider only (no
+  aws-lc, P28), with its ACME client trusting webpki-roots.
+  - **Challenge: TLS-ALPN-01** on `server.tls.listen` (default `0.0.0.0:443`) itself, so
+    port 80 is not needed; the CA must reach that listener as port 443 of every name in
+    `domains`. A validation connection (ALPN `acme-tls/1` only) gets the challenge
+    certificate and is closed after the handshake.
+  - **Startup:** `site.url` must be `https://` and its host one of `domains` (default:
+    that host; DNS names only, no IP address or wildcard); `contact` is a required
+    `mailto:` URI; cluster mode (explicit, or `auto` resolving to it) is a config error:
+    ACME would need shared challenge state, so a cluster terminates TLS at the LB. The
+    TLS (and redirect) listener is bound with `server.listen` before any background task,
+    so a busy port stops startup. The ACME client then runs as a background task: it
+    deploys the cached certificate at once, otherwise orders one (until then TLS
+    handshakes fail and the plain listener still answers), renews when a third of the
+    validity is left (rustls-acme 0.15.4; 30 days of today's 90-day Let's Encrypt
+    certificates; Let's Encrypt's default becomes 64 days on 2027-02-10 and 45 days in
+    2028, which the client follows without a change, as it reads each certificate's
+    validity), and backs off after failures (logged as warnings). There is no ACME
+    Renewal Info (ARI) support in that crate, so renewals are ordinary orders.
+  - **Storage:** `<data>/tls/` (created 0700 at startup, existing files tightened to
+    0600): `account-<hash>.pem` (the account key) and `cert-<hash>.pem` (key and chain),
+    each written 0600 to a temporary file and renamed into place. The hash covers the
+    contact or domains and the directory URL, so a changed config starts a new account
+    or order: the account file is keyed by `contact` and the directory, the certificate
+    file by `domains` and the directory (`crates/ferrite/src/tls.rs`, `TlsCache::name`).
+    Backups (§4) do not include the folder; a restored site orders again.
+  - **Listeners:** `server.listen` keeps serving plain HTTP: bind it to loopback
+    (`127.0.0.1:8080`, the default), which is what `ferrite healthcheck` (http only)
+    uses. The TLS listener serves the same site (h2 and HTTP/1.1 by ALPN); handshakes run
+    concurrently (at most 1 024 at once, 10 s each), and the client address is the TCP
+    peer as on plain HTTP (`server.trusted_proxies` applies). Every response over TLS has
+    `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`), the plain
+    listener's never. `redirect_http` (optional, e.g. `0.0.0.0:80`) answers every request,
+    whatever its method or `Host`, with `301` to the same path and query on `site.url`'s
+    origin, and serves nothing else. `serve` prints `Listening on https://<addr>` too; at
+    shutdown all listeners drain together (§8 `serve`).
+  - **First setup, rate limits and restores.** Try `directory = "staging"` first: its
+    certificates are not trusted by browsers, but its limits are much higher, so a wrong
+    DNS record, firewall or port mapping costs nothing. Let's Encrypt production allows
+    (its rate-limits page, checked 2026-10-30) 5 authorization failures per identifier per
+    account an hour, 5 certificates for the exact same set of names every 7 days, 50
+    certificates per registered domain every 7 days and 300 new orders per account every 3
+    hours. The client retries a failure after 1, 2, 4, 8 … s (doubling up to 2^16 s,
+    about 18 h), so a broken setup can use up the 5 failures an hour within a few
+    minutes (derived from those waits plus order polling, not measured) and then waits.
+    Switching back to `production` orders afresh (the cache files are per directory).
+    `<data>/tls/` is not in backups, so every restore, and every change of `domains`,
+    orders a new certificate, which counts against the 5-per-7-days duplicate limit:
+    restoring or re-creating a site more than a few times a week can leave it without a
+    certificate until the window passes (copy `<data>/tls/` along by hand to avoid that).
+    A changed `contact` only registers a new account (10 per IP address every 3 hours):
+    the cached certificate for the same `domains` and directory keeps being served and is
+    renewed under the new account.
+  - **Ports below 1024** need `CAP_NET_BIND_SERVICE` (systemd `AmbientCapabilities=`) or
+    a port mapping (Docker `-p 443:8443` with `listen = "0.0.0.0:8443"`).
+  - **Verified** by `crates/ferrite/tests/tls.rs`: HSTS only on TLS, the redirect
+    listener, the file modes, and `acme_against_pebble_serves_https` (with
+    `FERRITE_TEST_PEBBLE=1`; it runs `ghcr.io/letsencrypt/pebble` pinned by digest in
+    Docker with real TLS-ALPN-01 validation back to the node as `host.docker.internal`,
+    the test adds it with `--add-host=host.docker.internal:host-gateway` for Linux
+    Docker). Not verified: Let's Encrypt
+    itself, renewal at expiry.
 
 ## 6. Metrics & logs
 
@@ -464,31 +793,174 @@ retry `system:write`) have:
   page cache's pending maintenance on each call: fine for an admin page, not for a
   tight polling loop.
 
-**Planned (M4).** A node-local metrics registry and `/metrics` (Prometheus); in cluster
-mode each node writes a 1-minute summary row (`node_metrics`, retained 7 days) so the
-dashboard can show cluster-wide figures and time series. (Prometheus remains the source
-of truth for real monitoring.)
+**As built (M4-2 P34): the registry and `/metrics`.** Each node has one registry
+(`ferrite_http::metrics::Metrics`, built by `serve`); the families, labels and buckets
+are in [01 §7](01-architecture.md#7-observability). `/metrics` is served only when
+`[server] metrics_listen` is set (for example `"127.0.0.1:9464"`; off by default), on
+that separate listener, which answers `GET /metrics` and nothing else (another path is
+`404`, another method `405`). It has no auth: bind it to loopback or a private network
+and let Prometheus scrape each node. The public listener never serves it (`/metrics`
+there is an ordinary page path: a redirect to `/metrics/`, then the 404 page). A bind
+failure stops startup like `server.listen`'s; the listener stops with the background
+tasks at shutdown, so the drain can still be scraped. Counters start at zero when the
+node starts.
+
+Prometheus scrape config, per node:
+
+```yaml
+scrape_configs:
+  - job_name: ferrite
+    static_configs:
+      - targets: ["10.0.0.5:9464", "10.0.0.6:9464"]
+```
+
+`Metrics::snapshot()` gives the cumulative counters (requests and 5xx errors of every class but `other`, so load-balancer health checks stay out (ruling R3; `/metrics` counts every class), page views
+(`200` answers and `304` revalidations of public HTML pages, M4-2 R8), cache hits and
+misses, plugin calls and failures, jobs completed and failed attempts of
+this node's runner, and the page-class latency buckets) that the per-minute
+`node_metrics` rows are made from.
+
+**As built (M4-2 P35): `node_metrics` and the series.** Every node, solo included, writes
+one row per minute to `node_metrics` (migration `0012_node_metrics`; key `node_id`,
+`minute`; the counts `requests`, `errors_5xx`, `page_views`, `cache_hits`,
+`cache_misses`, `plugin_calls`, `plugin_failures`, `jobs_done`, `jobs_failed`, and the
+page latency histogram `page_le_5` … `page_le_10000`, `page_over_10000`). The writer is a
+`serve` background task, not a job
+(`crates/ferrite/src/node_metrics.rs`): at every whole UTC minute of the wall clock it
+diffs two registry snapshots and writes the delta under the minute its period started
+in, so the first, partial minute after a boot has a row of its own. The histogram counts
+that minute's page responses per latency bucket (at most 5, 10, 25, 50, 100, 250, 500,
+1000, 2500, 5000 and 10000 ms, then over 10 s; not cumulative), so the histograms of
+several minutes and nodes add up (M4-2 R7). A write adds to an existing (node, minute)
+row (every count added, the histogram's too), so a write that failed is carried by the next
+one (still under its own minute; logged) and a repeated minute never conflicts. So
+after a database outage the traffic of the whole outage shows as one spike in the
+outage's first minute followed by zeros: nothing is lost, it is filed late. A periodic
+write has no timeout of its own (an abandoned statement could still commit and the
+kept delta would count twice); only the final flush is bounded. At
+shutdown, after the request drain and the job runner, the partial minute is flushed once
+more (at most 500 ms, inside the 1 s background stop). Rows have no foreign key to
+`nodes`: a stopped node's figures stay for their 7 days. `node_metrics.prune` (hourly,
+with the other built-in prunes, in batches of 10 000) deletes rows older than 7 days on
+the database clock; about 10 000 rows per node per week. The table is not exported
+(transient, like `jobs` and `nodes`). Node clocks are trusted for the minute (NTP);
+the database clock only for the prune.
+
+`GET /api/v1/system/metrics/series?from&to&step=minute|hour|day[&node=<id>]`
+(`manage_system` + `system:read`): `from` and `to` are RFC 3339; the range is widened to
+whole buckets (aligned to the Unix epoch, so days are UTC days) and returned as
+`{from, to, step, node, buckets: [{start, requests, …, p95_ms, page_latency}]}`,
+**dense** (every bucket of the range, zeros where no node wrote a row) and ascending.
+Each bucket sums the minutes of every node (or of `node` only), the histogram per latency
+bucket too (`page_latency`: the 12 counts), and `p95_ms` is computed from that sum: the
+upper bound (ms) of the latency bucket holding the 95th percentile of all the bucket's
+page responses (the first bucket whose running total reaches ceil(0.95 × total); 10000
+also for anything slower; 0 without page responses). It is exact to the bucket over any
+range and across nodes, never the largest of the minutes' values (M4-2 R7); summing
+`page_latency` over several buckets gives a longer range's p95 the same way (the
+dashboard's headline). A minute series spans at most 24 h, hour and day
+series 7 days (`422`, field `step`); `to` not after `from` is `422` (field `to`); a
+malformed value is `400`. (Prometheus remains the source of truth for real monitoring.)
 
 ## 7. Packaging
 
-- Release targets: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`,
-  `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`,
-  `x86_64-apple-darwin` (wasmtime/cranelift support for all to verify in CI).
-- **Docker image (as built, M1.5; admin stage M2b-1):** `Dockerfile` at the repository
-  root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g pnpm@10.28.2`,
-  `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA; `rust:1-bookworm`
-  (current stable, matching `rust-toolchain.toml`'s `channel = "stable"`) copies its
-  `/src/admin/dist` in and builds `cargo build --release --locked -p ferrite`, which embeds
-  it; the runtime is
-  `gcr.io/distroless/cc-debian12:nonroot` (glibc, no shell, uid 65532) with the binary at
-  `/ferrite`, an empty `/data` owned by the non-root user, `VOLUME /data`, `EXPOSE 8080`,
-  `ENTRYPOINT ["/ferrite"]`, `CMD ["serve", "--data", "/data"]`. CA certificates come with
-  the distroless base. `.dockerignore` keeps `target/`, `.git`, docs, examples and the admin's local
-  `node_modules`, `dist`, `test-results`, `e2e/.auth` and `.tanstack` out of the build context. Health checks use `ferrite healthcheck` (§8), because the image has
-  no shell, curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs
-  `config check` in it; publishing images is M4.
-- systemd unit with hardening (`ProtectSystem=strict`, `ReadWritePaths=/var/lib/ferrite`,
-  `NoNewPrivileges`, `MemoryMax`) (M4).
+**As built (M4-2 P25, P27, P37, P38; rulings M4-2 R4, R5).** Nothing has been published
+yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
+
+- **Release targets and runners** (`.github/workflows/release.yml`, job `build`; each on a
+  native runner, so wasmtime is never cross-compiled; R4):
+
+  | Target | Runner | Notes |
+  |---|---|---|
+  | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` | needs glibc 2.35 or newer |
+  | `aarch64-unknown-linux-gnu` | `ubuntu-22.04-arm` | needs glibc 2.35 or newer |
+  | `x86_64-unknown-linux-musl` | `ubuntu-24.04` | static (`musl-tools`; checked with `readelf`/`file`) |
+  | `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | static, as above |
+  | `aarch64-apple-darwin` | `macos-15` | |
+  | `x86_64-apple-darwin` | `macos-15-intel` | |
+
+  Each runs `cargo build --release --locked -p ferrite --target <triple>` over the admin
+  built once (`pnpm -C admin build`, job `admin`), checks that `--version` prints
+  `ferrite <version>`, and packs `ferrite-<version>-<target>.tar.gz`
+  (`.github/scripts/package.sh`: a folder `ferrite-<version>-<target>/` with `ferrite`
+  0755, `README.md` and any `LICENSE*`). The crypto is ring only (P28: no cmake or clang);
+  the musl builds compile the bundled C code (SQLite, zstd) with `musl-gcc` and need the
+  host's CA certificates at run time (`packaging/systemd/README.md`). The release profile
+  is `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"` (P27); the
+  `aarch64-apple-darwin` binary is 53.5 MB (M4-2 exit). Only `aarch64-apple-darwin` has
+  been built and packed outside GitHub (the exit); the other five are first proven by a
+  real run.
+- **The release workflow** (`release.yml`, every action pinned by commit SHA): a `v*` tag
+  push publishes; `workflow_dispatch` is a dry run by default (the same builds, signed
+  with a throwaway key made in the job, uploaded as workflow artifacts only; its binaries
+  embed the placeholder key, so they can only be self-update-tested with a `test-seams`
+  build). Jobs:
+  - `meta`: the version from `Cargo.toml` (the tag must be `v<version>`), whether it is
+    a prerelease (`X.Y.Z-…`), whether this run publishes, and from
+    `.github/scripts/newest.sh` whether it is the newest stable version overall
+    (`latest`) and of its `X.Y` line (`minor_latest`); a publishing run refuses while
+    `crates/ferrite/release.pub` is the placeholder.
+  - `admin`, then `build` (the matrix above).
+  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the six assets
+    (`.github/scripts/sums.sh` refuses any other count), signed with minisign
+    (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and
+    `MINISIGN_PASSWORD`, then checked against the committed key
+    (`.github/scripts/verify-sig.sh`). `sign-dry-run` does the same with a throwaway key.
+  - `release` (environment `release`): a draft GitHub Release (a draft left by a failed
+    run of the same tag is reused; an already published one stops the run), the eight
+    assets uploaded and counted, then published, marked "latest" only when `latest`
+    (so a backport never becomes the release `self-update` installs; prereleases are
+    marked as such).
+  - `image` and `image-tags` (environment `release`, `packages: write`): the image built
+    natively per platform (`linux/amd64` on `ubuntu-24.04`, `linux/arm64` on
+    `ubuntu-24.04-arm`, no QEMU; R5), pushed by digest with the OCI labels `source`
+    (which links the package to the repository), `version` and `revision`, then joined
+    with `docker buildx imagetools create` under `ghcr.io/<owner>/<repo>:<X.Y.Z>`, plus
+    `:<X.Y>` when `minor_latest` and `:latest` when `latest`.
+
+  The environment `release` (deployment policy: `v*` tags only; required reviewers where
+  the plan allows) is what keeps the signing key from a branch with an edited workflow;
+  the repository's settings are the user's (release gate). In a private repository
+  environments and their secrets need GitHub Pro or Team, and required reviewers are not
+  available there below GitHub Enterprise (GitHub's docs, read 2026-10-30). A new GHCR package is private until made
+  public. Not yet done: image signing or provenance (cosign, GitHub attestations).
+- **CI checks** (`ci.yml`): job `packaging` greps `Cargo.lock` for `aws-lc` (stricter
+  than `cargo tree`: dev dependencies too, P28), runs `systemd-analyze verify` and
+  `systemd-analyze security --offline=true` on the unit, and `shellcheck` on
+  `.github/scripts/*.sh`; job `compat` is the backward-compatibility check (02 §8).
+- **Docker image (as built, M1.5; admin stage M2b-1; digests M4-2):** `Dockerfile` at the
+  repository root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g
+  pnpm@10.28.2`, `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA;
+  `rust:1-bookworm` (current stable, matching `rust-toolchain.toml`'s `channel =
+  "stable"`) copies its `/src/admin/dist` in and builds `cargo build --release --locked -p
+  ferrite`, which embeds it; the runtime is `gcr.io/distroless/cc-debian12:nonroot` (glibc,
+  no shell, uid 65532) with the binary at `/ferrite`, an empty `/data` owned by the
+  non-root user, `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
+  "--data", "/data"]`. Every base is pinned as `name:tag@sha256:<multi-arch index
+  digest>` (P37; the digests matched their tags on 2026-10-30, `docker buildx imagetools
+  inspect`); bump them by hand. CA certificates come with the distroless base.
+  `.dockerignore` keeps `target/`, `.git`, docs, examples and the admin's local
+  `node_modules`, `dist`, `test-results`, `e2e/.auth` and `.tanstack` out of the build
+  context. Health checks use `ferrite healthcheck` (§8), because the image has no shell,
+  curl or wget. CI builds the image (`docker build -t ferrite:ci .`) and runs `config
+  check` in it. `self-update` and `rollback` do not apply in a container (the binary is
+  not writable there): deploy a new image tag instead (§3).
+- **systemd (as built, M4-2 P37):** `packaging/systemd/ferrite.service` and its install
+  guide `packaging/systemd/README.md`. The unit runs `ferrite serve --data
+  /var/lib/ferrite` as `User=ferrite`; `Restart=on-failure`, `RestartSec=5`, at most five
+  starts in ten minutes (`StartLimitIntervalSec=600`, `StartLimitBurst=5`, M4-2 R9: a
+  failing upgrade does not loop, each start taking another snapshot);
+  `TimeoutStopSec=30`; `UMask=0027`; `MemoryMax=1G`, `LimitNOFILE=65536`;
+  `CAP_NET_BIND_SERVICE` as the only capability (ACME on 443/80); `ProtectSystem=strict`
+  with `ReadWritePaths=/var/lib/ferrite` (a local `[backup] to` or `[media] root` outside
+  it needs a drop-in), `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `NoNewPrivileges`,
+  the `Protect*` kernel, clock and hostname settings, `Restrict*`, `LockPersonality`,
+  `SystemCallArchitectures=native`; no `MemoryDenyWriteExecute` (wasmtime compiles
+  WebAssembly at run time). The binary is root-owned and read-only to the unit, so
+  `self-update` and `rollback` run as root outside it, then `systemctl restart ferrite`
+  ([solo-upgrade runbook](../operations/solo-upgrade.md)). `systemd-analyze verify`
+  passes with systemd 255 (Ubuntu 24.04 container, M4-2 exit; `security` rates it 3.2,
+  "OK").
 - **Cluster example (as built, M1.5):** `examples/cluster/` — `docker-compose.yml`,
   `ferrite.toml`, `ferrite.env`, `Caddyfile`. Usage (also in the compose file's header):
 
@@ -525,7 +997,7 @@ of truth for real monitoring.)
 
 ## 8. CLI summary
 
-### Implemented (M1c-1 to M4-1: `crates/ferrite`)
+### Implemented (M1c-1 to M4-2: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -560,7 +1032,41 @@ ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]           
 ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
+ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
+ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ```
+
+**`ferrite self-update`** (`crates/ferrite/src/update/`; §1): replaces the running binary
+with a newer signed release of this target, keeping the old one as `ferrite.prev`, and
+prints the restart command (it restarts nothing). `--version X` picks a release (older or
+equal is refused: use `rollback`); `--check` only reports; `--yes` skips the confirmation
+(required without a terminal); `--data DIR` also shows the new binary's `migrate status`.
+Exit 0 updated or up to date, 2 a newer release exists (`--check`), 1 on any error (a bad
+signature or sha256, no asset for this target, a new binary that does not report the
+release's version, an unwritable binary folder, a build without a release key); every
+refusal leaves the binary untouched. A usage error (clap: an unknown flag, a missing
+value) exits 2 too, before anything runs, so a wrapper around `--check` must not read 2
+alone as "an update is available" (check for the `a newer release is available` line).
+Test seams (`test-seams` builds only): a hidden
+`--base-url` replaces the GitHub API root (plain HTTP allowed), a hidden
+`--test-current-exe PATH` the running binary's path, a hidden `--test-download-deadline-ms`
+the 10-minute download bound, and `FERRITE_TEST_RELEASE_PUBKEY` the embedded key.
+
+**`ferrite rollback`** (`crates/ferrite/src/update/rollback.rs`; §2): without `--schema`
+swaps `ferrite` and `ferrite.prev` (either binary may run it; again re-upgrades); `--data
+DIR` first runs the kept binary's `migrate status` and refuses with exit 3 when it cannot
+open the schema. `--schema` (needs `--data`, runs only as the binary `upgrade.json` names as
+`to`) runs the down migrations to the record's `schema_from` under the migrate lock (SQLite:
+`serve` stopped); `--allow-lossy` allows lossy steps. `--restore-snapshot` (with `--schema`,
+SQLite only, not with `--allow-lossy`) restores the snapshot the record names, after
+confirmation (`--yes` without a terminal), moving `ferrite.db[-wal|-shm]` to
+`backups/rolled-back-<ts>.db[-wal|-shm]`. A rollback that used the record renames it to
+`upgrade-rolled-back-<ts>.json`. Exit 0 rolled back, 3 the previous binary cannot open this
+schema, 1 any other error (no `ferrite.prev`, no or unreadable `upgrade.json`, the wrong
+binary, a lossy step without `--allow-lossy`, Postgres or no recorded snapshot with
+`--restore-snapshot`, no confirmation, the folder locked); a usage error (clap) exits 2.
+After a schema rollback `schema_meta.last_binary_version` names the older binary (§2 b).
+Test seam (`test-seams` builds only): a hidden `--test-current-exe PATH`.
 
 **`ferrite import wordpress`** (`crates/ferrite/src/import_cmd.rs`; design 08): imports a
 WXR file as the active admin `--as` names (default: the first active admin). Writes
@@ -582,8 +1088,10 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (`mode`
-is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `backup` the `[backup] schedule`), exit
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (`mode`
+is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail`
+whether `[mail]` is set, `metrics` the `server.metrics_listen` address, `tls` the
+`[server.tls] mode`, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
 Checks that need the database (site id, live nodes, migrations) are not part of it.
@@ -591,7 +1099,9 @@ Checks that need the database (site id, live nodes, migrations) are not part of 
 `config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
 work but may cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
 attributes; Ferrite sets none on stored artifacts today, so it costs nothing yet, and it is the
-value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
+value §4a lists for AWS S3), and for settings without effect: each `[server.tls]` key
+(`domains`, `contact`, `directory`, `listen`, `redirect_http`) set while `mode` is `"off"`
+(`warning: server.tls.<key>: ignored: server.tls.mode is "off"`). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
 `serve` would refuse, a local folder included that is not empty and not a repository, and, on
 SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
 
@@ -773,7 +1283,9 @@ also installs the `ring` rustls default crypto provider at start.
   up to date or newer-but-compatible schema, **2** migrations pending, **3** schema
   incompatible with this binary, **1** any error (bad config, missing database, connection
   failure, and so on).
-- `up [--to N]` applies pending migrations (all, or up to version `N`).
+- `up [--to N]` applies pending migrations (all, or up to version `N`), under the migrate
+  lock, and records the move like a `serve` start: `<data>/upgrade.json` and
+  `schema_meta.last_binary_version` (§1; `crate::upgrade::migrate_and_record`).
 - `down --to N` reverts everything above version `N`. Migrations whose down loses data need
   `--allow-lossy`. It asks for typed confirmation (`yes`) on a terminal and refuses to run
   without `--yes` when stdin is not a terminal.
@@ -804,15 +1316,25 @@ also installs the `ring` rustls default crypto provider at start.
   and check them against the registered types and taxonomies; load the active theme (at
   startup a broken one falls back to the embedded `blog`, 06 §7); install the enabled plugins
   (a broken row is skipped, 05 §7a); build the route table; bind `server.listen` (default
-  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one); start
-  the background tasks: the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
-  hot-reload task, the plugin-failure flusher (every 5 s), the `request.served` flusher
-  (every 10 s or 1 000 events, M2a-2a), the job runner (`cluster.workers` handlers; prune
-  jobs, scheduled publishing, `plugin.action`, `plugin.purge`), the periodic scheduler
-  (every 10 s: the prune jobs hourly, `content.publish_due` every 30 s,
-  `plugin.purge_sweep` daily) and the heartbeat (every 10 s); print
-  `Listening on http://<addr>` on stdout. A failure after joining the registry removes the
-  node's row again.
+  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one),
+  `server.metrics_listen` when set (§6), and with `[server.tls] mode = "acme"`
+  `server.tls.listen` and `redirect_http` (§5; `<data>/tls/` is created 0700 here), all
+  before any background task, so a busy port fails startup and releases what was bound;
+  start the background tasks (with TLS also the ACME client): the invalidation loop (with
+  `LISTEN` wake-ups in cluster mode) and the hot-reload task, the plugin-failure flusher
+  (every 5 s), the `request.served` flusher (every 10 s or 1 000 events, M2a-2a), the
+  redirect-hits flusher (every 10 s), the job runner (`cluster.workers` handlers; prune
+  jobs including `node_metrics.prune`, scheduled publishing, `plugin.action`,
+  `plugin.purge`, `media.variants`, `permalink.redirects`, `import.wordpress`,
+  `artifacts.gc`, `site.backup`), the periodic scheduler (every 10 s: the prune jobs
+  hourly, `content.publish_due` every 30 s, `plugin.purge_sweep` and `artifacts.gc`
+  daily, `site.backup` when `[backup]` is on), the heartbeat (every 10 s) and the
+  `node_metrics` minute writer (one row per whole UTC minute, §6); print `Listening on
+  http://<addr>` on stdout, and with TLS `Listening on https://<addr>` too. `/metrics` is
+  served on `server.metrics_listen` only. A failure after joining the registry removes
+  the node's row again. The migration check also records the start (§1): it writes
+  `upgrade.json` when the binary or the schema changed and sets
+  `schema_meta.last_binary_version`.
 - **Hot swap** (ruling P18, 04 §8): `theme.changed`, `plugins.changed`, `plugin.disabled`
   (the plugin stops on this node at once) and `options.changed` for `permalink.post` /
   `permalink.page` make one background task re-read the theme, the plugins or the permalink
@@ -833,9 +1355,12 @@ also installs the `ring` rustls default crypto provider at start.
 - **Shutdown** on SIGINT or SIGTERM: stop accepting connections and stop the job runner at
   once; open requests get up to 10 s while running jobs get 9 s, after which the runner
   releases the rest without using an attempt (another node takes them at once; the runner
-  is abandoned after 12 s, ruling R6); then the background tasks stop (the failure flusher
-  writes once more, the `request.served` buffer is flushed into jobs once more, mail sends
-  still running are cancelled) and the node deregisters, together within 1 s; the database pools close
+  is abandoned after 12 s, ruling R6); every listener (plain, TLS, redirect) drains in the
+  same 10 s; then the background tasks stop (the failure flusher writes once more, the
+  `request.served` buffer is flushed into jobs once more, the redirect hits are written
+  once more, the partial minute's `node_metrics` row is flushed (at most 500 ms), the
+  ACME task and the `/metrics` listener stop, mail sends still running are cancelled) and
+  the node deregisters, together within 1 s; the database pools close
   (up to 2 s, cut so that shutdown so far ends within 13 s of the signal); `main` then shuts
   the runtime down with a 1 s grace, dropping connection tasks still running. A clean
   shutdown exits 0; the process is gone at most 14 s after the first signal. A signal
@@ -844,7 +1369,9 @@ also installs the `ring` rustls default crypto provider at start.
 - **Health:** `/healthz` is `200 ok`; `/readyz` is `200` when a store read succeeds within
   2 s and the startup migration check passed, else `503`.
 - **Settings it uses** (`[server]`, `[cache]`, `[plugins]`, 01 §4): `server.listen`,
-  `server.trusted_proxies` (§5), `cache.max_bytes` (default 256 MB), `cache.poll_interval_ms`
+  `server.trusted_proxies` (§5), `server.metrics_listen` (§6), `[server.tls]` (`mode`,
+  `domains`, `contact`, `directory`, `listen`, `redirect_http`; §5), `site.timezone`
+  (the themes' `date` filter, 06), `[backup]` (§4), `cache.max_bytes` (default 256 MB), `cache.poll_interval_ms`
   (default 250; how often the invalidation loop reads the event outbox),
   `plugins.render_deadline_ms` (default 200, ruling R18; the hard timeout is 1.5 × it),
   `plugins.action_deadline_ms`, `plugins.default_memory`, `plugins.default_fuel`,
@@ -946,6 +1473,5 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
-ferrite self-update / rollback [--schema] [--restore-snapshot]  # M4
 ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```

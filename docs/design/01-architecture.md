@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M2a-1: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M4-2: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -21,11 +21,19 @@ ferritecms/
 │   │                             #   (`archive`, `site_copy`, `export_cmd`), `backup`/`restore`
 │   │                             #   (`backup/`), `media sync|gc|regenerate` (`media_cmd`,
 │   │                             #   `media_url`, `gc`), the `artifacts.gc` and `site.backup`
-│   │                             #   jobs (`jobs/{gc,backup}.rs`)
+│   │                             #   jobs (`jobs/{gc,backup}.rs`). M4-2: `self-update` and
+│   │                             #   `rollback` (`update/{mod,release,verify,swap,rollback}.rs`),
+│   │                             #   `upgrade` (`upgrade.json`, `last_binary_version`), `tls`
+│   │                             #   (ACME via rustls-acme, the TLS and redirect listeners),
+│   │                             #   `node_metrics` (the minute writer), `build.rs` (the target
+│   │                             #   triple) and `release.pub` (the embedded release key)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
-│   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
+│   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
+│   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
-│   │                             #   the table `catalogue`, `export` reader, `import_writer`
+│   │                             #   the table `catalogue`, `export` reader, `import_writer`;
+│   │                             #   M4-2: `MigrateReport`, `NodeMetricsRepo` (`node_metrics`,
+│   │                             #   skipped by the catalogue like `jobs`)
 │   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
 │   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
@@ -72,7 +80,9 @@ ferritecms/
 │   │                             #   `index.html`; M3-1: `import_fetch::HttpSource`, the
 │   │                             #   import's attachment fetcher over the egress SSRF rules;
 │   │                             #   M3-2: the `/import` endpoints and `import_blobs::MediaArtifacts`,
-│   │                             #   core's report storage over the media store))
+│   │                             #   core's report storage over the media store; M4-2: the
+│   │                             #   metrics registry and `/metrics` text (`metrics`), HSTS
+│   │                             #   and the redirect app (`tls`), the series endpoint))
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
@@ -96,8 +106,13 @@ ferritecms/
 │                                 #   counter, settings-probe, fetcher, admin-e2e (the admin
 │                                 #   E2E's plugin, M2b-3), hostile/*; seo, analytics,
 │                                 #   contact-form are M4
+├── packaging/systemd/            # (M4-2) ferrite.service + install guide (09 §7)
+├── Dockerfile                    # (M1.5; digests pinned M4-2) the image (09 §7)
+├── .github/                      # workflows ci.yml, release.yml (M4-2); scripts/ (package,
+│                                 #   sums, verify-sig, newest, compat; M4-2)
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
-└── docs/
+└── docs/                         # design/, superpowers/ (plans, rulings, exits), operations/
+                                  #   (M4-2: cluster-runbook.md, solo-upgrade.md)
 ```
 
 > Migrations live in each store crate (`crates/ferrite-store-*/migrations/`); CLAUDE.md
@@ -135,11 +150,14 @@ with core and themes); `ferrite-http` adapts between them (`StoreHostServices`).
 Only the binary crate depends on concrete store crates; everything else sees
 `Arc<dyn Store>` (see [02](02-storage.md#repository-layer)). Both store crates are always
 compiled in; Cargo features to leave one out (`sqlite`, `postgres`) are planned but do not
-exist yet (no `[features]` section in any crate).
+exist yet. The only Cargo features are the `test-seams` ones of `ferrite`, `ferrite-http`,
+`ferrite-core` and `ferrite-import-wp` (10 §2), which only tests enable. M4-2 added no
+crate edges, only external dependencies (`minisign-verify`, `rustls-acme`,
+`tokio-rustls`, `webpki-roots`, `flate2` and `jiff`; `minisign` and `rcgen` for tests).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains (as built after M2a-2a; planned parts marked):
+One `ferrite serve` process contains (as built after M4-2; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
@@ -157,7 +175,10 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
-| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); later `/metrics` (M4) | ferrite-http |
+| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); with `[server.tls] mode = "acme"` the same site over HTTPS on `server.tls.listen` (HSTS) and an optional `redirect_http` listener that only answers `301` (M4-2, 09 §5) | ferrite-http + ferrite (bin) |
+| ACME client | `rustls-acme` on the TLS listener (TLS-ALPN-01), certificates and account key in `<data>/tls/`, renewal and backoff (M4-2 P33; solo only) | ferrite (bin) |
+| Metrics | One registry per node (`ferrite_http::metrics::Metrics`): request counts and latency by class, page views, page cache, plugin hooks, jobs, DB pool, nodes; `/metrics` only on `server.metrics_listen` (M4-2 P34, §7) | ferrite-http + ferrite (bin) |
+| Minute writer | One `node_metrics` row per node and whole UTC minute from the registry's deltas, flushed at shutdown (M4-2 P35, 09 §6) | ferrite (bin) |
 | Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a), `media.variants` (M2a-2b), `permalink.redirects` and `import.wordpress` (M3-2; 04 §6) | ferrite-cluster + core + ferrite (bin) |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
@@ -171,18 +192,25 @@ with `[mail]`, the SMTP mailer and mail queue (a value lettre refuses exits 1) �
 from the `plugins` table + artifacts (a broken row is skipped) → route table → the API's
 services (`AuthService`, users, content types, options, the node's extension
 `Installer`) → bind
-`server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
-reloader hook, plugin-failure flusher, `request.served` flusher, job runner, periodic
-scheduler, heartbeat → serve the
-public site with the API merged in front of it (`build_site`) and print
-`Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
+`server.listen`, `server.metrics_listen` when set, and with TLS `server.tls.listen` and
+`redirect_http` (all before any background task, so a busy port fails cleanly) →
+background tasks: invalidation loop (`LISTEN` in cluster mode) with the reloader hook,
+plugin-failure flusher, `request.served` flusher, redirect-hits flusher, job runner,
+periodic scheduler, heartbeat, `node_metrics` minute writer, the `/metrics` listener and
+the ACME client → serve the public site with the API merged in front of it
+(`build_site`) and print `Listening on http://<addr>` (and `Listening on https://<addr>`
+with TLS). The migration check is also where the start is recorded (M4-2 P30): it writes
+`<data>/upgrade.json` when the binary version or the schema changed and sets
+`schema_meta.last_binary_version` (09 §1). Signal handlers are installed before all of this; a signal
 during startup exits at once (130/143), after deregistering the node (bounded at 1 s) if it
 had already joined.
 
 Shutdown on SIGINT or SIGTERM, as built: stop accepting **and** stop the job runner → drain
 open requests for up to 10 s while running jobs get 9 s, then the rest are released without
-using an attempt (runner abandoned after 12 s) → stop the background tasks (final failure
-flush) and deregister the node (together up to 1 s) → close the database pools (up to 2 s,
+using an attempt (runner abandoned after 12 s); the plain, TLS and redirect listeners
+drain together → stop the background tasks (final failure flush, `request.served` and
+redirect-hits flushes, the partial minute's `node_metrics` row in at most 500 ms, the
+`/metrics` listener and the ACME client) and deregister the node (together up to 1 s) → close the database pools (up to 2 s,
 cut to end within 13 s of the signal) → the runtime gets a 1 s grace, then remaining
 connection tasks are dropped. The process is gone at most 14 s after the first signal; a
 second signal during startup or shutdown exits at once (130 for SIGINT, 143 for SIGTERM).
@@ -271,12 +299,24 @@ MB/MiB = 1024², GB/GiB = 1024³ (`cx.rs`, `parse_size`). Durations: seconds, `"
 url        = "https://example.com"     # required; absolute http(s) URL
 title      = ""                        # default empty
 locale     = "en"                      # default "en"; must not be empty
-timezone   = "UTC"                     # default "UTC"; must not be empty (not validated as a zone)
+timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. `Europe/Warsaw`), validated at load against the bundled database; an unknown name is a config error. The theme `date` filter formats in it (06 §4); permalinks stay UTC. Config only: a change needs a restart
 
 [server]
 listen     = "127.0.0.1:8080"          # default; a socket address
 trusted_proxies = []                   # CIDRs or bare IPs
-# tls = ...                            # planned (M4: ACME); rejected as an unknown key today
+# metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must not share listen's port (same or 0.0.0.0/:: address)
+
+[server.tls]                           # M4-2 (P33): built-in HTTPS, solo mode only (09 §5)
+mode       = "off"                     # "off" (default: a reverse proxy terminates TLS) | "acme"
+# contact  = "mailto:ops@example.com"  # required with acme; a mailto: URI (the ACME account contact)
+# domains  = ["example.com"]           # default: the host of site.url, which must be among them; DNS names only (no IP, no wildcard)
+# directory = "production"             # "production" (Let's Encrypt) | "staging" | an https:// ACME directory URL
+# listen   = "0.0.0.0:443"             # the HTTPS listener; TLS-ALPN-01 is answered here, so it must be reachable as :443 from the internet
+# redirect_http = "0.0.0.0:80"         # optional plain listener answering every request with 301 to site.url's origin
+# With acme: site.url must be https://; cluster mode (explicit or auto) is a config error; the
+# listeners must not share a socket with server.listen or metrics_listen. server.listen keeps
+# serving plain HTTP (keep it on 127.0.0.1 for `healthcheck`). Account key and certificates:
+# <data>/tls/ (0700, files 0600).
 
 [database]
 url        = "sqlite://ferrite.db"     # default; sqlite:… (relative to the data folder) or postgres[ql]://…
@@ -479,7 +519,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> backup=<off|daily|weekly>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes
@@ -510,9 +550,39 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 - `tracing` with JSON output in production, pretty in dev. Spans: `http.request`,
   `render`, `plugin.hook{plugin,hook}`, `db.query{repo,op}`, `job{kind}`.
-- `/metrics` (Prometheus text): request latency histograms by route class, cache
-  hit/miss, plugin hook duration/fuel/failures by plugin+hook, job queue depth/latency,
-  DB pool usage, node count.
+- `/metrics` (Prometheus text format 0.0.4; as built in M4-2, P34): served only on the
+  separate listener `server.metrics_listen` (off by default; no auth, so bind it to a
+  private address; never on the public listener), `GET /metrics` alone. The registry is
+  hand-rolled (`crates/ferrite-http/src/metrics.rs`, no dependency): atomics per route
+  class and status class on the request path, gauges read at scrape time. Families:
+  - `ferrite_build_info{version,target}` 1;
+  - `ferrite_http_requests_total{class,status}`: `class` is
+    `page|api|admin|media|plugin|preview|other` (`/api/v1`, `/admin`, `/_media` and
+    `/_theme`, `/_p`, `/_preview`; the health checks `/healthz` and `/readyz` are
+    `other`; everything else, any method, is `page`: the comment form `POST /_comment`
+    and 405s on the public site too, so their 5xx errors show), `status` is `2xx|3xx|4xx|5xx`
+    (every series is present, zeros included);
+  - `ferrite_http_request_duration_seconds{class}` (time to the response headers),
+    buckets .005 .01 .025 .05 .1 .25 .5 1 2.5 5 10;
+  - `ferrite_page_cache_hits_total`, `ferrite_page_cache_misses_total` (page cache
+    lookups), `ferrite_page_cache_entries`, `ferrite_page_cache_bytes`;
+  - `ferrite_plugin_hook_calls_total{plugin,hook}`,
+    `ferrite_plugin_hook_failures_total{plugin,hook}`,
+    `ferrite_plugin_hook_duration_seconds{plugin,hook}` with the host's buckets .001
+    .005 .025 .1 .5; labels are plugin and hook names only: every plugin route call is
+    the hook `route` (no request path in a label), and the host tracks at most 64 hooks
+    per plugin. There is no fuel family (the host keeps no fuel counter; follow-up);
+  - `ferrite_jobs{status}` (the site's jobs, one `GROUP BY`);
+  - `ferrite_db_pool_connections{state="idle|used"}` (this node's pools; SQLite: reader
+    plus writer; dedicated `LISTEN`/lock connections are not pooled);
+  - `ferrite_nodes` (live nodes: heartbeat within 30 s of the database clock);
+  - `ferrite_page_views_total`: `GET`s of public HTML pages answered `200`, or `304`
+    when a browser revalidated its stored copy (a returning reader, M4-2 R8), that are
+    not previews or logged-in requests and whose `User-Agent` does not match
+    `bot|crawler|spider|slurp|preview` (case-insensitive); nothing per visitor is kept.
+
+  A store read that fails or takes over 2 s leaves its family out of that scrape. Job
+  queue latency (named in the original design) is not exported: P34 does not list it.
 - `/healthz` (process alive) and `/readyz` (DB reachable, migrations compatible, theme
   loaded) for load balancers.
 
@@ -526,7 +596,8 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
   are `Cache-Control: no-store`. Extension endpoints check `manage_themes` /
   `manage_plugins` with the `extensions` scope in core before reading an upload.
 - Strict security headers by default (CSP for admin, `X-Content-Type-Options`,
-  `Referrer-Policy`, HSTS when TLS).
+  `Referrer-Policy`; `Strict-Transport-Security: max-age=31536000` on every response of the
+  built-in TLS listener, never on the plain one, M4-2 P33).
 - Uploaded files: content-type sniffed, SVG sanitised or served with
   `Content-Disposition: attachment` and a sandboxing CSP; never executed.
 - Plugins: see [05](05-plugin-host.md): an install needs the admin's approval of the

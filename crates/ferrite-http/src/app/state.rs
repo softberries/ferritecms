@@ -23,6 +23,7 @@ use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
 use crate::admin::{AdminAssets, AdminHeaders, EmbeddedAdmin, InvalidAdminHeader};
+use crate::metrics::Metrics;
 use crate::plugins::ServedBuffer;
 use crate::route::{RouteTable, TypeInfo};
 
@@ -70,6 +71,9 @@ pub struct HttpConfig {
     pub site_title: String,
     pub site_description: String,
     pub locale: String,
+    /// IANA zone of `site.timezone` (validated by the config loader): the zone the
+    /// theme `date` filter formats in. Config only, so a change needs a restart.
+    pub timezone: String,
     /// Cache TTL of pages whose plugin calls were volatile or failed, or whose theme
     /// helper reads failed (`plugins.volatile_ttl`, 1 s..=1 h). Default [`SHORT_TTL`].
     pub volatile_ttl: Duration,
@@ -115,6 +119,7 @@ impl HttpConfig {
             site_title: site_title.to_owned(),
             site_description: String::new(),
             locale: locale.to_owned(),
+            timezone: "UTC".to_owned(),
             volatile_ttl: SHORT_TTL,
             search_ttl: SHORT_TTL,
             default_host,
@@ -193,6 +198,9 @@ pub struct AppState {
     /// Counts redirect hits (bounded, flushed by `serve`); `None` (no
     /// [`with_hits`](Self::with_hits)): hits are not counted.
     pub(crate) hits: Option<Arc<HitCounter>>,
+    /// Counts every response and the page views (M4-2 P34); `None` (no
+    /// [`with_metrics`](Self::with_metrics)): nothing is counted.
+    pub(crate) metrics: Option<Arc<Metrics>>,
     /// Takes theme-form comments (`POST /_comment`, P12); `None` (no
     /// [`with_comments`](Self::with_comments)): the form answers `503`.
     pub(crate) comments: Option<Arc<CommentService>>,
@@ -218,6 +226,7 @@ impl AppState {
             auth: None,
             served: None,
             hits: None,
+            metrics: None,
             comments: None,
             admin: Arc::new(EmbeddedAdmin),
             admin_headers,
@@ -265,6 +274,19 @@ impl AppState {
     pub fn with_hits(mut self, hits: Arc<HitCounter>) -> Self {
         self.hits = Some(hits);
         self
+    }
+
+    /// Every response of the site ([`build_app`](crate::build_app),
+    /// [`build_site`](crate::build_site)) is counted into `metrics` by route class and
+    /// status class, and the public handler counts page views there (P34).
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// The registry of [`with_metrics`](Self::with_metrics), if any.
+    pub fn metrics(&self) -> Option<&Arc<Metrics>> {
+        self.metrics.as_ref()
     }
 
     /// Theme-form comments (`POST /_comment`) go to `comments`, the node's one
@@ -331,6 +353,7 @@ impl AppState {
             url: self.config.site_url.clone(),
             description: texts.description,
             locale: bcp47(&texts.locale),
+            timezone: self.config.timezone.clone(),
             settings: theme.manifest().settings_values(&stored),
         })
     }
@@ -361,6 +384,7 @@ impl AppState {
             url: self.config.site_url.clone(),
             description: self.config.site_description.clone(),
             locale: bcp47(&self.config.locale),
+            timezone: self.config.timezone.clone(),
             settings: theme
                 .manifest()
                 .settings_values(&serde_json::Map::default()),

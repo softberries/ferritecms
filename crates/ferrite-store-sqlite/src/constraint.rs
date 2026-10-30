@@ -41,6 +41,10 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("menu_items.id", "menu_items_pkey"),
     ("menus.name", "menus_pkey"),
+    (
+        "node_metrics.node_id, node_metrics.minute",
+        "node_metrics_pkey",
+    ),
     ("nodes.id", "nodes_pkey"),
     ("options.key", "options_pkey"),
     (

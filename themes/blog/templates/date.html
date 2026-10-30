@@ -8,7 +8,7 @@
 <p class="page-eyebrow">Archive</p>
 <h1 class="page-title">
   {%- if valid_year and month is number and month >= 1 and month <= 12 -%}
-  {{ (year ~ "-" ~ ("0" ~ month)[-2:] ~ "-01T00:00:00Z") | date("%B %Y") }}
+  {{ (year ~ "-" ~ ("0" ~ month)[-2:] ~ "-01T00:00:00Z") | date("%B %Y", tz="UTC") }}
   {%- elif valid_year -%}
   {{ year }}
   {%- else -%}

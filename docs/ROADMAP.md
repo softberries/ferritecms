@@ -439,27 +439,40 @@ Design: [09](design/09-operations.md).
 
 M4-1 (data safety) is done: [`m4-1-exit.md`](superpowers/m4-1-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md).
 
+M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md) ("M4-2 plan rulings", "M4-2 execution rulings"). Nothing is published: the first tag waits for the release gate in the exit (license, release key, the `release` environment and tag ruleset, GHCR visibility).
+
 - [x] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc` (M4-1; 09 §4 and §8, 02 §10, 03 §6 and §8), plus the scheduled `[backup]` (`site.backup` job; 09 §4).
 - [x] Cluster follow-up (M1.5 ruling R3): waiting for a Postgres named lock holds one connection with `lock_timeout` instead of opening a connection per 250 ms poll (P13), which removes the connect churn while waiting (M4-1 P19, `Store::lock_wait`; 04 §7).
+- [x] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot` (M4-2 P30–P32; 09 §1, §2; run end to end with two real binaries in the exit).
+- [x] ACME TLS (solo) (M4-2 P33; 09 §5; tested against Pebble, not against Let's Encrypt).
+- [x] `/metrics`, `node_metrics`, dashboard charts wired (M4-2 P34–P36; 01 §7, 09 §6, 07 §3).
+- [x] Deferred from M2a-2b (P27): `date` filter time zones (M4-2 P29: jiff with the bundled tzdb; `date(fmt)` formats in `site.timezone`, `tz=` overrides it; permalink dates stay UTC; 06).
+- [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
+- [x] Release workflow for six targets and the GHCR image (publishing waits for the release gate), systemd unit, cluster and solo runbooks (M4-2 P27, P37, P38: `release.yml`, `packaging/systemd/`, `docs/operations/`; 09 §7). Checked locally only: one target (`aarch64-apple-darwin`) built and packed here, no GitHub run, nothing published (see M4-4, "Deferred from M4-2").
+- [x] Backward-compat CI job (M4-2 P38: `ci.yml` job `compat`, `.github/scripts/compat.sh`; it has something to run against from the second tag; run by hand in the exit with the M4-1 binary).
+
+### M4-3 — examples and docs
+
+What the M4 list above already named and M4-1/M4-2 did not build.
+
+- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
+- [ ] Docs site (built with FerriteCMS itself).
+- [ ] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (planned in 09 §8; `config check` covers the configuration today). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+
+### M4-4 — follow-ups
+
+The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
+
 - [ ] Media follow-ups (from M1b):
   - [x] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup). 09 §4a (M4-1 P22); its JSON example's field names are marked not verified.
   - [x] S3 `copy_if_not_exists` config option (M4-1 P16: `[media.s3] copy_if_not_exists`; unset, S3 still takes the head + copy fallback and `ArtifactRef.created` stays advisory; values per provider in 09 §4a).
-  - [ ] Decide `aws-lc-sys` vs `ring` for the static build. object_store's `aws` feature enables `aws-lc-rs` directly (which builds the C library `aws-lc-sys`); object_store also has a `ring` feature. `cargo tree` shows both `ring` and `aws-lc-rs` linked today (rustls pulls both).
+  - [x] Decide `aws-lc-sys` vs `ring` for the static build: ring only (M4-2 P28). object_store uses `aws-base` + `reqwest` + `ring`, reqwest `rustls-no-provider`; aws-lc is gone from `Cargo.lock`, and CI's `packaging` job fails if it comes back.
   - [x] Expose `copy_if_not_exists` and `conditional_put` in `S3Config` (M4-1 P16: both are set on the builder when configured, on the explicit-keys and the `from_env` path alike; `conditional_put` defaults to object_store's `etag`). Note the explicit-keys vs `from_env` difference: with explicit `access_key_id`/`secret_access_key` the builder reads no `AWS_*` environment (so `AWS_COPY_IF_NOT_EXISTS`, `AWS_CONDITIONAL_PUT`, session tokens and instance/web-identity credentials do not apply); only the no-keys path uses `from_env`.
   - [ ] `build_s3` replaces any client options read from the environment with its own timeouts (split from the item above).
   - [ ] Before `PublicUrlMode::Direct` ships: set `Content-Type` / `Cache-Control` attributes on the S3 path only (object_store's local backend rejects attributes, and the `Multipart` `copy_if_not_exists` mode does not copy attributes from the source object, so they must be set on the final object explicitly).
   - [x] Artifacts GC (`artifacts.gc` job, `ferrite media gc`; design 03 §6).
   - [x] `ferrite media regenerate`: regenerate variants after a theme change adds sizes (M2a-2b P8, P27; older uploads fall back to the original for the new sizes).
   - [x] Optional location-metadata stripping on upload: `[media] strip_metadata = true` removes EXIF and XMP losslessly from JPEG, PNG and WebP originals on upload and import (M4-1 P17; an image whose metadata cannot be removed is refused, R1; 03 §4). Off by default, so the stored original keeps its EXIF, GPS included, as WordPress does (M2a-2b R11).
-- [ ] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot`.
-- [ ] ACME TLS (solo).
-- [ ] `/metrics`, `node_metrics`, dashboard charts wired (the metrics registry and time series; M2a-2b P20 built only a node-local snapshot, 09 §6).
-- [ ] Deferred from M2a-2b (P27): `date` filter time zones (`site.timezone`; needs a tz database dependency, chosen with the static-build decisions: chrono-tz vs jiff; dates are UTC today).
-- [x] Deferred from M2a-2b (P27): `ferrite seed demo` atomicity (M4-1 P20: blobs first, then every row in one transaction through `ferrite_core::seed::DemoBatch`; a failed seed leaves no rows, its blobs go to the GC; 09 §8).
-- [ ] Release builds for all targets, published Docker image (a `Dockerfile` exists since M1.5, built in CI), systemd unit, cluster runbook.
-- [ ] Backward-compat CI job (from first tag).
-- [ ] Example plugins: SEO, privacy-friendly analytics, contact form; starter themes `docs`, `business`.
-- [ ] Docs site (built with FerriteCMS itself).
 - [ ] Deferred from M2b-3 ([`m2-exit.md`](superpowers/m2-exit.md) "Open follow-ups"):
   - [ ] Plugin hook latency across the cluster as a time series, with the metrics registry (the Plugins screen shows this node's p95 as a bucket bound, M2b P48).
   - [ ] An index for the redirect `q` substring search if large redirect sets need one (a trigram index is Postgres-only; M2b R43).
@@ -506,6 +519,25 @@ M4-1 (data safety) is done: [`m4-1-exit.md`](superpowers/m4-1-exit.md), rulings 
   - [ ] A snapshot taken by the `site.backup` job holds that job's own row as `running` (the snapshot copies the whole database), so a restored site claims it again once the lease expires and writes one more snapshot (into the same repository when `to` is unchanged; `restore` warns), and with the schedule off the row stays `running`. Clear or reset the copied `jobs` rows on restore (export already skips `jobs`, P2). Seen in the M4-1 exit (§3).
   - [ ] Strip (R1): a JPEG/PNG/WebP is buffered whole (up to 64 MiB) to strip it; a streaming segment walker would lower the peak.
   - [ ] Later surfaces (P13, P15, P18, P23): an ad-hoc live backup of a SQLite site without the schedule, cron-style backup schedules, a job-based `media regenerate`, a Backups screen and API.
+- [ ] Deferred from M4-2 ([`m4-2-exit.md`](superpowers/m4-2-exit.md) "Not verified" and "Open follow-ups"; rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)):
+  - [ ] The release gate (the user's): a license, the minisign key pair and the real `crates/ferrite/release.pub`, the GitHub environment `release` (deployment policy `v*` only, required reviewers where the plan allows, environment secrets `MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`; a private repository needs GitHub Pro or Team for environments), a tag ruleset restricting who creates `v*` tags, then the first tag `v0.1.0` (freezes migrations 0001–0012); after the first publish make the GHCR package public and check its Actions access.
+  - [ ] Watch the first real runs: `release.yml` (a `workflow_dispatch` dry run first, then the tag), the five targets not built here, the musl static check, GHCR publishing and `imagetools`, the `compat` job from the second tag.
+  - [ ] Image signing or provenance (cosign, or GitHub artifact attestations).
+  - [ ] In-place update from the admin (P31), and rollback chains longer than one step (P32).
+  - [ ] Rollback on a filesystem without hard links: `--restore-snapshot` refuses and the record's rename only warns (09 §2); a rename fallback (no-clobber checked first) would cover them (Task 5 N1/N2).
+  - [ ] `--restore-snapshot` checks only the SQLite header: compare the snapshot's applied schema with `schema_from` before asking. That also covers a snapshot found by name (a provisional record finalised later, or carried by `undo_begin`) that names an older cycle's file when the move's own file is missing (final review A-Minor7, re-review).
+  - [ ] A missing carried snapshot drops the move's own snapshot from the record (Task 3, parked).
+  - [ ] Postgres: a finished record is carried forward (A→B→rollback A→C keeps A→B's `schema_from`; there is no snapshot, and `migrate down` reaches the older start; Task 3, accepted). `rollback --schema` on Postgres does not detect a live site (solo or cluster): refuse while the node registry shows a fresh heartbeat, or in cluster mode (final review A-Minor3; the runbooks say to stop the service).
+  - [ ] Warn when `ferrite.prev` is a binary this site never ran (two self-updates before a restart; A-Minor2: needs the database, which `serve` locks on SQLite; documented in 09 §1 and the runbook).
+  - [ ] `--restore-snapshot` run by a non-root owner whose database has a group they are not in refuses (the copy cannot take the gid; re-review Minor 2): skip the gid when only it differs, or say so in the message (documented in 09 §2).
+  - [ ] A crash between the last move and the final rename of `replace_db` leaves no `ferrite.db`, and the next `serve` creates an empty site (microseconds; A-Minor4): refuse to start while a `ferrite.db.restore-*.tmp` exists.
+  - [ ] After `--restore-snapshot` the media GC deletes the uploads only the moved-aside database refers to, after the grace period (A-Minor5; documented in 09 §2 and the runbook): pause the GC once, or keep `backups/rolled-back-*.db` references.
+  - [ ] `self-update --data` only warns when the new binary's `migrate status` fails on a config error, e.g. a `site.timezone` that M4-1 accepted and M4-2 refuses (`"UTC+2"`), and the next `serve` then refuses to start (B-Minor4): refuse instead, or say it in the release notes.
+  - [ ] Metrics: no fuel family (P34: the host keeps no fuel counter), no job queue latency (01 §7), a public-only request count (R6), plugin hook latency as a series (the M2b-3 item above), a separate class or a GET/HEAD-only histogram for page latency (since R3 as amended the page p95 includes `POST /_comment` and public 405s, which WordPress-probe floods can pull down; re-review Minor 3).
+  - [ ] The minute writer takes its baseline after the job runner starts, so jobs finished in that window are never in a row (B-Minor7); a scrape in flight at shutdown can outlast the 1 s background stop and log a warning (B-Minor8).
+  - [ ] Dashboard (Task 9, parked): the 7-day axis misses a tick when the window's first bucket starts at local midnight; an E2E seam for the minute tick (the spec waits for real minutes); the Site traffic group's placement.
+  - [ ] Flaky tests: `plugins::content_read_never_returns_drafts::cluster` (seen once, Task 1); `node.rs` timeouts at a load average near 146 (Task 5; green on a quiet machine).
+  - [ ] Release scripts: a dry run's artifacts embed the placeholder key, so they can be self-update-tested only with a `test-seams` build; `.github/scripts/sums.sh` needs `EXPECTED` (default 6) for a partial set.
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).

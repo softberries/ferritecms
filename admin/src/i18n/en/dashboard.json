@@ -105,6 +105,7 @@
     "title": "Site health",
     "description": "Page cache, background jobs and plugin failures",
     "thisNode": "This node only",
+    "thisNodeSince": "This node, since {{time}}",
     "allNodes": "All nodes",
     "cache": {
       "title": "Page cache",
@@ -134,5 +135,57 @@
       "capped_one": "Shows the first {{count}} enabled plugin.",
       "capped_other": "Shows the first {{count}} enabled plugins."
     }
+  },
+  "metrics": {
+    "title": "Site traffic",
+    "description": "Every node's figures, summed, recorded once a minute",
+    "range": "Time range",
+    "ranges": {
+      "24h": "24 hours",
+      "7d": "7 days"
+    },
+    "span": {
+      "24h": "the last 24 hours",
+      "7d": "the last 7 days"
+    },
+    "allNodes": "All nodes",
+    "stale": "Couldn't refresh. These are the figures from {{time}}.",
+    "soFar": "so far"
+  },
+  "traffic": {
+    "title": "Traffic",
+    "description": "Page views, and all requests including assets, the API and the admin, per hour, {{span}}",
+    "totals": "Totals",
+    "pageViews": "Page views",
+    "requests": "All requests",
+    "errors": "5xx errors",
+    "errorRate": "{{rate}} of all requests",
+    "errorsChart": "5xx errors per hour",
+    "noErrors": "No 5xx errors in {{span}}.",
+    "emptyTitle": "No traffic in {{span}}",
+    "emptyBody": "Each node records its requests once a minute; they show up here shortly after the first visits.",
+    "tableCaptionHours": "Page views, all requests (including assets, the API and the admin) and 5xx errors per hour, {{span}}; the last hour is still in progress",
+    "tableCaptionDays": "Page views, all requests (including assets, the API and the admin) and 5xx errors per day, {{span}}; an hour counts for the day it starts on",
+    "hour": "Hour",
+    "day": "Day",
+    "inProgress": "{{label}} (in progress)",
+    "partialDay": "{{label}} (part of the day)"
+  },
+  "performance": {
+    "title": "Performance",
+    "description": "Page cache and page response times, {{span}}",
+    "ratio": "Cache hit ratio",
+    "ratioCaption": "{{hits}} of {{lookups}} lookups",
+    "noLookups": "No page cache lookups in {{span}}.",
+    "p95": "Page p95",
+    "p95Caption": "95th percentile of the page responses in {{span}}",
+    "noPages": "No page responses in {{span}}.",
+    "le_ms": "≤ {{value}} ms",
+    "le_s": "≤ {{value}} s",
+    "over_s": "> {{value}} s",
+    "ms": "{{value}} ms",
+    "s": "{{value}} s",
+    "emptyTitle": "No performance data in {{span}}",
+    "emptyBody": "The cache hit ratio and page response times show up here once pages are served."
   }
 }

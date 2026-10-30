@@ -50,8 +50,9 @@ pub enum Export {
     Rows,
     /// Only the rows whose key (one [`ColType::Text`] column) is one of these values.
     /// `schema_meta` exports only `site_id`: the other keys (`created_by_version`,
-    /// `min_binary_version`) belong to the target's own migrations. The reader applies
-    /// the filter, and the loader writes such rows over the target's.
+    /// `min_binary_version`, `last_binary_version`) belong to the target's own migrations
+    /// and binary. The reader applies the filter, and the loader writes such rows over the
+    /// target's.
     OnlyKeys(&'static [&'static str]),
     /// Not exported: the data is transient or derived (P2). The reader refuses it.
     Skip,
@@ -106,7 +107,7 @@ pub const BACKEND_SPECIFIC: &[&str] = &["search_docs"];
 
 use ColType::{Bool, Bytes, Id, Int, Json, Text, Timestamp as Ts};
 
-/// Every table of the latest schema (migrations 0001–0011), in foreign-key order: each
+/// Every table of the latest schema (migrations 0001–0012), in foreign-key order: each
 /// table comes after the tables it references. Not listed: SQLite's FTS5 `search_fts`
 /// and its shadow tables, and sqlx's `_sqlx_migrations`.
 pub static TABLES: &[TableSpec] = &[
@@ -637,6 +638,38 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &[],
         export: Export::Rows,
     },
+    TableSpec {
+        name: "node_metrics",
+        columns: &[
+            ("node_id", Id),
+            ("minute", Ts),
+            ("requests", Int),
+            ("errors_5xx", Int),
+            ("page_views", Int),
+            ("cache_hits", Int),
+            ("cache_misses", Int),
+            ("plugin_calls", Int),
+            ("plugin_failures", Int),
+            ("jobs_done", Int),
+            ("jobs_failed", Int),
+            ("page_le_5", Int),
+            ("page_le_10", Int),
+            ("page_le_25", Int),
+            ("page_le_50", Int),
+            ("page_le_100", Int),
+            ("page_le_250", Int),
+            ("page_le_500", Int),
+            ("page_le_1000", Int),
+            ("page_le_2500", Int),
+            ("page_le_5000", Int),
+            ("page_le_10000", Int),
+            ("page_over_10000", Int),
+        ],
+        key: &["node_id", "minute"],
+        self_ref: None,
+        nullable: &[],
+        export: Export::Skip,
+    },
 ];
 
 /// The catalogue entry of table `name`.
@@ -815,7 +848,7 @@ mod tests {
                 assert_eq!(t.column(t.key[0]), Some(ColType::Text), "{}", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 34);
+        assert_eq!(TABLES.len(), 35);
     }
 
     #[test]
@@ -836,6 +869,7 @@ mod tests {
                 "sessions",
                 "rate_limits",
                 "idempotency_keys",
+                "node_metrics",
             ]
         );
         assert_eq!(

@@ -128,6 +128,21 @@ impl CallStats {
         out
     }
 
+    /// Every plugin's hooks, plugins and hooks by name (one lock, for a metrics scrape).
+    pub(crate) fn all(&self) -> Vec<(String, Vec<HookStats>)> {
+        let plugins = self.plugins.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut out: Vec<(String, Vec<HookStats>)> = plugins
+            .iter()
+            .map(|(name, hooks)| {
+                let mut hooks: Vec<HookStats> = hooks.values().cloned().collect();
+                hooks.sort_by(|a, b| a.hook.cmp(&b.hook));
+                (name.to_string(), hooks)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Drops the counters of every plugin `loaded` rejects (uninstalled from the host).
     /// The totals keep counting their calls.
     pub(crate) fn retain(&self, loaded: impl Fn(&str) -> bool) {
@@ -204,6 +219,10 @@ mod tests {
         );
         assert_eq!(stats.totals(), (4, 1));
         assert!(stats.of("nobody").is_empty());
+        let all = stats.all();
+        let names: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["p", "q"]);
+        assert_eq!(all[0].1, p);
     }
 
     #[test]

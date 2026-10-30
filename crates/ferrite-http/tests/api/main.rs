@@ -19,6 +19,7 @@ mod jobs;
 mod media;
 mod media_filters;
 mod menu_locations;
+mod metrics_series;
 mod plugins;
 mod redirect_search;
 mod reset;

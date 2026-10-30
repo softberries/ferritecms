@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use ferrite_cache::CacheStats;
-use ferrite_domain::{AuditEntry, Job, Node};
+use ferrite_core::MetricsSeries;
+use ferrite_domain::{AuditEntry, Job, Node, SeriesBucket, SeriesStep};
 use ferrite_store::Compat;
 use serde::Serialize;
 use serde_json::Value;
@@ -425,7 +426,7 @@ pub struct PluginTotalsDto {
 }
 
 /// `GET /system/metrics/summary`: a snapshot of the answering node (its counters since
-/// it started) plus the site's job counts; time series are M4 (P20).
+/// it started) plus the site's job counts (P20); time series: `MetricsSeriesDto`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MetricsSummaryDto {
     pub node: ThisNodeDto,
@@ -435,4 +436,104 @@ pub struct MetricsSummaryDto {
     pub plugins: PluginTotalsDto,
     /// Jobs per status, every node's.
     pub jobs: JobCountsDto,
+}
+
+/// The bucket width of a metrics series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SeriesStepDto {
+    Minute,
+    Hour,
+    Day,
+}
+
+impl From<SeriesStep> for SeriesStepDto {
+    fn from(s: SeriesStep) -> Self {
+        match s {
+            SeriesStep::Minute => Self::Minute,
+            SeriesStep::Hour => Self::Hour,
+            SeriesStep::Day => Self::Day,
+        }
+    }
+}
+
+/// One bucket of `GET /system/metrics/series`: the minutes starting in
+/// `[start, start + step)`, summed over the nodes (zeros where none wrote a row).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SeriesBucketDto {
+    pub start: DateTime<Utc>,
+    /// Responses of every route class but `other` (health checks).
+    pub requests: u64,
+    /// Those of `requests` with a 5xx status.
+    pub errors_5xx: u64,
+    /// HTML page views: `200` answers and `304` revalidations of public pages (no bots,
+    /// previews or logged-in requests).
+    pub page_views: u64,
+    /// Page cache lookups that found a page.
+    pub cache_hits: u64,
+    /// Page cache lookups that did not.
+    pub cache_misses: u64,
+    /// Plugin calls that ran.
+    pub plugin_calls: u64,
+    /// Plugin calls that failed.
+    pub plugin_failures: u64,
+    /// Jobs completed.
+    pub jobs_done: u64,
+    /// Job attempts that failed (retried or dead).
+    pub jobs_failed: u64,
+    /// The upper bound (ms) of the latency bucket holding the 95th percentile of the
+    /// bucket's page responses (every minute's and node's together, from the summed
+    /// `page_latency`); 0 without page responses. Bounds: 5, 10, 25, 50, 100, 250, 500,
+    /// 1000, 2500, 5000 and 10000 (also for anything slower).
+    pub p95_ms: u32,
+    /// Page responses per latency bucket, 12 counts (not cumulative): at most 5, 10, 25,
+    /// 50, 100, 250, 500, 1000, 2500, 5000 and 10000 ms, then over 10 s. Summed over
+    /// several buckets they give the p95 of a longer range.
+    #[schema(min_items = 12, max_items = 12)]
+    pub page_latency: Vec<u64>,
+}
+
+impl From<SeriesBucket> for SeriesBucketDto {
+    fn from(b: SeriesBucket) -> Self {
+        let c = b.counts;
+        Self {
+            start: b.start.as_datetime(),
+            requests: c.requests,
+            errors_5xx: c.errors_5xx,
+            page_views: c.page_views,
+            cache_hits: c.cache_hits,
+            cache_misses: c.cache_misses,
+            plugin_calls: c.plugin_calls,
+            plugin_failures: c.plugin_failures,
+            jobs_done: c.jobs_done,
+            jobs_failed: c.jobs_failed,
+            p95_ms: c.p95_ms(),
+            page_latency: c.page_latency.to_vec(),
+        }
+    }
+}
+
+/// `GET /system/metrics/series`: every bucket of the range, ascending (dense).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MetricsSeriesDto {
+    /// The requested `from` rounded down to a bucket start (UTC, epoch-aligned).
+    pub from: DateTime<Utc>,
+    /// The requested `to` rounded up to a bucket end (exclusive).
+    pub to: DateTime<Utc>,
+    pub step: SeriesStepDto,
+    /// The node filter, if one was given.
+    pub node: Option<Uuid>,
+    pub buckets: Vec<SeriesBucketDto>,
+}
+
+impl From<MetricsSeries> for MetricsSeriesDto {
+    fn from(s: MetricsSeries) -> Self {
+        Self {
+            from: s.from.as_datetime(),
+            to: s.to.as_datetime(),
+            step: s.step.into(),
+            node: s.node.map(|n| n.as_uuid()),
+            buckets: s.buckets.into_iter().map(SeriesBucketDto::from).collect(),
+        }
+    }
 }

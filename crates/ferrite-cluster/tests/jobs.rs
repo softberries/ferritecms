@@ -15,7 +15,8 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_cluster::{
-    ClusterError, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler, builtin,
+    ClusterError, JobCounters, JobError, JobHandler, JobRunner, Periodic, RunnerConfig, Scheduler,
+    builtin,
 };
 use ferrite_domain::{
     ApiToken, ApiTokenId, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Job,
@@ -25,10 +26,10 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
     TestDb, auth::align_to_window, backend_tests_spawning, fixtures::fixture_user,
@@ -229,6 +230,42 @@ pub async fn runner_retries_then_dead(db: Arc<TestDb>) {
     assert_eq!(job.attempts, 2);
     assert_eq!(job.last_error.as_deref(), Some("boom"));
     assert_eq!(calls(&log), vec![id, id]);
+}
+
+/// M4-2 P35: the runner counts the jobs it completed and the attempts that failed
+/// (retry or permanent), never a `Busy` release.
+pub async fn runner_counts_finished_jobs(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    for outcome in ["ok", "ok", "retry", "permanent", "busy"] {
+        let mut new = NewJob::new(KIND, json!({"v": 1, "outcome": outcome}));
+        new.max_attempts = 1;
+        enqueue(store.as_ref(), new).await;
+    }
+    let (handler, _log) = TestHandler::new(KIND, |job| async move {
+        match job.payload["outcome"].as_str() {
+            Some("ok") => Ok(()),
+            Some("retry") => Err(JobError::Retry("again".into())),
+            Some("busy") => Err(JobError::Busy("later".into())),
+            _ => Err(JobError::Permanent("never".into())),
+        }
+    })
+    .build();
+    let counters = Arc::new(JobCounters::default());
+    let stop = CancellationToken::new();
+    let handle = JobRunner::new(
+        store.clone(),
+        RunnerConfig::new(NodeId::new(), 2),
+        vec![handler],
+    )
+    .unwrap()
+    .with_counters(counters.clone())
+    .spawn(stop.clone());
+    wait_for(Duration::from_secs(5), "jobs counted", || async {
+        (counters.done() == 2 && counters.failed() == 2).then_some(())
+    })
+    .await;
+    stop_runner(stop, handle).await;
+    assert_eq!((counters.done(), counters.failed()), (2, 2));
 }
 
 /// R20(3): `Busy` puts the job back with the attempt refunded, due again after the
@@ -507,6 +544,9 @@ impl Store for FaultyStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         &self.repos
     }
@@ -528,7 +568,10 @@ impl Store for FaultyStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -638,6 +681,9 @@ impl Repos for FaultyRepos {
     }
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.read().imports()
+    }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.read().node_metrics()
     }
 }
 
@@ -1036,6 +1082,25 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
         .add("fresh", "render.head", hours_ago(23), 2)
         .await
         .unwrap();
+    // Node metrics: kept 7 days.
+    let metrics = store.read().node_metrics();
+    let metrics_node = NodeId::new();
+    let minute_ago = |h: i64| {
+        let t = now - h * 3_600_000_000;
+        Timestamp::from_micros(t - t.rem_euclid(60_000_000)).unwrap()
+    };
+    let one = ferrite_domain::MetricCounts {
+        requests: 1,
+        ..Default::default()
+    };
+    metrics
+        .insert(metrics_node, minute_ago(7 * 24 + 1), &one)
+        .await
+        .unwrap();
+    metrics
+        .insert(metrics_node, minute_ago(7 * 24 - 1), &one)
+        .await
+        .unwrap();
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
@@ -1051,12 +1116,12 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     .unwrap()
     .spawn(stop.clone());
     let jobs = store.read().jobs();
-    wait_for(Duration::from_secs(5), "five prune jobs done", || async {
+    wait_for(Duration::from_secs(5), "six prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
-        // Once the old fixture job is pruned: the fresh one plus the five prune jobs.
+        // Once the old fixture job is pruned: the fresh one plus the six prune jobs.
         let gone = jobs.get(old_job).await.unwrap().is_none()
             && jobs.get(old_dead).await.unwrap().is_none();
-        (gone && counts[&JobStatus::Done] == 6).then_some(())
+        (gone && counts[&JobStatus::Done] == 7).then_some(())
     })
     .await;
     stop.cancel();
@@ -1089,11 +1154,25 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let since = Timestamp::from_micros(0).unwrap();
     assert_eq!(failures.sum_since("old", since).await.unwrap(), 0);
     assert_eq!(failures.sum_since("fresh", since).await.unwrap(), 2);
+    let left = metrics
+        .series(
+            since,
+            Timestamp::from_micros(now + 1).unwrap(),
+            ferrite_domain::SeriesStep::Day,
+            Some(metrics_node),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        left.iter().map(|b| b.counts.requests).sum::<u64>(),
+        1,
+        "the 8-day-old minute went, the 6-day-old one stayed"
+    );
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
-        6,
-        "fresh fixture + five prune jobs"
+        7,
+        "fresh fixture + six prune jobs"
     );
     assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
 }
@@ -1344,6 +1423,7 @@ pub async fn prune_removes_old_keys(db: Arc<TestDb>) {
 
 backend_tests_spawning!(
     runner_runs_and_completes,
+    runner_counts_finished_jobs,
     runner_retries_then_dead,
     runner_busy_refunds_the_attempt,
     runner_permanent_error_is_dead_at_once,

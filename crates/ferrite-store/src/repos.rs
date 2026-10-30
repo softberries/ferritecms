@@ -9,10 +9,10 @@ use ferrite_domain::{
     Comment, CommentId, CommentQuery, CommentStatus, ContentId, ContentItem, ContentQuery,
     ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, ImportMapKind, ImportMapRow,
     ImportRun, ImportRunId, ImportRunState, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
-    JobQuery, JobStatus, Media, Menu, NewAudit, NewContent, NewEvent, NewJob, NewNode, NewUser,
-    Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId, RedirectQuery, Revision,
-    RevisionId, SearchQuery, Secret, Session, Taxonomy, Term, TermId, Timestamp, User, UserId,
-    UserQuery,
+    JobQuery, JobStatus, Media, Menu, MetricCounts, NewAudit, NewContent, NewEvent, NewJob,
+    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
+    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, SeriesBucket, SeriesStep, Session,
+    Taxonomy, Term, TermId, Timestamp, User, UserId, UserQuery,
 };
 
 use uuid::Uuid;
@@ -24,6 +24,16 @@ use crate::{Channel, LockGuard, StoreError, Subscription, migrate::MigrationStat
 pub enum Backend {
     Sqlite,
     Postgres,
+}
+
+/// Connections of a store's pools at one moment (`ferrite_db_pool_connections`, M4-2
+/// P34): `idle` wait in a pool, `used` are checked out (a query or a transaction).
+/// Dedicated connections (Postgres `LISTEN`, named locks, export and import) are not
+/// pooled and not counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    pub idle: u64,
+    pub used: u64,
 }
 
 /// A database connection pool plus migration control.
@@ -38,6 +48,9 @@ pub trait Store: Send + Sync + 'static {
     /// a `Tx`.** On SQLite both wait for the writer connection the `Tx` holds and fail
     /// with [`StoreError::Busy`] after 5 s. Pass the `Tx` on as `&dyn Repos` instead.
     fn read(&self) -> &dyn Repos;
+    /// The pools' connections now (SQLite: the reader pool plus the writer; Postgres:
+    /// the one pool). Cheap, no I/O: read at every metrics scrape.
+    fn pool_stats(&self) -> PoolStats;
     /// Starts a write transaction; dropping it without commit rolls back. Fails with
     /// [`StoreError::Busy`] when no connection frees up in time (SQLite: 5 s for the
     /// single writer; see [`Store::read`] for the self-deadlock to avoid).
@@ -90,8 +103,9 @@ pub trait Store: Send + Sync + 'static {
         &self,
         binary: &semver::Version,
     ) -> Result<MigrationStatus, StoreError>;
-    /// Applies pending migrations up to `to` (all if `None`); returns applied versions.
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError>;
+    /// Applies pending migrations up to `to` (all if `None`); reports the applied versions
+    /// and, on SQLite, the pre-migration snapshot taken first (M4-2 P30).
+    async fn migrate_up(&self, to: Option<i64>) -> Result<crate::MigrateReport, StoreError>;
     /// Reverts migrations down to version `to`; lossy downs need `allow_lossy`.
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError>;
     /// Checks that applied migration checksums match the embedded ones.
@@ -182,6 +196,38 @@ pub trait Repos: Send + Sync {
     fn idempotency(&self) -> &dyn IdempotencyRepo;
     fn autosaves(&self) -> &dyn AutosaveRepo;
     fn imports(&self) -> &dyn ImportRepo;
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo;
+}
+
+/// Per-node minute metrics (`node_metrics`, M4-2 P35).
+#[async_trait]
+pub trait NodeMetricsRepo: Send + Sync {
+    /// Adds `counts` to `node`'s row of `minute` (a whole UTC minute), in one statement:
+    /// the row is created if absent; otherwise its counts (the page latency histogram's
+    /// too) are added to. A writer that flushes the same minute twice (a shutdown flush,
+    /// a write retried after a failure) so never conflicts or loses a count. `Invalid`:
+    /// `minute` before 1970 or not a whole minute, or a count above `i64::MAX`.
+    async fn insert(
+        &self,
+        node: NodeId,
+        minute: Timestamp,
+        counts: &MetricCounts,
+    ) -> Result<(), StoreError>;
+    /// The rows whose minute is in `[from, to)` (of `node` only, when given), summed per
+    /// `step` bucket (aligned to the Unix epoch; the page latency histograms summed per
+    /// latency bucket, so a bucket's p95 is that of all its page responses, M4-2 R7):
+    /// ascending by start, only buckets with rows. `Invalid`: `from >= to`.
+    async fn series(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        step: SeriesStep,
+        node: Option<NodeId>,
+    ) -> Result<Vec<SeriesBucket>, StoreError>;
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) rows whose
+    /// minute is before `before`; returns the count. Callers loop until a batch comes
+    /// back short (R5).
+    async fn prune(&self, before: Timestamp, limit: u32) -> Result<u64, StoreError>;
 }
 
 #[async_trait]

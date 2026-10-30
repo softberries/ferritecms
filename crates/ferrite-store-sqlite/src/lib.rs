@@ -15,12 +15,12 @@ use std::{fs::File, path::PathBuf};
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
-    check_lock_name,
+    Backend, Channel, LockGuard, MigrationStatus, PoolStats, Repos, Store, StoreError,
+    Subscription, Tx, check_lock_name,
 };
 use sqlx::SqlitePool;
 
-pub use connect::SqliteOptions;
+pub use connect::{KeepSnapshot, SqliteOptions};
 use exec::map_db_err;
 pub use migrate::latest_schema_version;
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
@@ -35,6 +35,8 @@ pub struct SqliteStore {
     /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
+    /// Never pruned (see [`SqliteOptions::keep_snapshot`]).
+    keep_snapshot: Option<KeepSnapshot>,
     /// Named locks (`Store::try_lock`).
     locks: lock::Locks,
     _lock: File,
@@ -44,6 +46,18 @@ pub struct SqliteStore {
 impl Store for SqliteStore {
     fn backend(&self) -> Backend {
         Backend::Sqlite
+    }
+
+    fn pool_stats(&self) -> PoolStats {
+        let (idle, size) = [&self.reader, &self.writer]
+            .into_iter()
+            .fold((0u64, 0u64), |(idle, size), pool| {
+                (idle + pool.num_idle() as u64, size + u64::from(pool.size()))
+            });
+        PoolStats {
+            idle,
+            used: size.saturating_sub(idle),
+        }
     }
 
     fn read(&self) -> &dyn Repos {
@@ -79,7 +93,10 @@ impl Store for SqliteStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 

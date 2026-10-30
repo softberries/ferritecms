@@ -39,8 +39,15 @@ pub(crate) const SECURITY_HEADERS: [(HeaderName, &str); 3] = [
     (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
 ];
 
+/// Marks a `304 Not Modified` from [`page_response`] that revalidated an HTML page (not a
+/// feed, sitemap or robots file): the 304 carries no `Content-Type`, and a revalidated
+/// view counts as a page view (M4-2 R8). A response extension, never sent.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HtmlRevalidation;
+
 /// `page` (an HTML page) as a response; `304 Not Modified` (no body) when it is a `200`
-/// and `if_none_match` matches its ETag.
+/// and `if_none_match` matches its ETag (marked [`HtmlRevalidation`] when the page is
+/// HTML).
 ///
 /// The ETag is sent **weak** (`W/"…"`): the tag hashes the
 /// uncompressed body while compression may change the bytes on the wire, and a strong
@@ -55,6 +62,13 @@ pub(crate) fn page_response(page: &CachedPage, if_none_match: Option<&str>) -> R
         *res.status_mut() = StatusCode::NOT_MODIFIED;
         insert(&mut res, header::ETAG, &etag);
         vary(&mut res);
+        let html = page.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case(header::CONTENT_TYPE.as_str())
+                && value.starts_with("text/html")
+        });
+        if html {
+            res.extensions_mut().insert(HtmlRevalidation);
+        }
         return res;
     }
     let mut res = Response::new(Body::from(page.body.clone()));

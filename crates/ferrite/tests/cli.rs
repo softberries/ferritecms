@@ -170,7 +170,7 @@ fn migrate_status_output() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 11"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
     assert!(
         out.contains(&format!("(ferrite {})", env!("CARGO_PKG_VERSION"))),
         "{out}"
@@ -196,7 +196,7 @@ fn migrate_status_output() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let out = stdout_code(
         {
             let mut c = ferrite();
@@ -238,7 +238,7 @@ fn migrate_status_output() {
 
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -261,7 +261,7 @@ fn migrate_down_requires_yes() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 11"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
 }
 
 #[test]
@@ -740,7 +740,7 @@ fn postgres_init_and_migrate() {
         stdout(c)
     };
     let out = status(tmp.path());
-    assert!(out.contains("database version: 11"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
     assert!(out.contains("verdict: up to date"), "{out}");
 
     let mut c = ferrite();
@@ -754,13 +754,13 @@ fn postgres_init_and_migrate() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let mut c = ferrite();
     c.args(["migrate", "status", "--data"]).arg(tmp.path());
     assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -781,8 +781,41 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off backup=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off"
     );
+    // `server.metrics_listen` (P34) is reported as its address.
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_SERVER__METRICS_LISTEN", "127.0.0.1:9464");
+        c
+    });
+    assert!(out.contains(" metrics=127.0.0.1:9464 "), "{out}");
+    // `[server.tls]` (P33) is reported as its mode.
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_SERVER__TLS__MODE", "acme")
+            .env("FERRITE_SERVER__TLS__CONTACT", "mailto:ops@example.com");
+        c
+    });
+    assert!(out.contains(" tls=acme "), "{out}");
+    // TLS keys without `mode = "acme"` load, with a warning that they are ignored.
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_SERVER__TLS__REDIRECT_HTTP", "0.0.0.0:80")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("warning: server.tls.redirect_http: ignored: server.tls.mode is \"off\""),
+        "{err}"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains(" tls=off "));
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
@@ -806,7 +839,7 @@ fn config_check_prints_backup() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=2 mail=off backup=weekly"
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly"
     );
     // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
     let out = stdout({
@@ -916,7 +949,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off backup=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off"
     );
 }
 

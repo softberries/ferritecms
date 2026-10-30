@@ -455,6 +455,23 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   `send` with progress; one `Idempotency-Key` per start, kept across a `5xx` Retry, R72).
   Strings are in the `import` namespace.
 
+  The M4-2 dashboard's Site traffic (Task 9, P36; `src/dashboard/site-metrics.tsx`,
+  `traffic-card.tsx`, `performance-card.tsx`, `metrics-series.ts`) adds no kit component
+  but two patterns. **One range control for a group of charts:** a single-select
+  `ToggleGroup` (`spacing={0}`, `role="radiogroup"`, "Time range"; each item selects on
+  focus, so an arrow key moves and selects as the ARIA radio pattern expects, where Radix
+  alone only moves focus) sits once in the
+  group's header row above the cards it scopes, never inside one card, so every number
+  in the group covers the same hours; a switch keeps the previous figures at 60 % opacity
+  with `aria-busy` until the new ones arrive (`keepPreviousData`), no skeleton.
+  **A polling card that fails keeps its figures:** an error state only without data;
+  after a failed refresh, `StaleNote` (`dashboard/panel.tsx`, `role="status"`) says from
+  when the shown figures are, and the query has `INLINE_ERRORS` (no toast each minute).
+  Two measures of different size get separate charts (5xx errors as a bar strip under
+  the traffic areas, sharing the x axis and y-axis width), never two y-scales; hours
+  without a measure are gaps (`connectNulls={false}`) with a marker for an isolated
+  point; every chart has its numbers as text (totals, headlines, a hidden table).
+
   `useStaleAsk` now settles a pending question with `cancel` when a second one is asked
   or the component unmounts (an M2b-2 minor). Strings of these components are in the
   `admin` namespace (the administration screens add theirs there too).

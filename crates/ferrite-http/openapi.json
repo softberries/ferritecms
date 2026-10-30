@@ -6746,6 +6746,112 @@
         ]
       }
     },
+    "/api/v1/system/metrics/series": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "get_metrics_series",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the range (RFC 3339), inclusive; rounded down to a bucket start.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the range (RFC 3339), exclusive; rounded up to a bucket end. After `from`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "description": "`minute` (the range spans at most 24 h), `hour` or `day` (at most 7 days).",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SeriesStepDto"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "description": "Only this node's rows (UUID); every node's, summed, when absent.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every bucket of the range (widened to whole buckets), ascending: the nodes' per-minute figures summed (the page latency histograms too; `p95_ms` is the p95 of the summed histogram), zeros where no node wrote a row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSeriesDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`from`, `to`, `step`, `node` malformed) or `malformed-query` (a parameter missing)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_system`, `system:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `to` not after `from` (`errors[0].field` = `to`), or a span over the step's limit (`step`: minute 24 h, hour and day 7 days)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/system/metrics/summary": {
       "get": {
         "tags": [
@@ -11873,9 +11979,48 @@
           }
         }
       },
+      "MetricsSeriesDto": {
+        "type": "object",
+        "description": "`GET /system/metrics/series`: every bucket of the range, ascending (dense).",
+        "required": [
+          "from",
+          "to",
+          "step",
+          "buckets"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeriesBucketDto"
+            }
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The requested `from` rounded down to a bucket start (UTC, epoch-aligned)."
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node filter, if one was given."
+          },
+          "step": {
+            "$ref": "#/components/schemas/SeriesStepDto"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The requested `to` rounded up to a bucket end (exclusive)."
+          }
+        }
+      },
       "MetricsSummaryDto": {
         "type": "object",
-        "description": "`GET /system/metrics/summary`: a snapshot of the answering node (its counters since\nit started) plus the site's job counts; time series are M4 (P20).",
+        "description": "`GET /system/metrics/summary`: a snapshot of the answering node (its counters since\nit started) plus the site's job counts (P20); time series: `MetricsSeriesDto`.",
         "required": [
           "node",
           "renders",
@@ -13095,6 +13240,110 @@
             ]
           }
         }
+      },
+      "SeriesBucketDto": {
+        "type": "object",
+        "description": "One bucket of `GET /system/metrics/series`: the minutes starting in\n`[start, start + step)`, summed over the nodes (zeros where none wrote a row).",
+        "required": [
+          "start",
+          "requests",
+          "errors_5xx",
+          "page_views",
+          "cache_hits",
+          "cache_misses",
+          "plugin_calls",
+          "plugin_failures",
+          "jobs_done",
+          "jobs_failed",
+          "p95_ms",
+          "page_latency"
+        ],
+        "properties": {
+          "cache_hits": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Page cache lookups that found a page.",
+            "minimum": 0
+          },
+          "cache_misses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Page cache lookups that did not.",
+            "minimum": 0
+          },
+          "errors_5xx": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Those of `requests` with a 5xx status.",
+            "minimum": 0
+          },
+          "jobs_done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Jobs completed.",
+            "minimum": 0
+          },
+          "jobs_failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Job attempts that failed (retried or dead).",
+            "minimum": 0
+          },
+          "p95_ms": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The upper bound (ms) of the latency bucket holding the 95th percentile of the\nbucket's page responses (every minute's and node's together, from the summed\n`page_latency`); 0 without page responses. Bounds: 5, 10, 25, 50, 100, 250, 500,\n1000, 2500, 5000 and 10000 (also for anything slower).",
+            "minimum": 0
+          },
+          "page_latency": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Page responses per latency bucket, 12 counts (not cumulative): at most 5, 10, 25,\n50, 100, 250, 500, 1000, 2500, 5000 and 10000 ms, then over 10 s. Summed over\nseveral buckets they give the p95 of a longer range.",
+            "maxItems": 12,
+            "minItems": 12
+          },
+          "page_views": {
+            "type": "integer",
+            "format": "int64",
+            "description": "HTML page views: `200` answers and `304` revalidations of public pages (no bots,\npreviews or logged-in requests).",
+            "minimum": 0
+          },
+          "plugin_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plugin calls that ran.",
+            "minimum": 0
+          },
+          "plugin_failures": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Plugin calls that failed.",
+            "minimum": 0
+          },
+          "requests": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Responses of every route class but `other` (health checks).",
+            "minimum": 0
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SeriesStepDto": {
+        "type": "string",
+        "description": "The bucket width of a metrics series.",
+        "enum": [
+          "minute",
+          "hour",
+          "day"
+        ]
       },
       "SessionDto": {
         "type": "object",

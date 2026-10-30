@@ -1,13 +1,13 @@
 //! Built-in maintenance jobs (P11, P14, P20, P23): hourly pruning of the events outbox,
 //! finished jobs, stale node rows, old plugin failure buckets and ended sessions, expired
-//! API tokens, past rate-limit windows and old idempotency keys. Ages are measured on the
-//! database clock; rows go in batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement
-//! holds locks for long.
+//! API tokens, past rate-limit windows, old idempotency keys and per-node minute metrics
+//! older than 7 days (M4-2 P35). Ages are measured on the database clock; rows go in
+//! batches of [`MAX_PRUNE_BATCH`] (R5) so no single statement holds locks for long.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ferrite_domain::{IDEMPOTENCY_RETENTION, Job, SESSION_IDLE, Timestamp};
+use ferrite_domain::{IDEMPOTENCY_RETENTION, Job, NODE_METRICS_RETENTION, SESSION_IDLE, Timestamp};
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError};
 use futures::future::BoxFuture;
 use serde_json::json;
@@ -244,6 +244,27 @@ impl JobHandler for SessionsPrune {
     }
 }
 
+/// `node_metrics.prune` (M4-2 P35): deletes per-node minute rows older than
+/// [`NODE_METRICS_RETENTION`] (7 days).
+pub struct NodeMetricsPrune(pub Arc<dyn Store>);
+
+#[async_trait]
+impl JobHandler for NodeMetricsPrune {
+    fn kind(&self) -> &'static str {
+        "node_metrics.prune"
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        let before = db_now_minus(self.0.as_ref(), NODE_METRICS_RETENTION).await?;
+        let metrics = self.0.read().node_metrics();
+        prune_batches("node_metrics", PRUNE_BUDGET, || {
+            metrics.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
+        Ok(())
+    }
+}
+
 /// The built-in handlers, on `store`; plugin failure buckets are kept for
 /// `failure_retention` (from [`failure_retention`]).
 pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<dyn JobHandler>> {
@@ -255,7 +276,8 @@ pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<d
             store: store.clone(),
             retention: failure_retention,
         }),
-        Arc::new(SessionsPrune(store)),
+        Arc::new(SessionsPrune(store.clone())),
+        Arc::new(NodeMetricsPrune(store)),
     ]
 }
 
@@ -267,6 +289,7 @@ pub fn periodics() -> Vec<Periodic> {
         "nodes.prune",
         "plugin_failures.prune",
         "sessions.prune",
+        "node_metrics.prune",
     ]
     .into_iter()
     .map(|kind| Periodic {
@@ -361,6 +384,7 @@ mod tests {
             "nodes.prune",
             "plugin_failures.prune",
             "sessions.prune",
+            "node_metrics.prune",
         ]
         .into();
         assert_eq!(periodic, expected);

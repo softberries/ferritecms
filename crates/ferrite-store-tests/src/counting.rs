@@ -23,10 +23,10 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -201,12 +201,18 @@ impl Repos for CountingRepos {
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.read().imports()
     }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.read().node_metrics()
+    }
 }
 
 #[async_trait]
 impl Store for CountingStore {
     fn backend(&self) -> Backend {
         self.inner.store.backend()
+    }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.store.pool_stats()
     }
     fn read(&self) -> &dyn Repos {
         &self.repos
@@ -234,7 +240,10 @@ impl Store for CountingStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.store.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.store.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -616,6 +625,9 @@ impl Repos for CountingTx {
     }
     fn imports(&self) -> &dyn ImportRepo {
         self.tx.imports()
+    }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.tx.node_metrics()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

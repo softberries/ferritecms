@@ -1,6 +1,6 @@
 //! The system API (M2a-2b P15, P18, P19; 07 §1): the node registry, the audit log
 //! (with filters, M2b-3), the migration state, job counts, the job list, the dead-job
-//! retry and the test mail (P49). Every read needs `manage_system` (admins) and the
+//! retry, the test mail (P49) and the metrics series (M4-2 P35). Every read needs `manage_system` (admins) and the
 //! `system:read` scope ([`require_reader`]); the retry and the test mail need
 //! `system:write` ([`require`]) and are audited (`job.retry`, `mail.test`).
 //!
@@ -17,7 +17,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_domain::{
-    AuditEntry, AuditQuery, Job, JobId, JobQuery, JobStatus, NewAudit, Node, Page, Timestamp,
+    AuditEntry, AuditQuery, Job, JobId, JobQuery, JobStatus, MetricCounts, NewAudit, Node, NodeId,
+    Page, SeriesBucket, SeriesStep, Timestamp,
 };
 use ferrite_store::{MigrationStatus, Repos, Store};
 use serde_json::{Value, json};
@@ -37,6 +38,18 @@ pub const RETRY_NOT_DEAD: &str = "only dead jobs can be retried";
 /// Why a test mail cannot be sent without `[mail]` (`422`, field `mail`).
 pub const MAIL_NOT_CONFIGURED: &str =
     "mail is not configured: set [mail] smtp_url and from in ferrite.toml";
+
+/// A dense metrics series ([`SystemService::metrics_series`]): the range widened to
+/// whole buckets and every bucket in it, ascending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricsSeries {
+    pub from: Timestamp,
+    pub to: Timestamp,
+    pub step: SeriesStep,
+    /// The node filter, if one was given.
+    pub node: Option<NodeId>,
+    pub buckets: Vec<SeriesBucket>,
+}
 
 /// Reads behind `GET /system/*`.
 pub struct SystemService {
@@ -103,6 +116,77 @@ impl SystemService {
             scrub_job(job);
         }
         Ok(page)
+    }
+
+    /// The per-node minute metrics of `[from, to)` summed over nodes (or of `node`
+    /// only) into `step` buckets, dense: every bucket of the range is there, zeros where
+    /// no row is (M4-2 P35). The range is widened to whole buckets (aligned to the Unix
+    /// epoch, UTC). A bucket's page latency histogram is the sum of its minutes' and
+    /// nodes', so its p95 is that of all its page responses (M4-2 R7).
+    /// Invalid: `from >= to` (`invalid_field("to")`); a span over
+    /// [`SeriesStep::max_span`] (`invalid_field("step")`: minutes cover at most 24 h,
+    /// hours and days 7 days).
+    pub async fn metrics_series(
+        &self,
+        actor: &Actor,
+        from: Timestamp,
+        to: Timestamp,
+        step: SeriesStep,
+        node: Option<NodeId>,
+    ) -> Result<MetricsSeries, CoreError> {
+        require_reader(actor, Capability::ManageSystem)?;
+        if from >= to {
+            return Err(CoreError::invalid_field("to", "to must be after from"));
+        }
+        let span = to.as_micros().saturating_sub(from.as_micros());
+        let max = i64::try_from(step.max_span().as_micros()).unwrap_or(i64::MAX);
+        if span > max {
+            let limit = match step {
+                SeriesStep::Minute => "24 hours",
+                SeriesStep::Hour | SeriesStep::Day => "7 days",
+            };
+            return Err(CoreError::invalid_field(
+                "step",
+                format!("a {step} series spans at most {limit}"),
+            ));
+        }
+        let width = step.micros();
+        let start = step.floor(from.as_micros());
+        // `to` rounded up to a bucket boundary.
+        let end = step
+            .floor(to.as_micros().saturating_sub(1))
+            .saturating_add(width);
+        let bounds = |m: i64| {
+            Timestamp::from_micros(m)
+                .map_err(|_| CoreError::invalid_field("to", "the range is out of bounds"))
+        };
+        let (start_at, end_at) = (bounds(start)?, bounds(end)?);
+        let rows = self
+            .store
+            .read()
+            .node_metrics()
+            .series(start_at, end_at, step, node)
+            .await?;
+        let by_start: BTreeMap<i64, MetricCounts> = rows
+            .into_iter()
+            .map(|b| (b.start.as_micros(), b.counts))
+            .collect();
+        let mut buckets = Vec::new();
+        let mut at = start;
+        while at < end {
+            buckets.push(SeriesBucket {
+                start: bounds(at)?,
+                counts: by_start.get(&at).copied().unwrap_or_default(),
+            });
+            at += width;
+        }
+        Ok(MetricsSeries {
+            from: start_at,
+            to: end_at,
+            step,
+            node,
+            buckets,
+        })
     }
 
     /// Puts dead job `id` back in the queue (due now, attempts reset, `last_error`

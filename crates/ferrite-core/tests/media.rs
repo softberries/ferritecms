@@ -18,10 +18,10 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
@@ -739,6 +739,9 @@ impl Store for FailingStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         self.inner.read()
     }
@@ -762,7 +765,10 @@ impl Store for FailingStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -885,6 +891,9 @@ impl Repos for FailingTx {
     }
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.imports()
+    }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.node_metrics()
     }
 }
 

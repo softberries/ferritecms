@@ -9,6 +9,7 @@ mod json;
 mod lock;
 mod menu;
 mod migrate;
+mod node_metrics;
 mod notify;
 mod paging;
 mod repos;
@@ -29,9 +30,11 @@ pub use lock::{
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{
-    Compat, Directives, MigrationStatus, PendingMigration, Phase, SCHEMA_META_INSTALL_ID,
-    SCHEMA_META_MIN_BINARY, expand_lint, next_min_binary, parse_directives, plan_down, verdict,
+    Compat, Directives, MigrateReport, MigrationStatus, PendingMigration, Phase,
+    SCHEMA_META_INSTALL_ID, SCHEMA_META_LAST_BINARY, SCHEMA_META_MIN_BINARY, expand_lint,
+    next_min_binary, parse_directives, plan_down, verdict,
 };
+pub use node_metrics::{check_node_metrics, check_series_range, series_bucket_from_db};
 pub use notify::{Channel, Notice, Subscription};
 pub use paging::{
     ARTIFACT_UNREFERENCED_SQL, AUDIT_CURSOR_TAG, AuditPlan, COMMENT_CURSOR_TAG, JOB_CURSOR_TAG,
@@ -54,10 +57,10 @@ pub use paging::{
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MarkCounts,
-    MediaRepo, MenuRepo, MetaRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo,
-    PluginRepo, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
-    retained_marker,
+    MediaRepo, MenuRepo, MetaRepo, NodeMetricsRepo, NodeRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, PoolStats, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo,
+    ThemeRepo, Tx, UserRepo, retained_marker,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,

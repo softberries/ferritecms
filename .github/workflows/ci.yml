@@ -200,6 +200,103 @@ jobs:
           path: admin/test-results/screens/
           if-no-files-found: ignore
 
+  # Release and packaging checks (M4-2 P28, P37, P38) that need no build.
+  packaging:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build is ring-only (P28): aws-lc's C code would need cmake and clang on every
+      # release target. aws-lc is absent from the lockfile, so `cargo tree -i aws-lc-sys`
+      # would fail with "did not match"; the lockfile is the check.
+      - name: no aws-lc in Cargo.lock
+        run: |
+          if grep -n '^name = "aws-lc' Cargo.lock; then
+            echo "::error::aws-lc is back in Cargo.lock (P28: ring only); see 'cargo tree -i aws-lc-sys'"
+            exit 1
+          fi
+      # `verify` needs the unit's ExecStart binary to exist; a stand-in is installed.
+      - name: systemd unit
+        run: |
+          sudo install -m 0755 /bin/true /usr/local/bin/ferrite
+          sudo mkdir -p /var/lib/ferrite
+          systemd-analyze --version | head -1
+          systemd-analyze verify packaging/systemd/ferrite.service
+          systemd-analyze security --offline=true packaging/systemd/ferrite.service || true
+      - name: release scripts
+        run: shellcheck .github/scripts/*.sh
+
+  # Backward compatibility (M4-2 P38; 02 §8, S5): the previous `v*` tag's binary must run
+  # against a database migrated by this commit's binary, on SQLite and Postgres. Without
+  # a previous tag it prints a notice and succeeds.
+  compat:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: ferrite
+          POSTGRES_DB: ferrite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The newest `v*` tag reachable from HEAD that is not HEAD itself.
+      - id: prev
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          if [ -n "$tag" ] && [ "$(git rev-list -n 1 "$tag")" = "$(git rev-parse HEAD)" ]; then
+            tag=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          fi
+          if [ -z "$tag" ]; then
+            echo "::notice::no previous v* tag: the backward-compatibility check has nothing to run against"
+          else
+            echo "previous release: $tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - if: steps.prev.outputs.tag != ''
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+      # Debug builds without the admin: the check is about the schema, not the binary's
+      # speed or its embedded admin.
+      - name: Check out the previous release
+        if: steps.prev.outputs.tag != ''
+        env:
+          TAG: ${{ steps.prev.outputs.tag }}
+        run: git worktree add "$RUNNER_TEMP/old" "$TAG"
+      # From its own folder, so the old tag's rust-toolchain.toml and .cargo/ apply.
+      - name: Build the previous release
+        if: steps.prev.outputs.tag != ''
+        working-directory: ${{ runner.temp }}/old
+        run: cargo build --locked -p ferrite --target-dir "$RUNNER_TEMP/old-target"
+      - name: Build this commit
+        if: steps.prev.outputs.tag != ''
+        run: cargo build --locked -p ferrite
+      - name: Old binary against the new schema
+        if: steps.prev.outputs.tag != ''
+        run: >-
+          .github/scripts/compat.sh "$RUNNER_TEMP/old-target/debug/ferrite" target/debug/ferrite
+          "$RUNNER_TEMP/compat" postgres://ferrite@localhost:5432/ferrite_test
+
   # The cluster example (P24): validated and built, not started (`docker compose up`
   # is not run in CI; docs/superpowers/m15-exit.md).
   docker:
