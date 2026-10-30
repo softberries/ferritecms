@@ -14,7 +14,8 @@ if [ "$#" -ne 1 ]; then
   exit 1
 fi
 version=$1
-if [[ "$version" == *-* ]]; then
+# A prerelease (`-rc.1`) or build metadata (`+meta`) is never latest.
+if [[ "$version" == *-* || "$version" == *+* ]]; then
   echo "latest=false"
   echo "minor_latest=false"
   exit 0
