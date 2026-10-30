@@ -31,6 +31,10 @@ pub struct MdDoc {
     /// The folder this page stands for (`/`-separated, `""` for the import's root): set
     /// for a folder's index or synthesized page, `None` for other files.
     pub folder: Option<String>,
+    /// A synthesized folder page whose `index.md`/`README.md` exists but was skipped (and
+    /// reported): it stands in only so the folder's files have a parent, and a run must
+    /// not write it over a page the index filled earlier.
+    pub index_skipped: bool,
     pub slug: String,
     pub order: i32,
     pub front: FrontMatter,
@@ -291,11 +295,38 @@ pub fn resolve(dir: &Path, from_rel: &str, target: &str) -> Option<Target> {
 
 /// Resolves `target` (an image `src` or a link `href` as the HTML holds it, percent-encoded)
 /// from the page at `from_rel` inside `dir`, or says why it cannot ([`Miss`]). The path
-/// is percent-decoded, normalised without the file system (a `..` above `dir` is
-/// [`Miss::Outside`]), then each component is checked with `lstat` (a symlink is
-/// outside, never followed) and the result must stay under `dir`'s canonical path.
-/// Nothing outside `dir` is read.
+/// is [`lexical`]ly normalised first, then each component is checked with `lstat` (a
+/// symlink is outside, never followed) and the result must stay under `dir`'s canonical
+/// path. Nothing outside `dir` is read.
 pub fn locate(dir: &Path, from_rel: &str, target: &str) -> Result<Target, Miss> {
+    let (rel, fragment) = lexical(from_rel, target)?;
+    let root = dir.canonicalize().map_err(|_| Miss::Missing)?;
+    // No component may be a symlink: checked one by one, never followed.
+    let mut at = root.clone();
+    for s in rel.split('/').filter(|s| !s.is_empty()) {
+        at.push(s);
+        let meta = std::fs::symlink_metadata(&at).map_err(|_| Miss::Missing)?;
+        if meta.file_type().is_symlink() {
+            return Err(Miss::Outside);
+        }
+    }
+    let path = at.canonicalize().map_err(|_| Miss::Missing)?;
+    if !path.starts_with(&root) {
+        return Err(Miss::Outside);
+    }
+    Ok(Target {
+        path,
+        rel,
+        fragment,
+    })
+}
+
+/// The path `target` names from the page at `from_rel`, relative to the folder, and its
+/// `#fragment`, without touching the file system: percent-decoded and normalised. A URL
+/// with a scheme, a rooted path or a bare fragment is [`Miss::NotRelative`]; a `..` above
+/// the folder, `\` or NUL is [`Miss::Outside`]; a hidden segment or a path that is not
+/// UTF-8 once decoded is [`Miss::Missing`].
+pub fn lexical(from_rel: &str, target: &str) -> Result<(String, Option<String>), Miss> {
     let (path, fragment) = match target.split_once('#') {
         Some((p, f)) => (p, Some(f.to_owned())),
         None => (target, None),
@@ -314,7 +345,7 @@ pub fn locate(dir: &Path, from_rel: &str, target: &str) -> Result<Target, Miss> 
     if path.contains(['\\', '\0']) {
         return Err(Miss::Outside);
     }
-    // The page's folder, then the target's segments, normalised without the file system.
+    // The page's folder, then the target's segments.
     let mut segs: Vec<&str> = from_rel.split('/').collect();
     segs.pop();
     segs.retain(|s| !s.is_empty());
@@ -334,25 +365,7 @@ pub fn locate(dir: &Path, from_rel: &str, target: &str) -> Result<Target, Miss> 
     if hidden {
         return Err(Miss::Missing);
     }
-    let root = dir.canonicalize().map_err(|_| Miss::Missing)?;
-    // No component may be a symlink: checked one by one, never followed.
-    let mut at = root.clone();
-    for s in &segs {
-        at.push(s);
-        let meta = std::fs::symlink_metadata(&at).map_err(|_| Miss::Missing)?;
-        if meta.file_type().is_symlink() {
-            return Err(Miss::Outside);
-        }
-    }
-    let path = at.canonicalize().map_err(|_| Miss::Missing)?;
-    if !path.starts_with(&root) {
-        return Err(Miss::Outside);
-    }
-    Ok(Target {
-        path,
-        rel: segs.join("/"),
-        fragment,
-    })
+    Ok((segs.join("/"), fragment))
 }
 
 /// `%XX` escapes decoded; `None` when the result is not UTF-8. An invalid escape is kept.
@@ -519,6 +532,7 @@ impl Walker {
                     rel: rel.to_owned(),
                     parent: parent.map(str::to_owned),
                     folder: Some(rel.to_owned()),
+                    index_skipped: index.is_some(),
                     slug,
                     order,
                     front: FrontMatter::default(),
@@ -548,6 +562,7 @@ impl Walker {
             rel,
             parent: parent.map(str::to_owned),
             folder: folder.map(str::to_owned),
+            index_skipped: false,
             slug: front.slug.clone().unwrap_or(slug),
             order: front.order.unwrap_or(order),
             front,

@@ -233,6 +233,12 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
         let permalinks = Arc::new(permalink_rules(store.as_ref()).await?);
         let service = ImportService::new(store.clone(), permalinks);
         let actor = importer(store.as_ref(), &service, args.as_login.as_deref()).await?;
+        // Scan and check the type before a run starts: a refusal writes nothing.
+        let dir = args.dir.clone();
+        let scanned = tokio::task::spawn_blocking(move || ferrite_import_md::scan(&dir))
+            .await
+            .context("the folder scan stopped")??;
+        check_type(store.as_ref(), &args.kind, &scanned).await?;
         let handle = match service
             .start(
                 &actor,
@@ -258,7 +264,7 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
             strip_metadata: config.uploads.strip_metadata,
             work_dir: args.data.join("import"),
         };
-        match ferrite_import_md::run(&service, &handle, &media, &args.dir, &opts).await {
+        match ferrite_import_md::run(&service, &handle, &media, &args.dir, scanned, &opts).await {
             Ok(report) => {
                 handle
                     .finish(&service, ImportRunState::Done, report.stats())
@@ -283,6 +289,28 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
     .await;
     store.close().await;
     done
+}
+
+/// Refuses a `--type` the pages cannot have: unknown, `media` (uploads only), or not
+/// hierarchical while the folder nests pages.
+async fn check_type(
+    store: &dyn Store,
+    kind: &str,
+    scanned: &ferrite_import_md::Scan,
+) -> anyhow::Result<()> {
+    let Some(ty) = store.read().types().get(kind).await? else {
+        bail!("unknown content type {kind:?} (--type)");
+    };
+    if ty.name == ferrite_domain::MEDIA_KIND {
+        bail!("--type media is for uploads; pick a page type");
+    }
+    if !ty.hierarchical && ferrite_import_md::needs_hierarchy(scanned) {
+        bail!(
+            "content type {kind:?} is not hierarchical, but the folder nests pages \
+             (index.md or README.md with files beside it, or subfolders)"
+        );
+    }
+    Ok(())
 }
 
 /// The Markdown report as text (P62): the counts, the front page, then one line per

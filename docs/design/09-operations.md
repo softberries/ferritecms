@@ -1222,15 +1222,22 @@ the files and keeps what was edited here. `--front-page` makes the root `index.m
 transaction opens (rolled back with it), so a very large dry run, one that takes over 120 s,
 can outlive the staleness window: another import may then take the run over (`--takeover`,
 or a job), and closing the dry run's run fails (exit 1) instead of printing its report (by
-reading of the fence; not tested). There is no report file: it prints
+reading of the fence; not tested). On Postgres that one transaction also holds the row locks
+of every existing row it updates (pages, map rows, the run's row) until it ends, image
+reads and staging included, so on a live site an admin's save of one of those pages
+waits for the dry run.
+There is no report file: it prints
 `created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
 when set, then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
 `too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
 `refused-image`, `broken-link`, `other-type`, `no-front-page`, and the notices
 `synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`). Exit
 0 done (notices only), 2 done with skipped files, missing or refused images or broken links,
-3 another import running, 1 on any error (`--front-page` with another type, a folder that is
-not a folder; the run is marked `failed`). With SQLite `serve` holds the data folder's lock:
+3 another import running, 1 on any error. These are checked before a run starts, so they
+write nothing and leave no run: `--front-page` with another type, a folder that is not a
+folder or cannot be scanned, and a `--type` that does not exist, is `media`, or is not
+hierarchical while the folder nests pages. An error after the run started marks that run
+`failed` (each batch it committed stays). With SQLite `serve` holds the data folder's lock:
 stop it first. Media variants are made by the next `serve`.
 
 **Imports through the admin and the API** (M3-2; design 08 §1): with `serve` running, an

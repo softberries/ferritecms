@@ -228,12 +228,21 @@ pipeline above, but it shares the run and map rules:
   | changed | not edited (same version) | `updated` in place |
   | changed | edited here | `kept (edited here)`: nothing written |
   | renamed or deleted | any | stays on the site, reported `not-in-source` |
+  | skipped (bad front matter, unreadable, too large, not UTF-8; or under a folder that could not be read or is too deep) | any | nothing written, reported (`bad-front-matter`, `unreadable`, …), never `not-in-source` |
   | new | none | `created` |
 
-  A mapped image is not read again. One whose bytes changed is never replaced by a
+  A skipped `index.md`/`README.md` leaves its folder's page as an earlier run left it; on
+  a first run the folder gets the empty stand-in page so its files still have a parent
+  (`MdDoc.index_skipped`).
+
+  A mapped image is read only to compare its hash (a new one is hashed while it is
+  staged, so each file is read once). One whose bytes changed is never replaced by a
   re-run: the media item keeps the file it was first imported with (core does not
   replace a media item's file) and the run reports `image-changed`; replace it in the
-  media library.
+  media library. A mapped image that is now gone, unreadable or refused keeps its media
+  item in the pages that name it (reported `missing-image`, `unreadable` or
+  `refused-image`), so the link pass, which converts a page's whole body again, does not
+  drop it from a page whose file did not change.
 - **Passes.** 1 media, 2 content (parents first; relative links kept as written; then the
   front page), 3 links: every page created, updated or unchanged (not one kept, nor one
   edited here since) is converted again with its links pointing at the target pages'

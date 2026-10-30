@@ -106,10 +106,22 @@ impl Site {
         ferrite_config::load(self.data(), self.env.clone()).unwrap()
     }
 
+    /// Opens the site's store. On SQLite the data-folder lock is retried for up to 5 s:
+    /// with tests running in parallel, a CLI child another test spawns can briefly hold a
+    /// copy of this test's lock descriptor (seen about once in ten parallel runs, never
+    /// with `--test-threads=1`).
     async fn store(&self) -> Arc<dyn Store> {
-        open_store(&self.config(), OpenMode::MustExist)
-            .await
-            .unwrap()
+        let mut tries = 0;
+        loop {
+            match open_store(&self.config(), OpenMode::MustExist).await {
+                Ok(store) => return store,
+                Err(e) if tries < 100 && format!("{e:#}").contains("data folder is in use") => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(e) => panic!("{e:#}"),
+            }
+        }
     }
 }
 
@@ -190,6 +202,11 @@ both!(
     bad_front_matter_skips_the_file_exit_2,
     dry_run_writes_nothing,
     busy_exit_3,
+    a_skipped_index_keeps_its_folder_page,
+    a_skipped_root_index_keeps_the_home_page,
+    an_unreadable_folder_hides_nothing,
+    an_image_imported_earlier_stays,
+    a_bad_type_writes_nothing,
 );
 
 /// A 2×2 PNG.
@@ -701,18 +718,25 @@ async fn outside_dir_is_never_read(site: Site) {
     write(root.path(), "secret.png", &png());
     write(root.path(), "outside.md", b"# Outside\n\nSecret text.\n");
     let secret = root.path().join("secret.png").canonicalize().unwrap();
+    write(root.path(), "outdir/inner.md", b"# Inner\n\nSecret text.\n");
+    write(root.path(), "outdir/secret.png", &png());
     write(&dir, "ok.md", b"# Ok\n");
     write(
         &dir,
         "guides/a.md",
         format!(
-            "# A\n\n![s](../../secret.png)\n\n![abs]({})\n",
+            "# A\n\n![s](../../secret.png)\n\n![abs]({})\n\n![l](../linked-dir/secret.png)\n",
             secret.display()
         )
         .as_bytes(),
     );
     #[cfg(unix)]
-    std::os::unix::fs::symlink(root.path().join("outside.md"), dir.join("link.md")).unwrap();
+    {
+        use std::os::unix::fs::symlink;
+        symlink(root.path().join("outside.md"), dir.join("link.md")).unwrap();
+        // A symlinked folder inside DIR: neither walked nor passed to reach an image.
+        symlink(root.path().join("outdir"), dir.join("linked-dir")).unwrap();
+    }
     let out = site.import(&dir, &[]).await;
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let o = stdout(&out);
@@ -723,7 +747,14 @@ async fn outside_dir_is_never_read(site: Site) {
         "{o}"
     );
     #[cfg(unix)]
-    assert!(o.contains("outside  link.md  "), "{o}");
+    {
+        assert!(o.contains("outside  link.md  "), "{o}");
+        assert!(o.contains("outside  linked-dir  "), "{o}");
+        assert!(
+            o.contains("outside  guides/a.md  ../linked-dir/secret.png "),
+            "{o}"
+        );
+    }
     assert_eq!(media_count(&site).await, 0);
     let p = pages(&site).await;
     let slugs: Vec<&str> = {
@@ -891,4 +922,175 @@ async fn front_page_needs_type_page() {
         "{}",
         text(&out)
     );
+}
+
+/// A skipped index file (bad front matter) leaves the folder page an earlier run made as
+/// it is: no write, no `not-in-source`; the folder's files keep it as their parent.
+async fn a_skipped_index_keeps_its_folder_page(site: Site) {
+    let (_root, dir) = tree();
+    assert_eq!(site.import(&dir, &[]).await.status.code(), Some(0));
+    let before = pages(&site).await.remove("guides").unwrap();
+    assert!(before.body.to_string().contains("How-to guides."));
+    write(
+        &dir,
+        "guides/README.md",
+        b"+++\norder = 4\nweight = 1\n+++\n# Guides\n\nHow-to guides, changed.\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(
+        o.contains("created 0, updated 0, unchanged 6, kept (edited here) 0"),
+        "{o}"
+    );
+    assert!(
+        o.contains("bad-front-matter  guides/README.md  line 3: skipped, "),
+        "{o}"
+    );
+    assert!(!o.contains("not-in-source"), "{o}");
+    let p = pages(&site).await;
+    let after = &p["guides"];
+    assert_eq!(
+        (&after.title, &after.body, after.version),
+        (&before.title, &before.body, before.version)
+    );
+    assert_eq!(p["write"].parent_id, Some(before.id));
+}
+
+/// A skipped root index keeps the home page and the front page as they are, with no
+/// `not-in-source` and no `no-front-page` line.
+async fn a_skipped_root_index_keeps_the_home_page(site: Site) {
+    let (_root, dir) = tree();
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let before = pages(&site).await.remove("home").unwrap();
+    write(&dir, "index.md", b"---\ntitle: Welcome\n---\n# Home\n");
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("created 0, updated 0, unchanged 6"), "{o}");
+    assert!(o.contains("bad-front-matter  index.md  line 1: "), "{o}");
+    assert!(!o.contains("not-in-source"), "{o}");
+    assert!(!o.contains("no-front-page"), "{o}");
+    let after = pages(&site).await.remove("home").unwrap();
+    assert_eq!(
+        (&after.title, &after.body, after.version),
+        (&before.title, &before.body, before.version)
+    );
+    let store = site.store().await;
+    let front = store
+        .read()
+        .options()
+        .get("reading.front_page")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(front.value, json!(before.id.to_string()));
+    store.close().await;
+}
+
+/// A folder that cannot be read on a re-run is reported; nothing under it is listed as
+/// no longer in the folder, and its pages stay.
+async fn an_unreadable_folder_hides_nothing(site: Site) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_root, dir) = tree();
+        assert_eq!(site.import(&dir, &[]).await.status.code(), Some(0));
+        let guides = dir.join("guides");
+        std::fs::set_permissions(&guides, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads anything: nothing to check then.
+        let readable = std::fs::read_dir(&guides).is_ok();
+        let out = site.import(&dir, &[]).await;
+        std::fs::set_permissions(&guides, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return;
+        }
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+        let o = stdout(&out);
+        assert!(o.contains("created 0, updated 0, unchanged 5"), "{o}");
+        assert!(o.contains("unreadable  guides  "), "{o}");
+        assert!(!o.contains("not-in-source"), "{o}");
+        let p = pages(&site).await;
+        assert_eq!(p["write"].parent_id, Some(p["guides"].id));
+    }
+    #[cfg(not(unix))]
+    drop(site);
+}
+
+/// An image an earlier run imported stays in a page whose file did not change, when the
+/// image is unreadable now or gone: reported, the page untouched.
+async fn an_image_imported_earlier_stays(site: Site) {
+    let (_root, dir) = tree();
+    assert_eq!(site.import(&dir, &[]).await.status.code(), Some(0));
+    let before = pages(&site).await.remove("install").unwrap();
+    let src = image_srcs(&before.body);
+    assert_eq!(src.len(), 1);
+    let logo = dir.join("assets/logo.png");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&logo, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::File::open(&logo).is_ok();
+        let out = site.import(&dir, &[]).await;
+        std::fs::set_permissions(&logo, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if !readable {
+            assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+            let o = stdout(&out);
+            assert!(o.contains("unchanged 7"), "{o}");
+            assert!(o.contains("unreadable  assets/logo.png  "), "{o}");
+            let after = pages(&site).await.remove("install").unwrap();
+            assert_eq!(
+                (image_srcs(&after.body), after.version),
+                (src.clone(), before.version)
+            );
+        }
+    }
+    std::fs::remove_file(&logo).unwrap();
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("unchanged 7"), "{o}");
+    assert!(
+        o.contains("missing-image  01-install.md  image assets/logo.png "),
+        "{o}"
+    );
+    let after = pages(&site).await.remove("install").unwrap();
+    assert_eq!(
+        (image_srcs(&after.body), after.version),
+        (src, before.version)
+    );
+    assert_eq!(media_count(&site).await, 1);
+}
+
+/// `--type` is checked before a run starts: an unknown type, one that is not
+/// hierarchical for a nested folder, or `media`, is exit 1 with nothing written.
+async fn a_bad_type_writes_nothing(site: Site) {
+    let (_root, dir) = tree();
+    let out = site.import(&dir, &["--type", "nope"]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown content type \"nope\""),
+        "{}",
+        text(&out)
+    );
+    let out = site.import(&dir, &["--type", "post"]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("is not hierarchical"),
+        "{}",
+        text(&out)
+    );
+    let out = site.import(&dir, &["--type", "media"]).await;
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let store = site.store().await;
+    let r = store.read();
+    assert_eq!(
+        r.content().count(&ContentQuery::default()).await.unwrap(),
+        0
+    );
+    assert!(r.imports().list_runs(10).await.unwrap().is_empty());
+    store.close().await;
 }

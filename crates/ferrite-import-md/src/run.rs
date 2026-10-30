@@ -27,9 +27,10 @@
 //! store under `MdOptions::work_dir`, deleted afterwards.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ferrite_core::content::SeoPatch;
@@ -43,13 +44,16 @@ use ferrite_domain::{
 use ferrite_import_wp::convert::{ImageRef, Notes, Rewrite};
 use ferrite_media::ingest::stage_stream;
 use ferrite_media::{Backend, MediaConfig, MediaError, MediaStore, PublicUrlMode};
+use futures::StreamExt as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::convert::{Converted, convert};
 use crate::error::MdError;
-use crate::scan::{FORMAT, MdDoc, Miss, Problem, hex, locate, map_id, open_nofollow, scan};
+use crate::scan::{
+    FORMAT, MdDoc, Miss, Problem, Scan, hex, lexical, locate, map_id, open_nofollow,
+};
 
 /// The option `--front-page` sets.
 const FRONT_PAGE_OPTION: &str = "reading.front_page";
@@ -155,20 +159,19 @@ struct Cx<'a> {
     opts: &'a MdOptions,
 }
 
-/// Imports the folder `dir` under the started run `handle` (see the module docs).
-/// Writes made before an error stay (each batch commits), except in a dry run. The caller
-/// finishes the run.
+/// Imports the folder `dir`, as [`scan`](crate::scan()) read it into `scanned`, under the
+/// started run `handle` (see the module docs). The caller scans first, so it can check the
+/// content type against the tree before a run starts ([`needs_hierarchy`]). Writes made
+/// before an error stay (each batch commits), except in a dry run. The caller finishes
+/// the run.
 pub async fn run(
     svc: &ImportService,
     handle: &ImportHandle,
     media: &MediaStore,
     dir: &Path,
+    scanned: Scan,
     opts: &MdOptions,
 ) -> Result<MdReport, MdError> {
-    let owned = dir.to_owned();
-    let scanned = tokio::task::spawn_blocking(move || scan(&owned))
-        .await
-        .map_err(|e| MdError::Stopped(e.to_string()))??;
     let root = dir.canonicalize().map_err(|source| MdError::Io {
         path: dir.to_owned(),
         source,
@@ -213,6 +216,7 @@ pub async fn run(
     }
     // Every page once: its images, and what it cannot import.
     let mut images: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut missing: BTreeSet<String> = BTreeSet::new();
     let (no_media, no_paths) = (HashMap::new(), HashMap::new());
     for d in &docs {
         let Some(source) = &d.md.source else {
@@ -222,6 +226,7 @@ pub async fn run(
         convert(source, &rw, &mut Notes::default());
         let found = rw.found.into_inner();
         images.extend(found.images);
+        missing.extend(found.missing);
         for p in found.problems {
             if !report.problems.contains(&p) {
                 report.problems.push(p);
@@ -257,12 +262,12 @@ pub async fn run(
                     path_prefix: "/_media".into(),
                 },
             })?;
-            let done = media_pass(&mut w, &cx, &staging, &images, &mut report).await;
+            let done = media_pass(&mut w, &cx, &staging, &images, &missing, &mut report).await;
             drop(staging);
             remove_dir(store_dir.parent().unwrap_or(&store_dir)).await;
             done?
         } else {
-            media_pass(&mut w, &cx, media, &images, &mut report).await?
+            media_pass(&mut w, &cx, media, &images, &missing, &mut report).await?
         };
         content_pass(&mut w, &cx, &mut docs, &media_ids, &mut report).await?;
         if opts.front_page {
@@ -277,6 +282,12 @@ pub async fn run(
     done?;
     ended?;
     Ok(report)
+}
+
+/// Whether the scanned tree has a page with a parent: then the content type must be
+/// hierarchical.
+pub fn needs_hierarchy(scanned: &Scan) -> bool {
+    scanned.docs.iter().any(|d| d.parent.is_some())
 }
 
 /// The string a page's `import_map` key is [`map_id`] of (ruling R-b9): a folder's page
@@ -373,10 +384,12 @@ async fn remove_dir(dir: &Path) {
 }
 
 /// What converting a page found: the images it names inside the folder (path to the
-/// canonical file) and the problems.
+/// canonical file), the paths of images it names that are not there (an earlier run may
+/// have imported them), and the problems.
 #[derive(Default)]
 struct Found {
     images: BTreeMap<String, PathBuf>,
+    missing: BTreeSet<String>,
     problems: Vec<Problem>,
 }
 
@@ -446,10 +459,20 @@ impl Rewrite for Rw<'_> {
                 }
                 self.found.borrow_mut().images.insert(t.rel, t.path);
             }
-            Err(Miss::Missing) => self.problem(Problem::MissingImage {
-                file,
-                src: shown(src),
-            }),
+            Err(Miss::Missing) => {
+                self.problem(Problem::MissingImage {
+                    file,
+                    src: shown(src),
+                });
+                // Gone from the folder, but an earlier run imported it: the page keeps
+                // that media item.
+                if let Ok((rel, _)) = lexical(self.from, src) {
+                    if let Some(id) = self.media.get(&rel) {
+                        return ImageRef::Media(id.as_uuid());
+                    }
+                    self.found.borrow_mut().missing.insert(rel);
+                }
+            }
             // A rooted or absolute path, another scheme, or a path leaving the folder:
             // never read.
             Err(Miss::NotRelative | Miss::Outside) => self.problem(Problem::OutsideDir {
@@ -501,54 +524,57 @@ impl Rewrite for Rw<'_> {
 }
 
 /// Pass 1: every image found becomes a media item (see the module docs); the media
-/// item of each image path that has one.
+/// item of each image path that has one. An image an earlier run imported keeps its
+/// media item when its file is now gone, unreadable or refused (reported as such), so a
+/// page whose file did not change keeps its images. Each file is read once: a mapped
+/// one only to compare its hash, a new one while it is staged.
 async fn media_pass(
     w: &mut Writer<'_>,
     cx: &Cx<'_>,
     staging: &MediaStore,
     images: &BTreeMap<String, PathBuf>,
+    missing: &BTreeSet<String>,
     report: &mut MdReport,
 ) -> Result<HashMap<String, ContentId>, MdError> {
     let opts = cx.opts;
     let mut ids = HashMap::new();
-    let all: Vec<(&String, &PathBuf)> = images.iter().collect();
+    let all: Vec<(&String, Option<&PathBuf>)> = images
+        .iter()
+        .map(|(rel, path)| (rel, Some(path)))
+        .chain(
+            missing
+                .iter()
+                .filter(|rel| !images.contains_key(*rel))
+                .map(|rel| (rel, None)),
+        )
+        .collect();
     for chunk in all.chunks(ImportBatch::BATCH_ITEMS) {
-        // The hash of each file, read without following a symlink.
-        let mut hashed = Vec::with_capacity(chunk.len());
-        let mut beat = Instant::now();
-        for (rel, path) in chunk {
-            match hash_file(path, opts.max_upload).await? {
-                Ok(hash) => hashed.push((*rel, *path, hash)),
-                Err(p) => report.problems.push(p.with_file(rel)),
-            }
-            if beat.elapsed() >= HEARTBEAT_EVERY {
-                w.heartbeat().await?;
-                beat = Instant::now();
-            }
-        }
-        // Mapped images are not read again.
         let batch = w.open().await?;
-        let checked = check_mapped(&batch, &hashed).await;
+        let checked = check_mapped(&batch, chunk).await;
         let mapped = w.close(batch, checked).await?;
-        let mut todo = Vec::new();
-        for ((rel, path, hash), m) in hashed.into_iter().zip(mapped) {
-            match m {
-                Some((id, same)) => {
+        let mut staged = Vec::new();
+        let mut beat = Instant::now();
+        for (&(rel, path), m) in chunk.iter().zip(mapped) {
+            match (m, path) {
+                (Some((id, hash)), Some(path)) => {
                     ids.insert(rel.clone(), id);
-                    if !same {
-                        report
+                    match hash_file(path, opts.max_upload).await? {
+                        Ok(now) if now != hash => report
                             .problems
-                            .push(Problem::ImageChanged { file: rel.clone() });
+                            .push(Problem::ImageChanged { file: rel.clone() }),
+                        Ok(_) => {}
+                        Err(p) => report.problems.push(p.with_file(rel)),
                     }
                 }
-                None => todo.push((rel, path, hash)),
-            }
-        }
-        let mut staged = Vec::with_capacity(todo.len());
-        for (rel, path, hash) in todo {
-            match stage(staging, rel, path, opts).await? {
-                Ok(upload) => staged.push((rel, hash, upload)),
-                Err(p) => report.problems.push(p),
+                // Gone from the folder (reported missing): the media item stays.
+                (Some((id, _)), None) => {
+                    ids.insert(rel.clone(), id);
+                }
+                (None, Some(path)) => match stage(staging, rel, path, opts).await? {
+                    Ok((upload, hash)) => staged.push((rel, hash, upload)),
+                    Err(p) => report.problems.push(p),
+                },
+                (None, None) => {}
             }
             if beat.elapsed() >= HEARTBEAT_EVERY {
                 w.heartbeat().await?;
@@ -589,6 +615,10 @@ impl ImageProblem {
 
 /// The SHA-256 (hex) of the file at `path` and [`FORMAT`], read on a blocking thread
 /// without following a symlink; a file over `max` bytes is refused unread.
+///
+/// `open_nofollow` refuses a symlink only as the last component; the folders above it
+/// were checked by [`locate`] (every component `lstat`ed, none a symlink) just before,
+/// and the import folder is the operator's own (Task 5 review, accepted).
 async fn hash_file(path: &Path, max: u64) -> Result<Result<String, ImageProblem>, MdError> {
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -621,19 +651,19 @@ async fn hash_file(path: &Path, max: u64) -> Result<Result<String, ImageProblem>
     .map_err(|e| MdError::Stopped(e.to_string()))?
 }
 
-/// For each hashed image: its media item when mapped (and still there), and whether the
-/// mapped hash is the same.
+/// For each image path: its media item and mapped hash when an earlier run imported it
+/// and the item is still there.
 async fn check_mapped(
     b: &ImportBatch<'_>,
-    hashed: &[(&String, &PathBuf, String)],
-) -> Result<Vec<Option<(ContentId, bool)>>, MdError> {
-    let mut out = Vec::with_capacity(hashed.len());
-    for (rel, _, hash) in hashed {
+    chunk: &[(&String, Option<&PathBuf>)],
+) -> Result<Vec<Option<(ContentId, String)>>, MdError> {
+    let mut out = Vec::with_capacity(chunk.len());
+    for (rel, _) in chunk {
         let mapped = b.lookup(ImportMapKind::Media, map_id(rel)).await?;
         let found = match mapped {
             Some(m) => {
                 let id = ContentId::from_uuid(m.id);
-                b.media_row(id).await?.map(|_| (id, m.hash == *hash))
+                b.media_row(id).await?.map(|_| (id, m.hash))
             }
             None => None,
         };
@@ -642,13 +672,14 @@ async fn check_mapped(
     Ok(out)
 }
 
-/// Stages one image as an upload, or the problem that refused it.
+/// Stages one image as an upload, hashing its bytes (and [`FORMAT`]) as they are read, or
+/// the problem that refused it. Opened as [`hash_file`] opens it.
 async fn stage(
     staging: &MediaStore,
     rel: &str,
     path: &Path,
     opts: &MdOptions,
-) -> Result<Result<NewUpload, Problem>, MdError> {
+) -> Result<Result<(NewUpload, String), Problem>, MdError> {
     let refused = |message: String| {
         Ok(Err(Problem::RefusedImage {
             file: rel.to_owned(),
@@ -669,7 +700,13 @@ async fn stage(
         Ok(file) => tokio::fs::File::from_std(file),
         Err(e) => return unreadable(e.to_string()),
     };
-    let stream = tokio_util::io::ReaderStream::new(file);
+    let hasher = Arc::new(Mutex::new(Sha256::new()));
+    let fed = Arc::clone(&hasher);
+    let stream = tokio_util::io::ReaderStream::new(file).inspect(move |chunk| {
+        if let Ok(bytes) = chunk {
+            fed.lock().unwrap_or_else(|e| e.into_inner()).update(bytes);
+        }
+    });
     let staged = match stage_stream(
         staging,
         &file_name,
@@ -689,7 +726,12 @@ async fn stage(
         Err(MediaError::Io(why)) => return unreadable(why.to_string()),
         Err(e) => return Err(e.into()),
     };
-    Ok(Ok(NewUpload {
+    let hash = {
+        let mut h = hasher.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        h.update(FORMAT.as_bytes());
+        hex(&h.finalize())
+    };
+    let upload = NewUpload {
         artifact: Artifact {
             hash: staged.artifact.hash,
             kind: ArtifactKind::Media,
@@ -705,7 +747,8 @@ async fn stage(
         alt: String::new(),
         sanitized: staged.sanitized,
         raster: staged.raster,
-    }))
+    };
+    Ok(Ok((upload, hash)))
 }
 
 async fn write_media<'r>(
@@ -814,6 +857,15 @@ async fn write_pages(
             docs[i].id = Some(item.id);
             continue;
         }
+        // The folder's index was skipped (reported): the page an earlier run made stays
+        // as it is; only a first run makes the stand-in, so the folder's files have a
+        // parent.
+        if d.md.index_skipped
+            && let Some(item) = &mapped
+        {
+            docs[i].id = Some(item.id);
+            continue;
+        }
         let (body, h1) = body_of(d, cx, media, &no_paths);
         let front = &d.md.front;
         let title = front
@@ -821,7 +873,7 @@ async fn write_pages(
             .clone()
             .or(h1)
             .unwrap_or_else(|| d.md.fallback_title.clone());
-        let date = front.date.map(jiff_to_timestamp).transpose()?;
+        let date = front.date;
         let created_at = date
             .or_else(|| mapped.as_ref().map(|m| m.created_at))
             .unwrap_or(start);
@@ -876,11 +928,6 @@ async fn write_pages(
     Ok(problems)
 }
 
-fn jiff_to_timestamp(t: jiff::Timestamp) -> Result<Timestamp, MdError> {
-    Timestamp::from_micros(t.as_microsecond())
-        .map_err(|_| MdError::Stopped(format!("date {t} is out of range")))
-}
-
 /// Sets `reading.front_page` to the root index (P62) under the import's option rule:
 /// written on the first run; on a re-run only while the site still holds what the
 /// import last set, else the site's choice is kept and reported. A dry run only
@@ -892,7 +939,14 @@ async fn front_page(
     report: &mut MdReport,
 ) -> Result<(), MdError> {
     let Some(d) = cx.index.by_folder.get("").map(|&i| &docs[i]) else {
-        report.problems.push(Problem::NoFrontPage);
+        // A root index that was skipped is reported as such; the front page stays.
+        let skipped_root = report
+            .problems
+            .iter()
+            .any(|p| skipped(p).0.iter().any(|k| k == "/"));
+        if !skipped_root {
+            report.problems.push(Problem::NoFrontPage);
+        }
         return Ok(());
     };
     let Some(id) = d.id.filter(|_| d.written.is_some()) else {
@@ -1022,17 +1076,54 @@ async fn fix_links(
     Ok(())
 }
 
+/// What a problem says this run skipped: the page key strings (as [`page_key`] gives them)
+/// of a skipped file (its own, and its folder's when it is the folder's index file), and
+/// the folder of a skipped folder (whose whole subtree was not read). An `unreadable`
+/// entry may be either, so it counts as both.
+fn skipped(p: &Problem) -> (Vec<String>, Option<String>) {
+    match p {
+        Problem::BadFrontMatter { file, .. }
+        | Problem::TooLarge { file }
+        | Problem::NotUtf8 { file }
+        | Problem::OutsideDir { file, .. } => (file_keys(file), None),
+        Problem::Unreadable { file, .. } => {
+            let mut keys = file_keys(file);
+            keys.push(format!("{file}/"));
+            (keys, Some(file.clone()))
+        }
+        Problem::TooDeep { dir } => (vec![format!("{dir}/")], Some(dir.clone())),
+        _ => (Vec::new(), None),
+    }
+}
+
+/// The page keys a skipped file stands for: its path, and `<folder>/` when it is an
+/// `index.md` or `README.md` (any case).
+fn file_keys(file: &str) -> Vec<String> {
+    let mut keys = vec![file.to_owned()];
+    let (folder, name) = file.rsplit_once('/').unwrap_or(("", file));
+    if name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("readme.md") {
+        keys.push(format!("{folder}/"));
+    }
+    keys
+}
+
 /// Reports every page an earlier run of this source imported whose file is gone from
-/// the folder (renamed or deleted) and was not skipped by this run.
+/// the folder (renamed or deleted). Pages of files this run skipped (and reported), and
+/// every page under a folder it skipped, are not gone.
 async fn not_in_source(
     w: &mut Writer<'_>,
     docs: &[Doc],
     report: &mut MdReport,
 ) -> Result<(), MdError> {
     let mut here: HashSet<i64> = docs.iter().map(|d| d.wp_id).collect();
-    here.extend(report.problems.iter().map(|p| map_id(p.file())));
+    let mut skipped_folders = Vec::new();
+    for p in &report.problems {
+        let (keys, folder) = skipped(p);
+        here.extend(keys.iter().map(|k| map_id(k)));
+        skipped_folders.extend(folder);
+    }
     let batch = w.open().await?;
-    let gone = list_gone(&batch, &here).await;
+    let gone = list_gone(&batch, &here, &skipped_folders).await;
     let gone = w.close(batch, gone).await?;
     report
         .problems
@@ -1040,15 +1131,31 @@ async fn not_in_source(
     Ok(())
 }
 
-async fn list_gone(b: &ImportBatch<'_>, here: &HashSet<i64>) -> Result<Vec<String>, MdError> {
+async fn list_gone(
+    b: &ImportBatch<'_>,
+    here: &HashSet<i64>,
+    skipped_folders: &[String],
+) -> Result<Vec<String>, MdError> {
+    // The pages of the skipped folders: what is under them was not read.
+    let mut roots = HashSet::new();
+    for folder in skipped_folders {
+        if let Some(m) = b
+            .lookup(ImportMapKind::Content, map_id(&format!("{folder}/")))
+            .await?
+        {
+            roots.insert(ContentId::from_uuid(m.id));
+        }
+    }
     let mut gone = Vec::new();
     let mut after = None;
     loop {
         let (rows, next) = b.mapped(ImportMapKind::Content, after, MAP_PAGE).await?;
         for (wp_id, m) in rows {
-            if !here.contains(&wp_id)
-                && let Some(path) = b.path(ContentId::from_uuid(m.id)).await?
-            {
+            let id = ContentId::from_uuid(m.id);
+            if here.contains(&wp_id) || under(b, id, &roots).await? {
+                continue;
+            }
+            if let Some(path) = b.path(id).await? {
                 gone.push(path);
             }
         }
@@ -1057,4 +1164,27 @@ async fn list_gone(b: &ImportBatch<'_>, here: &HashSet<i64>) -> Result<Vec<Strin
             None => return Ok(gone),
         }
     }
+}
+
+/// Whether item `id` is one of `roots` or below one (its parent chain, at most
+/// [`MAX_DEPTH`](crate::MAX_DEPTH) + 1 steps).
+async fn under(
+    b: &ImportBatch<'_>,
+    id: ContentId,
+    roots: &HashSet<ContentId>,
+) -> Result<bool, MdError> {
+    if roots.is_empty() {
+        return Ok(false);
+    }
+    let mut at = Some(id);
+    for _ in 0..=crate::MAX_DEPTH {
+        let Some(current) = at else {
+            return Ok(false);
+        };
+        if roots.contains(&current) {
+            return Ok(true);
+        }
+        at = b.get_item(current).await?.and_then(|item| item.parent_id);
+    }
+    Ok(false)
 }

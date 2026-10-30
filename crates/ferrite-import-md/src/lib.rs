@@ -16,8 +16,8 @@ pub mod scan;
 pub use convert::{Converted, convert};
 pub use error::MdError;
 pub use front::{FrontMatter, split_front_matter};
-pub use run::{MdOptions, MdReport, run};
+pub use run::{MdOptions, MdReport, needs_hierarchy, run};
 pub use scan::{
-    FORMAT, MAX_DEPTH, MAX_FILE_BYTES, MAX_FILES, MdDoc, Miss, Problem, Scan, Target, locate,
-    map_id, resolve, scan,
+    FORMAT, MAX_DEPTH, MAX_FILE_BYTES, MAX_FILES, MdDoc, Miss, Problem, Scan, Target, lexical,
+    locate, map_id, resolve, scan,
 };

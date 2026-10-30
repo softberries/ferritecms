@@ -1789,6 +1789,7 @@ dependencies = [
  "ferrite-domain",
  "ferrite-import-wp",
  "ferrite-media",
+ "futures",
  "jiff",
  "libc",
  "pulldown-cmark",

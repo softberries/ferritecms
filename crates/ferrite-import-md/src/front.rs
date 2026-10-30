@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use ferrite_domain::Timestamp;
 use serde::Deserialize;
 
 use crate::error::MdError;
@@ -13,8 +14,9 @@ pub struct FrontMatter {
     pub slug: Option<String>,
     pub order: Option<i32>,
     pub draft: bool,
-    /// RFC 3339 with an offset: a TOML offset date-time or a string.
-    pub date: Option<jiff::Timestamp>,
+    /// RFC 3339 with an offset: a TOML offset date-time or a string; kept to the
+    /// microsecond.
+    pub date: Option<Timestamp>,
     /// The excerpt and the SEO description.
     pub description: Option<String>,
 }
@@ -107,7 +109,12 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
                 toml::Value::String(s) => s,
                 _ => String::new(),
             };
-            Some(text.parse::<jiff::Timestamp>().map_err(|_| {
+            // Stored with microseconds, as every timestamp of the site.
+            let parsed = text
+                .parse::<jiff::Timestamp>()
+                .ok()
+                .and_then(|t| Timestamp::from_micros(t.as_microsecond()).ok());
+            Some(parsed.ok_or_else(|| {
                 (
                     offset,
                     "`date` must be an RFC 3339 date-time with an offset, as \
@@ -153,6 +160,11 @@ mod tests {
         split_front_matter(text, Path::new("guides/a.md"))
     }
 
+    fn ts(rfc3339: &str) -> Timestamp {
+        let t: jiff::Timestamp = rfc3339.parse().unwrap();
+        Timestamp::from_micros(t.as_microsecond()).unwrap()
+    }
+
     fn line_of(e: MdError) -> (usize, String) {
         match e {
             MdError::FrontMatter {
@@ -179,7 +191,7 @@ mod tests {
                 slug: Some("setup".into()),
                 order: Some(3),
                 draft: true,
-                date: Some("2026-10-30T12:00:00Z".parse().unwrap()),
+                date: Some(ts("2026-10-30T12:00:00Z")),
                 description: Some("How to install.".into()),
             }
         );
@@ -189,7 +201,7 @@ mod tests {
     #[test]
     fn date_as_a_string_with_an_offset() {
         let (fm, _) = split("+++\ndate = \"2026-10-30T14:00:00+02:00\"\n+++\n").unwrap();
-        assert_eq!(fm.date, Some("2026-10-30T12:00:00Z".parse().unwrap()));
+        assert_eq!(fm.date, Some(ts("2026-10-30T12:00:00Z")));
     }
 
     #[test]

@@ -12,6 +12,7 @@ ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
 ferrite-import-wp = { path = "../ferrite-import-wp" }
 ferrite-media = { path = "../ferrite-media" }
+futures.workspace = true
 jiff.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
