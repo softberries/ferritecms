@@ -19,11 +19,17 @@ const LOCK_FILE: &str = "ferrite.lock";
 
 /// Whether this process may do `access` to `path`, by the kernel's own check with the
 /// effective uid and gid (as `open` would): ACLs, groups and read-only mounts count, and
-/// nothing is written.
+/// nothing is written. Some container seccomp profiles answer `faccessat2` (which
+/// `EACCESS` needs) with `EPERM`; then the plain real-id check is asked instead, which is
+/// the same answer for a process that is not setuid.
 #[cfg(unix)]
 fn may(path: &Path, access: rustix::fs::Access) -> bool {
     use rustix::fs::{AtFlags, CWD};
-    rustix::fs::accessat(CWD, path, access, AtFlags::EACCESS).is_ok()
+    match rustix::fs::accessat(CWD, path, access, AtFlags::EACCESS) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::PERM) => rustix::fs::access(path, access).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Whether this process may list `dir` (read and enter).

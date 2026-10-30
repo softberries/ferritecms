@@ -936,7 +936,7 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   ferrite`, which embeds it; the runtime is `gcr.io/distroless/cc-debian12:nonroot` (glibc,
   no shell, uid 65532) with the binary at `/ferrite`, an empty `/data` owned by the
   non-root user with mode 0750 (`COPY --chmod=0750`: a plain `COPY` of a folder does not keep the
-  source's mode), `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
+  source's mode; `--chmod` needs BuildKit, the default builder since Docker 23 and implied by the file's `# syntax=` line), `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
   "--data", "/data"]`. Every base is pinned as `name:tag@sha256:<multi-arch index
   digest>` (P37; the digests matched their tags on 2026-10-30, `docker buildx imagetools
   inspect`); bump them by hand. CA certificates come with the distroless base.

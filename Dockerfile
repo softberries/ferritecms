@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 # FerriteCMS image (design 09 §7): one static-ish binary on distroless, non-root.
+# Needs BuildKit (the default builder since Docker 23): `COPY --chmod` below.
 #
 #   docker build -t ferrite .
 #   docker run -v ferrite-data:/data ferrite init --data /data --url http://localhost:8080

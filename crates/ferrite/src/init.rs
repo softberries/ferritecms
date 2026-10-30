@@ -198,7 +198,6 @@ async fn ensure_pg_unmigrated(url: &str, schema: Option<&str>) -> anyhow::Result
     Ok(())
 }
 
-/// Creates `path` exclusively with mode 0600 (it can hold the database URL).
 /// Creates the data folder. A folder that does not exist yet gets mode 0750 (the database
 /// beside it holds password hashes and sessions, and is created readable by the group);
 /// missing parents are created as usual, and a folder that already exists is left as it is
@@ -224,6 +223,7 @@ fn create_data_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Creates `path` exclusively with mode 0600 (it can hold the database URL).
 fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
     let mut file = create_private(path)?;
     file.write_all(contents.as_bytes())
