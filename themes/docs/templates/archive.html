@@ -1,0 +1,20 @@
+{#- Every listing but search (06 §2: type, term, author and date archives fall back
+    here). The heading comes from `archive`, never from the listed items. -#}
+{% extends "base.html" %}
+{% block body_class %}is-archive{% endblock %}
+{% block content %}
+{%- set a = archive %}
+{%- set valid_year = a.year is number and a.year >= 1000 and a.year <= 9999 %}
+<div class="docs-listing">
+  <h1 class="docs-title">
+    {%- if a.term %}{{ a.term.name }}
+    {%- elif a.author and a.author.display_name %}By {{ a.author.display_name }}
+    {%- elif valid_year and a.month is number and a.month >= 1 and a.month <= 12 %}{{ (a.year ~ "-" ~ ("0" ~ a.month)[-2:] ~ "-01T00:00:00Z") | date("%B %Y", tz="UTC") }}
+    {%- elif valid_year %}{{ a.year }}
+    {%- elif a.content_type %}{{ a.content_type | replace("_", " ") | capitalize }}
+    {%- else %}Archive
+    {%- endif -%}
+  </h1>
+  {% include "partials/listing.html" %}
+</div>
+{% endblock %}

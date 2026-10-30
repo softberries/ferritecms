@@ -1,0 +1,13 @@
+{#- The final fallback (06 §2) and the front page when it lists posts. -#}
+{% extends "base.html" %}
+{% block body_class %}is-index{% endblock %}
+{% block content %}
+{%- if post %}
+{% include "partials/article.html" %}
+{%- else %}
+<div class="docs-listing">
+  <h1 class="docs-title">{% if posts and posts.page > 1 %}Latest updates, page {{ posts.page }}{% else %}Latest updates{% endif %}</h1>
+  {% include "partials/listing.html" %}
+</div>
+{%- endif %}
+{% endblock %}

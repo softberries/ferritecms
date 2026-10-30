@@ -1,0 +1,56 @@
+{#- The page frame (P59): sticky header, the page-tree sidebar, the main column and the
+    table of contents. `tree` (the `nav_type` setting's tree, `post` current when it is
+    in it) is read once here; one bridge call per render. Fixed ids are reserved ones
+    (06 §4) or `docs-`-prefixed ones on pages without a body (06 §8). -#}
+<!doctype html>
+<html lang="{{ site.locale or 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+{{ head() }}
+<link rel="stylesheet" href="{{ asset('style.css') }}">
+<script src="{{ asset('docs.js') }}" defer></script>
+{% include "partials/accent.html" %}
+</head>
+{%- set tree = page_tree(post=post, kind=site.settings.nav_type or "page") %}
+<body class="{% block body_class %}{% endblock %}">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="site-title" href="/" rel="home">{{ site.title or "Home" }}</a>
+    {%- set primary = menu("primary") %}
+    {%- if primary and primary.items %}
+    <nav class="site-nav" aria-label="Primary">
+      {% with items = primary.items, flat = true %}{% include "partials/menu.html" %}{% endwith %}
+    </nav>
+    {%- endif %}
+    {% with form_id = "search", form_label = "Site", compact = true %}{% include "partials/search-form.html" %}{% endwith %}
+  </div>
+</header>
+{%- if request.preview %}
+<p class="preview-notice" role="status">Preview: this content is not published.</p>
+{%- endif %}
+<div class="docs-layout">
+{% include "partials/sidebar.html" %}
+<main id="content" class="docs-main" tabindex="-1">
+{% block content %}{% endblock %}
+</main>
+{%- if post %}
+{% include "partials/toc.html" %}
+{%- endif %}
+</div>
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    {%- set footer_menu = menu("footer") %}
+    {%- if footer_menu and footer_menu.items %}
+    <nav class="footer-nav" aria-label="Footer">
+      {% with items = footer_menu.items, flat = false %}{% include "partials/menu.html" %}{% endwith %}
+    </nav>
+    {%- endif %}
+    <p class="site-credit">{% if site.title %}{{ site.title }}. {% endif %}Powered by FerriteCMS</p>
+  </div>
+</footer>
+{{ footer() }}
+</body>
+</html>

@@ -1,0 +1,9 @@
+{#- Site search (`/?s=`). Expects `form_id` (unique on the page) and `form_label` (the
+    landmark's name, unique on the page); `compact` hides the label visually (header). -#}
+<form class="search-form{% if compact %} search-form--compact{% endif %}" role="search" aria-label="{{ form_label or 'Search' }}" method="get" action="/">
+  <label class="search-form__label{% if compact %} visually-hidden{% endif %}" for="{{ form_id }}">Search the documentation</label>
+  <div class="search-form__row">
+    <input type="search" id="{{ form_id }}" name="s" value="{{ request.s or '' }}" placeholder="Search" autocomplete="off" required>
+    <button type="submit">Search</button>
+  </div>
+</form>

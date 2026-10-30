@@ -1,0 +1,18 @@
+{#- "On this page": the body's level 2 and 3 headings from `post.toc`, when there are at
+    least two of them and the `show_toc` setting is on. The stylesheet shows it on wide
+    screens only. -#}
+{%- set show_toc = site.settings.show_toc is not defined or site.settings.show_toc %}
+{%- if show_toc and post and post.toc %}
+{%- set ns = namespace(n=0) %}
+{%- for e in post.toc %}{% if e.level == 2 or e.level == 3 %}{% set ns.n = ns.n + 1 %}{% endif %}{% endfor %}
+{%- if ns.n >= 2 %}
+<nav class="docs-toc" id="toc" aria-label="On this page">
+  <p class="docs-toc__title">On this page</p>
+  <ul role="list">
+    {%- for e in post.toc %}{% if e.level == 2 or e.level == 3 %}
+    <li class="docs-toc__item docs-toc__item--h{{ e.level }}"><a href="#{{ e.id }}">{{ e.text }}</a></li>
+    {%- endif %}{% endfor %}
+  </ul>
+</nav>
+{%- endif %}
+{%- endif %}
