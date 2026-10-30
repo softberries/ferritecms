@@ -954,7 +954,9 @@ Checks that need the database (site id, live nodes, migrations) are not part of 
 `config check` also prints `warning: …` lines to stderr (the exit code stays 0) for settings that
 work but may cost something: `media.s3.copy_if_not_exists = "multipart"` (it does not copy object
 attributes; Ferrite sets none on stored artifacts today, so it costs nothing yet, and it is the
-value §4a lists for AWS S3). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
+value §4a lists for AWS S3), and for settings without effect: each `[server.tls]` key
+(`domains`, `contact`, `directory`, `listen`, `redirect_http`) set while `mode` is `"off"`
+(`warning: server.tls.<key>: ignored: server.tls.mode is "off"`). With `[backup] schedule` on, it fails (exit 1) for a `backup.to` that
 `serve` would refuse, a local folder included that is not empty and not a repository, and, on
 SQLite, for a `database.url` other than `sqlite://ferrite.db` (§4).
 

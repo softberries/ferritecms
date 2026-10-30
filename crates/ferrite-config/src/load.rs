@@ -45,6 +45,7 @@ pub fn load(
 
     let mut cx = Cx {
         problems: Vec::new(),
+        warnings: Vec::new(),
         data_dir: data_dir.to_path_buf(),
         env_paths: HashMap::new(),
         env_raw: HashMap::new(),
@@ -97,6 +98,7 @@ pub fn load(
             auth,
             mail,
             backup,
+            warnings: cx.warnings,
         }),
         _ => Err(ConfigError {
             problems: cx.problems,
@@ -396,7 +398,9 @@ fn parse_tls(
             "must be a mailto: URI such as \"mailto:ops@example.com\"",
         );
     }
-    let directory = match cx.string(&mut t, BASE, "directory").as_deref() {
+    let directory_raw = cx.string(&mut t, BASE, "directory");
+    let directory_set = directory_raw.is_some();
+    let directory = match directory_raw.as_deref() {
         None | Some("production") => AcmeDirectory::Production,
         Some("staging") => AcmeDirectory::Staging,
         Some(s) => match url::Url::parse(s) {
@@ -423,10 +427,26 @@ fn parse_tls(
             }
         },
     };
-    let tls_listen = addr(cx, &mut t, "listen").unwrap_or(DEFAULT_TLS_LISTEN);
+    let tls_listen_set = addr(cx, &mut t, "listen");
+    let tls_listen = tls_listen_set.unwrap_or(DEFAULT_TLS_LISTEN);
     let redirect_http = addr(cx, &mut t, "redirect_http");
     cx.unknown(t, BASE);
     if !acme {
+        // Checked for shape above, but without effect: say so (`config check`).
+        for (key, set) in [
+            ("domains", domains.is_some()),
+            ("contact", contact.is_some()),
+            ("directory", directory_set),
+            ("listen", tls_listen_set.is_some()),
+            ("redirect_http", redirect_http.is_some()),
+        ] {
+            if set {
+                cx.warnings.push(ConfigProblem {
+                    path: join(BASE, key),
+                    message: "ignored: server.tls.mode is \"off\"".to_owned(),
+                });
+            }
+        }
         return TlsConfig::Off;
     }
 

@@ -41,7 +41,7 @@ use axum::{
     Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderValue, Method, Response, StatusCode, header},
+    http::{HeaderValue, Response, StatusCode, header},
     middleware::Next,
     routing::get,
 };
@@ -727,6 +727,7 @@ async fn scrape(State(metrics): State<Arc<Metrics>>) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::Method;
     use ferrite_domain::PAGE_LATENCY_BOUNDS_MS;
 
     #[test]

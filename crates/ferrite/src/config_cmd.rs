@@ -74,6 +74,12 @@ fn warnings(config: &Config) -> Vec<String> {
                 .to_owned(),
         );
     }
+    out.extend(
+        config
+            .warnings
+            .iter()
+            .map(|w| format!("{}: {}", w.path, w.message)),
+    );
     out
 }
 

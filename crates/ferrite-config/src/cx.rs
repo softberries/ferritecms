@@ -10,6 +10,8 @@ use crate::error::ConfigProblem;
 
 pub(crate) struct Cx {
     pub problems: Vec<ConfigProblem>,
+    /// Settings that are valid but have no effect (`Config::warnings`).
+    pub warnings: Vec<ConfigProblem>,
     pub data_dir: PathBuf,
     /// Dotted config path -> env var name, for every key (and section prefix) set by env.
     pub env_paths: HashMap<String, String>,

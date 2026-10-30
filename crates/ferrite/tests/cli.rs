@@ -802,6 +802,20 @@ fn config_check_reports_effective_settings() {
         c
     });
     assert!(out.contains(" tls=acme "), "{out}");
+    // TLS keys without `mode = "acme"` load, with a warning that they are ignored.
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_SERVER__TLS__REDIRECT_HTTP", "0.0.0.0:80")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("warning: server.tls.redirect_http: ignored: server.tls.mode is \"off\""),
+        "{err}"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains(" tls=off "));
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
