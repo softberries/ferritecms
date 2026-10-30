@@ -45,8 +45,16 @@ ferrite self-update [--version X] [--channel stable]
   (same `from` and `to`). It finalises the record with the newest
   `backups/pre-<schema_from>-to-<schema_to>-*.db`, found by name.
 
-  An attempt that stopped partway leaves the schema between `schema_from` and
-  `schema_to`. The next start keeps that attempt's start and snapshot.
+  An unfinished earlier move is carried forward: the next move keeps its `schema_from`
+  and snapshot. That covers two cases:
+  - an attempt at the same move that stopped partway (the schema between its
+    `schema_from` and `schema_to`);
+  - a move from the stored binary to another one that died after migrating (A→B
+    crashed, then C starts: C's record is `from: A` with A→B's start and snapshot).
+
+  A `migrate_up` that fails without moving the schema leaves the file as it was: the
+  record that was there is written back, or the provisional one is removed when there
+  was none.
 - **When it changes:** the stored `last_binary_version` differs from this binary, or
   migrations were applied. Then `last_binary_version` is set to this binary. A start that
   changed nothing leaves an existing file alone.

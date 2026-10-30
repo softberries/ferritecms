@@ -164,6 +164,11 @@ pub enum Migrate {
 /// between leaves the provisional record, and the next start (the same move, nothing left
 /// to apply) finalises it, finding the snapshot by its name
 /// `backups/pre-<schema_from>-to-<schema_to>-*.db`.
+///
+/// When `migrate_up` fails and the schema did not move, the record `begin` replaced is
+/// written back (or the provisional one removed when there was none): a failed start
+/// changes nothing. When it moved partway, the provisional record stays and the next
+/// start carries its start forward.
 pub async fn migrate_and_record(
     store: &dyn Store,
     data_dir: &Path,
@@ -173,6 +178,7 @@ pub async fn migrate_and_record(
     let status = store.migration_status(binary).await?;
     let before = status.db_version;
     let mut report = MigrateReport::default();
+    let mut carry = None;
     if let Migrate::UpTo(to) = migrate {
         let target = status
             .pending
@@ -180,15 +186,72 @@ pub async fn migrate_and_record(
             .map(|p| p.version)
             .filter(|v| to.is_none_or(|t| *v <= t))
             .max();
-        if let Some(target) = target {
-            begin(store, data_dir, binary, before, target).await?;
-        }
-        report = store.migrate_up(to).await?;
+        let begun = match target {
+            Some(target) => begin(store, data_dir, binary, before, target).await?,
+            None => None,
+        };
+        report = match store.migrate_up(to).await {
+            Ok(report) => report,
+            Err(e) => {
+                if let Some(begun) = begun {
+                    undo_begin(store, data_dir, binary, before, begun).await;
+                }
+                return Err(e.into());
+            }
+        };
         #[cfg(feature = "test-seams")]
         seams::check_fail_after_migrate()?;
+        carry = begun.and_then(|b| b.carry);
     }
-    let written = finish(store, data_dir, binary, before, &report).await?;
+    let written = finish(store, data_dir, binary, before, &report, carry).await?;
     Ok((report, written))
+}
+
+/// What [`begin`] did: the record it replaced, and the start of an unfinished earlier move
+/// it carried into the provisional record.
+struct Begun {
+    previous: Option<UpgradeRecord>,
+    carry: Option<Carry>,
+}
+
+/// The start of an unfinished earlier move: its `schema_from` and snapshot.
+#[derive(Debug, Clone)]
+struct Carry {
+    schema_from: i64,
+    snapshot: Option<PathBuf>,
+}
+
+/// After a failed `migrate_up`: if the schema did not move, puts back what [`begin`]
+/// replaced (or removes the provisional record). Best effort: the migrate error is what
+/// the caller reports.
+async fn undo_begin(
+    store: &dyn Store,
+    data_dir: &Path,
+    binary: &semver::Version,
+    before: i64,
+    begun: Begun,
+) {
+    match store.migration_status(binary).await {
+        Ok(s) if s.db_version == before => {}
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot tell whether the failed migration moved the schema; {UPGRADE_FILE} left provisional");
+            return;
+        }
+    }
+    let result = match &begun.previous {
+        Some(prev) => write(data_dir, prev),
+        None => match std::fs::remove_file(data_dir.join(UPGRADE_FILE)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        },
+    };
+    if let Err(e) = result {
+        tracing::warn!(
+            error = format!("{e:#}"),
+            "cannot restore {UPGRADE_FILE} after the failed migration"
+        );
+    }
 }
 
 /// The record names this move: same target binary, same previous one.
@@ -203,15 +266,20 @@ fn incomplete(rec: &UpgradeRecord, before: i64) -> bool {
 }
 
 /// The provisional record, written before migrating from `before` (> 0) to `target`.
+///
+/// An unfinished earlier move is carried forward (its `schema_from` and snapshot become
+/// this move's): an attempt at this same move that stopped partway, or a move from the
+/// stored binary to another one that never stored its version (it died after migrating,
+/// and now a third binary starts: A→B crashed, then C).
 async fn begin(
     store: &dyn Store,
     data_dir: &Path,
     binary: &semver::Version,
     before: i64,
     target: i64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<Begun>> {
     if before == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let stored = store
         .read()
@@ -219,32 +287,41 @@ async fn begin(
         .get(SCHEMA_META_LAST_BINARY)
         .await?;
     let to = binary.to_string();
-    if let Ok(Some(e)) = load(data_dir)
-        && same_move(&e, &to, stored.as_deref())
-        && incomplete(&e, before)
-    {
-        // Keep the earlier attempt's start; `finish` carries it forward.
-        return Ok(());
-    }
+    let previous = load(data_dir).ok().flatten();
+    let carry = previous.as_ref().and_then(|e| {
+        let unfinished = if e.to == to {
+            same_move(e, &to, stored.as_deref()) && incomplete(e, before)
+        } else {
+            e.from.as_deref() == stored.as_deref() && e.schema_from < before
+        };
+        unfinished.then(|| Carry {
+            schema_from: e.schema_from,
+            snapshot: e
+                .snapshot
+                .clone()
+                .or_else(|| find_snapshot(data_dir, e.schema_from, e.schema_to)),
+        })
+    });
     replace(
         data_dir,
         &UpgradeRecord {
             v: UPGRADE_FORMAT,
             from: stored,
             to,
-            schema_from: before,
+            schema_from: carry.as_ref().map_or(before, |c| c.schema_from),
             schema_to: target,
-            snapshot: None,
+            snapshot: carry.as_ref().and_then(|c| c.snapshot.clone()),
             at: Timestamp::now(),
         },
-    )
+    )?;
+    Ok(Some(Begun { previous, carry }))
 }
 
 /// Writes the final record when something changed, then stores `binary` as the last
 /// version. `before` is the schema before `migrate_up` ran.
 ///
-/// - Migrations applied: the record of this move, with its snapshot (an incomplete
-///   earlier attempt's start and snapshot are carried forward).
+/// - Migrations applied: the record of this move, with its snapshot; with `carry` (an
+///   unfinished earlier move, see [`begin`]) its start and snapshot instead.
 /// - Nothing applied, and the file already names this move (a retry after a start that
 ///   failed after migrating, or a re-upgrade after a binary rollback): kept, and a
 ///   provisional one gets its snapshot.
@@ -258,6 +335,7 @@ async fn finish(
     binary: &semver::Version,
     before: i64,
     report: &MigrateReport,
+    carry: Option<Carry>,
 ) -> anyhow::Result<Option<UpgradeRecord>> {
     let after = store.migration_status(binary).await?.db_version;
     if after == 0 {
@@ -275,14 +353,11 @@ async fn finish(
     let mut rec = None;
     if !report.applied.is_empty() {
         if before > 0 {
-            let (schema_from, snapshot) = match &same {
-                Some(e) if incomplete(e, before) => (
-                    e.schema_from,
-                    e.snapshot
-                        .clone()
-                        .or_else(|| find_snapshot(data_dir, e.schema_from, e.schema_to)),
-                ),
-                _ => (
+            // A carried start keeps its own snapshot (or none): a later one would not
+            // match its `schema_from`.
+            let (schema_from, snapshot) = match carry {
+                Some(c) => (c.schema_from, c.snapshot),
+                None => (
                     before,
                     report.snapshot.as_ref().map(|s| relative(data_dir, s)),
                 ),

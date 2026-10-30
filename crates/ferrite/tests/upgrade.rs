@@ -15,7 +15,7 @@ use std::{
 use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use ferrite::{
     binary_version, startup_check,
-    upgrade::{self, KeepSnapshot, UPGRADE_FILE, UpgradeRecord},
+    upgrade::{self, KeepSnapshot, Migrate, UPGRADE_FILE, UpgradeRecord},
 };
 use ferrite_config::DatabaseConfig;
 use ferrite_domain::{Secret, Timestamp};
@@ -367,6 +367,102 @@ async fn incomplete_attempt_keeps_its_start() {
         .expect("a record");
     assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
     assert_eq!(rec.snapshot, Some(first));
+}
+
+/// A `migrate_up` that fails without moving the schema changes nothing: the record that
+/// was there is put back, and with none there stays none.
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_migration_restores_the_previous_record() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let data = tempfile::tempdir().unwrap();
+    let store = sqlite_in(data.path()).await;
+    let bin = binary_version().unwrap();
+    store.migrate_up(None).await.unwrap();
+    let l = latest(&store).await;
+    store.migrate_down(l - 1, true).await.unwrap();
+    set_last_binary(&store, "0.0.1").await;
+    // The pre-migration snapshot cannot be written: migrate_up fails before applying.
+    let backups = data.path().join("backups");
+    let perms = |mode| std::fs::Permissions::from_mode(mode);
+    std::fs::set_permissions(&backups, perms(0o500)).unwrap();
+
+    // No record before: none after.
+    let e = startup_check(&store, &bin, &dbconf(), data.path())
+        .await
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("backups/pre-"), "{e:#}");
+    assert!(!data.path().join(UPGRADE_FILE).exists());
+
+    // A record before: the same record after.
+    let previous = UpgradeRecord {
+        v: 1,
+        from: Some("0.0.0".into()),
+        to: "0.0.1".into(),
+        schema_from: l - 2,
+        schema_to: l - 1,
+        snapshot: Some(PathBuf::from(format!(
+            "backups/pre-{}-to-{}-20261030T000000Z.db",
+            l - 2,
+            l - 1
+        ))),
+        at: Timestamp::now(),
+    };
+    upgrade::write(data.path(), &previous).unwrap();
+    startup_check(&store, &bin, &dbconf(), data.path())
+        .await
+        .unwrap_err();
+    assert_eq!(upgrade::load(data.path()).unwrap(), Some(previous));
+    assert_eq!(latest_applied(&store).await, l - 1);
+    assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
+    std::fs::set_permissions(&backups, perms(0o700)).unwrap();
+}
+
+async fn latest_applied(store: &dyn Store) -> i64 {
+    store
+        .migration_status(&binary_version().unwrap())
+        .await
+        .unwrap()
+        .db_version
+}
+
+/// A→B dies after migrating (the key still says A), then C starts and migrates further:
+/// C's record carries the unfinished A→B move's start and snapshot.
+#[tokio::test]
+async fn unfinished_earlier_move_is_carried_into_the_next() {
+    let data = tempfile::tempdir().unwrap();
+    let store = sqlite_in(data.path()).await;
+    store.migrate_up(None).await.unwrap();
+    let l = latest(&store).await;
+    store.migrate_down(l - 2, true).await.unwrap();
+    set_last_binary(&store, "0.0.1").await;
+    let b = semver::Version::new(0, 0, 2);
+    let c = semver::Version::new(0, 0, 3);
+
+    upgrade::seams::fail_after_migrate(upgrade::migrate_and_record(
+        &store,
+        data.path(),
+        &b,
+        Migrate::UpTo(Some(l - 1)),
+    ))
+    .await
+    .unwrap_err();
+    assert_eq!(latest_applied(&store).await, l - 1);
+    assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
+
+    let rec = startup_check(&store, &c, &dbconf(), data.path())
+        .await
+        .unwrap()
+        .expect("a record");
+    assert_eq!(rec.from.as_deref(), Some("0.0.1"));
+    assert_eq!(rec.to, "0.0.3");
+    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert!(
+        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{}-", l - 2, l - 1)),
+        "{rec:?}"
+    );
+    assert!(data.path().join(rec.snapshot.unwrap()).is_file());
 }
 
 fn ferrite() -> Command {
