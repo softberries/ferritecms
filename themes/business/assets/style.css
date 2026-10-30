@@ -83,6 +83,27 @@
   }
 }
 
+/* Without color-mix() (browsers before 2023) the mixed tokens would be invalid at use
+   time, and buttons would lose their background. These are the default accent's mixes;
+   the accent setting then only colours the rules. A fallback declared before the
+   color-mix() value in :root would not help: custom properties are not validated
+   when declared. */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  :root {
+    --link: #0c615a;
+    --link-hover: #094742;
+    --panel: #094944;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --link: #93c1be;
+      --link-hover: #c3dddb;
+      --panel: #073532;
+    }
+  }
+}
+
 /* ---------- Base ---------- */
 
 *,
@@ -510,13 +531,17 @@ button:hover {
   text-decoration: underline;
 }
 
-.feature:has(a:focus-visible) {
-  outline: 3px solid var(--focus);
-  outline-offset: 6px;
-}
+/* The ring moves to the whole card only where `:has()` works; elsewhere the link
+   keeps its own. */
+@supports selector(:has(a)) {
+  .feature:has(a:focus-visible) {
+    outline: 3px solid var(--focus);
+    outline-offset: 6px;
+  }
 
-.feature__title a:focus-visible {
-  outline: none;
+  .feature__title a:focus-visible {
+    outline: none;
+  }
 }
 
 .feature__excerpt {
@@ -639,13 +664,17 @@ button:hover {
   text-decoration: underline;
 }
 
-.card:has(a:focus-visible) {
-  outline: 3px solid var(--focus);
-  outline-offset: 6px;
-}
+/* The ring moves to the whole card only where `:has()` works; elsewhere the link
+   keeps its own. */
+@supports selector(:has(a)) {
+  .card:has(a:focus-visible) {
+    outline: 3px solid var(--focus);
+    outline-offset: 6px;
+  }
 
-.card__title a:focus-visible {
-  outline: none;
+  .card__title a:focus-visible {
+    outline: none;
+  }
 }
 
 .card__excerpt {
@@ -973,6 +1002,27 @@ input[type="search"] {
   flex-basis: 100%;
   margin: 0;
   color: var(--muted);
+}
+
+/* ---------- Forced colours (Windows high contrast) ---------- */
+
+@media (forced-colors: active) {
+  /* Box shadows are dropped in forced colours: underline the current page instead. */
+  .site-nav .menu a[aria-current="page"] {
+    box-shadow: none;
+    text-decoration: underline;
+    text-decoration-thickness: 3px;
+  }
+
+  .hero__panel,
+  .contact-panel {
+    border: 1px solid CanvasText;
+  }
+
+  .button,
+  button {
+    border-color: ButtonText;
+  }
 }
 
 /* ---------- Motion and print ---------- */

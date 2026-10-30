@@ -1587,25 +1587,31 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
   the next item describes. Another value is a usage error (exit 2).
 - `--profile business` writes the same `admin` user, then category News, four generated
   PNGs (variants at the core sizes plus the embedded `business` theme's `[images]`, since
-  that is the theme the profile is for), pages Home (with a featured image and an
-  excerpt), Services, Consulting and Support (children of Home with `menu_order` 1–3,
-  each with an excerpt and a card image), About and Contact, three posts in News, menus
-  `primary` (Home → `/`, About, News → `/post/`, Contact) and `footer` (Services, About,
-  Contact, RSS feed), `site.title` "Larkspur Studio", `site.description` and
-  `reading.front_page` = Home's id. It activates no theme: the output ends with
-  `next: ferrite theme activate business --data DIR`. The child pages live under Home's
-  slug (`/home/services/`), as pages follow their parents. The rules below (refusal,
-  `--force`, atomicity) are the same for both profiles.
-- With the `blog` profile, writes demo content through the core services where they exist: an `admin` user (no
-  password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
+  that is the theme the profile is for), the front page "Gardens that grow with you"
+  (slug `home`, with a featured image and an excerpt), Garden design, Consulting and
+  Aftercare (its children with `menu_order` 1–3, each with an excerpt and a card image),
+  About and Contact, three posts in News, menus `primary` (Home → `/`, About, News →
+  `/post/`, Contact) and `footer` (Garden design, About, Contact, RSS feed),
+  `site.title` "Larkspur Studio", `site.description` and `reading.front_page` = the front
+  page's id. It activates no theme: the output ends with
+  `next: ferrite theme activate business --data DIR`. The child pages live under the
+  front page's slug (`/home/garden-design/`), as pages follow their parents. The refusal
+  and atomicity rules below are the same for both profiles; `--force` differs in which
+  options it replaces (below).
+- With the `blog` profile, writes demo content through the core services where they
+  exist: an `admin` user (no password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
   admin` sets one), categories News and Guides, tags rust and cms,
   12 published posts with block bodies dated over the past months, three pages (About,
   About/Team, Contact), a `primary` and a `footer` menu, one generated sample PNG with its
   variants (the core sizes plus the active theme's `[images]`) used as the featured image of
   some posts, and the `site.title` / `site.description` options.
 - Refuses (exit 1) when the site already has content, unless `--force`, which adds another
-  batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
-  both menus and the two options are replaced to point at the new batch).
+  batch (user, terms and image files reused; posts and pages get fresh `-2`, `-3`, … slugs;
+  both menus and the profile's options are replaced to point at the new batch: `blog`
+  replaces `site.title` and `site.description`, `business` those two and
+  `reading.front_page`). `blog` never touches `reading.front_page`, so a `blog --force`
+  run after a `business` seed leaves the site on the business front page; clear it in
+  Settings (or `PATCH /api/v1/settings`) to list posts on `/` again.
 - **Atomic (M4-1 P20):** the image files are stored first (content-addressed), then every row
   (user, terms, the image's media item, artifacts and `media` row, posts, pages, menus,
   options, with the events the services emit) is written in one transaction

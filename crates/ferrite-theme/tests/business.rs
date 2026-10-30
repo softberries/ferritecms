@@ -278,6 +278,9 @@ fn loads_cleanly() {
         "prefers-reduced-motion",
         ":focus-visible",
         "var(--accent)",
+        "@media (forced-colors: active)",
+        "@supports not (color: color-mix(",
+        "@supports selector(:has(a))",
     ] {
         assert!(css.contains(needle), "style.css lacks {needle}");
     }
@@ -561,6 +564,18 @@ fn contact_page_form_follows_the_plugin_readme() {
         );
     }
     assert!(!tag_with(inner, "name=\"subject\"").contains("required"));
+    // The plugin's limits (`plugins/examples/contact-form/src/form.rs`).
+    for (field, attrs) in [
+        ("name", &["maxlength=\"100\""][..]),
+        ("email", &["maxlength=\"254\""]),
+        ("subject", &["maxlength=\"150\""]),
+        ("message", &["minlength=\"10\"", "maxlength=\"5000\""]),
+    ] {
+        let el = tag_with(inner, &format!("name=\"{field}\""));
+        for a in attrs {
+            assert!(el.contains(a), "{a} on {el}");
+        }
+    }
 
     // The honeypot: out of tab order, no autofill, inside an aria-hidden wrapper,
     // hidden with CSS rather than `type="hidden"`.
@@ -626,6 +641,31 @@ fn cta_url_is_escaped() {
         cta.contains("href=\"https:&#x2f;&#x2f;example.org&#x2f;book\""),
         "{cta}"
     );
+
+    // A colon after a `/`, `?` or `#` names no scheme: the button stays.
+    for url in [
+        "/book/?at=10:00",
+        "/a/b:c",
+        "#top:1",
+        "?at=10:00",
+        "mailto:hi@example.org",
+        "TEL:+441234",
+    ] {
+        let (c, b) = front_fixture(&t, json!({ "cta_url": url }));
+        let html = render(&t, "front-page.html", c, b);
+        assert!(html.contains("hero__cta\""), "{url} kept:\n{html}");
+    }
+    // Any other scheme is dropped.
+    for url in [
+        "data:text/html,x",
+        "vbscript:x",
+        "java\tscript:x",
+        "ftp://example.org/",
+    ] {
+        let (c, b) = front_fixture(&t, json!({ "cta_url": url }));
+        let html = render(&t, "front-page.html", c, b);
+        assert!(!html.contains("hero__cta"), "{url:?} dropped:\n{html}");
+    }
 }
 
 #[test]
@@ -700,4 +740,15 @@ fn pages_listings_and_errors_render() {
         !html.contains("missing"),
         "the 404 body is path-independent:\n{html}"
     );
+    // Also at the CTA's own path (a missing contact page): the header CTA is shown
+    // either way, so the shared body does not depend on which path rendered it.
+    assert!(html.contains("site-header__cta"), "{html}");
+    let mut c = ctx(&t, "/contact/", json!({}));
+    c.status = 404;
+    assert_eq!(render(&t, "404.html", c, b()), html);
+    // On a 200 page at that path the CTA hides.
+    let mut c = ctx(&t, "/contact/", json!({}));
+    c.item = Some(item("page", "contact", "Contact"));
+    let page = render(&t, "page-contact.html", c, b());
+    assert!(!page.contains("site-header__cta"), "{page}");
 }

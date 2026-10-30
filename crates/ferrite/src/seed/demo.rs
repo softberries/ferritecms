@@ -243,6 +243,24 @@ mod tests {
         assert_eq!((img.width(), img.height()), (IMAGE_WIDTH, IMAGE_HEIGHT));
     }
 
+    /// The blog profile's image is unchanged byte for byte (M4-3b P61): the SHA-256 (the
+    /// artifact hash) a site seeded before `gradient_png_of` existed stored for
+    /// `sample-gradient.png`, 338 103 bytes.
+    #[test]
+    fn gradient_bytes_are_pinned() {
+        use sha2::{Digest, Sha256};
+        let png = gradient_png().unwrap();
+        assert_eq!(png.len(), 338_103);
+        let hex: String = Sha256::digest(&png)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "e61905d85f1a6e2d40815f7ad69c4b8f1fdb0a2e9133e69c3539504541b247d0"
+        );
+    }
+
     #[test]
     fn demo_posts_are_distinct_and_use_known_terms() {
         let mut slugs: Vec<_> = POSTS.iter().map(|p| p.slug).collect();

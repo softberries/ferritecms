@@ -1,11 +1,11 @@
 //! `ferrite seed demo`: demo content for a new site.
 //!
 //! Two profiles (`--profile`, M4-3b P61): `blog` (the default, described below) and
-//! `business`, which writes pages Home (the static front page, `reading.front_page`,
-//! with a featured image), Services, Consulting and Support (children of Home with
-//! `menu_order` 1–3 and card images), About and Contact, three posts in category News,
-//! menus `primary` (Home, About, News → `/post/`, Contact) and `footer`, and
-//! `site.title` "Larkspur Studio". It activates no theme; it prints the
+//! `business`, which writes the static front page "Gardens that grow with you" (slug
+//! `home`, `reading.front_page`, with a featured image), Garden design, Consulting and
+//! Aftercare (its children with `menu_order` 1–3 and card images), About and Contact,
+//! three posts in category News, menus `primary` (Home, About, News → `/post/`,
+//! Contact) and `footer`, and `site.title` "Larkspur Studio". It activates no theme; it prints the
 //! `ferrite theme activate business` line to run next, and makes its image variants
 //! with the embedded `business` theme's sizes. Both profiles share the rules below.
 //!
@@ -485,13 +485,13 @@ async fn write_business_rows(
         })
         .await
         .context("primary menu")?;
-    let services = children.first().context("the services page")?;
+    let design = children.first().context("the garden design page")?;
     batch
         .menu(&Menu {
             name: "footer".into(),
             label: "Footer".into(),
             items: vec![
-                item(0, "Services", MenuItemKind::Item, services.id.as_uuid()),
+                item(0, "Garden design", MenuItemKind::Item, design.id.as_uuid()),
                 item(1, "About", MenuItemKind::Item, about.id.as_uuid()),
                 item(2, "Contact", MenuItemKind::Item, contact.id.as_uuid()),
                 url_item(3, "RSS feed", "/feed/"),

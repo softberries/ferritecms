@@ -20,7 +20,9 @@
       {% with items = primary.items %}{% include "partials/menu.html" %}{% endwith %}
     </nav>
     {%- endif %}
-    {%- if not (request.path and request.path == site.settings.cta_url) %}
+    {#- Hidden on the page it links to; only on 200 pages, so the shared 404 body
+        never depends on the path. #}
+    {%- if not (request.status == 200 and request.path and request.path == site.settings.cta_url) %}
     {% with cta_class = "site-header__cta" %}{% include "partials/cta.html" %}{% endwith %}
     {%- endif %}
   </div>

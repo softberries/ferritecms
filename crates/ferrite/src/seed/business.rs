@@ -40,10 +40,10 @@ pub(super) const IMAGES: [DemoImage; 4] = [
         to: [76.0, 29.0, 149.0],
     },
     DemoImage {
-        title: "Services gradient",
-        slug: "larkspur-services",
+        title: "Garden design gradient",
+        slug: "larkspur-garden-design",
         alt: "A green to teal gradient",
-        name: "larkspur-services.png",
+        name: "larkspur-garden-design.png",
         width: 1280,
         height: 800,
         from: [101.0, 163.0, 13.0],
@@ -60,10 +60,10 @@ pub(super) const IMAGES: [DemoImage; 4] = [
         to: [225.0, 29.0, 72.0],
     },
     DemoImage {
-        title: "Support gradient",
-        slug: "larkspur-support",
+        title: "Aftercare gradient",
+        slug: "larkspur-aftercare",
         alt: "A sky blue to indigo gradient",
-        name: "larkspur-support.png",
+        name: "larkspur-aftercare.png",
         width: 1280,
         height: 800,
         from: [14.0, 165.0, 233.0],
@@ -79,8 +79,10 @@ pub(super) struct DemoPage {
     pub body: &'static [&'static str],
 }
 
+/// The static front page: slug `home` (so the children live under `/home/`), with a
+/// headline as its title, since the hero shows it (ruling R-b15).
 pub(super) const HOME: DemoPage = DemoPage {
-    title: "Home",
+    title: "Gardens that grow with you",
     slug: "home",
     excerpt: "We design, plant and look after small gardens, courtyards and roof terraces across the city.",
     body: &[
@@ -91,8 +93,8 @@ pub(super) const HOME: DemoPage = DemoPage {
 /// The front page's children, in `menu_order` 1, 2, 3.
 pub(super) const CHILDREN: [DemoPage; 3] = [
     DemoPage {
-        title: "Services",
-        slug: "services",
+        title: "Garden design",
+        slug: "garden-design",
         excerpt: "Full garden design, from the first site survey to planting day.",
         body: &[
             "We measure the space, listen to how you want to use it and draw a plan you can walk through before anything is dug.",
@@ -108,8 +110,8 @@ pub(super) const CHILDREN: [DemoPage; 3] = [
         ],
     },
     DemoPage {
-        title: "Support",
-        slug: "support",
+        title: "Aftercare",
+        slug: "aftercare",
         excerpt: "Seasonal care visits that keep a new garden growing the way it was planned.",
         body: &[
             "Four visits a year for pruning, feeding and replacing anything that did not settle in. Every garden we build gets the first year free.",

@@ -2066,8 +2066,8 @@ fn seed_business_profile() {
                 .get_by_slug("page", None, "home")
                 .await
                 .unwrap()
-                .expect("Home");
-            assert_eq!(home.title, "Home");
+                .expect("the front page");
+            assert_eq!(home.title, "Gardens that grow with you");
             assert_eq!(home.status, ferrite_domain::ContentStatus::Published);
             assert!(
                 home.fields["featured_image"].is_string(),
@@ -2093,9 +2093,9 @@ fn seed_business_profile() {
             assert_eq!(
                 kids,
                 vec![
-                    ("Services".to_owned(), 1, true),
+                    ("Garden design".to_owned(), 1, true),
                     ("Consulting".to_owned(), 2, true),
-                    ("Support".to_owned(), 3, true),
+                    ("Aftercare".to_owned(), 3, true),
                 ]
             );
             for slug in ["about", "contact"] {
@@ -2123,6 +2123,16 @@ fn seed_business_profile() {
             let primary = read.menus().get("primary").await.unwrap().unwrap();
             let labels: Vec<&str> = primary.items.iter().map(|i| i.label.as_str()).collect();
             assert_eq!(labels, ["Home", "About", "News", "Contact"]);
+            let footer = read.menus().get("footer").await.unwrap().unwrap();
+            let labels: Vec<&str> = footer.items.iter().map(|i| i.label.as_str()).collect();
+            assert_eq!(labels, ["Garden design", "About", "Contact", "RSS feed"]);
+            let design = read
+                .content()
+                .get_by_slug("page", Some(home.id), "garden-design")
+                .await
+                .unwrap()
+                .expect("garden design");
+            assert_eq!(footer.items[0].target_id, Some(design.id.as_uuid()));
             let news = primary.items.iter().find(|i| i.label == "News").unwrap();
             assert_eq!(news.url.as_deref(), Some("/post/"));
 
@@ -2149,6 +2159,47 @@ fn seed_default_profile_is_unchanged() {
                 .items;
             assert_eq!(posts.len(), 12);
             assert!(posts.iter().any(|p| p.title == "Welcome to FerriteCMS"));
+            // One body, byte for byte as before M4-3b.
+            let hello = posts.iter().find(|p| p.slug == "hello-world").unwrap();
+            let text = |t: &str| serde_json::json!({ "type": "text", "text": t });
+            let para = |t: &str| serde_json::json!({ "type": "paragraph", "content": [text(t)] });
+            assert_eq!(
+                hello.body,
+                serde_json::json!({ "type": "doc", "content": [
+                    para("Every CMS starts with a hello world post. This is ours."),
+                    { "type": "heading", "attrs": { "level": 2 }, "content": [text("What you get")] },
+                    { "type": "bulletList", "content": [
+                        { "type": "listItem", "content": [para("A single binary and a single data folder")] },
+                        { "type": "listItem", "content": [para("Plugins in a capability-scoped sandbox")] },
+                        { "type": "listItem", "content": [para("Themes that are templates, not programs")] },
+                    ]},
+                    para("Try it on your own machine:"),
+                    { "type": "codeBlock", "attrs": { "language": "sh" }, "content": [
+                        text("ferrite init --data ./site --url http://localhost:8080\nferrite seed demo --data ./site\nferrite serve --data ./site")
+                    ]},
+                    { "type": "blockquote", "content": [
+                        para("Plugins are untrusted. They get only what their manifest declares.")
+                    ]},
+                    { "type": "paragraph", "content": [
+                        text("Read more in "),
+                        { "type": "text", "text": "the about page", "marks": [{ "type": "link", "attrs": { "href": "/about/" } }] },
+                        text("."),
+                    ]},
+                ]})
+            );
+            // The sample image: the same PNG (its SHA-256 is the artifact hash).
+            let image = read
+                .content()
+                .list(&content_query("media"))
+                .await
+                .unwrap()
+                .items;
+            let row = read.media().get(image[0].id).await.unwrap().unwrap();
+            assert_eq!(
+                row.artifact_hash.as_str(),
+                "e61905d85f1a6e2d40815f7ad69c4b8f1fdb0a2e9133e69c3539504541b247d0"
+            );
+            assert_eq!(row.bytes, 338_103);
             let mut pages: Vec<String> = read
                 .content()
                 .list(&content_query("page"))
