@@ -877,8 +877,12 @@ async fn write_pages(
         let created_at = date
             .or_else(|| mapped.as_ref().map(|m| m.created_at))
             .unwrap_or(start);
+        // Draft wins; a date after the run's start schedules the page at it (ruling
+        // R-b13); a past or absent date publishes it.
         let (status, published_at) = if front.draft {
             (ContentStatus::Draft, None)
+        } else if let Some(at) = date.filter(|at| *at > start) {
+            (ContentStatus::Scheduled, Some(at))
         } else {
             let published = date
                 .or_else(|| mapped.as_ref().and_then(|m| m.published_at))
@@ -953,18 +957,52 @@ async fn front_page(
         // Skipped (another type): its problem is reported.
         return Ok(());
     };
-    report.front_page = Some(d.md.rel.clone());
-    if cx.opts.dry_run {
-        return Ok(());
-    }
+    let file = d.md.rel.clone();
     let mut batch = w.open().await?;
-    let set = set_front_page(&mut batch, id).await;
-    if !w.close(batch, set).await? {
-        report.problems.push(Problem::FrontPageKept {
-            file: d.md.rel.clone(),
-        });
+    let set = front_page_in(&mut batch, id, cx.opts.dry_run).await;
+    match w.close(batch, set).await? {
+        FrontPage::NotPublic => report.problems.push(Problem::FrontPageNotPublic { file }),
+        FrontPage::Kept => {
+            report.front_page = Some(file.clone());
+            report.problems.push(Problem::FrontPageKept { file });
+        }
+        FrontPage::Set => report.front_page = Some(file),
     }
     Ok(())
+}
+
+/// What [`front_page_in`] did.
+enum FrontPage {
+    /// Set (or already set by the import; a dry run: would be set).
+    Set,
+    /// The site's own choice was kept.
+    Kept,
+    /// The page is not public after the run (ruling R-b12): left as it was.
+    NotPublic,
+}
+
+/// Sets the front page to `id` when that item is public now (published, not later than
+/// now); a dry run only checks.
+async fn front_page_in(
+    b: &mut ImportBatch<'_>,
+    id: ContentId,
+    dry_run: bool,
+) -> Result<FrontPage, MdError> {
+    let public = b.get_item(id).await?.is_some_and(|item| {
+        item.status == ContentStatus::Published
+            && item.published_at.is_some_and(|at| at <= Timestamp::now())
+    });
+    if !public {
+        return Ok(FrontPage::NotPublic);
+    }
+    if dry_run {
+        return Ok(FrontPage::Set);
+    }
+    Ok(if set_front_page(b, id).await? {
+        FrontPage::Set
+    } else {
+        FrontPage::Kept
+    })
 }
 
 /// `false` when the site's own front page was kept.

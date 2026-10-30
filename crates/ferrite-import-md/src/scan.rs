@@ -101,6 +101,9 @@ pub enum Problem {
     NoFrontPage,
     /// The site's front page was changed here since the import set it: kept.
     FrontPageKept { file: String },
+    /// `--front-page`: the root index `file` is not public after the run (a draft, or
+    /// scheduled for later), so `reading.front_page` was left as it was (ruling R-b12).
+    FrontPageNotPublic { file: String },
 }
 
 impl Problem {
@@ -123,6 +126,7 @@ impl Problem {
             Self::NotInSource { .. } => "not-in-source",
             Self::NoFrontPage => "no-front-page",
             Self::FrontPageKept { .. } => "front-page-kept",
+            Self::FrontPageNotPublic { .. } => "front-page-not-public",
         }
     }
 
@@ -140,7 +144,8 @@ impl Problem {
             | Self::ImageChanged { file }
             | Self::SlugChanged { file, .. }
             | Self::OtherType { file, .. }
-            | Self::FrontPageKept { file } => file,
+            | Self::FrontPageKept { file }
+            | Self::FrontPageNotPublic { file } => file,
             Self::SynthesizedSection { dir } | Self::TooDeep { dir } => dir,
             Self::NotInSource { page } => page,
             Self::NoFrontPage => "index.md",
@@ -187,6 +192,11 @@ impl Problem {
             Self::NoFrontPage => "--front-page: the folder has no index.md or README.md".to_owned(),
             Self::FrontPageKept { .. } => {
                 "the front page was changed here since the import set it; kept".to_owned()
+            }
+            Self::FrontPageNotPublic { .. } => {
+                "--front-page: the page is not public (a draft, or scheduled for later); \
+                 reading.front_page left unchanged"
+                    .to_owned()
             }
         }
     }

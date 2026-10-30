@@ -220,6 +220,18 @@ pipeline above, but it shares the run and map rules:
   synthesized folder page: `md1` and the folder's path), then the parent page's key string
   (R-b6), so a switch between an index and a synthesized page is an `updated`, and a page
   whose parent page changed is updated too. An image: SHA-256 over its bytes and `md1`.
+- **Front matter** (TOML between `+++` lines; any other key, invalid TOML or a `---` YAML
+  block skips the file, reported `bad-front-matter` with its line):
+
+  | Key | Effect |
+  |---|---|
+  | `title` | the page title (not empty); else the first `# H1`, else from the file name |
+  | `slug` | the slug (not empty); else from the file name (`NN-name` → `name`) |
+  | `order` | `menu_order`; else `NN` of an `NN-name` file name, else 0 |
+  | `draft` | `true`: the page is a draft, whatever `date` says |
+  | `date` | RFC 3339 with an offset. Later than the run's start: the page is `scheduled` at that date (`scheduled_at` and its `content.publish_scheduled` job, R-b13). Earlier: published with that date. Absent: published, dated by an earlier run's import of it, else the run's start |
+  | `description` | the excerpt and the SEO description |
+
 - **Re-runs**, as for WordPress items (§2, P4):
 
   | The file since the last run | The page since the import wrote it | Outcome |
@@ -256,7 +268,10 @@ pipeline above, but it shares the run and map rules:
   `slug-changed`; links resolve to each page's real path.
 - **Front page.** `--front-page` writes `reading.front_page` (map kind `option`, id 1, the
   value's hash) on the first run, and on a re-run only while the site still holds what
-  the import last set; else the site's choice is kept, reported `front-page-kept`.
+  the import last set; else the site's choice is kept, reported `front-page-kept`. Only a
+  root index that is public after the run (published, dated no later than now) is set;
+  a draft or a scheduled one is reported `front-page-not-public` (exit 2) and the setting
+  is left as it was (R-b12).
 - **Never read:** a path above `DIR`, through a symlink (files are opened with
   `O_NOFOLLOW` on unix), rooted or absolute, or hidden. Such images are reported `outside`
   or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the

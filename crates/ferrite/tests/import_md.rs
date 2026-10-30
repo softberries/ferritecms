@@ -13,8 +13,8 @@ use ferrite::{OpenMode, open_store};
 use ferrite_config::Config;
 use ferrite_core::{Actor, ContentDraft, ContentService, PermalinkRules};
 use ferrite_domain::{
-    ContentItem, ContentQuery, ContentStatus, ImportRun, ImportRunId, ImportRunState, MEDIA_KIND,
-    NewUser, Role, Timestamp, UserId, UserStatus,
+    ContentItem, ContentQuery, ContentStatus, ImportRun, ImportRunId, ImportRunState, JobQuery,
+    MEDIA_KIND, NewUser, Role, Timestamp, UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::TestDb;
@@ -107,9 +107,10 @@ impl Site {
     }
 
     /// Opens the site's store. On SQLite the data-folder lock is retried for up to 5 s:
-    /// with tests running in parallel, a CLI child another test spawns can briefly hold a
-    /// copy of this test's lock descriptor (seen about once in ten parallel runs, never
-    /// with `--test-threads=1`).
+    /// with tests running in parallel, opening the store failed with "data folder is in
+    /// use" about once in ten parallel runs, never with `--test-threads=1`. The suspected
+    /// cause, unconfirmed: a CLI child another test forks holds an inherited copy of this
+    /// test's lock descriptor between fork and exec.
     async fn store(&self) -> Arc<dyn Store> {
         let mut tries = 0;
         loop {
@@ -207,6 +208,8 @@ both!(
     an_unreadable_folder_hides_nothing,
     an_image_imported_earlier_stays,
     a_bad_type_writes_nothing,
+    a_draft_root_index_is_not_the_front_page,
+    a_future_date_schedules_the_page,
 );
 
 /// A 2×2 PNG.
@@ -1093,4 +1096,129 @@ async fn a_bad_type_writes_nothing(site: Site) {
     );
     assert!(r.imports().list_runs(10).await.unwrap().is_empty());
     store.close().await;
+}
+
+/// The stored `reading.front_page`, if any.
+async fn front_page_option(site: &Site) -> Option<Value> {
+    let store = site.store().await;
+    let value = store
+        .read()
+        .options()
+        .get("reading.front_page")
+        .await
+        .unwrap()
+        .map(|o| o.value);
+    store.close().await;
+    value
+}
+
+/// Ruling R-b12: `--front-page` with a root index that is not public after the run (a
+/// draft) sets nothing, reports `front-page-not-public` and exits 2; an existing setting
+/// stays.
+async fn a_draft_root_index_is_not_the_front_page(site: Site) {
+    let (_root, dir) = tree();
+    let draft = b"+++\ntitle = \"Welcome\"\ndraft = true\n+++\n# FerriteCMS docs\n";
+    write(&dir, "index.md", draft);
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("front-page-not-public  index.md  "), "{o}");
+    assert!(!o.contains("front page: "), "{o}");
+    assert_eq!(front_page_option(&site).await, None);
+    // Public: set.
+    write(
+        &dir,
+        "index.md",
+        b"+++\ntitle = \"Welcome\"\n+++\n# FerriteCMS docs\n",
+    );
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let home = pages(&site).await.remove("home").unwrap();
+    let set = Some(json!(home.id.to_string()));
+    assert_eq!(front_page_option(&site).await, set);
+    // A draft again: reported, the setting left as it is.
+    write(&dir, "index.md", draft);
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(
+        stdout(&out).contains("front-page-not-public  index.md  "),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(front_page_option(&site).await, set);
+}
+
+/// Ruling R-b13: a front matter `date` after the run's start schedules the page at that
+/// date (not public); `draft = true` wins; a past date publishes at that date.
+async fn a_future_date_schedules_the_page(site: Site) {
+    let (_root, dir) = tree();
+    let secs = |dt: chrono::DateTime<chrono::Utc>| dt.timestamp();
+    let rfc = |s: i64| {
+        chrono::DateTime::from_timestamp(s, 0)
+            .unwrap()
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    };
+    let future = secs(chrono::Utc::now()) + 2 * 86_400;
+    let past = 1_700_000_000;
+    write(
+        &dir,
+        "02-configure.md",
+        format!("+++\ndate = {}\n+++\n# Configure\n", rfc(future)).as_bytes(),
+    );
+    write(
+        &dir,
+        "01-install.md",
+        format!("+++\ndate = {}\n+++\n# Install\n", rfc(past)).as_bytes(),
+    );
+    write(
+        &dir,
+        "03-reference/api.md",
+        format!("+++\ndate = {}\ndraft = true\n+++\n# API\n", rfc(future)).as_bytes(),
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let p = pages(&site).await;
+    let at = |s: i64| Timestamp::from(chrono::DateTime::from_timestamp(s, 0).unwrap());
+    let configure = &p["configure"];
+    assert_eq!(configure.status, ContentStatus::Scheduled);
+    assert_eq!(configure.scheduled_at, Some(at(future)));
+    assert_eq!(configure.published_at, None);
+    let install = &p["install"];
+    assert_eq!(
+        (install.status, install.published_at),
+        (ContentStatus::Published, Some(at(past)))
+    );
+    assert_eq!(p["api"].status, ContentStatus::Draft);
+    // Not public: the public reads serve published items only, and the publish job is
+    // queued for the date.
+    let store = site.store().await;
+    let jobs = store
+        .read()
+        .jobs()
+        .list(&JobQuery {
+            status: None,
+            kind: Some("content.publish_scheduled".into()),
+            limit: 100,
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        jobs.items
+            .iter()
+            .any(|j| j.run_at == at(future)
+                && j.payload.to_string().contains(&configure.id.to_string())),
+        "{:?}",
+        jobs.items
+    );
+    store.close().await;
+    drop(store);
+    // A re-run with nothing changed leaves it scheduled.
+    let out = site.import(&dir, &[]).await;
+    assert!(stdout(&out).contains("unchanged 7"), "{}", text(&out));
+    assert_eq!(
+        pages(&site).await["configure"].status,
+        ContentStatus::Scheduled
+    );
 }

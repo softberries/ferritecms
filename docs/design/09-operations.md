@@ -1216,7 +1216,11 @@ M4-3b P62, design 08 §8): imports the folder `DIR` of Markdown files as pages o
 import run of source `markdown:<NAME>` (`--source`, default the folder's name) under the same
 lock and run fence as the WordPress import, so a re-run of the same name updates what changed in
 the files and keeps what was edited here. `--front-page` makes the root `index.md` (or
-`README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it).
+`README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it), but only
+when that page is public after the run: a draft or scheduled root index is reported
+`front-page-not-public` (exit 2) and the setting is left as it was. A front matter `date`
+later than the run's start imports the page as scheduled at that date (`draft = true` wins); a
+past or absent date publishes it.
 `--dry-run` runs everything in one transaction and rolls it back; its images are staged under
 `<data>/import/<run-id>/` and deleted. Its only heartbeat is the one written when that
 transaction opens (rolled back with it), so a very large dry run, one that takes over 120 s,
@@ -1230,9 +1234,10 @@ There is no report file: it prints
 `created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
 when set, then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
 `too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
-`refused-image`, `broken-link`, `other-type`, `no-front-page`, and the notices
+`refused-image`, `broken-link`, `other-type`, `no-front-page`, `front-page-not-public`, and the notices
 `synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`). Exit
-0 done (notices only), 2 done with skipped files, missing or refused images or broken links,
+0 done (notices only), 2 done with skipped files, missing or refused images, broken links or
+a `--front-page` that is not public,
 3 another import running, 1 on any error. These are checked before a run starts, so they
 write nothing and leave no run: `--front-page` with another type, a folder that is not a
 folder or cannot be scanned, and a `--type` that does not exist, is `media`, or is not
