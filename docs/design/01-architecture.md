@@ -277,7 +277,18 @@ timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. 
 listen     = "127.0.0.1:8080"          # default; a socket address
 trusted_proxies = []                   # CIDRs or bare IPs
 # metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must not share listen's port (same or 0.0.0.0/:: address)
-# tls = ...                            # planned (M4: ACME); rejected as an unknown key today
+
+[server.tls]                           # M4-2 (P33): built-in HTTPS, solo mode only (09 §5)
+mode       = "off"                     # "off" (default: a reverse proxy terminates TLS) | "acme"
+# contact  = "mailto:ops@example.com"  # required with acme; a mailto: URI (the ACME account contact)
+# domains  = ["example.com"]           # default: the host of site.url, which must be among them; DNS names only (no IP, no wildcard)
+# directory = "production"             # "production" (Let's Encrypt) | "staging" | an https:// ACME directory URL
+# listen   = "0.0.0.0:443"             # the HTTPS listener; TLS-ALPN-01 is answered here, so it must be reachable as :443 from the internet
+# redirect_http = "0.0.0.0:80"         # optional plain listener answering every request with 301 to site.url's origin
+# With acme: site.url must be https://; cluster mode (explicit or auto) is a config error; the
+# listeners must not share a socket with server.listen or metrics_listen. server.listen keeps
+# serving plain HTTP (keep it on 127.0.0.1 for `healthcheck`). Account key and certificates:
+# <data>/tls/ (0700, files 0600).
 
 [database]
 url        = "sqlite://ferrite.db"     # default; sqlite:… (relative to the data folder) or postgres[ql]://…
@@ -480,7 +491,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> backup=<off|daily|weekly>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes
@@ -555,7 +566,8 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
   are `Cache-Control: no-store`. Extension endpoints check `manage_themes` /
   `manage_plugins` with the `extensions` scope in core before reading an upload.
 - Strict security headers by default (CSP for admin, `X-Content-Type-Options`,
-  `Referrer-Policy`, HSTS when TLS).
+  `Referrer-Policy`; `Strict-Transport-Security: max-age=31536000` on every response of the
+  built-in TLS listener, never on the plain one, M4-2 P33).
 - Uploaded files: content-type sniffed, SVG sanitised or served with
   `Content-Disposition: attachment` and a sandboxing CSP; never executed.
 - Plugins: see [05](05-plugin-host.md): an install needs the admin's approval of the

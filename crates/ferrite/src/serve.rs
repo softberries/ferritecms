@@ -21,8 +21,10 @@
 //!    only, 06 §7); the enabled plugins (a broken one is skipped); the route table. A
 //!    fallback or a skipped plugin is retried by the reload task with the R14 backoff
 //!    (R17);
-//! 8. bind `server.listen`, and `server.metrics_listen` when set (before any background
-//!    task starts, so a busy port fails cleanly);
+//! 8. bind `server.listen`, `server.metrics_listen` when set, and with
+//!    `[server.tls] mode = "acme"` `server.tls.listen` and `redirect_http` (before any
+//!    background task starts, so a busy port fails cleanly; `<data>/tls/` is created
+//!    0700 here);
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
 //!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
@@ -40,7 +42,12 @@
 //!     `server.metrics_listen`, `GET /metrics` (Prometheus text, P34) is served there and
 //!     only there, until the background tasks stop. The node's metrics registry counts
 //!     every response of the site and reads the page cache, the plugin host, the job
-//!     runner's counters and the store at scrape time.
+//!     runner's counters and the store at scrape time. With TLS on (P33, [`crate::tls`]),
+//!     the same site is also served over HTTPS on `server.tls.listen`, every response
+//!     there with `Strict-Transport-Security`, while `server.listen` keeps serving plain
+//!     HTTP (bind it to loopback); the ACME client runs as a background task;
+//!     `redirect_http` answers only `301` to the https site. [`run`] then also prints
+//!     `Listening on https://<addr>`. The listeners drain together at shutdown.
 //!
 //! Shutdown ([`RunningNode::shutdown`]; SIGINT or SIGTERM in [`run`]): stop accepting
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
@@ -61,12 +68,13 @@
 use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
+use axum::serve::ListenerExt;
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_cluster::{
     ClusterMode as NodeMode, JobCounters, JobRunner, NodeIdentity, Registry, RunnerConfig,
     SCHEDULER_TICK, STALE_AFTER, Scheduler, builtin, node_name,
 };
-use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig};
+use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig, TlsConfig};
 use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
@@ -179,6 +187,9 @@ pub struct NodeOptions {
     /// batches.
     #[cfg(feature = "test-seams")]
     pub import_fail_after_batches: Option<u32>,
+    /// Test seam: the TLS listener's (extra ACME roots, or a fixed certificate).
+    #[cfg(feature = "test-seams")]
+    pub tls: crate::tls::TlsSeams,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -240,6 +251,10 @@ pub struct RunningNode {
     pub addr: SocketAddr,
     /// Where `/metrics` is served (`server.metrics_listen`); `None` when it is off.
     pub metrics_addr: Option<SocketAddr>,
+    /// The HTTPS listener (`[server.tls]` on); `None` when TLS is off.
+    pub tls_addr: Option<SocketAddr>,
+    /// The redirect listener (`server.tls.redirect_http`); `None` when it is off.
+    pub redirect_addr: Option<SocketAddr>,
     pub node_id: NodeId,
     pub state: Arc<AppState>,
     /// The API's state (its services).
@@ -670,6 +685,19 @@ async fn boot(
         .as_ref()
         .map(TcpListener::local_addr)
         .transpose()?;
+    // Built-in TLS (P33): the config refuses it in cluster mode.
+    #[cfg(feature = "test-seams")]
+    let tls_seams = opts.tls;
+    #[cfg(not(feature = "test-seams"))]
+    let tls_seams = crate::tls::TlsSeams::default();
+    let tls = match &config.server.tls {
+        TlsConfig::Acme(acme) => Some(crate::tls::bind(acme, &config.data_dir, tls_seams).await?),
+        TlsConfig::Off => None,
+    };
+    let tls_addr = tls.as_ref().map(|t| t.addr);
+    let redirect_addr = tls
+        .as_ref()
+        .and_then(|t| t.redirect.as_ref().map(|(_, a)| *a));
 
     // Nothing below fails: start the background tasks.
     let background = CancellationToken::new();
@@ -725,16 +753,59 @@ async fn boot(
     registry.beat_now();
 
     let stop_accepting = CancellationToken::new();
-    let server = tokio::spawn(
-        axum::serve(
-            listener,
-            build_site(state.clone(), api.clone())
-                .into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
-        .into_future(),
-    );
+    let plain = axum::serve(
+        listener,
+        build_site(state.clone(), api.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+    .into_future();
+    // With TLS: the HTTPS and redirect listeners, served and drained with the plain one;
+    // the ACME client runs until the background tasks stop.
+    let mut acme_task = None;
+    let secure = match tls {
+        Some(crate::tls::Bound {
+            listener: tls_listener,
+            redirect,
+            acme,
+            ..
+        }) => {
+            acme_task = acme.map(|state| crate::tls::spawn_acme(state, background.clone()));
+            // `tap_io` gives the listener axum's `ConnectInfo<SocketAddr>`.
+            let https = axum::serve(
+                tls_listener.tap_io(|_| {}),
+                ferrite_http::tls::with_hsts(build_site(state.clone(), api.clone()))
+                    .into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+            .into_future();
+            let redirect = redirect.map(|(l, _)| {
+                let origin = state.config.site_url.clone();
+                axum::serve(l, ferrite_http::tls::redirect_app(&origin))
+                    .with_graceful_shutdown(stop_accepting.clone().cancelled_owned())
+                    .into_future()
+            });
+            Some(async move {
+                match redirect {
+                    Some(redirect) => tokio::try_join!(https, redirect).map(|_| ()),
+                    None => https.await,
+                }
+            })
+        }
+        None => None,
+    };
+    let server = tokio::spawn(async move {
+        match secure {
+            Some(secure) => tokio::try_join!(plain, secure).map(|_| ()),
+            None => plain.await,
+        }
+    });
     tracing::info!(listen = %format!("http://{addr}"), site = %state.config.site_url, node = %registry.id(), "serving");
+    if let Some(at) = tls_addr {
+        tracing::info!(listen = %format!("https://{at}"), "serving over TLS");
+    }
+    if let Some(at) = redirect_addr {
+        tracing::info!(listen = %format!("http://{at}"), "redirecting to https");
+    }
     if let Some(at) = metrics_addr {
         tracing::info!(listen = %format!("http://{at}/metrics"), "serving metrics");
     }
@@ -748,9 +819,12 @@ async fn boot(
         ("heartbeat", heartbeat),
     ];
     tasks.extend(metrics_server.map(|task| ("metrics listener", task)));
+    tasks.extend(acme_task.map(|task| ("acme client", task)));
     Ok(RunningNode {
         addr,
         metrics_addr,
+        tls_addr,
+        redirect_addr,
         node_id: registry.id(),
         state,
         api,
@@ -945,6 +1019,9 @@ async fn serve(
         Err(e) => return (Err(e), Instant::now() + CLOSE_TIMEOUT),
     };
     println!("Listening on http://{}", node.addr);
+    if let Some(at) = node.tls_addr {
+        println!("Listening on https://{at}");
+    }
     match node.wait(signals).await {
         Some(signal) => tracing::info!(
             signal = signal.name(),

@@ -64,6 +64,9 @@ assert_cmd = "2.2.2"
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 hyper-util.workspace = true
 minisign = { version = "=0.10.0", default-features = false }
+# A self-signed certificate for the TLS listener tests; already in the tree through
+# rustls-acme.
+rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 s3s.workspace = true
 s3s-fs.workspace = true
 serde_json.workspace = true

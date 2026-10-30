@@ -1426,8 +1426,14 @@ fn tls_config_parses_and_validates() {
         &[
             ("FERRITE_SERVER__TLS__MODE", "acme"),
             ("FERRITE_SERVER__TLS__CONTACT", "mailto:ops@example.com"),
-            ("FERRITE_SERVER__TLS__DOMAINS", "example.com, www.example.com"),
-            ("FERRITE_SERVER__TLS__DIRECTORY", "https://pebble.test:14000/dir"),
+            (
+                "FERRITE_SERVER__TLS__DOMAINS",
+                "example.com, www.example.com",
+            ),
+            (
+                "FERRITE_SERVER__TLS__DIRECTORY",
+                "https://pebble.test:14000/dir",
+            ),
         ],
     );
     let TlsConfig::Acme(a) = r.unwrap().server.tls else {

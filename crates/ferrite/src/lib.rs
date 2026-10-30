@@ -26,6 +26,7 @@ mod site_copy;
 #[cfg(test)]
 #[path = "../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;
+pub mod tls;
 pub mod update;
 pub mod upgrade;
 mod user_cmd;

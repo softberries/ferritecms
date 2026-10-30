@@ -624,10 +624,47 @@ more, not as lost ones.
   and the page-cache host is pinned to it (R25), so a TLS-terminating proxy cannot change
   the scheme (not needed while `site.url` is set to the public `https://` URL).
   `crates/ferrite-http/src/app/client.rs`.
-- Built-in ACME (solo only in v1): rustls + an ACME client crate (`instant-acme` or
-  `rustls-acme` — choose in M4), HTTP-01 on :80 or TLS-ALPN-01. Certificates stored in
-  `data/tls/`. In cluster mode ACME would need shared challenge state — out of scope;
-  use the LB.
+- **Built-in ACME (as built, M4-2 P33; solo only).** `[server.tls] mode = "acme"` (keys
+  in [01 §4](01-architecture.md#4-configuration)) serves the site over HTTPS with
+  certificates from an ACME CA (Let's Encrypt by default; `directory = "staging"` or any
+  `https://` directory URL). Crate: `rustls-acme` 0.15 on the `ring` provider only (no
+  aws-lc, P28), with its ACME client trusting webpki-roots.
+  - **Challenge: TLS-ALPN-01** on `server.tls.listen` (default `0.0.0.0:443`) itself, so
+    port 80 is not needed; the CA must reach that listener as port 443 of every name in
+    `domains`. A validation connection (ALPN `acme-tls/1` only) gets the challenge
+    certificate and is closed after the handshake.
+  - **Startup:** `site.url` must be `https://` and its host one of `domains` (default:
+    that host; DNS names only, no IP address or wildcard); `contact` is a required
+    `mailto:` URI; cluster mode (explicit, or `auto` resolving to it) is a config error:
+    ACME would need shared challenge state, so a cluster terminates TLS at the LB. The
+    TLS (and redirect) listener is bound with `server.listen` before any background task,
+    so a busy port stops startup. The ACME client then runs as a background task: it
+    deploys the cached certificate at once, otherwise orders one (until then TLS
+    handshakes fail and the plain listener still answers), renews when a third of the validity is left (30 days for Let's Encrypt's 90),
+    and backs off after failures (logged as warnings).
+  - **Storage:** `<data>/tls/` (created 0700 at startup, existing files tightened to
+    0600): `account-<hash>.pem` (the account key) and `cert-<hash>.pem` (key and chain),
+    each written 0600 to a temporary file and renamed into place. The hash covers the
+    contact or domains and the directory URL, so a changed config starts a new account
+    or order. Backups (§4) do not include the folder; a restored site orders again.
+  - **Listeners:** `server.listen` keeps serving plain HTTP: bind it to loopback
+    (`127.0.0.1:8080`, the default), which is what `ferrite healthcheck` (http only)
+    uses. The TLS listener serves the same site (h2 and HTTP/1.1 by ALPN); handshakes run
+    concurrently (at most 1 024 at once, 10 s each), and the client address is the TCP
+    peer as on plain HTTP (`server.trusted_proxies` applies). Every response over TLS has
+    `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`), the plain
+    listener's never. `redirect_http` (optional, e.g. `0.0.0.0:80`) answers every request,
+    whatever its method or `Host`, with `301` to the same path and query on `site.url`'s
+    origin, and serves nothing else. `serve` prints `Listening on https://<addr>` too; at
+    shutdown all listeners drain together (§8 `serve`).
+  - **Ports below 1024** need `CAP_NET_BIND_SERVICE` (systemd `AmbientCapabilities=`) or
+    a port mapping (Docker `-p 443:8443` with `listen = "0.0.0.0:8443"`).
+  - **Verified** by `crates/ferrite/tests/tls.rs`: HSTS only on TLS, the redirect
+    listener, the file modes, and `acme_against_pebble_serves_https` (with
+    `FERRITE_TEST_PEBBLE=1`; it runs `ghcr.io/letsencrypt/pebble` pinned by digest in
+    Docker with real TLS-ALPN-01 validation back to the node as `host.docker.internal`,
+    which needs Docker Desktop or an equivalent host alias). Not verified: Let's Encrypt
+    itself, renewal at expiry.
 
 ## 6. Metrics & logs
 
@@ -835,7 +872,7 @@ the inputs (`<data>/import/job-<id>/`) and the run's work file (`<data>/import/<
 **`ferrite config check`** (`crates/ferrite/src/config_cmd.rs`): loads `<data>/ferrite.toml`
 plus the `FERRITE_*` environment exactly as `serve` does (`ferrite_config::load`) and never
 opens the database or the media store. Valid: prints one line,
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> backup=<off|daily|weekly>` (`mode`
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (`mode`
 is the effective mode, `auto` resolved; `workers` the effective `cluster.workers`; `mail` whether `[mail]` is set, `metrics` the `server.metrics_listen` address, `backup` the `[backup] schedule`), exit
 0. Invalid: prints `error: invalid configuration (<n> problem(s))` and one
 `  <path>: <message>` line per problem to stderr (secret values are never printed), exit 1.
@@ -1057,8 +1094,9 @@ also installs the `ring` rustls default crypto provider at start.
   and check them against the registered types and taxonomies; load the active theme (at
   startup a broken one falls back to the embedded `blog`, 06 §7); install the enabled plugins
   (a broken row is skipped, 05 §7a); build the route table; bind `server.listen` (default
-  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one); start
-  the background tasks: the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
+  `127.0.0.1:8080`; override with `FERRITE_SERVER__LISTEN`, port `0` picks a free one) and, with
+  `[server.tls] mode = "acme"`, `server.tls.listen` and `redirect_http` (§5); start
+  the background tasks (with TLS also the ACME client): the invalidation loop (with `LISTEN` wake-ups in cluster mode) and the
   hot-reload task, the plugin-failure flusher (every 5 s), the `request.served` flusher
   (every 10 s or 1 000 events, M2a-2a), the job runner (`cluster.workers` handlers; prune
   jobs, scheduled publishing, `plugin.action`, `plugin.purge`), the periodic scheduler
