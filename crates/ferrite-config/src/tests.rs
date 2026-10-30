@@ -1305,6 +1305,77 @@ fn backup_template_is_commented_and_parses_uncommented() {
 }
 
 #[test]
+fn metrics_listen_is_off_by_default_and_parsed() {
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().server.metrics_listen, None);
+
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n"
+        )),
+        &[],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+
+    let (_d, r) = run(
+        Some(MIN),
+        &[("FERRITE_SERVER__METRICS_LISTEN", "0.0.0.0:9100")],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("0.0.0.0:9100".parse().unwrap())
+    );
+
+    // Not an address, or the public listener's own address: refused.
+    for bad in [
+        "metrics_listen = \"nope\"\n",
+        "metrics_listen = 9464\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        // The same port where either side is every interface.
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"0.0.0.0:8080\"\n",
+        "listen = \"[::]:8080\"\nmetrics_listen = \"10.0.0.5:8080\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{bad}")), &[]);
+        assert_eq!(paths(&r.unwrap_err()), ["server.metrics_listen"], "{bad}");
+    }
+    // Not a clash: port 0 on both (tests: two different free ports), the same port on
+    // two specific addresses, a different port beside a wildcard.
+    for ok in [
+        "listen = \"127.0.0.1:0\"\nmetrics_listen = \"127.0.0.1:0\"\n",
+        "listen = \"0.0.0.0:0\"\nmetrics_listen = \"0.0.0.0:0\"\n",
+        "listen = \"10.0.0.5:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:9464\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{ok}")), &[]);
+        assert!(r.is_ok(), "{ok}: {r:?}");
+    }
+}
+
+#[test]
+fn metrics_listen_template_is_commented() {
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    assert!(
+        rendered.contains("# metrics_listen = \"127.0.0.1:9464\"\n"),
+        "{rendered}"
+    );
+    let uncommented = rendered.replace(
+        "# metrics_listen = \"127.0.0.1:9464\"\n",
+        "metrics_listen = \"127.0.0.1:9464\"\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ferrite.toml"), uncommented).unwrap();
+    let c = load(dir.path(), env(&[])).unwrap();
+    assert_eq!(
+        c.server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+}
+
+#[test]
 fn invalid_timezone_is_config_error() {
     for bad in ["Mars/Base", "Europe/Warsw", "not a zone", "+02:00"] {
         let src = format!("{MIN}timezone = \"{bad}\"\n");

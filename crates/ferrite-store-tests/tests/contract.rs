@@ -4,7 +4,7 @@ use ferrite_store_tests::{
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
     menu::*, migration_dirs, migration_files, migrations::*, node::*, notify::*, plugin::*,
-    plugin_failure::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
+    plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*,
     user_filters::*,
 };
 
@@ -246,6 +246,7 @@ backend_tests!(
     nodes_register_heartbeat_list_prune,
     nodes_prune_in_batches,
     nodes_list_keeps_newest_heartbeats,
+    pool_stats_count_used_and_idle,
 );
 
 backend_tests!(

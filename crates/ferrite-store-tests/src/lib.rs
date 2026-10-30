@@ -33,6 +33,7 @@ pub mod node;
 pub mod notify;
 pub mod plugin;
 pub mod plugin_failure;
+pub mod pool;
 pub mod search;
 pub mod semantics;
 pub mod site;

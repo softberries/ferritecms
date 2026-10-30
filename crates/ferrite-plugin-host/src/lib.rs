@@ -785,6 +785,12 @@ impl PluginHost {
         self.stats.of(plugin)
     }
 
+    /// Every plugin's [`call_stats`](Self::call_stats), plugins by name: what a metrics
+    /// scrape reads (one lock for all of them).
+    pub fn all_call_stats(&self) -> Vec<(String, Vec<HookStats>)> {
+        self.stats.all()
+    }
+
     /// Calls that ran and calls that failed on this host since it was built, every
     /// plugin and hook.
     pub fn totals(&self) -> (u64, u64) {

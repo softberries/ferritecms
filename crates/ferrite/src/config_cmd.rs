@@ -13,7 +13,7 @@ pub enum ConfigCommand {
     /// Load ferrite.toml and FERRITE_* variables exactly as `serve` does, without
     /// touching the database or media.
     ///
-    /// Prints `ok: mode=… database=… media=… workers=… mail=… backup=…` and exits 0, or prints every
+    /// Prints `ok: mode=… database=… media=… workers=… mail=… metrics=… backup=…` and exits 0, or prints every
     /// problem to stderr and exits 1.
     Check(DataArg),
 }
@@ -96,8 +96,12 @@ fn summary(config: &Config) -> String {
     } else {
         "off"
     };
+    let metrics = config
+        .server
+        .metrics_listen
+        .map_or_else(|| "off".to_owned(), |at| at.to_string());
     format!(
-        "ok: mode={mode} database={database} media={media} workers={} mail={mail} backup={}",
+        "ok: mode={mode} database={database} media={media} workers={} mail={mail} metrics={metrics} backup={}",
         config.cluster.workers,
         config.backup.schedule.as_str()
     )

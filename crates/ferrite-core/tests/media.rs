@@ -739,6 +739,9 @@ impl Store for FailingStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
     }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
+    }
     fn read(&self) -> &dyn Repos {
         self.inner.read()
     }

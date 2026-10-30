@@ -21,8 +21,8 @@
 //!    only, 06 §7); the enabled plugins (a broken one is skipped); the route table. A
 //!    fallback or a skipped plugin is retried by the reload task with the R14 backoff
 //!    (R17);
-//! 8. bind `server.listen` (before any background task starts, so a busy port fails
-//!    cleanly);
+//! 8. bind `server.listen`, and `server.metrics_listen` when set (before any background
+//!    task starts, so a busy port fails cleanly);
 //! 9. the background tasks: the invalidation loop (`cache.poll_interval_ms`; with
 //!    `LISTEN` wake-ups in cluster mode) with the [`Reloader`] hook (hot swap of theme,
 //!    plugins and permalinks, P18), the shared plugin-failure flusher (P20), the
@@ -36,7 +36,11 @@
 //!    theme, plugin and permalink state; the reloader beats after every reload);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
 //!     services and the site key are set up in step 7, so a missing or bad key stops
-//!     startup); [`run`] prints `Listening on http://<addr>` on stdout.
+//!     startup); [`run`] prints `Listening on http://<addr>` on stdout. With
+//!     `server.metrics_listen`, `GET /metrics` (Prometheus text, P34) is served there and
+//!     only there, until the background tasks stop. The node's metrics registry counts
+//!     every response of the site and reads the page cache, the plugin host, the job
+//!     runner's counters and the store at scrape time.
 //!
 //! Shutdown ([`RunningNode::shutdown`]; SIGINT or SIGTERM in [`run`]): stop accepting
 //! connections **and** stop the job runner at once; open requests get up to 10 s while
@@ -59,8 +63,8 @@ use std::{future::IntoFuture, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::Context;
 use ferrite_cache::{InvalidationLoop, PageCache};
 use ferrite_cluster::{
-    ClusterMode as NodeMode, JobRunner, NodeIdentity, Registry, RunnerConfig, SCHEDULER_TICK,
-    Scheduler, builtin, node_name,
+    ClusterMode as NodeMode, JobCounters, JobRunner, NodeIdentity, Registry, RunnerConfig,
+    SCHEDULER_TICK, STALE_AFTER, Scheduler, builtin, node_name,
 };
 use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig};
 use ferrite_core::mail::MailQueue;
@@ -82,6 +86,7 @@ use ferrite_http::{
     load_route_table,
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
+    metrics::{Metrics, metrics_router},
     plugins::egress::Egress,
 };
 use ferrite_media::MediaStore;
@@ -233,10 +238,14 @@ impl BootGate {
 /// its tasks running.
 pub struct RunningNode {
     pub addr: SocketAddr,
+    /// Where `/metrics` is served (`server.metrics_listen`); `None` when it is off.
+    pub metrics_addr: Option<SocketAddr>,
     pub node_id: NodeId,
     pub state: Arc<AppState>,
     /// The API's state (its services).
     pub api: Arc<ApiState>,
+    /// The node's metrics registry (P34); the per-minute writer reads its snapshots.
+    pub metrics: Arc<Metrics>,
     server: Option<JoinHandle<std::io::Result<()>>>,
     /// The server's result when it ended before shutdown.
     server_result: Option<Result<std::io::Result<()>, JoinError>>,
@@ -245,7 +254,7 @@ pub struct RunningNode {
     runner: JoinHandle<()>,
     background: CancellationToken,
     /// Reloader, invalidation loop, failure flusher, `request.served` flusher, redirect
-    /// hits flusher, scheduler, heartbeat.
+    /// hits flusher, scheduler, heartbeat, and the metrics listener when configured.
     tasks: Vec<(&'static str, JoinHandle<()>)>,
     /// The outgoing-mail queue (`[mail]` set); its sends are cancelled at shutdown.
     mail: Option<Arc<MailQueue>>,
@@ -455,6 +464,19 @@ async fn boot(
         auth.clone(),
         dyn_permalinks.clone(),
     ));
+    // The node's metrics registry (P34): every response, page views, and at scrape time
+    // the page cache, the plugin host, the jobs, the nodes and the pools.
+    let job_counters = Arc::new(JobCounters::default());
+    let metrics = {
+        let jobs = job_counters.clone();
+        Arc::new(
+            Metrics::new(&binary_version()?.to_string(), crate::binary_target())
+                .with_cache(cache.clone())
+                .with_plugins(host.clone())
+                .with_store(store.clone(), STALE_AFTER)
+                .with_job_totals(move || (jobs.done(), jobs.failed())),
+        )
+    };
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),
@@ -471,7 +493,8 @@ async fn boot(
         .with_auth(auth.clone())
         .with_served(served.clone())
         .with_hits(hits.clone())
-        .with_comments(comments.clone()),
+        .with_comments(comments.clone())
+        .with_metrics(metrics.clone()),
     );
 
     let status = Arc::new(NodeStatus::default());
@@ -617,7 +640,8 @@ async fn boot(
     }
     runner_config.listen = listen;
     let runner = JobRunner::new(store.clone(), runner_config, handlers)
-        .context("cannot set up the job runner")?;
+        .context("cannot set up the job runner")?
+        .with_counters(job_counters);
     let mut periodics = builtin::periodics();
     periodics.extend(jobs::core_periodics());
     periodics.extend(backup_periodic);
@@ -633,6 +657,19 @@ async fn boot(
         .await
         .with_context(|| format!("cannot listen on {}", config.server.listen))?;
     let addr = listener.local_addr()?;
+    // `/metrics` only on its own listener, when configured (P34).
+    let metrics_listener = match config.server.metrics_listen {
+        Some(at) => Some(
+            TcpListener::bind(at)
+                .await
+                .with_context(|| format!("cannot listen on {at} (server.metrics_listen)"))?,
+        ),
+        None => None,
+    };
+    let metrics_addr = metrics_listener
+        .as_ref()
+        .map(TcpListener::local_addr)
+        .transpose()?;
 
     // Nothing below fails: start the background tasks.
     let background = CancellationToken::new();
@@ -671,6 +708,19 @@ async fn boot(
     let runner = runner.spawn(runner_stop.clone());
     let scheduler = scheduler.spawn(background.clone());
     let heartbeat = registry.spawn_heartbeat(status.meta_fn(), background.clone());
+    // Served until the background tasks stop, so the drain can still be scraped.
+    let metrics_server = metrics_listener.map(|listener| {
+        let app = metrics_router(metrics.clone());
+        let stop = background.clone();
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(stop.cancelled_owned())
+                .await
+            {
+                tracing::warn!(error = %e, "the metrics listener failed");
+            }
+        })
+    });
     // The row was registered without the node's state; publish it now.
     registry.beat_now();
 
@@ -685,26 +735,33 @@ async fn boot(
         .into_future(),
     );
     tracing::info!(listen = %format!("http://{addr}"), site = %state.config.site_url, node = %registry.id(), "serving");
+    if let Some(at) = metrics_addr {
+        tracing::info!(listen = %format!("http://{at}/metrics"), "serving metrics");
+    }
+    let mut tasks = vec![
+        ("reloader", reload_task),
+        ("invalidation loop", poller),
+        ("plugin failure flusher", flusher),
+        ("request.served flusher", served_flusher),
+        ("redirect hits flusher", hits_flusher),
+        ("scheduler", scheduler),
+        ("heartbeat", heartbeat),
+    ];
+    tasks.extend(metrics_server.map(|task| ("metrics listener", task)));
     Ok(RunningNode {
         addr,
+        metrics_addr,
         node_id: registry.id(),
         state,
         api,
+        metrics,
         server: Some(server),
         server_result: None,
         stop_accepting,
         runner_stop,
         runner,
         background,
-        tasks: vec![
-            ("reloader", reload_task),
-            ("invalidation loop", poller),
-            ("plugin failure flusher", flusher),
-            ("request.served flusher", served_flusher),
-            ("redirect hits flusher", hits_flusher),
-            ("scheduler", scheduler),
-            ("heartbeat", heartbeat),
-        ],
+        tasks,
         mail,
         hits,
         registry,

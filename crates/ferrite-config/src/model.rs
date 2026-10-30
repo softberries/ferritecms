@@ -97,6 +97,9 @@ pub struct SiteConfig {
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// Where `GET /metrics` (Prometheus text) is served, on a listener of its own
+    /// (M4-2 P34); `None` (the default): no metrics listener. Never on `listen`.
+    pub metrics_listen: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

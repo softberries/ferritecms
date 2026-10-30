@@ -144,6 +144,15 @@ impl PageCache {
         }
     }
 
+    /// The hit and miss counts of [`stats`](Self::stats) alone: two atomic loads, no
+    /// maintenance (what the per-minute metrics snapshot reads).
+    pub fn lookups(&self) -> (u64, u64) {
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+        )
+    }
+
     /// Removes the entry under `key` only if it is still entry `id`, so a newer valid
     /// entry stored meanwhile survives.
     async fn remove_if_id(&self, key: &CacheKey, id: u64) {
