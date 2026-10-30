@@ -77,9 +77,22 @@ pub(super) fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// The placeholder's text, as the repository holds it before the release key is added.
+    const PLACEHOLDER: &str = "\
+# FerriteCMS release public key (minisign), embedded by `ferrite self-update` (M4-2 P26).
+# This is a placeholder and holds no key: a binary built from it refuses to self-update.
+";
+
+    /// The embedded file parses, whether it is still the placeholder or holds the real
+    /// key (the release gate adds it; this test must stay green either way).
+    #[test]
+    fn embedded_key_file_parses() {
+        parse_key(RELEASE_PUB).unwrap();
+    }
+
     #[test]
     fn placeholder_and_comments_mean_no_key() {
-        assert!(parse_key(RELEASE_PUB).unwrap().is_none());
+        assert!(parse_key(PLACEHOLDER).unwrap().is_none());
         assert!(parse_key("").unwrap().is_none());
         assert!(parse_key("# only a comment\n\n").unwrap().is_none());
     }
