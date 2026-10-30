@@ -1,0 +1,31 @@
+[plugin]
+name        = "contact-form"
+version     = "0.1.0"
+publisher   = "ferritecms.dev"
+description = "A contact form: messages are mailed to the site's admins and kept in an inbox page for chosen users"
+world       = "ferrite:plugin/plugin@0.1.0"
+license     = "MIT"
+
+# A standalone form page at `/_p/contact-form/`, the form's target `/_p/contact-form/submit`
+# (a theme posts its own form there too) and an inbox page for the users listed in the
+# `viewers` setting. A message is mailed to the active admins and kept in the plugin's own
+# storage (the latest 100). `site.title` names the site on the form page.
+[capabilities]
+routes       = true
+kv           = true
+mail         = "admins"
+options.read = ["site.title"]
+
+# The form page and the inbox have the default limit (10 requests a minute per client).
+# `/submit` accepts posts from any origin: the plugin's own page is sandboxed, so a browser
+# sends `Origin: null` with its form, and such a request is always served anonymously.
+[routes]
+"/"       = { methods = ["GET"] }
+"/submit" = { methods = ["POST"], cross_origin = true, rate_limit = "10/h" }
+"/inbox"  = { methods = ["GET"] }
+
+[settings]
+viewers         = { type = "textarea", label = "Viewers: ids of the users who may open the inbox page (separated by commas or new lines; empty means nobody)" }
+subject_prefix  = { type = "text", label = "Subject prefix of the mail to the admins", default = "[Contact]" }
+success_message = { type = "textarea", label = "Message shown after a successful submission (empty: a standard thank-you)" }
+store_messages  = { type = "bool", label = "Keep messages in the inbox (the latest 100)", default = true }

@@ -6,6 +6,7 @@
 
 mod analytics;
 mod common;
+mod contact_form;
 mod egress;
 mod install;
 mod mail;

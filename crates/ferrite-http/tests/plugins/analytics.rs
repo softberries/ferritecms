@@ -1201,10 +1201,11 @@ async fn the_largest_blob_after_truncation_fits_the_stats_page(site: Site) -> Si
 }
 
 /// [`StoreHostServices`] whose `kv_get` of one key answers `None`, as the host does for a
-/// store read that failed (it cannot tell that from a missing key).
-struct FailingGet {
-    inner: Arc<StoreHostServices>,
-    key: String,
+/// store read that failed (it cannot tell that from a missing key). Also used by the
+/// `contact-form` cases.
+pub(crate) struct FailingGet {
+    pub(crate) inner: Arc<StoreHostServices>,
+    pub(crate) key: String,
 }
 
 #[async_trait::async_trait]

@@ -1112,7 +1112,8 @@ ferrite_sdk::export_plugin! {
   - `form::parse_urlencoded(body) -> Result<Vec<(String, String)>, FormError>`: `+` is a
     space, `%XX` is decoded, empty segments are skipped, and a key with no `=` gets an
     empty value. A bad escape, invalid UTF-8 or more than 100 pairs is an error.
-  - `html::escape(s)`: escapes `& < > " '`.
+  - `html::escape(s)`: escapes `& < > " '`. It scans bytes and copies the runs between them
+    whole (M4-3a Task 4): a character-by-character loop cost more fuel on non-ASCII text.
   - `Head`: `json_ld(json)` (a `script-tag` with only `json-ld`; the host re-serialises it
     and escapes `<`, `>`, `&`, and drops invalid JSON), `link_typed(rel, href, kind)`, and
     the queries `has_meta_name`, `has_meta_property` and `meta_property`, so a filter can
@@ -1211,3 +1212,18 @@ reached the payload (the 404s alone) and 16 to 20 million once core percent-enco
 The page over 90 full days or over the largest blob, 11 to 14 million; over 90 days of 33 KB
 blobs, 15 to 18, and of short distinct keys, 12 to 15; 1000 ordinary events onto two 33 KB
 days, 14 to 17. No limit above the default is requested.
+M4-3a also adds the shipped example `contact-form` (`plugins/examples/contact-form`, P45 and
+P46, `README.md`): a sandboxed form page `GET /`, `POST /submit` (`cross_origin`, because a
+form on a plugin page posts with `Origin: null`; `rate_limit = "10/h"`) that themes post their
+own form to with `plugin_route("contact-form", "/submit")`, and a viewer-guarded `GET /inbox`.
+A valid post is mailed with `notify-admins` (the subject made one line and cut to 200
+characters before the host adds the site title; a mail error is logged, not shown) and kept in
+one KV blob of the latest 100 messages within 900 KiB. Fuel shaped its storage: a JSON
+document of messages that each need escapes (`"` throughout) cost more than 25 million to
+decode and re-encode at 16 messages, so the blob is JSON lines (a version line, then one
+compact message per line, newest first). A submit finds the stored lines by their line breaks,
+eight bytes per step, and writes them back without decoding any; the inbox page decodes only
+the ten it shows. Measured by bisecting the plugin's fuel limit: a submit onto a full blob,
+about 9 million; the dearest inbox page (ten messages of `"`), about 19 million; the test suite
+runs these at half the default. A failed `kv.get` (`None`) is checked with `list-keys` before
+a first blob is written, as in `analytics`.
