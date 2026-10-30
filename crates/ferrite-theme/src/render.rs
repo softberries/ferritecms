@@ -19,10 +19,11 @@
 //!   size guards (`range()` over 100 000 items, string/sequence repetition over 100 M)
 //!   are [`ThemeError::Limit`]. Each render has its own state, so the next one is
 //!   unaffected.
-//! * Data-backed helpers (`related`, `query`, `menu`, `image`, `comments`) go through the
-//!   [`HelperBridge`], at most [`MAX_BRIDGE_CALLS`] times per render; after that they
-//!   return nothing and one warning is logged. Same-name `menu()` calls are memoised,
-//!   and `image()` of media already in the context (featured images) needs no call.
+//! * Data-backed helpers (`related`, `query`, `menu`, `image`, `comments`, `page_tree`)
+//!   go through the [`HelperBridge`], at most [`MAX_BRIDGE_CALLS`] times per render;
+//!   after that they return nothing and one warning is logged. Same-name `menu()` calls
+//!   and same-kind `page_tree()` calls are memoised, and `image()` of media already in
+//!   the context (featured images) needs no call.
 //!
 //! **Known gaps (ruling R14).** Fuel counts instructions, not bytes or CPU time:
 //!
@@ -42,7 +43,9 @@
 //! `archive` (listing routes: `kind`, `term`, `author`, `year`, `month`; ruling R30),
 //! `pagination` (`page`, `pages`, `prev_url`, `next_url`), `request` (`path`,
 //! `s` = the search query, `page`, `status`, `preview`) and the
-//! helpers `menu(name)`, `related(post, n=3)`, `query(type=…, term=…, limit=10)`,
+//! helpers `menu(name)`, `related(post, n=3)`,
+//! `query(type=…, term=…, limit=10, order="date"|"menu")`, `page_tree(post=none,
+//! kind=none)` (the public items of one type as a tree: see the `page_tree` module),
 //! `asset(path)`, `image(media, size)`, `head()`, `footer()` (the plugins'
 //! `render.footer` HTML, safe; empty without footer plugins), `plugin_route(name, path)` (a plugin
 //! route's URL, `/_p/<name><path>`), `comments(post)` (page `?cpage=N` of the public
@@ -68,7 +71,7 @@
 //! `option:site.locale` (`site.url` is config, not an option, so it has no key); for every item in the context or
 //! returned by a helper `post:<id>`, `user:<author>`, `term:<id>` per term and
 //! `post:<featured media>`; `term:<id>`/`user:<id>` for `archive.term`/`archive.author`;
-//! `archive:<kind>` for `related`/`query`; `menu:<name>` for
+//! `archive:<kind>` for `related`/`query`/`page_tree`; `menu:<name>` for
 //! menus; `post:<media>` for `image()`; `post:<id>` for `comments()`; plus every key the
 //! [`HelperBridge`] reports for `related`, `query`, `menu` (menu targets, hidden ones
 //! included) and `comments` (`option:comments.enabled`, `option:comments.per_page`,
@@ -86,6 +89,8 @@ use ferrite_core::{
     DepKeys, Listing, MediaPublic, PageItem, TermPublic, UserPublic,
     comments::{COMMENT_FORM_PATH, CommentThread, HONEYPOT_FIELD},
     events::{THEME_KEY, archive_key, menu_key, option_key, post_key, term_key, user_key},
+    is_type_name_shaped,
+    site::{ContentTree, ListOrder},
 };
 use ferrite_domain::ContentId;
 use minijinja::{
@@ -99,6 +104,7 @@ use crate::{
     bridge::{MAX_QUERY_LIMIT, MAX_RELATED},
     filters,
     package::{SEGMENT, asset_url},
+    page_tree::tree_value,
     view::ItemObject,
 };
 
@@ -109,6 +115,8 @@ pub const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 /// Most [`HelperBridge`] calls one render may make.
 pub const MAX_BRIDGE_CALLS: u32 = 20;
 const DEFAULT_RELATED: u32 = 3;
+/// Most `page_tree()` values (one per kind and current node) one render keeps.
+const MAX_TREE_VALUES: usize = 16;
 const DEFAULT_QUERY_LIMIT: u32 = 10;
 /// Options every render reads through `site`. `site.url` is not one: it comes from the
 /// config, which no write changes at runtime.
@@ -417,6 +425,12 @@ struct ScopeState {
     calls: u32,
     warned: bool,
     menus: HashMap<String, Value>,
+    /// `page_tree()` reads by kind (memo key `tree:<kind>`, P57).
+    trees: HashMap<String, Option<Arc<ContentTree>>>,
+    /// `page_tree()` values by kind and current node, so a template calling it in a loop
+    /// builds each one once; at most [`MAX_TREE_VALUES`] entries, later ones are built
+    /// on every call.
+    tree_values: HashMap<(String, Option<ContentId>), Value>,
     /// Media already in the context, for `image()` without a bridge call.
     media: HashMap<ContentId, MediaPublic>,
 }
@@ -546,6 +560,13 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
     );
     let s = scope.clone();
     root.insert(
+        "page_tree",
+        Value::from_function(move |post: Option<Value>, kwargs: Kwargs| {
+            page_tree(&s, post, kwargs)
+        }),
+    );
+    let s = scope.clone();
+    root.insert(
         "image",
         Value::from_function(move |media: &Value, size: Option<&str>| image(&s, media, size)),
     );
@@ -622,7 +643,18 @@ fn query(scope: &Scope, kwargs: Kwargs) -> Result<Value, Error> {
     let kind: String = kwargs.get("type")?;
     let term: Option<String> = kwargs.get("term")?;
     let limit: Option<u32> = kwargs.get("limit")?;
+    let order: Option<String> = kwargs.get("order")?;
     kwargs.assert_all_used()?;
+    let order = match order.as_deref() {
+        None | Some("date") => ListOrder::Date,
+        Some("menu") => ListOrder::Menu,
+        Some(other) => {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!("query(): order must be \"date\" or \"menu\", not {other:?}"),
+            ));
+        }
+    };
     scope.record(archive_key(&kind));
     if !scope.take_call("query") {
         return Ok(Value::from(Vec::<Value>::new()));
@@ -630,9 +662,69 @@ fn query(scope: &Scope, kwargs: Kwargs) -> Result<Value, Error> {
     let limit = limit
         .unwrap_or(DEFAULT_QUERY_LIMIT)
         .clamp(1, MAX_QUERY_LIMIT);
-    let (items, deps) = scope.bridge.query(&kind, term.as_deref(), limit);
+    let (items, deps) = scope.bridge.query(&kind, term.as_deref(), limit, order);
     scope.merge(deps);
     Ok(scope.items(items))
+}
+
+/// A value that is absent for a helper argument: missing, `none` or undefined.
+fn given(v: Option<Value>) -> Option<Value> {
+    v.filter(|v| !v.is_none() && !v.is_undefined())
+}
+
+/// `page_tree(post=none, kind=none)` (P57): the tree of `kind`, else of `post.kind`,
+/// with `post` marked current (see the `page_tree` module for the shape). Without a
+/// kind, or with one that is not a type name, it is `none` and makes no call; a type
+/// without public items, or a spent call budget, also gives `none`. One bridge call per
+/// kind and render. Records `archive:<kind>`.
+fn page_tree(scope: &Scope, post: Option<Value>, kwargs: Kwargs) -> Result<Value, Error> {
+    let named: Option<Value> = kwargs.get("post")?;
+    let kind: Option<Value> = kwargs.get("kind")?;
+    kwargs.assert_all_used()?;
+    let post = given(post).or(given(named));
+    let kind = match given(kind) {
+        Some(k) => k.as_str().map(str::to_owned),
+        None => post.as_ref().and_then(item_kind),
+    };
+    let Some(kind) = kind.filter(|k| is_type_name_shaped(k)) else {
+        return Ok(Value::from(()));
+    };
+    scope.record(archive_key(&kind));
+    let memo = scope.lock().trees.get(&kind).cloned();
+    let tree = match memo {
+        Some(tree) => tree,
+        None => {
+            if !scope.take_call("page_tree") {
+                return Ok(Value::from(()));
+            }
+            let (tree, deps) = scope.bridge.tree(&kind);
+            scope.merge(deps);
+            let tree = tree.map(Arc::new);
+            scope.lock().trees.insert(kind.clone(), tree.clone());
+            tree
+        }
+    };
+    let Some(tree) = tree else {
+        return Ok(Value::from(()));
+    };
+    let key = (kind, post.as_ref().and_then(content_id));
+    if let Some(v) = scope.lock().tree_values.get(&key) {
+        return Ok(v.clone());
+    }
+    let v = tree_value(&tree, key.1);
+    let mut st = scope.lock();
+    if st.tree_values.len() < MAX_TREE_VALUES {
+        st.tree_values.insert(key, v.clone());
+    }
+    Ok(v)
+}
+
+/// The content type of an item object, or of a map with `kind`.
+fn item_kind(v: &Value) -> Option<String> {
+    if let Some(obj) = v.downcast_object_ref::<ItemObject>() {
+        return Some(obj.0.item.kind.clone());
+    }
+    v.get_attr("kind").ok()?.as_str().map(str::to_owned)
 }
 
 fn image(scope: &Scope, media: &Value, size: Option<&str>) -> Value {

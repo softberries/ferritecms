@@ -45,8 +45,10 @@
 
 mod hydrate;
 mod model;
+mod tree;
 
 use std::{
+    cmp::Ordering as CmpOrdering,
     collections::HashMap,
     num::NonZeroU32,
     sync::{
@@ -57,8 +59,8 @@ use std::{
 
 use chrono::NaiveDate;
 use ferrite_domain::{
-    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, MEDIA_KIND,
-    SearchQuery, Taxonomy, TermId, Timestamp,
+    ArtifactHash, ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, MAX_PAGE,
+    MEDIA_KIND, SearchQuery, Taxonomy, TermId, Timestamp,
 };
 use ferrite_store::{
     MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_PAGE_ROWS, MAX_SEARCH_KINDS, Repos, Store,
@@ -77,6 +79,7 @@ pub use model::{
     PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
     srcset,
 };
+pub use tree::{ContentTree, TreeNode};
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
 pub type MediaUrlFn = Arc<dyn Fn(&ArtifactHash, &str) -> String + Send + Sync>;
@@ -111,6 +114,52 @@ pub const MAX_LATEST: u32 = 100;
 /// Most search matches paged through; a search `total` never exceeds it (ruling R9:
 /// bounds what one anonymous request can make the store load).
 pub const SEARCH_CAP: usize = 200;
+/// Most nodes [`SiteReader::tree`] returns (M4-3b P56); past it the tree is marked
+/// `truncated`.
+pub const MAX_TREE_NODES: usize = 1000;
+
+/// The order of [`SiteReader::latest`] and [`SiteReader::term_items`] (the theme's
+/// `query(order=)`, M4-3b P58).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListOrder {
+    /// Newest first (`published_at` descending).
+    #[default]
+    Date,
+    /// [`menu_order_cmp`]: `menu_order` ascending, then title, then id.
+    Menu,
+}
+
+impl ListOrder {
+    fn content_order(self) -> ContentOrder {
+        match self {
+            ListOrder::Date => ContentOrder::PublishedDesc,
+            ListOrder::Menu => ContentOrder::MenuOrderAsc,
+        }
+    }
+
+    /// Sorts rows the store returned in [`content_order`](Self::content_order): the
+    /// store breaks `menu_order` ties by id, the menu order by title first.
+    fn sort(self, rows: &mut [ContentItem]) {
+        if self == ListOrder::Menu {
+            rows.sort_by(|a, b| {
+                menu_order_cmp(
+                    (a.menu_order, &a.title, a.id),
+                    (b.menu_order, &b.title, b.id),
+                )
+            });
+        }
+    }
+}
+
+/// The menu order of `(menu_order, title, id)` triples: `menu_order` ascending, then
+/// the title compared case-insensitively (Unicode `to_lowercase`), then the id, so the
+/// order is total. `query(order="menu")` and `page_tree()`'s siblings use it (M4-3b
+/// P57, P58).
+pub fn menu_order_cmp(a: (i32, &str, ContentId), b: (i32, &str, ContentId)) -> CmpOrdering {
+    a.0.cmp(&b.0)
+        .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+        .then_with(|| a.2.cmp(&b.2))
+}
 
 /// Whether `item` is publicly visible at `now`: published, with a publish time not in
 /// the future. The one definition of "public": `SiteReader`'s re-checks and
@@ -135,24 +184,52 @@ pub(crate) async fn public_paths(
     items: Vec<ContentItem>,
     deps: &mut DepKeys,
 ) -> Result<Vec<(ContentItem, String)>, CoreError> {
+    let mut out = Vec::with_capacity(items.len());
+    paths_with(
+        repos,
+        rules,
+        items,
+        &mut Nodes::new(),
+        Some(deps),
+        |item, url| {
+            out.push((item, url));
+        },
+    )
+    .await?;
+    Ok(out)
+}
+
+/// The path of each of `items` (callers pass items with a public page only), handed to
+/// `each` in order: terms (for the primary term) in one call per 200 ids, ancestors
+/// one `get_many` per missing level, kept in `nodes` so a paged walk reads each
+/// ancestor once; none for no items. With `deps`, records the keys of every term of
+/// the items and of the ancestors the paths use.
+async fn paths_with(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    items: Vec<ContentItem>,
+    nodes: &mut Nodes,
+    mut deps: Option<&mut DepKeys>,
+    mut each: impl FnMut(ContentItem, String),
+) -> Result<(), CoreError> {
     if items.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let mut terms = HashMap::new();
     for chunk in unique(items.iter().map(|i| i.id)).chunks(MAX_ID_FILTER) {
         terms.extend(repos.terms().for_items(chunk).await?);
     }
-    let mut nodes = Nodes::new();
-    load_ancestors(repos, &items, &mut nodes).await?;
-    let mut out = Vec::with_capacity(items.len());
+    load_ancestors(repos, &items, nodes).await?;
     for item in items {
         let item_terms = terms.remove(&item.id).unwrap_or_default();
-        for t in &item_terms {
-            deps.insert(term_key(t.id));
-        }
-        let ancestors = chain(&nodes, item.parent_id);
-        for (id, _) in &ancestors {
-            deps.insert(post_key(*id));
+        let ancestors = chain(nodes, item.parent_id);
+        if let Some(deps) = deps.as_deref_mut() {
+            for t in &item_terms {
+                deps.insert(term_key(t.id));
+            }
+            for (id, _) in &ancestors {
+                deps.insert(post_key(*id));
+            }
         }
         let input = PermalinkInput {
             item,
@@ -160,9 +237,40 @@ pub(crate) async fn public_paths(
             primary_term: primary_term(item_terms),
         };
         let url = rules.path(&input);
-        out.push((input.item, url));
+        each(input.item, url);
     }
-    Ok(out)
+    Ok(())
+}
+
+/// Up to `max` items of `q` from `q.cursor` (callers pass a [`published`] query of one
+/// type that is not media), each with its path ([`paths_with`]), handed to `each` in
+/// the query's order. Pages of up to `MAX_PAGE` rows; each page's rows are dropped
+/// once handed on. Leaves `q.cursor` after the last item handed on, `None` when no
+/// matching row follows. Records no keys: the sitemap and the tree depend on
+/// `archive:<kind>` alone, which every content and term write emits.
+async fn walk_paths(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    q: &mut ContentQuery,
+    max: usize,
+    mut each: impl FnMut(ContentItem, String),
+) -> Result<(), CoreError> {
+    let mut nodes = Nodes::new();
+    let mut seen = 0;
+    while seen < max {
+        q.limit = u32::try_from((max - seen).min(MAX_PAGE as usize)).unwrap_or(MAX_PAGE);
+        let page = repos.content().list(q).await?;
+        seen += page.items.len();
+        paths_with(repos, rules, page.items, &mut nodes, None, &mut each).await?;
+        match page.next_cursor {
+            Some(c) => q.cursor = Some(c),
+            None => {
+                q.cursor = None;
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The published-only read facade; see the module docs.
@@ -632,38 +740,13 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
-        let mut nodes = Nodes::new();
-        let file_len = self.sitemap_file_len;
-        while out.entries.len() < file_len {
-            q.limit = u32::try_from((file_len - out.entries.len()).min(MAX_PAGE as usize))
-                .unwrap_or(MAX_PAGE);
-            let page = repos.content().list(&q).await?;
-            load_ancestors(repos, &page.items, &mut nodes).await?;
-            let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
-            let mut terms = if ids.is_empty() {
-                Default::default()
-            } else {
-                repos.terms().for_items(&ids).await?
-            };
-            for item in page.items {
-                let input = PermalinkInput {
-                    ancestors: chain(&nodes, item.parent_id),
-                    primary_term: primary_term(terms.remove(&item.id).unwrap_or_default()),
-                    item,
-                };
-                out.entries.push(SitemapEntry {
-                    url: rules.path(&input),
-                    lastmod: input.item.updated_at,
-                });
-            }
-            match page.next_cursor {
-                Some(c) => q.cursor = Some(c),
-                None => {
-                    q.cursor = None;
-                    break;
-                }
-            }
-        }
+        walk_paths(repos, rules, &mut q, self.sitemap_file_len, |item, url| {
+            out.entries.push(SitemapEntry {
+                url,
+                lastmod: item.updated_at,
+            });
+        })
+        .await?;
         out.next_cursor = q.cursor;
         Ok(public(out, deps))
     }
@@ -989,14 +1072,19 @@ impl SiteReader {
         Ok(item.is_some_and(|i| i.kind != MEDIA_KIND && is_public(&i, now)))
     }
 
-    /// Up to `limit` (at most [`MAX_LATEST`]) public items of `kind`, newest first,
-    /// after skipping `offset` of them; empty for media and when `offset` exceeds
-    /// [`MAX_SKIP`] (the same paging bound as archives).
+    /// Up to `limit` (at most [`MAX_LATEST`]) public items of `kind` in `order` (newest
+    /// first, or the menu order), after skipping `offset` of them; empty for media and
+    /// when `offset` exceeds [`MAX_SKIP`] (the same paging bound as archives).
+    ///
+    /// [`ListOrder::Menu`] pages by the store's `(menu_order, id)` and sorts the
+    /// returned rows by [`menu_order_cmp`], so items tied on `menu_order` across the
+    /// `offset` or `limit` boundary keep the store's id order.
     pub async fn latest(
         &self,
         kind: &str,
         limit: u32,
         offset: u32,
+        order: ListOrder,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         let now = (self.clock)();
         // One set of rules for the whole read (R10).
@@ -1011,11 +1099,13 @@ impl SiteReader {
         }
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
+        q.order = order.content_order();
         if skip_rows(repos, &mut q, u64::from(offset)).await?.is_err() {
             return Ok(public(Vec::new(), deps));
         }
         q.limit = limit;
-        let rows = repos.content().list(&q).await?.items;
+        let mut rows = repos.content().list(&q).await?.items;
+        order.sort(&mut rows);
         let items = self
             .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
@@ -1024,8 +1114,8 @@ impl SiteReader {
     }
 
     /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`], else `Invalid`) public items of `kind`
-    /// with the term `taxonomy`/`slug`, newest first, for the theme's
-    /// `query(type, term, limit)` helper: one content query, then hydration (no
+    /// with the term `taxonomy`/`slug` in `order` (as [`latest`](Self::latest)), for the
+    /// theme's `query(type, term, limit, order)` helper: one content query, then hydration (no
     /// `reading.per_page`, no count). Empty for an unknown term or taxonomy and when
     /// `kind` is not a public type of the taxonomy. Records `archive:<kind>`, and
     /// `term:<id>` when the term exists.
@@ -1035,6 +1125,7 @@ impl SiteReader {
         taxonomy: &str,
         slug: &str,
         limit: u32,
+        order: ListOrder,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         if !(1..=MAX_QUERY_LIMIT).contains(&limit) {
             return Err(CoreError::invalid_field(
@@ -1059,8 +1150,10 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.term = Some(term.id);
+        q.order = order.content_order();
         q.limit = limit;
-        let rows = repos.content().list(&q).await?.items;
+        let mut rows = repos.content().list(&q).await?.items;
+        order.sort(&mut rows);
         let items = self
             .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)

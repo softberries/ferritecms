@@ -14,6 +14,7 @@ use ferrite_core::{
     CoreError, DepKeys, MenuService, PageItem, SiteReader,
     comments::CommentThread,
     events::{archive_key, menu_key},
+    site::{ContentTree, ListOrder},
 };
 use ferrite_domain::{ContentId, MenuItem, MenuItemId, MenuItemKind, TermId};
 use ferrite_store::Store;
@@ -206,7 +207,13 @@ impl HelperBridge for BlockingBridge {
 
     /// With `term`, [`SiteReader::term_items`]: exactly `limit` items at most, of any
     /// kind the term's taxonomy lists (another kind gets none).
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>> {
+    fn query(
+        &self,
+        kind: &str,
+        term: Option<&str>,
+        limit: u32,
+        order: ListOrder,
+    ) -> Bridged<Vec<PageItem>> {
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
         let items = self.run("query", async {
@@ -215,12 +222,15 @@ impl HelperBridge for BlockingBridge {
                     let Some((taxonomy, slug)) = term.split_once('/') else {
                         return Ok(Vec::new());
                     };
-                    let read = self.reader.term_items(kind, taxonomy, slug, limit).await?;
+                    let read = self
+                        .reader
+                        .term_items(kind, taxonomy, slug, limit, order)
+                        .await?;
                     deps.extend(read.deps);
                     Ok(read.value)
                 }
                 None => {
-                    let read = self.reader.latest(kind, limit, 0).await?;
+                    let read = self.reader.latest(kind, limit, 0, order).await?;
                     deps.extend(read.deps);
                     Ok(read.value)
                 }
@@ -234,6 +244,20 @@ impl HelperBridge for BlockingBridge {
         deps.insert(menu_key(name));
         let tree = self.run("menu", self.load_menu(name, &mut deps));
         (tree.flatten(), deps)
+    }
+
+    /// [`SiteReader::tree`]: the sitemap's items and paths, at most `MAX_TREE_NODES`.
+    fn tree(&self, kind: &str) -> Bridged<Option<ContentTree>> {
+        match self.run("page_tree", self.reader.tree(kind)) {
+            Some(read) => (read.value, read.deps),
+            None => {
+                // The key the read would have recorded, so the short-lived page still
+                // refreshes on the next write in the type.
+                let mut deps = DepKeys::default();
+                deps.insert(archive_key(kind));
+                (None, deps)
+            }
+        }
     }
 
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef> {

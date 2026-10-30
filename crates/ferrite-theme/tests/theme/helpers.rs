@@ -1,6 +1,9 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use ferrite_core::events::{archive_key, menu_key, post_key};
+use ferrite_core::{
+    events::{archive_key, menu_key, post_key},
+    site::ListOrder,
+};
 use ferrite_domain::ContentId;
 use ferrite_theme::{ImageRef, MAX_BRIDGE_CALLS, RenderOutput, Renderer};
 
@@ -183,8 +186,13 @@ fn query_takes_kwargs_and_clamps_limit() {
     assert_eq!(
         *bridge.queries.lock().unwrap(),
         vec![
-            ("event".into(), Some("category/news".into()), 50),
-            ("post".into(), None, 10)
+            (
+                "event".into(),
+                Some("category/news".into()),
+                50,
+                ListOrder::Date
+            ),
+            ("post".into(), None, 10, ListOrder::Date)
         ]
     );
     assert!(out.deps.contains(&archive_key("event")));
