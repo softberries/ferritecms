@@ -68,7 +68,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         &media,
     );
     let data_existed = args.data.exists();
-    std::fs::create_dir_all(&args.data)
+    create_data_dir(&args.data)
         .with_context(|| format!("cannot create {}", args.data.display()))?;
     write_private(&config_path, &rendered)?;
 
@@ -199,6 +199,31 @@ async fn ensure_pg_unmigrated(url: &str, schema: Option<&str>) -> anyhow::Result
 }
 
 /// Creates `path` exclusively with mode 0600 (it can hold the database URL).
+/// Creates the data folder. A folder that does not exist yet gets mode 0750 (the database
+/// beside it holds password hashes and sessions, and is created readable by the group);
+/// missing parents are created as usual, and a folder that already exists is left as it is
+/// (09 §8, `ferrite doctor`'s `fs.data_dir`).
+fn create_data_dir(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o750);
+    }
+    match builder.create(dir) {
+        Ok(()) => Ok(()),
+        // Created by someone else in between.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
     let mut file = create_private(path)?;
     file.write_all(contents.as_bytes())

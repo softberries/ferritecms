@@ -935,7 +935,8 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   "stable"`) copies its `/src/admin/dist` in and builds `cargo build --release --locked -p
   ferrite`, which embeds it; the runtime is `gcr.io/distroless/cc-debian12:nonroot` (glibc,
   no shell, uid 65532) with the binary at `/ferrite`, an empty `/data` owned by the
-  non-root user, `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
+  non-root user with mode 0750 (`COPY --chmod=0750`: a plain `COPY` of a folder does not keep the
+  source's mode), `VOLUME /data`, `EXPOSE 8080`, `ENTRYPOINT ["/ferrite"]`, `CMD ["serve",
   "--data", "/data"]`. Every base is pinned as `name:tag@sha256:<multi-arch index
   digest>` (P37; the digests matched their tags on 2026-10-30, `docker buildx imagetools
   inspect`); bump them by hand. CA certificates come with the distroless base.
@@ -997,7 +998,7 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
 
 ## 8. CLI summary
 
-### Implemented (M1c-1 to M4-2: `crates/ferrite`)
+### Implemented (M1c-1 to M4-3a: `crates/ferrite`)
 
 ```
 ferrite init --data DIR --url URL [--title T] [--db URL] [--schema NAME] [--media s3://bucket/prefix]
@@ -1034,7 +1035,65 @@ ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
 ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
 ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
+ferrite doctor         --data DIR [--offline]                                    # M4-3a
 ```
+
+**`ferrite doctor`** (`crates/ferrite/src/doctor/`; M4-3a P48–P53): checks a site and
+changes nothing. It prints one line per check, `<status>  <check-id>  <detail>`, the status
+(`ok`, `info`, `warn`, `error`, `skip`) padded to 5 characters and followed by two spaces,
+in the order of the table below (a check may print several lines, `config.load` one per
+problem or warning), then `doctor: N ok, N warn, N error, N skip` (`info` lines are not
+counted). There is no `--json`.
+
+Exit code: **3** when `db.schema` finds the database newer than this binary allows (as
+`migrate status` does); else **1** when any check is an `error`; else **2** when any is a
+`warn`; else **0**. A usage error (clap) exits 2 too, so a wrapper must read the summary
+line, not the code alone.
+
+Doctor never writes. It creates and changes no file, folder, key or schema, and it does not
+call `keys::site_key`, `gc::install_id` or `TlsCache::prepare`. Permissions are asked of the
+kernel with `access(2)` (the process's own user, ACLs and read-only mounts included) instead
+of writing a probe, and the SQLite lock is only tried and released at once, never created.
+The one write is the media probe object under `tmp/`, which the GC removes if it is ever
+left. Nothing prints a secret: a database or SMTP URL, an S3 key and `secret.key` never
+appear. `info` means informational or not applicable to this site (Postgres has no
+`ferrite.lock`, a solo site no cluster); `skip` means the check did not run (`--offline`, a
+configuration that did not load, a node that is running, or, until M4-3a Task 7 lands, not
+wired in: `skip  <id>  not checked yet`). Run it as the user that runs `serve`: a check
+passes or fails for the user that runs doctor.
+
+| Check | What it checks |
+|---|---|
+| `version.binary` | The binary's version and target (`info`). |
+| `config.load` | The configuration loads as `serve` loads it, with the offline checks `serve` runs (`backup.to`, the SQLite database of a scheduled backup). A missing `ferrite.toml` is an `error` (the loader alone would use defaults). Problems are errors, warnings (`config check` prints them to stderr) are warnings. |
+| `fs.data_dir` | The data folder exists, is a folder, is readable and writable by this user (`error` otherwise); a mode with world bits is a `warn` (`ferrite init` creates a new folder 0750; the systemd README and the Docker image use 0750 too). |
+| `fs.config_file` | `ferrite.toml` has no group or other bits (`warn`): it can hold the database URL, S3 secret and SMTP credentials. |
+| `fs.secret_key` | With `auth.secret_key[_file]` the key comes from the configuration (`ok`). Otherwise `secret.key` must exist and hold 64 hex characters (`error`; `serve` would create a new key, and data sealed with the old one could not be read) with no group or other bits (`warn`). |
+| `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`. Postgres: `info`. |
+| `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
+| `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
+| `db.lock_state` | `info`: whether a node is running (it holds `<data>/ferrite.lock`). Tried without waiting and released at once; a missing lock file is not created. |
+| `db.connect` | The database opens; reports backend, latency and the Postgres version. |
+| `db.schema` | Migration status, as `migrate status`; an incompatible schema is exit 3. |
+| `db.identity` | `site_id` present (`error`), `install_id` present (`warn`), `last_binary_version` against the binary (`warn` if newer). |
+| `upgrade.record` | `upgrade.json` parses (`warn` if not); on SQLite a provisional record (`snapshot: null` with a schema move: an upgrade that did not finish) and a missing named snapshot are warnings (§1); on Postgres a null snapshot is the normal finished record. |
+| `media.store` | Local: the root exists, then the probe runs. S3: the probe runs; endpoint and bucket are reported, never keys. |
+| `media.owner` | The owner marker against `install_id`: absent is `info`, a mismatch a `warn` (the GC then deletes nothing; `media gc --claim`). |
+| `clock.db_skew` | Postgres: skew against the server's `now()`, `warn` over 2 s, `error` over 30 s (the TOTP window). SQLite: `skip` (the database uses the local clock). |
+| `clock.peers` | `warn` for live nodes whose recorded `clock_skew_ms` is over 2 s. |
+| `cluster.versions` | Postgres: live nodes' version and schema version; a mixed set is a `warn`. |
+| `cluster.site_url` | Live peers' `site_url` and mode match this configuration (`warn`). |
+| `smtp.connect` | With `[mail]`: connect, EHLO, STARTTLS and auth without sending mail; host, port and TLS mode are reported (`warn` on failure). Mail off is `info`. |
+| `tls.dir` | ACME mode: `<data>/tls/` is 0700 and its files 0600 (`warn`; `serve` tightens them at start). Otherwise `info`. |
+| `tls.acme_directory` | ACME mode: a GET of the directory URL returns JSON (`warn`). |
+| `net.listen` | With a node running: `/healthz`, `/readyz` and, with `metrics_listen`, `/metrics` answer. Otherwise `skip`. |
+| `backup.target` | With `[backup] to`: a local folder exists (or its nearest existing parent is writable, for the first backup to create it) and is writable (`error` with a schedule on, `warn` with it off), is empty or a repository (marker `ferrite-backup-repo.json`), and its newest snapshot is not older than twice the schedule's period (`warn`); a Postgres site's repository is read for export archives. An S3 target is listed with a 5 s timeout (`warn` on failure) and is `skip` with `--offline`. No target is `info`. |
+| `release.latest` | The newest stable release against the binary: newer is a `warn`, an unreachable lookup `info`, never `error`. |
+
+The network checks (an S3 backup target, `smtp.connect`, `tls.acme_directory`,
+`release.latest`) each have a 5 s timeout and become `skip` with `--offline`; the database
+is not a network check and is always required. Left out: an HTTP `Date` clock check,
+detection of the service user, update-path writability and `--json`.
 
 **`ferrite self-update`** (`crates/ferrite/src/update/`; §1): replaces the running binary
 with a newer signed release of this target, keeping the old one as `ferrite.prev`, and
@@ -1249,7 +1308,10 @@ also installs the `ring` rustls default crypto provider at start.
 - **Refuses to overwrite** an existing `ferrite.toml`, and **refuses an existing database**:
   an existing SQLite file, or a Postgres schema that already has applied migrations. Use
   `ferrite migrate` for those.
-- Creates the data folder, `media/` (local media only) and `backups/`, validates the written
+- Creates the data folder with mode `0750` when it does not exist (missing parents are
+  created as usual, the umask can only take more away; an existing folder is never
+  chmodded, so create it with `install -d -m 0750` as the systemd README does, or `chmod`
+  it, when its mode matters; `ferrite doctor` warns about world bits), `media/` (local media only) and `backups/`, validates the written
   config, then creates the database and applies all migrations. If any step fails, it removes
   what this run created (the config file, new folders, and with SQLite the new database and
   lock files) so a retry starts clean.
@@ -1473,5 +1535,4 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 ```
 ferrite plugin new <name>                                       # later (scaffold a plugin crate)
-ferrite doctor        # validates connectivity, permissions, clock skew, versions (config: `config check`)
 ```
