@@ -28,8 +28,8 @@ The type is decided from the file's content, not from its name.
 | `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.zip` | as a download only |
 | `.txt` and `.csv` (UTF-8 text) | as a download only |
 
-Anything else, such as HTML, XML or programs, is refused. Documents are always served as
-downloads, so a browser never opens them inside your site.
+Anything else, such as HTML, XML or programs, is refused. Office files, archives and text
+files are always served as downloads, so a browser never opens them inside your site.
 
 ## Title and alt text
 

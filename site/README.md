@@ -16,15 +16,18 @@ The script:
 
 1. creates the data folder with `ferrite init --title FerriteCMS` (the folder must not
    hold a site yet);
-2. creates an admin account `docs` and prints its one-time password, which you need only
-   to sign in to the admin (`ferrite user reset-password --data /tmp/ferrite-docs --login docs`
-   sets a new one);
+2. creates an admin account `docs` without showing a password; to sign in to the admin,
+   set one with `ferrite user reset-password --data /tmp/ferrite-docs --login docs` (with
+   `serve` stopped);
 3. runs `ferrite import markdown site/content --front-page --source ferrite-docs`;
 4. activates the `docs` theme;
 5. prints the command that serves the site.
 
 It stops with a non-zero exit code when any step fails. An import that exits 2 (a file
-skipped for bad front matter, a missing image or a broken link) fails the build too.
+skipped for bad front matter, a missing image or a broken link) fails the build too. A
+failed build leaves the folder as far as it got, and `init` refuses an existing site: fix
+the files, then re-run the import into that folder (below) and activate the theme
+(`ferrite theme activate --data /tmp/ferrite-docs docs`), or build into a new folder.
 
 `FERRITE` names the command that runs ferrite (default `cargo run -q -p ferrite --`), for
 example `FERRITE=target/release/ferrite site/build.sh …`. Build the admin first

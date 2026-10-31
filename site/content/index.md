@@ -32,7 +32,10 @@ plugins or themes.
 
 ## Two ways to run a site
 
-Every feature works in both profiles.
+Content, the admin, themes and plugins work the same in both. A few operations are for solo
+or SQLite sites only: built-in HTTPS (ACME) is refused in cluster mode, where TLS ends at
+the load balancer; `ferrite backup` refuses a Postgres site, which relies on the database's
+own backups and `ferrite export`; and `ferrite rollback --restore-snapshot` needs SQLite.
 
 | | Solo (default) | Cluster |
 |---|---|---|

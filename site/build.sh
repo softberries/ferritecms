@@ -7,7 +7,11 @@
 #
 # OUT_DIR must not hold a site yet (`ferrite init` refuses an existing one). URL is the
 # site's public URL (default http://localhost:8080). FERRITE is the command that runs
-# ferrite (default `cargo run -q -p ferrite --`, run from the repository root).
+# ferrite (default `cargo run -q -p ferrite --`, run from the repository root); it is split
+# on whitespace, so a binary path holding spaces needs a symlink or a PATH entry instead.
+#
+# The admin account `docs` is created without printing its one-time password; set one
+# with `ferrite user reset-password --data OUT_DIR --login docs` to sign in.
 #
 # Exits non-zero when any step fails, including an import that exits 2 (a skipped file,
 # a missing image or a broken link is a build failure).
@@ -32,8 +36,8 @@ cd "$root"
 echo "==> init $out ($url)"
 "${ferrite[@]}" init --data "$out" --url "$url" --title "FerriteCMS"
 
-echo "==> admin account 'docs' (its one-time password is printed once)"
-"${ferrite[@]}" user create --data "$out" --login docs --email docs@example.com
+echo "==> admin account 'docs' (no password shown; see the README to set one)"
+"${ferrite[@]}" user create --data "$out" --login docs --email docs@example.com > /dev/null
 
 echo "==> import markdown site/content"
 status=0
@@ -41,6 +45,7 @@ status=0
   --source ferrite-docs || status=$?
 if [ "$status" -ne 0 ]; then
   echo "error: ferrite import markdown exited $status (2: skipped files, missing images or broken links, listed above)" >&2
+  echo "fix the files, then re-run the import into this folder (site/README.md) or build into a new folder" >&2
   exit "$status"
 fi
 
@@ -70,4 +75,4 @@ fi
 
 echo
 echo "Built. Serve it with:"
-echo "  ${listen}${FERRITE:-cargo run -q -p ferrite --} serve --data $out"
+printf '  %s%s serve --data %q\n' "$listen" "${FERRITE:-cargo run -q -p ferrite --}" "$out"

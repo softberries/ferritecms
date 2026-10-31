@@ -30,7 +30,10 @@ the page among its siblings; the digits are not part of the slug. Hidden files a
 folders (names starting with `.`) are skipped, and symbolic links are never followed.
 
 The page title is, in order: the `title` in the front matter, else the first `# heading`
-(which is then taken out of the body), else the file name. Start each file with one
+(which is then taken out of the body), else a title made from the name: the file name
+for a file, the folder name for a folder's `index.md` or `README.md`, and "Home" for the
+top-level index, with an `NN-` prefix dropped and dashes turned into spaces
+(`01-getting-started` becomes "Getting started"). Start each file with one
 `# Title` and use `##` and `###` for its sections.
 
 ## Front matter
@@ -74,7 +77,7 @@ The Markdown is CommonMark plus tables and strikethrough.
 
 ## The front page
 
-`--front-page` makes the top-level `index.md` the site's front page, as long as it is
+`--front-page` makes the top-level `index.md` (or `README.md`) the site's front page, as long as it is
 published:
 
 ```sh

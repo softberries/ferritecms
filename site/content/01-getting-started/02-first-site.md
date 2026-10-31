@@ -14,7 +14,8 @@ and the site key. These steps make a solo site (SQLite and local media) in the f
 ferrite init --data ./mysite --url http://localhost:8080
 ```
 
-`--url` is the public address of the site, used for links, feeds and the sitemap. Use the
+`--url` is the public address of the site, used for the absolute links in the page head,
+the feed and the sitemap. Use the
 real address (`https://example.com`) for a public site. `--title` sets the site title
 (default `My Site`).
 
@@ -74,8 +75,8 @@ run. Every setting can be overridden this way: `FERRITE_<SECTION>__<KEY>`.
 
 Open [http://localhost:8080/admin/](http://localhost:8080/admin/) and sign in with the
 login (or e-mail) and the one-time password. The admin asks for a new password first, then
-opens the dashboard. Press `⌘K` (`Ctrl+K` on Linux and Windows) for the command palette,
-which reaches every screen.
+opens the dashboard. Press `⌘K` (`Ctrl+K` on Linux and Windows) for the command palette: it searches
+content, jumps to a screen, creates something or changes a preference.
 
 ## Stop the server for maintenance commands
 

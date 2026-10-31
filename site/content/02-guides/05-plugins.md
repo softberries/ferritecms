@@ -94,4 +94,4 @@ cp plugins/target/wasm32-wasip2/release/seo.wasm seo-plugin/
 
 For `contact-form` the built file is `contact_form.wasm`. The contact form sends mail only
 when the site has `[mail]` set up (`smtp_url` and `from` in `ferrite.toml`); without it,
-messages are still kept in the inbox.
+messages are still kept in the inbox by default (its `store_messages` setting).

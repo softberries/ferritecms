@@ -41,7 +41,8 @@ a kind and a **Required** switch. The kinds are:
 | media | a media item |
 | repeater | a list of rows of sub-fields, up to two levels deep |
 
-A type has at most 100 fields. Drag the rows to change their order. The fields show in the
+A type has at most 100 fields per level (a repeater's sub-fields are a level of their
+own). Drag the rows to change their order. The fields show in the
 editor's side panel, or as a card under the body when there are more than four on a wide
 screen.
 
