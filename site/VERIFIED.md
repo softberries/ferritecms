@@ -2,8 +2,8 @@
 
 Every claim in `site/content/` is listed here with what it was checked against. "Run"
 means the command was run on 2026-10-31 with a debug build of branch `m4-3b-site-1`
-(this branch: `m4-3` plus the `docs` theme), in a scratch folder, unless the row says
-otherwise. Paths are relative to the repository root; line numbers are those of that
+(`m4-3` at 9930a25, with the `docs` and `business` themes, plus these pages), in a scratch
+folder, unless the row says otherwise. Paths are relative to the repository root; line numbers are those of that
 build. The pages name the data folder `./mysite`; the runs used `./site` in a scratch
 folder (the name changes nothing). A row marked **not run** or **not verified** says why.
 
@@ -69,7 +69,7 @@ its own rows.
 | concepts | Taxonomy terms at `/category/<slug>/`, `/tag/<slug>/` | `06-themes-rendering.md` §3 (`/{taxonomy}/{slug}/`) | Verified |
 | concepts | The body is stored as a block tree, not HTML | `crates/ferrite-core/src/blocks/`; `06-themes-rendering.md` §5 | Verified |
 | concepts | Statuses draft, pending, scheduled, published, trash; only published items are public | `crates/ferrite-domain/src/content.rs:6-16` (also `private`, left out of the page); `06-themes-rendering.md` §4 (`SiteReader`, published only) | Verified |
-| concepts | Menus: nested links to items, terms or URLs; theme menu locations; the built-in themes have `primary` and `footer` | `07-admin-api.md` §3 "Menus"; `themes/blog/theme.toml`, `themes/docs/theme.toml`, `themes/business/theme.toml` (branch `m4-3b-business`) | Verified |
+| concepts | Menus: nested links to items, terms or URLs; theme menu locations; the built-in themes have `primary` and `footer` | `07-admin-api.md` §3 "Menus"; `themes/blog/theme.toml`, `themes/docs/theme.toml`, `themes/business/theme.toml` | Verified |
 | concepts | Themes: MiniJinja templates, CSS, assets, settings; one active | `06-themes-rendering.md` §1, §4 | Verified |
 | concepts | Plugins: change the head, filter content, routes under `/_p/<plugin>/`, storage, mail to admins; wasm + `ferrite-plugin.toml`; approved at install | The three example manifests (`render.head`, `routes`, `kv`, `mail = "admins"`); `05-plugin-host.md`; P55 (`content.body` filter) | Verified |
 | concepts | Role table (contributor ⊂ author ⊂ editor ⊂ admin) | `crates/ferrite-core/src/actor.rs:287,461-463`; `07-admin-api.md` §1 "Roles & capabilities" | Verified |
@@ -116,11 +116,11 @@ its own rows.
 | content-types | New taxonomy: label, name, nesting, content types; tree with drag or Move to…; siblings by name; no delete with sub-terms; editor sections | `07-admin-api.md` §3 "Taxonomies", "Editor" | Verified |
 | content-types | Term pages at `/<taxonomy>/<slug>/` list their items | `06-themes-rendering.md` §3 "Term archives" | Verified |
 | content-types | Menus: theme locations; Content (types in the sidebar), Terms, Custom link (`http(s)://` or a path); 16 levels, 500 entries; saved at once | `07-admin-api.md` §3 "Menus"; `crates/ferrite-core/src/menu.rs:20`; `crates/ferrite-http/src/app/bridge.rs:25`; `admin/src/structure/menus/menu-model.ts:36-39` | Verified |
-| themes | Three built-in themes, MIT, plain CSS, light and dark | `themes/blog/theme.toml`, `themes/docs/theme.toml`; `06-themes-rendering.md` §8; `themes/business/theme.toml` on branch `m4-3b-business` (2dd38e3) | `blog` and `docs` verified on this branch; **`business` is not in this branch** (its branch is not merged into `m4-3` yet): checked against `m4-3b-business` only |
-| themes | Settings per theme (table) | The three `theme.toml` `[settings]` tables | Verified (`business` on its branch) |
-| themes | Menu locations `primary` and `footer` in all three | The three `theme.toml` `[menus]` | Verified (`business` on its branch) |
+| themes | Three built-in themes, MIT, plain CSS, light and dark | `themes/{blog,docs,business}/theme.toml`; `06-themes-rendering.md` §8; run: `ferrite theme list` lists `blog`, `business`, `docs` as embedded | Verified |
+| themes | Settings per theme (table) | The three `theme.toml` `[settings]` tables | Verified |
+| themes | Menu locations `primary` and `footer` in all three | The three `theme.toml` `[menus]` | Verified |
 | themes | `docs` sidebar shows one type's tree (`page` by default), in the pages' order | `themes/docs/theme.toml` (`nav_type`); `06-themes-rendering.md` §8; the built docs site's sidebar (below) | Verified |
-| themes | `business`: child pages as cards; contact page (slug `contact`) embeds the contact-form plugin's form behind a setting; `seed demo --profile business` | Branch `m4-3b-business`: `themes/business/templates/front-page.html`, `page-contact.html`, `theme.toml` (`contact_form` label), `crates/ferrite/src/seed/business.rs` | Checked on that branch only; **not run** (not in this branch's binary) |
+| themes | `business`: child pages as cards; contact page (slug `contact`) embeds the contact-form plugin's form behind a setting; `seed demo --profile business` | `themes/business/templates/front-page.html:3,32-33`, `page-contact.html`, `theme.toml` (`contact_form` label); run: `ferrite seed demo --data ./mysite --profile business` (`Seeded business demo content: 3 posts, 6 pages, …`), `theme activate … business`, then `/` showed the hero and 3 feature cards, `/contact/` 200 with no form while the setting is off | Verified (the form with the plugin enabled was not run) |
 | themes | Activate in Appearance; each node loads it and flushes its cache; the admin waits for every node | `07-admin-api.md` §3 "Themes"; `06-themes-rendering.md` §1 "Hot swap" | Verified |
 | themes | `ferrite theme list`, `ferrite theme activate --data ./site docs`; a theme that does not load is refused | Run: list printed `blog … embedded active`, `docs … embedded`; `activated theme docs`; `activate nosuch`: `theme not found`, exit 1 | Verified |
 | themes | Customize on the card; saving refreshes every page | `07-admin-api.md` §3 "Themes"; `06-themes-rendering.md` §1 (`option:theme.<name>.settings` on every page) | Verified |
