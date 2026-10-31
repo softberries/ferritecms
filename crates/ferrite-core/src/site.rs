@@ -48,7 +48,6 @@ mod model;
 mod tree;
 
 use std::{
-    cmp::Ordering as CmpOrdering,
     collections::HashMap,
     num::NonZeroU32,
     sync::{
@@ -125,7 +124,7 @@ pub enum ListOrder {
     /// Newest first (`published_at` descending).
     #[default]
     Date,
-    /// [`menu_order_cmp`]: `menu_order` ascending, then title, then id.
+    /// [`menu_order_key`]: `menu_order` ascending, then title, then id.
     Menu,
 }
 
@@ -141,24 +140,27 @@ impl ListOrder {
     /// store breaks `menu_order` ties by id, the menu order by title first.
     fn sort(self, rows: &mut [ContentItem]) {
         if self == ListOrder::Menu {
-            rows.sort_by(|a, b| {
-                menu_order_cmp(
-                    (a.menu_order, &a.title, a.id),
-                    (b.menu_order, &b.title, b.id),
-                )
-            });
+            rows.sort_by_cached_key(|r| menu_order_key(r.menu_order, &r.title, r.id));
         }
     }
 }
 
-/// The menu order of `(menu_order, title, id)` triples: `menu_order` ascending, then
-/// the title compared case-insensitively (Unicode `to_lowercase`), then the id, so the
-/// order is total. `query(order="menu")` and `page_tree()`'s siblings use it (M4-3b
-/// P57, P58).
-pub fn menu_order_cmp(a: (i32, &str, ContentId), b: (i32, &str, ContentId)) -> CmpOrdering {
-    a.0.cmp(&b.0)
-        .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-        .then_with(|| a.2.cmp(&b.2))
+/// The sort key of the menu order: `menu_order` ascending, then the title compared
+/// case-insensitively (Unicode `to_lowercase`), then the id, so the order is total.
+/// Sort with `sort_by_cached_key`, which lower-cases each title once (M4-4).
+/// `query(order="menu")` and `page_tree()`'s siblings use it (M4-3b P57, P58).
+pub fn menu_order_key(menu_order: i32, title: &str, id: ContentId) -> (i32, String, ContentId) {
+    (menu_order, title.to_lowercase(), id)
+}
+
+/// The item `reading.front_page` names, when its value is an id (the item may be
+/// missing, not public or media; the callers check).
+async fn front_page_id(repos: &dyn Repos) -> Result<Option<ContentId>, CoreError> {
+    Ok(repos
+        .options()
+        .get(FRONT_PAGE_OPTION)
+        .await?
+        .and_then(|e| e.value.as_str().and_then(|s| s.parse::<ContentId>().ok())))
 }
 
 /// Whether `item` is publicly visible at `now`: published, with a publish time not in
@@ -394,12 +396,7 @@ impl SiteReader {
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(option_key(FRONT_PAGE_OPTION));
-        let id = repos
-            .options()
-            .get(FRONT_PAGE_OPTION)
-            .await?
-            .and_then(|e| e.value.as_str().and_then(|s| s.parse::<ContentId>().ok()));
-        if let Some(id) = id {
+        if let Some(id) = front_page_id(repos).await? {
             // Recorded even while it is not public: publishing it must flush the root.
             deps.insert(post_key(id));
             if let Some(item) = repos.content().get(id).await?
@@ -417,6 +414,18 @@ impl SiteReader {
         }
         let listing = self.posts(repos, now, rules, page, &mut deps).await?;
         Ok(public(listing.map(FrontPage::Posts), deps))
+    }
+
+    /// Whether `item` (a public item this reader returned) is the static front page
+    /// that [`front_page`](Self::front_page) shows at `/`: `reading.front_page` names
+    /// it and it is not media (M4-4 P67; its own permalink then answers 301 to `/`).
+    /// One option read; records `option:reading.front_page`, so changing the option
+    /// refreshes a page that asked.
+    pub async fn is_front_page(&self, item: &PublicItem) -> Result<SiteRead<bool>, CoreError> {
+        let mut deps = DepKeys::default();
+        deps.insert(option_key(FRONT_PAGE_OPTION));
+        let id = front_page_id(self.store.read()).await?;
+        Ok(public(item.kind != MEDIA_KIND && id == Some(item.id), deps))
     }
 
     /// Page `page` of all public items of `kind`, newest first. Media is never listed.
@@ -1077,7 +1086,7 @@ impl SiteReader {
     /// when `offset` exceeds [`MAX_SKIP`] (the same paging bound as archives).
     ///
     /// [`ListOrder::Menu`] pages by the store's `(menu_order, id)` and sorts the
-    /// returned rows by [`menu_order_cmp`], so items tied on `menu_order` across the
+    /// returned rows by [`menu_order_key`], so items tied on `menu_order` across the
     /// `offset` or `limit` boundary keep the store's id order.
     pub async fn latest(
         &self,
@@ -1393,4 +1402,66 @@ fn date_range(year: i32, month: Option<u32>) -> Option<(Timestamp, Timestamp)> {
             .map(|d| Timestamp::from(d.and_utc()))
     };
     Some((at(start)?, at(end)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use ferrite_domain::ContentId;
+
+    use super::menu_order_key;
+
+    /// The comparator `menu_order_key` replaced (M4-3b P57), kept here to prove the
+    /// order did not change.
+    fn old_cmp(a: (i32, &str, ContentId), b: (i32, &str, ContentId)) -> Ordering {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+            .then_with(|| a.2.cmp(&b.2))
+    }
+
+    #[test]
+    fn menu_order_sort_matches_the_old_order() {
+        let titles = [
+            "beta",
+            "Beta",
+            "alpha",
+            "Älpha",
+            "İstanbul",
+            "istanbul",
+            "ß",
+            "SS",
+            "ss",
+            "",
+            "Zeta",
+            "zeta",
+            "éclair",
+            "Eclair",
+            "beta",
+        ];
+        let rows: Vec<(i32, String, ContentId)> = titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                (
+                    i32::try_from(i % 3).unwrap(),
+                    (*t).to_owned(),
+                    ContentId::new(),
+                )
+            })
+            .collect();
+        // The input forwards and reversed.
+        for mut input in [rows.clone(), rows.iter().rev().cloned().collect()] {
+            let mut old = input.clone();
+            old.sort_by(|a, b| old_cmp((a.0, &a.1, a.2), (b.0, &b.1, b.2)));
+            input.sort_by_cached_key(|r| menu_order_key(r.0, &r.1, r.2));
+            assert_eq!(input, old);
+        }
+        // Equal titles fall back to the id; case and Unicode lower-casing as before.
+        let (a, b) = (ContentId::new(), ContentId::new());
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        assert!(menu_order_key(0, "Same", hi) > menu_order_key(0, "same", lo));
+        assert!(menu_order_key(0, "zeta", lo) > menu_order_key(0, "Beta", hi));
+        assert!(menu_order_key(-1, "zeta", hi) < menu_order_key(0, "alpha", lo));
+    }
 }

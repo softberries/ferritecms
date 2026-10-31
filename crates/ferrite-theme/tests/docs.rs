@@ -197,6 +197,7 @@ fn bridge_with(nodes: Vec<TreeNode>, truncated: bool) -> Arc<FakeBridge> {
             kind: "page".into(),
             nodes,
             truncated,
+            media: Default::default(),
         }),
         tree_args: Mutex::new(Vec::new()),
     })

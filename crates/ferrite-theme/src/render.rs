@@ -23,7 +23,8 @@
 //!   go through the [`HelperBridge`], at most [`MAX_BRIDGE_CALLS`] times per render;
 //!   after that they return nothing and one warning is logged. Same-name `menu()` calls
 //!   and same-kind `page_tree()` calls are memoised, and `image()` of media already in
-//!   the context (featured images) needs no call.
+//!   the context (featured images, and the featured images of a `page_tree()` the
+//!   template read, M4-4) needs no call.
 //!
 //! **Known gaps (ruling R14).** Fuel counts instructions, not bytes or CPU time:
 //!
@@ -431,7 +432,8 @@ struct ScopeState {
     /// builds each one once; at most [`MAX_TREE_VALUES`] entries, later ones are built
     /// on every call.
     tree_values: HashMap<(String, Option<ContentId>), Value>,
-    /// Media already in the context, for `image()` without a bridge call.
+    /// Media already in the context (featured images of items and of tree nodes), for
+    /// `image()` without a bridge call.
     media: HashMap<ContentId, MediaPublic>,
 }
 
@@ -700,7 +702,16 @@ fn page_tree(scope: &Scope, post: Option<Value>, kwargs: Kwargs) -> Result<Value
             let (tree, deps) = scope.bridge.tree(&kind);
             scope.merge(deps);
             let tree = tree.map(Arc::new);
-            scope.lock().trees.insert(kind.clone(), tree.clone());
+            let mut st = scope.lock();
+            // The media the tree checked: `image()` on a node's `featured` needs no
+            // bridge call (its `post:<media>` key is in the tree's deps already).
+            if let Some(t) = &tree {
+                for (id, m) in &t.media {
+                    st.media.entry(*id).or_insert_with(|| m.clone());
+                }
+            }
+            st.trees.insert(kind.clone(), tree.clone());
+            drop(st);
             tree
         }
     };

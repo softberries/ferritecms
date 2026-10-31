@@ -58,7 +58,8 @@ makes three sizes:
 
 The active theme can ask for more (the `blog` theme adds `card` and `hero`). No copy is
 made wider than the original. Pages use the copies in a `srcset`, so browsers load a size
-that fits; until a copy exists, the original is used.
+that fits; a `srcset` only offers copies of the same shape, so a cropped `hero` never turns
+into the uncropped picture. Until a copy exists, the original is used.
 
 After you switch to a theme with other sizes, make the missing copies for images you
 already have (with SQLite, stop `serve` first):

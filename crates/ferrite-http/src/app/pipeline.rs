@@ -49,6 +49,8 @@ pub(crate) struct NotFound;
 enum Shown {
     Item(Box<PageItem>, TemplateKey),
     Listing(Listing, TemplateKey, Box<ArchiveInfo>),
+    /// The static front page's own permalink: a 301 to `/` (M4-4 P67).
+    FrontPermalink,
 }
 
 /// The response for a content route: the rendered page, a 503 when no render slot
@@ -137,6 +139,9 @@ async fn render_route(
     let Some(shown) = load(state, route, path, &mut deps).await? else {
         return Ok(None);
     };
+    if let Shown::FrontPermalink = shown {
+        return Ok(Some(front_redirect(query.cpage, deps)));
+    }
     let target = Target {
         route,
         path,
@@ -207,6 +212,8 @@ async fn finish(
     let (mut item, mut listing, key, archive) = match shown {
         Shown::Item(item, key) => (Some(*item), None, key, None),
         Shown::Listing(listing, key, archive) => (None, Some(listing), key, Some(*archive)),
+        // Answered by `render_route` before rendering.
+        Shown::FrontPermalink => return Ok(front_redirect(query.cpage, deps)),
     };
     let pagination = listing.as_ref().map(|l| pagination(route, l));
     let preview = matches!(viewer, Viewer::Preview(_));
@@ -349,6 +356,20 @@ async fn render_in_slot(
     })
     .await??;
     Ok(out)
+}
+
+/// The 301 from the static front page's permalink to `/` (M4-4 P67), cached like the
+/// page under the request path and its `deps`. Only `?cpage=N` is kept: it is the one
+/// parameter of a single item's cache key (`NormalQuery::cache_query`), so the answer
+/// is the same for every request the entry serves.
+fn front_redirect(cpage: Option<u32>, deps: DepKeys) -> CachedPage {
+    let location = match cpage {
+        Some(n) => format!("/?cpage={n}"),
+        None => "/".to_owned(),
+    };
+    let mut page = html_page(301, String::new(), deps.into_vec(), None);
+    page.headers = vec![("location".to_owned(), location)];
+    page
 }
 
 /// A non-HTML response (feeds, sitemaps, robots.txt) as the cache stores it.
@@ -529,6 +550,9 @@ async fn load(
 /// The first candidate whose item exists, is public and has exactly `path` as its URL
 /// (the router's handler obligation). A missed candidate records `archive:<kind>`, so a
 /// page that a later-created item of an earlier candidate would shadow is refreshed.
+/// A hit that is the static front page is [`Shown::FrontPermalink`] (M4-4 P67): `/`
+/// shows it, so its permalink is a duplicate (the hit records
+/// `option:reading.front_page` either way, so changing the option refreshes it).
 async fn content(
     state: &AppState,
     candidates: &[Candidate],
@@ -543,6 +567,9 @@ async fn content(
         let found = take(state.reader.single(kind, &parts).await?, deps);
         match found.filter(|item| item.url == path) {
             Some(item) => {
+                if take(state.reader.is_front_page(&item.item).await?, deps) {
+                    return Ok(Some(Shown::FrontPermalink));
+                }
                 let key = item_template(&item);
                 return Ok(Some(Shown::Item(Box::new(item), key)));
             }
