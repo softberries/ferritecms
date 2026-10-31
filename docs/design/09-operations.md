@@ -1220,10 +1220,12 @@ the files and keeps what was edited here. `--front-page` makes the root `index.m
 when that page is public after the run: a draft or scheduled root index is reported
 `front-page-not-public` (exit 2) and the setting is left as it was. A front matter `date`
 later than the run's start imports the page as scheduled at that date (`draft = true` wins); a
-past or absent date publishes it. A front matter `description` (the excerpt and the SEO
+past or absent date publishes it; a `date` outside the years 1 to 9999 (UTC; Postgres
+`timestamptz` starts at 4713 BC) skips the file as `bad-front-matter`. A front matter `description` (the excerpt and the SEO
 description) has every run of whitespace and control characters made one space and is cut to
 500 characters (a `description-cut` notice); NUL is stripped from `title` (Postgres refuses it in
-text). So no single file's value can fail the run (final review B-I1); one that still could not
+text). So no single file's front matter value can fail the run (final review B-I1 and its
+re-review); one that still could not
 be stored would skip that file as `bad-front-matter`. `--takeover` takes over an import whose
 process stopped (no heartbeat for 120 s), as with `import wordpress`; without it such a run
 makes every later import exit 3.
@@ -1242,8 +1244,10 @@ when set (not when the site's own choice was kept: `front-page-kept`), then one 
 `too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
 `refused-image`, `broken-link`, `other-type`, `no-front-page`, `front-page-not-public`, and the notices
 `synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`,
-`description-cut`). `broken-link` also names a link to a file in the folder that is not a page
-(a PDF, or an image only linked to): it is not imported, so it would 404 on the site.
+`description-cut`). `broken-link` also names a link to a file in the folder that is neither a
+page nor a media item (a PDF; an image only linked to, never shown with `![…]`), and a link
+to a file that is not there: it would 404 on the site. A link to an image the import made a
+media item (shown somewhere with `![…]`) points at that media file.
 `outside` also names a protocol-relative image (`//host/x.png`), which is dropped. Exit
 0 done (notices only), 2 done with skipped files, missing or refused images, broken links or
 a `--front-page` that is not public,

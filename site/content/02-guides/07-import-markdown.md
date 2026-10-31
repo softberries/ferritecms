@@ -57,7 +57,7 @@ description = "How to install the binary."
 | `slug` | the slug, instead of the one from the file name |
 | `order` | the order among siblings, instead of the `NN-` prefix |
 | `draft` | `true` imports the page as a draft |
-| `date` | the publish date (RFC 3339 with an offset); a date in the future schedules the page |
+| `date` | the publish date (RFC 3339 with an offset, in the years 1 to 9999); a date in the future schedules the page |
 | `description` | the excerpt and the SEO description (line breaks and runs of spaces become one space; cut to 500 characters, reported as `description-cut`) |
 
 Any other key, invalid TOML, or a YAML block between `---` lines makes the file skipped
@@ -71,8 +71,10 @@ The Markdown is CommonMark plus tables and strikethrough.
   `[Install](../01-getting-started/01-install.md)`, points at that page on the site.
   Fragments (`#section`) are kept.
 - A link to a `.md` file that is not part of the import is reported as broken, and so is
-  a link to any other file in the folder, such as a PDF: only pages and the images shown
-  with `![…](…)` are imported, so the link would not work on the site.
+  a link to a file that is not there, or to any other file in the folder, such as a PDF:
+  only pages and the images shown with `![…](…)` are imported, so the link would not work
+  on the site. A link to an image that is shown with `![…](…)` somewhere points at the
+  uploaded file.
 - A relative image inside the folder (`![Diagram](images/flow.png)`) is uploaded as a
   media item. An image outside the folder is never read and is reported.
 - `http://` and `https://` links and images are kept as they are. A protocol-relative

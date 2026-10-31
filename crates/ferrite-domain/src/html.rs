@@ -32,8 +32,8 @@ pub fn relative_url_allowed(url: &str) -> bool {
 /// (M4-3b P54). The block renderer seeds its heading-id counter with them, so a heading
 /// "Content" gets `content-1` and never collides with a landmark, and the plugin
 /// sanitiser drops them from headings ([`heading_id_allowed`]). Every fixed id of
-/// `themes/{blog,business,docs}` is here (test `fixed_ids` in `ferrite-theme`); ids built
-/// from data (`comment-<id>`, `reply-<id>`) are not.
+/// `themes/{blog,business,docs}` is here (test `fixed_ids` in `ferrite-theme`); the ids
+/// built from a comment's id are reserved by pattern ([`is_reserved_fragment_id`]).
 pub const RESERVED_FRAGMENT_IDS: [&str; 30] = [
     // Landmarks and core markup (`content` is also the skip links' target).
     "content",
@@ -71,18 +71,52 @@ pub const RESERVED_FRAGMENT_IDS: [&str; 30] = [
     "cf-website",
 ];
 
+/// The fields of a theme's comment form: its ids are `<form id>-<field>`
+/// (`comment-form-author`, `reply-<comment id>-email`, …).
+pub const COMMENT_FORM_FIELDS: [&str; 5] = ["author", "email", "url", "trap", "comment"];
+
+/// Whether `id` is reserved: one of [`RESERVED_FRAGMENT_IDS`], or an id a theme builds
+/// from a comment's id: its permalink `comment-<uuid>`, its reply form `reply-<uuid>`,
+/// or that form's fields `reply-<uuid>-<field>` ([`COMMENT_FORM_FIELDS`]). `<uuid>` is
+/// any 36 characters of lowercase hex and `-` (a hyphenated UUID's shape). A heading must
+/// not take any of them: the block renderer moves one off with a suffix
+/// (`comment-<uuid>-1`), and the plugin sanitiser drops them from headings.
+pub fn is_reserved_fragment_id(id: &str) -> bool {
+    if RESERVED_FRAGMENT_IDS.contains(&id) {
+        return true;
+    }
+    if let Some(after) = id.strip_prefix("comment-").and_then(uuid_then) {
+        return after.is_empty();
+    }
+    if let Some(after) = id.strip_prefix("reply-").and_then(uuid_then) {
+        return after.is_empty()
+            || after
+                .strip_prefix('-')
+                .is_some_and(|f| COMMENT_FORM_FIELDS.contains(&f));
+    }
+    false
+}
+
+/// What follows a leading hyphenated-UUID-shaped 36 characters of `rest`, if it has them.
+fn uuid_then(rest: &str) -> Option<&str> {
+    let (uuid, after) = (rest.get(..36)?, &rest[36..]);
+    uuid.bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f' | b'-'))
+        .then_some(after)
+}
+
 /// Whether `id` may stay on an `h1`–`h6` in sanitised plugin output: an id core's block
 /// renderer could have given a heading (M4-3b P54). That is a non-empty string of
 /// lowercase (Unicode) alphanumerics, `-` and `_` (the heading-id rule's output
-/// alphabet) that is not one of [`RESERVED_FRAGMENT_IDS`]. Such an id needs no escaping
-/// in an attribute and cannot take a theme's landmark.
+/// alphabet) that is not reserved ([`is_reserved_fragment_id`]). Such an id needs no
+/// escaping in an attribute and cannot take a theme's landmark or a comment's anchor.
 pub fn heading_id_allowed(id: &str) -> bool {
     !id.is_empty()
         && id
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
         && id.to_lowercase() == id
-        && !RESERVED_FRAGMENT_IDS.contains(&id)
+        && !is_reserved_fragment_id(id)
 }
 
 /// The YouTube player URL prefix of a content `embed` node's `<iframe>` (M3 P11); the
@@ -148,6 +182,37 @@ mod tests {
         }
         for reserved in RESERVED_FRAGMENT_IDS {
             assert!(!heading_id_allowed(reserved), "{reserved}");
+        }
+    }
+
+    /// Final re-review: the ids themes build from a comment's id (its permalink
+    /// `comment-<uuid>`, the reply form `reply-<uuid>` and its fields) are reserved too.
+    #[test]
+    fn comment_anchor_ids_are_reserved() {
+        let u = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+        let mut reserved = vec![format!("comment-{u}"), format!("reply-{u}")];
+        for field in COMMENT_FORM_FIELDS {
+            reserved.push(format!("reply-{u}-{field}"));
+        }
+        for id in &reserved {
+            assert!(is_reserved_fragment_id(id), "{id}");
+            assert!(!heading_id_allowed(id), "{id}");
+        }
+        for id in [
+            format!("comment-{u}-1"),
+            format!("reply-{u}-1"),
+            format!("reply-{u}-author-1"),
+            format!("comment-{}", &u[..35]),
+            format!("comment-{u}x"),
+            "comment-1".to_owned(),
+            "reply-to-all".to_owned(),
+            "comments-1".to_owned(),
+        ] {
+            assert!(!is_reserved_fragment_id(&id), "{id}");
+            assert!(heading_id_allowed(&id), "{id}");
+        }
+        for id in RESERVED_FRAGMENT_IDS {
+            assert!(is_reserved_fragment_id(id), "{id}");
         }
     }
 

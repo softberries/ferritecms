@@ -214,6 +214,7 @@ both!(
     a_stale_run_is_taken_over,
     a_kept_front_page_is_not_reported_as_set,
     unimported_links_and_protocol_relative_images_are_reported,
+    a_date_out_of_range_skips_the_file,
 );
 
 /// A 2×2 PNG.
@@ -923,35 +924,81 @@ async fn a_kept_front_page_is_not_reported_as_set(site: Site) {
     assert_eq!(front_page_option(&site).await, Some(chosen));
 }
 
-/// Final review B-M5, B-M6: a link to a file in the folder that is not a page (not
-/// imported, so it 404s on the site) and a protocol-relative image (dropped) are reported.
+/// Final review B-M5, B-M6 and its re-review: a link to a file in the folder that is
+/// not a page and not imported (so it 404s on the site), or to a missing file, is
+/// reported; a link to an image imported as media (it is also shown with `![…]`)
+/// points at that media file; a protocol-relative image (dropped) is reported.
 async fn unimported_links_and_protocol_relative_images_are_reported(site: Site) {
     let (_root, dir) = tree();
     write(&dir, "files/spec.pdf", b"%PDF-1.4\n");
+    write(&dir, "assets/only-linked.png", &png());
     write(
         &dir,
         "links.md",
-        b"# Links\n\nThe [spec](files/spec.pdf), the [logo](assets/logo.png).\n\n\
+        b"# Links\n\nThe [spec](files/spec.pdf), the [logo](assets/logo.png#x), \
+          [gone](files/gone.pdf), [only](assets/only-linked.png).\n\n\
           ![Remote](//cdn.example.test/x.png)\n",
     );
     let out = site.import(&dir, &[]).await;
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let o = stdout(&out);
-    assert!(
-        o.contains("broken-link  links.md  link files/spec.pdf is not in the import"),
-        "{o}"
-    );
-    assert!(
-        o.contains("broken-link  links.md  link assets/logo.png is not in the import"),
-        "{o}"
-    );
+    for href in ["files/spec.pdf", "files/gone.pdf", "assets/only-linked.png"] {
+        assert!(
+            o.contains(&format!(
+                "broken-link  links.md  link {href} is not in the import"
+            )),
+            "{href}: {o}"
+        );
+    }
+    assert!(!o.contains("link assets/logo.png"), "{o}");
     assert!(
         o.contains("outside  links.md  //cdn.example.test/x.png "),
         "{o}"
     );
-    // The image is not in the body.
-    let links = pages(&site).await.remove("links").unwrap();
+    // Only the image shown with `![…]` is media; the link to it is its public URL.
+    assert_eq!(media_count(&site).await, 1);
+    let p = pages(&site).await;
+    let logo = image_srcs(&p["install"].body)[0]
+        .strip_prefix("ferrite:media/")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let store = site.store().await;
+    let media = store.read().media().get(logo).await.unwrap().unwrap();
+    store.close().await;
+    let url = format!("/_media/{}/logo.png#x", media.artifact_hash);
+    let links = &p["links"];
+    assert_eq!(
+        hrefs(&links.body),
+        [
+            "files/spec.pdf",
+            url.as_str(),
+            "files/gone.pdf",
+            "assets/only-linked.png"
+        ]
+    );
+    // The protocol-relative image is not in the body.
     assert!(image_srcs(&links.body).is_empty(), "{}", links.body);
+}
+
+/// Final re-review: a front matter `date` outside years 1 to 9999 (Postgres
+/// `timestamptz` starts at 4713 BC) skips its file as `bad-front-matter`, never exit 1.
+async fn a_date_out_of_range_skips_the_file(site: Site) {
+    let (_root, dir) = tree();
+    write(
+        &dir,
+        "ancient.md",
+        b"+++\ntitle = \"Ancient\"\ndate = \"-005000-01-01T00:00:00Z\"\n+++\nText.\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("created 7, "), "{o}");
+    assert!(
+        o.contains("bad-front-matter  ancient.md  line 3: skipped, "),
+        "{o}"
+    );
+    assert!(!pages(&site).await.contains_key("ancient"));
 }
 
 /// What a dry run must leave as it was: content, options and the media files.

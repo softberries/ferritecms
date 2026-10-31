@@ -837,7 +837,8 @@ value is passed on and the call counts as a failure (§8).
   and `code[class]` restricted to `language-*` classes, and `pre[tabindex]` only as `0`
   (core's code blocks, M4-3b R-b17), and `id` on `h1`–`h6` only as an id core's heading
   rule can give (`ferrite_domain::html::heading_id_allowed`: non-empty, lowercase Unicode
-  alphanumerics, `-` and `_`, and not one of `RESERVED_FRAGMENT_IDS`; M4-3b P54), so
+  alphanumerics, `-` and `_`, and not reserved: one of `RESERVED_FRAGMENT_IDS`, or a comment
+  anchor `comment-<uuid>` / `reply-<uuid>[-field]`, `is_reserved_fragment_id`; M4-3b P54), so
   `post.toc` and deep links survive a sanitising `content.body` filter. An `id` on any other
   element, or one outside that rule, is dropped. Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives

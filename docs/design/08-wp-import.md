@@ -282,7 +282,9 @@ pipeline above, but it shares the run and map rules:
   it is reported `outside`, never read from disk, and kept in the body as written; a
   relative one that is not imported is left out of the body. A protocol-relative image
   (`//host/x.png`) is dropped (the converter keeps only `http(s)` sources) and reported
-  `outside`. A link to a file in the folder that is not a page (a PDF, an image only linked
+  `outside`. A link to an image the import made a media item points at its public file URL
+  (`MediaStore::public_url`). A link to a missing file, or to one that is neither a page
+  nor a media item (a PDF, an image only linked
   to) is kept as written and reported `broken-link`: nothing imports it. This holds for a folder that
   does not change during the run: every path component is checked with `lstat` before a
   file is opened and only the last one is opened with `O_NOFOLLOW`, so a folder above it

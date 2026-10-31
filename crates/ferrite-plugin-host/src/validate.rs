@@ -628,10 +628,17 @@ mod tests {
             "",
             " x",
             "x\t",
+            // A theme's comment permalink and reply-form ids (final re-review).
+            "comment-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "reply-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "reply-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b-email",
         ] {
             let html = format!("<h2 id=\"{}\">h</h2>", id.replace('"', "&quot;"));
             assert_eq!(clean(&html), "<h2>h</h2>", "{id:?}");
         }
+        // What core gives such a heading stays.
+        let moved = "<h2 id=\"comment-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b-1\">h</h2>";
+        assert_eq!(clean(moved), moved);
         assert_eq!(
             clean(
                 "<p id=\"x\">p</p><div id=\"x\">d</div><a id=\"x\" href=\"/\">a</a>\

@@ -87,6 +87,12 @@ fn next_line(text: &str, start: usize) -> (&str, usize) {
     }
 }
 
+/// The earliest `date` accepted, 0001-01-01T00:00:00Z, in Unix microseconds.
+const MIN_DATE: i64 = -62_135_596_800_000_000;
+/// The latest `date` accepted, 9999-12-31T23:59:59.999999Z, in Unix microseconds (the
+/// parser itself stops at 9999-12-30T22:00Z, jiff's limit).
+const MAX_DATE: i64 = 253_402_300_799_999_999;
+
 /// The keys as written; `date` keeps its span for the error.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,16 +122,24 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
                 _ => String::new(),
             };
             // Stored with microseconds, as every timestamp of the site.
-            let parsed = text
-                .parse::<jiff::Timestamp>()
-                .ok()
-                .and_then(|t| Timestamp::from_micros(t.as_microsecond()).ok());
-            Some(parsed.ok_or_else(|| {
+            let parsed = text.parse::<jiff::Timestamp>().ok().ok_or_else(|| {
                 (
                     offset,
                     "`date` must be an RFC 3339 date-time with an offset, as \
                      2026-10-30T12:00:00Z"
                         .to_owned(),
+                )
+            })?;
+            // Both backends store the years 1 to 9999 (Postgres `timestamptz` starts at
+            // 4713 BC; final re-review): another date would fail the whole run there.
+            let in_range = (MIN_DATE..=MAX_DATE).contains(&parsed.as_microsecond());
+            let stored = in_range
+                .then(|| Timestamp::from_micros(parsed.as_microsecond()).ok())
+                .flatten();
+            Some(stored.ok_or_else(|| {
+                (
+                    offset,
+                    "`date` must be in the years 1 to 9999 (UTC)".to_owned(),
                 )
             })?)
         }
@@ -262,6 +276,34 @@ mod tests {
         let (line, msg) = line_of(split("+++\n\ndate = 2026-10-30T12:00:00\n+++\n").unwrap_err());
         assert_eq!(line, 3);
         assert!(msg.contains("date"), "{msg}");
+    }
+
+    /// Final re-review: a date outside what both backends store (Postgres `timestamptz`
+    /// starts at 4713 BC) skips the file instead of failing the run; years 1 to 9999 pass.
+    #[test]
+    fn a_date_outside_years_1_to_9999_is_refused() {
+        for (date, why) in [
+            ("\"-005000-01-01T00:00:00Z\"", "1 to 9999"),
+            ("\"0000-12-31T23:59:59Z\"", "1 to 9999"),
+            ("0000-06-01T00:00:00Z", "1 to 9999"),
+            ("\"0001-01-01T00:30:00+01:00\"", "1 to 9999"),
+            // Past what the parser reads at all.
+            ("\"+010000-01-01T00:00:00Z\"", "RFC 3339"),
+        ] {
+            let (line, msg) =
+                line_of(split(&format!("+++\ntitle = \"a\"\ndate = {date}\n+++\n")).unwrap_err());
+            assert_eq!(line, 3, "{date}");
+            assert!(msg.contains(why), "{date}: {msg}");
+        }
+        for (date, want) in [
+            ("0001-01-01T00:00:00Z", "0001-01-01T00:00:00Z"),
+            // The parser's own limit is 9999-12-30T22:00Z (jiff), inside the range.
+            ("9999-12-30T21:59:59.999999Z", "9999-12-30T21:59:59.999999Z"),
+            ("\"9999-12-30T21:00:00-00:30\"", "9999-12-30T21:30:00Z"),
+        ] {
+            let (fm, _) = split(&format!("+++\ndate = {date}\n+++\n")).unwrap();
+            assert_eq!(fm.date, Some(ts(want)), "{date}");
+        }
     }
 
     #[test]

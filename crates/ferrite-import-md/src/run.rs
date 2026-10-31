@@ -217,7 +217,9 @@ pub async fn run(
     // Every page once: its images, and what it cannot import.
     let mut images: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut missing: BTreeSet<String> = BTreeSet::new();
-    let (no_media, no_paths) = (HashMap::new(), HashMap::new());
+    let (no_media, no_paths) = (MediaMap::default(), HashMap::new());
+    // Links to other files in the folder, by the page that has them.
+    let mut links: Vec<(String, String, String)> = Vec::new();
     for d in &docs {
         let Some(source) = &d.md.source else {
             continue;
@@ -227,6 +229,12 @@ pub async fn run(
         let found = rw.found.into_inner();
         images.extend(found.images);
         missing.extend(found.missing);
+        links.extend(
+            found
+                .links
+                .into_iter()
+                .map(|(href, rel)| (d.md.rel.clone(), href, rel)),
+        );
         for p in found.problems {
             if !report.problems.contains(&p) {
                 report.problems.push(p);
@@ -248,7 +256,7 @@ pub async fn run(
         opts,
     };
     let done = async {
-        let media_ids = if opts.dry_run {
+        let ids = if opts.dry_run {
             let store_dir = opts
                 .work_dir
                 .join(handle.run().id.to_string())
@@ -269,6 +277,19 @@ pub async fn run(
         } else {
             media_pass(&mut w, &cx, media, &images, &missing, &mut report).await?
         };
+        let media_ids = linked_media(&mut w, media, ids, &links).await?;
+        // A link to a file that is neither a page nor a media item 404s on the site.
+        for (file, href, rel) in &links {
+            if !media_ids.urls.contains_key(rel) {
+                let p = Problem::BrokenLink {
+                    file: file.clone(),
+                    href: href.clone(),
+                };
+                if !report.problems.contains(&p) {
+                    report.problems.push(p);
+                }
+            }
+        }
         content_pass(&mut w, &cx, &mut docs, &media_ids, &mut report).await?;
         if opts.front_page {
             front_page(&mut w, &cx, &docs, &mut report).await?;
@@ -385,12 +406,24 @@ async fn remove_dir(dir: &Path) {
 
 /// What converting a page found: the images it names inside the folder (path to the
 /// canonical file), the paths of images it names that are not there (an earlier run may
-/// have imported them), and the problems.
+/// have imported them), the links to other files in the folder (reported after the
+/// media pass unless that file became a media item), and the problems.
 #[derive(Default)]
 struct Found {
     images: BTreeMap<String, PathBuf>,
     missing: BTreeSet<String>,
+    /// (the link as shown, the target's path) of each link to a file in the folder that
+    /// is not a page.
+    links: Vec<(String, String)>,
     problems: Vec<Problem>,
+}
+
+/// The media items of the import by image path, and the public URL of each one a link
+/// names (a link to an image shown elsewhere with `![…]` points at its file).
+#[derive(Default)]
+struct MediaMap {
+    ids: HashMap<String, ContentId>,
+    urls: HashMap<String, String>,
 }
 
 /// The [`Rewrite`] of one page: images to media items, links to page paths (when
@@ -399,7 +432,7 @@ struct Rw<'a> {
     root: &'a Path,
     from: &'a str,
     index: &'a Index,
-    media: &'a HashMap<String, ContentId>,
+    media: &'a MediaMap,
     paths: &'a HashMap<usize, String>,
     found: RefCell<Found>,
 }
@@ -409,7 +442,7 @@ impl<'a> Rw<'a> {
         root: &'a Path,
         from: &'a str,
         index: &'a Index,
-        media: &'a HashMap<String, ContentId>,
+        media: &'a MediaMap,
         paths: &'a HashMap<usize, String>,
     ) -> Self {
         Self {
@@ -463,7 +496,7 @@ impl Rewrite for Rw<'_> {
         }
         match locate(self.root, self.from, src) {
             Ok(t) => {
-                if let Some(id) = self.media.get(&t.rel) {
+                if let Some(id) = self.media.ids.get(&t.rel) {
                     return ImageRef::Media(id.as_uuid());
                 }
                 self.found.borrow_mut().images.insert(t.rel, t.path);
@@ -476,7 +509,7 @@ impl Rewrite for Rw<'_> {
                 // Gone from the folder, but an earlier run imported it: the page keeps
                 // that media item.
                 if let Ok((rel, _)) = lexical(self.from, src) {
-                    if let Some(id) = self.media.get(&rel) {
+                    if let Some(id) = self.media.ids.get(&rel) {
                         return ImageRef::Media(id.as_uuid());
                     }
                     self.found.borrow_mut().missing.insert(rel);
@@ -514,16 +547,33 @@ impl Rewrite for Rw<'_> {
                     },
                     None => href.to_owned(),
                 },
-                None => {
-                    // A Markdown file or folder that is not in the import, or another
-                    // file in the folder (a PDF, an image linked, not shown): not
-                    // imported, so the link would 404 on the site (final review B-M5).
+                // A Markdown file or folder that is not in the import.
+                None if t.path.is_dir() || t.rel.to_ascii_lowercase().ends_with(".md") => {
                     broken();
                     href.to_owned()
                 }
+                // Another file in the folder: an image that is a media item (it is
+                // shown elsewhere with `![…]`) is linked at its file; anything else is
+                // not imported, so the link would 404 on the site, which is reported
+                // once the media pass has run (final review B-M5).
+                None => match self.media.urls.get(&t.rel) {
+                    Some(url) => match t.fragment {
+                        Some(f) => format!("{url}#{f}"),
+                        None => url.clone(),
+                    },
+                    None => {
+                        self.found.borrow_mut().links.push((shown(href), t.rel));
+                        href.to_owned()
+                    }
+                },
             },
             Err(Miss::NotRelative) => href.to_owned(),
-            Err(Miss::Missing | Miss::Outside) => {
+            // Inside the folder but not there: broken, whatever kind of file it names.
+            Err(Miss::Missing) => {
+                broken();
+                href.to_owned()
+            }
+            Err(Miss::Outside) => {
                 if is_page_link(href) {
                     broken();
                 }
@@ -531,6 +581,46 @@ impl Rewrite for Rw<'_> {
             }
         }
     }
+}
+
+/// The media ids with the public URL of each media item a link names, read in one batch.
+async fn linked_media(
+    w: &mut Writer<'_>,
+    store: &MediaStore,
+    ids: HashMap<String, ContentId>,
+    links: &[(String, String, String)],
+) -> Result<MediaMap, MdError> {
+    let wanted: BTreeMap<&str, ContentId> = links
+        .iter()
+        .filter_map(|(_, _, rel)| ids.get(rel).map(|id| (rel.as_str(), *id)))
+        .collect();
+    if wanted.is_empty() {
+        return Ok(MediaMap {
+            ids,
+            urls: HashMap::new(),
+        });
+    }
+    let batch = w.open().await?;
+    let read = media_urls(&batch, store, &wanted).await;
+    let urls = w.close(batch, read).await?;
+    Ok(MediaMap { ids, urls })
+}
+
+async fn media_urls(
+    b: &ImportBatch<'_>,
+    store: &MediaStore,
+    wanted: &BTreeMap<&str, ContentId>,
+) -> Result<HashMap<String, String>, MdError> {
+    let mut urls = HashMap::new();
+    for (rel, id) in wanted {
+        if let Some(m) = b.media_row(*id).await? {
+            urls.insert(
+                (*rel).to_owned(),
+                store.public_url(&m.artifact_hash, &m.original_name),
+            );
+        }
+    }
+    Ok(urls)
 }
 
 /// Pass 1: every image found becomes a media item (see the module docs); the media
@@ -789,7 +879,7 @@ async fn write_media<'r>(
 fn body_of(
     d: &Doc,
     cx: &Cx<'_>,
-    media: &HashMap<String, ContentId>,
+    media: &MediaMap,
     paths: &HashMap<usize, String>,
 ) -> (Value, Option<String>) {
     match &d.md.source {
@@ -807,7 +897,7 @@ async fn content_pass(
     w: &mut Writer<'_>,
     cx: &Cx<'_>,
     docs: &mut [Doc],
-    media: &HashMap<String, ContentId>,
+    media: &MediaMap,
     report: &mut MdReport,
 ) -> Result<(), MdError> {
     let mut at = 0;
@@ -839,7 +929,7 @@ async fn write_pages(
     cx: &Cx<'_>,
     docs: &mut [Doc],
     range: std::ops::Range<usize>,
-    media: &HashMap<String, ContentId>,
+    media: &MediaMap,
 ) -> Result<Vec<Problem>, MdError> {
     let (index, start, opts) = (cx.index, cx.start, cx.opts);
     let no_paths = HashMap::new();
@@ -1070,7 +1160,7 @@ async fn link_pass(
     w: &mut Writer<'_>,
     cx: &Cx<'_>,
     docs: &[Doc],
-    media: &HashMap<String, ContentId>,
+    media: &MediaMap,
     paths: &HashMap<usize, String>,
 ) -> Result<(), MdError> {
     let todo: Vec<usize> = (0..docs.len())
@@ -1095,7 +1185,7 @@ async fn fix_links(
     cx: &Cx<'_>,
     docs: &[Doc],
     chunk: &[usize],
-    media: &HashMap<String, ContentId>,
+    media: &MediaMap,
     paths: &HashMap<usize, String>,
 ) -> Result<(), MdError> {
     for &i in chunk {

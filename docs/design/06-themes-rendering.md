@@ -506,8 +506,10 @@ its `comment-form-author|email|url|trap|comment` fields, `related-title`, `news-
 `docs-search-error`, `cf-name|email|subject|message|website`; test `fixed_ids` in
 `ferrite-theme` reads the templates and fails on a fixed id missing from the list). So a
 heading "Content" becomes `content-1` and a heading "Comment pending" `comment-pending-1`,
-and neither can take a theme's landmark or `:target`. Ids a theme builds from data
-(`comment-<id>`, `reply-<id>`) are not reserved; a theme should not use another fixed id
+and neither can take a theme's landmark or `:target`. The ids a theme builds from a
+comment's id are reserved by pattern (`ferrite_domain::html::is_reserved_fragment_id`):
+`comment-<uuid>`, `reply-<uuid>` and `reply-<uuid>-author|email|url|trap|comment` (a
+heading "Comment <uuid>" gets `comment-<uuid>-1`). A theme should not use another fixed id
 that a heading could take. The kept characters need no escaping in the attribute, and the
 renderer escapes it anyway. Only headings with a valid level (1–6) that are not nested past
 `MAX_DEPTH` get an id; an invalid level renders as `<p>` without one. `html` blocks keep

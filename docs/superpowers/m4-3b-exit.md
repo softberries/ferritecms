@@ -425,6 +425,12 @@ B (the Markdown importer) and C (themes, E2E, CI). One fix round on branch
 | C-M5: the docs "Pages" disclosure was not linked to its nav | `aria-controls="nav"` on the summary; `docs.rs`; 06 §8 |
 | C-M6: every heading anchor was "Link to this section" | `Link to section: <heading text>`; `docs.rs` and a new E2E check `docs_heading_anchors_have_distinct_names`; 06 §8 |
 
+**Re-review residuals** (fixed on the same branch, tests first):
+
+- B-I1 dates: a front matter `date` outside the years 1 to 9999 (UTC) is `bad-front-matter` at its line and the file is skipped; before, `-005000-01-01` failed the whole run on Postgres (exit 1). Tests `a_date_outside_years_1_to_9999_is_refused` (`front.rs`) and `a_date_out_of_range_skips_the_file` (both backends); 09 §8 now says no single file's *front matter* value can fail the run.
+- B-M5 links: a link to an image the import made a media item points at its public file URL, and is not reported; a link to a missing file of any kind is `broken-link`; other non-page links are reported after the media pass (`Rw::href`, `linked_media`); test `unimported_links_and_protocol_relative_images_are_reported`; 08 §8, 09 §8, the guide.
+- A-I1 follow-on: `comment-<uuid>`, `reply-<uuid>` and `reply-<uuid>-<field>` are reserved by pattern (`ferrite_domain::html::is_reserved_fragment_id`): the sanitiser drops them from headings and core's anchors move a heading off them with a suffix; tests `comment_anchor_ids_are_reserved`, `comment_anchor_ids_are_never_given`, `hostile_heading_ids_are_dropped`; 05 §7, 06 §4.
+
 **Deferred** (§7 and ROADMAP "Deferred from M4-3b"): A-M3 the tree's full-row read, A-M4 tree
 excerpts bypass `content.excerpt`, A-M5 card `image()` calls spend the bridge budget, A-M6 the
 `page_tree()` memo past 16 pairs, A-M7 `menu_order_cmp` allocations, B-M2 the ~5 GB worst case,
