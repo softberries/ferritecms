@@ -128,6 +128,16 @@ test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
     await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
     const button = page.getByRole("button", { name: "Save", exact: true });
     expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBe(44);
+    // The small icon sizes too (`icon-sm` 28 px, `icon-xs` 24 px on a fine pointer).
+    await page.goto("/admin/_styleguide?section=controls");
+    for (const name of ["More actions", "Dismiss"]) {
+      const icon = page.getByRole("button", { name, exact: true });
+      const box = await icon.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { width: r.width, height: r.height };
+      });
+      expect(box, name).toEqual({ width: 44, height: 44 });
+    }
   } finally {
     await ctx.close();
   }
