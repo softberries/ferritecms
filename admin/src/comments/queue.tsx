@@ -492,9 +492,7 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
             loading={list.isPending}
             animateRows
             columnClassName={{ comment: "w-full max-w-0 whitespace-normal" }}
-            className={
-              list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-            }
+            stale={list.isPlaceholderData}
             empty={
               <QueueEmpty
                 status={status}

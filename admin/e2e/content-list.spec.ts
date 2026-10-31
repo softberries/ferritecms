@@ -5,7 +5,7 @@
 // review screens. Count-asserting tests use a content type of their own (F35), removed
 // with everything in it at the end so later screenshots keep a clean sidebar.
 
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 import { ContentApi, type Item } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
 import { SNAP_PROJECT } from "./support/projects";
@@ -39,7 +39,7 @@ async function openList(page: Page, type: string, label: string, query = ""): Pr
 /** The table has left its loading state and its rows are the current filter's. */
 async function loaded(page: Page, label: string): Promise<void> {
   await expect(table(page, label)).not.toHaveAttribute("aria-busy", "true");
-  await expect(page.locator("[data-slot=data-table].opacity-60")).toHaveCount(0);
+  await expect(page.locator("[data-slot=data-table] [data-slot=stale-bar]")).toHaveCount(0);
 }
 
 /** A row by its item's title. */
@@ -610,6 +610,28 @@ test("screens", async ({ as, site, siteKey, snap, expectAccessible }) => {
     await openList(page, type, label);
     await snap(page, "content-list-all");
     await expectAccessible(page);
+
+    // A slow filter: the previous rows stay up at full colour (R-c3; dimmed to 60 % their
+    // muted text fell below 4.5:1), the table is busy and the stale line runs on top.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const list = new RegExp(`/api/v1/content/${type}\\?`);
+    const hold = async (route: Route) => {
+      await held;
+      await route.fallback().catch(() => undefined);
+    };
+    await page.route(list, hold);
+    await tab(page, "Draft").click();
+    await expect(table(page, label)).toHaveAttribute("aria-busy", "true");
+    await expect(page.locator("[data-slot=data-table] [data-slot=stale-bar]")).toBeAttached();
+    await snap(page, "content-list-stale");
+    await expectAccessible(page);
+    release();
+    await page.unroute(list, hold);
+    await tab(page, "All").click();
+    await loaded(page, label);
 
     for (const name of ["Draft", "Pending", "Scheduled", "Published", "Private", "Trash"]) {
       await tab(page, name).click();

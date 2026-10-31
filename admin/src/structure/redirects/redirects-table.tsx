@@ -232,9 +232,7 @@ export function RedirectsScreen({ search, setSearch }: RedirectsScreenProps) {
             last_hit: "hidden whitespace-nowrap lg:table-cell",
             origin: "hidden md:table-cell",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (

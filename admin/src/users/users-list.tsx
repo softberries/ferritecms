@@ -190,9 +190,7 @@ export function UsersScreen({ search, setSearch, me }: UsersScreenProps) {
             two_factor: "hidden lg:table-cell",
             last_login: "hidden whitespace-nowrap xl:table-cell",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (

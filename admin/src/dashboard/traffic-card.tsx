@@ -8,7 +8,6 @@
 // also in a visually hidden table, per hour over 24 hours and per day over 7.
 
 import { useQuery } from "@tanstack/react-query";
-import { cn } from "cn";
 import { ActivityIcon, CircleCheckIcon } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -72,12 +71,7 @@ export function TrafficCard({ range, className }: { range: MetricsRange; classNa
     );
   } else {
     body = (
-      <div
-        className={cn(
-          "flex flex-col gap-4 transition-opacity",
-          series.isPlaceholderData && "opacity-60",
-        )}
-      >
+      <div className="flex flex-col gap-4">
         <Totals totals={totals} />
         <TrafficChart rows={rows} range={range} />
         <ErrorsStrip rows={rows} range={range} total={totals.errors} span={span} />
@@ -92,7 +86,8 @@ export function TrafficCard({ range, className }: { range: MetricsRange; classNa
       title={t("traffic.title")}
       description={t("traffic.description", { span })}
       scope={<ScopeBadge>{t("metrics.allNodes")}</ScopeBadge>}
-      busy={series.isPending || series.isPlaceholderData}
+      busy={series.isPending}
+      stale={series.isPlaceholderData}
       className={className}
     >
       {body}

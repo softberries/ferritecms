@@ -235,9 +235,7 @@ export function JobsTab({ search, setSearch }: TabProps) {
             finished: "hidden py-3 whitespace-nowrap lg:table-cell",
             locked_by: "hidden max-w-0 py-3 xl:table-cell xl:w-[12%]",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (

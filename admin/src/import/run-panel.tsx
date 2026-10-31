@@ -136,87 +136,87 @@ export function RunPanel({
 
   return (
     <section
-        data-slot="import-run"
-        data-phase={phase}
-        aria-label={t("run.label")}
-        className="flex min-w-0 flex-col rounded-xl border bg-card shadow-1"
-      >
-        <header className="flex min-w-0 flex-col gap-4 border-b px-5 py-4 md:flex-row md:items-start md:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <PhaseIcon phase={phase} />
-            <div className="flex min-w-0 flex-col gap-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2
-                  ref={heading}
-                  tabIndex={-1}
-                  className="rounded-sm text-md font-medium text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  {t(`run.phase.${phase}`)}
-                </h2>
-                {run?.dry_run ? <DryRunBadge /> : null}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {phase === "retrying"
-                  ? t("run.phaseBody.retrying", { attempts: data.attempts })
-                  : phase === "done" && run?.dry_run
-                    ? t("run.phaseBody.doneDry")
-                    : t(`run.phaseBody.${phase}`)}
+      data-slot="import-run"
+      data-phase={phase}
+      aria-label={t("run.label")}
+      className="flex min-w-0 flex-col rounded-xl border bg-card shadow-1"
+    >
+      <header className="flex min-w-0 flex-col gap-4 border-b px-5 py-4 md:flex-row md:items-start md:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <PhaseIcon phase={phase} />
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2
+                ref={heading}
+                tabIndex={-1}
+                className="rounded-sm text-md font-medium text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                {t(`run.phase.${phase}`)}
+              </h2>
+              {run?.dry_run ? <DryRunBadge /> : null}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {phase === "retrying"
+                ? t("run.phaseBody.retrying", { attempts: data.attempts })
+                : phase === "done" && run?.dry_run
+                  ? t("run.phaseBody.doneDry")
+                  : t(`run.phaseBody.${phase}`)}
+            </p>
+            {run?.source ? (
+              <p className="min-w-0 truncate text-sm text-muted-foreground" title={run.source}>
+                {t("run.source", { source: run.source })}
               </p>
-              {run?.source ? (
-                <p className="min-w-0 truncate text-sm text-muted-foreground" title={run.source}>
-                  {t("run.source", { source: run.source })}
-                </p>
-              ) : null}
-            </div>
-          </div>
-          {run ? (
-            <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 sm:flex sm:gap-6">
-              <Fact label={t("run.started")}>
-                <RelativeTime at={run.started_at} />
-              </Fact>
-              {run.finished_at ? (
-                <Fact label={t("run.finished")}>
-                  <RelativeTime at={run.finished_at} />
-                </Fact>
-              ) : (
-                <Fact label={t("run.heartbeat")}>
-                  <RelativeTime at={run.heartbeat_at} />
-                </Fact>
-              )}
-            </dl>
-          ) : null}
-        </header>
-
-        <div className="flex min-w-0 flex-col gap-6 px-5 py-5">
-          <Stepper run={run} phase={phase} />
-          {stalled(run) ? <Alert tone="warning">{t("run.stalled")}</Alert> : null}
-          {error ? (
-            <div
-              data-slot="import-run-error"
-              className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/6 px-3 py-2.5"
-            >
-              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <CircleAlertIcon aria-hidden="true" className="size-4 shrink-0 text-destructive" />
-                {t("run.error")}
-              </span>
-              <ExpandableText text={error} className="text-foreground" />
-            </div>
-          ) : null}
-          {run && Object.keys(run.counts).length > 0 ? <Counts counts={run.counts} /> : null}
-        </div>
-
-        {TERMINAL.has(phase) ? (
-          <footer className="flex flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
-            {run && !run.report ? (
-              <p className="text-sm text-muted-foreground sm:mr-auto">{t("run.noReport")}</p>
             ) : null}
-            <Button variant="outline" className="pointer-coarse:h-11" onClick={onDismiss}>
-              {t("run.another")}
-            </Button>
-            {run?.report ? <ReportActions run={run} partial={phase === "failed"} /> : null}
-          </footer>
+          </div>
+        </div>
+        {run ? (
+          <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 sm:flex sm:gap-6">
+            <Fact label={t("run.started")}>
+              <RelativeTime at={run.started_at} />
+            </Fact>
+            {run.finished_at ? (
+              <Fact label={t("run.finished")}>
+                <RelativeTime at={run.finished_at} />
+              </Fact>
+            ) : (
+              <Fact label={t("run.heartbeat")}>
+                <RelativeTime at={run.heartbeat_at} />
+              </Fact>
+            )}
+          </dl>
         ) : null}
-      </section>
+      </header>
+
+      <div className="flex min-w-0 flex-col gap-6 px-5 py-5">
+        <Stepper run={run} phase={phase} />
+        {stalled(run) ? <Alert tone="warning">{t("run.stalled")}</Alert> : null}
+        {error ? (
+          <div
+            data-slot="import-run-error"
+            className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/6 px-3 py-2.5"
+          >
+            <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <CircleAlertIcon aria-hidden="true" className="size-4 shrink-0 text-destructive" />
+              {t("run.error")}
+            </span>
+            <ExpandableText text={error} className="text-foreground" />
+          </div>
+        ) : null}
+        {run && Object.keys(run.counts).length > 0 ? <Counts counts={run.counts} /> : null}
+      </div>
+
+      {TERMINAL.has(phase) ? (
+        <footer className="flex flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+          {run && !run.report ? (
+            <p className="text-sm text-muted-foreground sm:mr-auto">{t("run.noReport")}</p>
+          ) : null}
+          <Button variant="outline" className="pointer-coarse:h-11" onClick={onDismiss}>
+            {t("run.another")}
+          </Button>
+          {run?.report ? <ReportActions run={run} partial={phase === "failed"} /> : null}
+        </footer>
+      ) : null}
+    </section>
   );
 }
 

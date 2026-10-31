@@ -101,12 +101,7 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
       {/* The run panel's live region lives here, mounted with the screen, so the first
           phase is a change even when the panel mounts already knowing it (a start puts
           its job in the cache). */}
-      <span
-        data-slot="import-run-live"
-        className="sr-only"
-        aria-live="polite"
-        aria-atomic="true"
-      >
+      <span data-slot="import-run-live" className="sr-only" aria-live="polite" aria-atomic="true">
         {said}
       </span>
       {header}

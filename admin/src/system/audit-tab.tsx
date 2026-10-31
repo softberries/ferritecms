@@ -178,9 +178,7 @@ export function AuditTab({ search, setSearch, canSearchUsers }: AuditTabProps) {
             action: "w-full max-w-0 py-2.5 md:w-[46%]",
             target: "hidden max-w-0 py-3 lg:table-cell lg:w-[22%]",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (

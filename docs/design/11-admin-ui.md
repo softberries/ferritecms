@@ -241,7 +241,12 @@ contrast pair unchanged.
   box; `InputGroupButton`'s `icon-xs` / `icon-sm` (24 / 32 px), which sit inside a field
   that is itself 44 px tall, keep their look and widen the hit area with a pseudo-element
   (`relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5` /
-  `-inset-1.5`), as `Switch` does. `xs` / `sm` text buttons are unchanged.
+  `-inset-1.5`), as `Switch` does. A container shorter than 44 px grows with its button
+  on touch screens (term chips: `pointer-coarse:h-11.5`, so the button stays inside the
+  chip's border instead of overlapping the next row); dialog and sheet headers keep
+  their text clear of the 44 px close button (`pointer-coarse:pr-10` / `pr-15`).
+  **Known gap:** `Button`'s `xs` / `sm` text sizes (24 / 28 px, about 65 call sites)
+  stay below 44 px on touch screens, against the §8 item; a follow-up, not yet done.
 - `--sticky-top` (default `0px`, `tokens.css`): the height of whatever sticks to the
   top of the viewport above page content. The shell sets it to its top bar's height
   (`3.5rem`, on the `SidebarProvider` wrapper in `routes/_app.tsx`); the
@@ -420,7 +425,7 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   | `ForbiddenState` | — | `EmptyState` with a lock |
   | `MetricTile` | `label, value: number, delta?, series?, caption?, href?` | value and change are text (the change also spoken: "Up 12 on the previous period"); `caption` names the change's period ("Last 30 days", Task 12); `href` is an admin path, a query allowed (router `Link`; the query is split off into `search`, Task 13, so preloading matches the path alone); the value carries `data-slot="metric-value"` |
   | `Sparkline` | `data: number[]` | Recharts `AreaChart` (`responsive`, `accessibilityLayer={false}`), `aria-hidden` |
-  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, empty, rowActions?, columnClassName?, label, animateRows?, footer?, className?` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading`. **Scrolling:** the frame is its own scroll container on both axes at every width (`overflow-auto`), so a wide table never spills past it; `overflow-x` makes the frame the sticky header's scroll container, so the header sticks to the frame's top (`top: 0`), not the page's, and the frame is capped at `max-h: calc(100svh - var(--sticky-top) - var(--page-pad))` so a long list scrolls inside a frame that fits below the top bar. Hide less important columns per breakpoint with `columnClassName`. No header row over an empty state. `animateRows` (Task 13): rows are `m.tr` in `AnimatePresence`, fading in and out over `--dur-base` and moving with the layout spring (`layout="position"`, the frame has `layoutScroll`); nothing animates under reduced motion. `footer` renders inside the scrolling frame, below the table (the list's "Load more" and paging sentinel). Selected rows are tinted `bg-primary/4`, not `muted`: axe found the warning-coloured "Pending review" badge below 4.5:1 on `muted` |
+  | `DataTable<T>` | `columns, data, getRowId, selection?, onRowOpen?, loading, stale?, empty, rowActions?, columnClassName?, label, animateRows?, footer?, className?` | TanStack Table v9 `useTable` + `rowSelectionFeature` (`data-table-features.ts`: `dataTableFeatures`, `dataTableColumns<T>()`, `DataTableColumn<T>`); roving tabindex on rows, `j`/`k` (and arrows) move, `x` toggles selection, `enter` opens; rows are `h-row`; `rowActions` show on row hover/focus, always on coarse pointers; skeleton rows while `loading`. **Scrolling:** the frame is its own scroll container on both axes at every width (`overflow-auto`), so a wide table never spills past it; `overflow-x` makes the frame the sticky header's scroll container, so the header sticks to the frame's top (`top: 0`), not the page's, and the frame is capped at `max-h: calc(100svh - var(--sticky-top) - var(--page-pad))` so a long list scrolls inside a frame that fits below the top bar. Hide less important columns per breakpoint with `columnClassName`. No header row over an empty state. `animateRows` (Task 13): rows are `m.tr` in `AnimatePresence`, fading in and out over `--dur-base` and moving with the layout spring (`layout="position"`, the frame has `layoutScroll`); nothing animates under reduced motion. `footer` renders inside the scrolling frame, below the table (the list's "Load more" and paging sentinel). Selected rows are tinted `bg-primary/4`, not `muted`: axe found the warning-coloured "Pending review" badge below 4.5:1 on `muted`. `stale` (M4-4 R-c3; every list passes `isPlaceholderData`): the rows are the previous answer while a new filter or page loads; they stay at full colour (never dimmed: at 60 % muted text fell to about 2:1 in light mode), the table is `aria-busy` and `StaleBar` (`kit/stale-bar.tsx`: a 2 px ember line, pulsing, still under reduced motion, `aria-hidden`) sticks to the frame's top. `MediaGrid` (`stale`, the bar held below the top bar) and the dashboard `Panel` (`stale`) do the same; `no_loading_state_dims_its_content` keeps any opacity tied to `isPlaceholderData` out of `src` |
   | `KbdCombo` | `keys` | `+` = together, space = sequence (`g d`); `mod` is ⌘ on Apple, Ctrl elsewhere; spoken text in `sr-only` |
   | `SaveState` | `state: saved \| saving \| dirty \| error \| offline, at?` | a polite `role="status"` region holds plain text; the visible label crossfades (Motion, 120 ms opacity) |
   | `RelativeTime` | `at` (RFC 3339) | `formatDistanceStrict` against a `now` that ticks every 30 s; "just now" within 45 s (Task 13 fix round 1); absolute time in `title` and `dateTime` |
@@ -480,8 +485,10 @@ itself (`?raw` + `parseTokens`), so the page cannot drift from the gate.
   focus, so an arrow key moves and selects as the ARIA radio pattern expects, where Radix
   alone only moves focus) sits once in the
   group's header row above the cards it scopes, never inside one card, so every number
-  in the group covers the same hours; a switch keeps the previous figures at 60 % opacity
-  with `aria-busy` until the new ones arrive (`keepPreviousData`), no skeleton.
+  in the group covers the same hours; a switch keeps the previous figures at full colour
+  until the new ones arrive (`keepPreviousData`), no skeleton: the card is `aria-busy`
+  and `Panel`'s `stale` draws a `StaleBar` along its top (M4-4 R-c3; at 60 % opacity, as
+  before, muted text fell to about 2:1 in light mode).
   **A polling card that fails keeps its figures:** an error state only without data;
   after a failed refresh, `StaleNote` (`dashboard/panel.tsx`, `role="status"`) says from
   when the shown figures are, and the query has `INLINE_ERRORS` (no toast each minute).
@@ -659,8 +666,9 @@ styleguide mounts its own for its toast specimens).
 - The loader reads the types and the type's counts (`GET /content/{type}/counts`): a
   missing type (or `media`) is the not-found screen, a `403`/`500` the shell's forbidden
   and error states (shell.spec's route-state screenshots intercept that read). The rows
-  load in the component (`useInfiniteQuery` over `next_cursor`, 50 a page, the previous
-  rows dimmed to 60 % while a new filter loads). The crumb and document title are the
+  load in the component (`useInfiniteQuery` over `next_cursor`, 50 a page; while a new
+  filter loads the previous rows stay at full colour and `DataTable`'s `stale` makes the
+  table `aria-busy` and draws a `StaleBar`, M4-4 R-c3). The crumb and document title are the
   type's label (`staticData.crumb(t, loaderData)`).
 - Header: label, count (all but trash), "New post/page/entry" (`edit_own`). Status tabs
   are links with counts (`nav` "Status", `aria-current`), not ARIA tabs (there is no
@@ -734,8 +742,10 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
   the previous hits up at full colour (P81: dimmed to 60 %, muted text fell to about
   2:1 in light mode, and no opacity below about 0.96 keeps 4.5:1). Either way the
   field's search icon turns into a spinner (`data-slot="palette-spinner"`, standing
-  still under reduced motion; its shape still differs) and the listbox is
-  `aria-busy="true"`; the rows stay selectable. The footer's `role="status"` says
+  still under reduced motion; its shape still differs) and the hits' wrapper
+  (`data-slot="palette-content"`, a generic `div` inside the listbox) is
+  `aria-busy="true"`, not the whole listbox, so Go to, Create and Preferences are read as
+  usual; the rows stay selectable. The footer's `role="status"` says
   "Searching content…" or "N content results" (it is visually hidden on phones, still
   read).
 - Empty: a centred icon, "No results for “…”" and a hint, drawn over the list, not
@@ -770,7 +780,8 @@ a failing test. Since M2b-3 the snapshots are taken only in the `chromium-sqlite
   `hsla(`, `oklch(`, `oklab(`, `lab(`, `lch(`, `hwb(` and the mode-blind
   `bg|text|border|ring|…-white|black` utilities (`bg-black/50` included; shadcn
   overlays need `bg-foreground/…` or a token instead).
-- [ ] Mobile width without horizontal scroll and with ≥ 44 px touch targets.
+- [ ] Mobile width without horizontal scroll and with ≥ 44 px touch targets (open:
+  the `xs` / `sm` text buttons, §4 "Known gap").
 - [ ] Text never truncated without a tooltip or `title`.
 - [ ] Numbers tabular.
 - [ ] Focus visible (§7 focus rule).

@@ -197,7 +197,26 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   const traffic = section.getByRole("region", { name: "Traffic" });
   await expect(traffic.getByTestId("errors-chart")).toBeVisible();
   await snap(page, "dashboard-metrics-day");
+
+  // A slow range switch: the day's figures stay up at full colour (R-c3; dimmed to 60 %
+  // their muted text fell below 4.5:1), the cards are busy and the stale line shows.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const hold = async (route: Route) => {
+    await held;
+    await route.fallback().catch(() => undefined);
+  };
+  await page.route("**/api/v1/system/metrics/series?*", hold);
   await section.getByRole("radio", { name: "7 days" }).click();
+  await expect(traffic).toHaveAttribute("aria-busy", "true");
+  await expect(traffic.locator("[data-slot=stale-bar]")).toBeAttached();
+  await expect(traffic.getByTestId("errors-chart")).toBeVisible();
+  await snap(page, "dashboard-metrics-stale");
+  await expectAccessible(page);
+  release();
+  await page.unroute("**/api/v1/system/metrics/series?*", hold);
   await expect(
     traffic.getByText(
       "Page views, and all requests including assets, the API and the admin, per hour, the last 7 days",

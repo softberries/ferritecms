@@ -198,7 +198,7 @@ describe("seo_section", () => {
     const full = "a".repeat(200);
     const { doc, setMeta } = docWith({ ...EMPTY, title: full });
     renderSeo(doc);
-    const title = screen.getByRole("textbox", { name: "SEO title" }) as HTMLInputElement;
+    const title = screen.getByRole<HTMLInputElement>("textbox", { name: "SEO title" });
     title.setSelectionRange(10, 10);
     const typed = new InputEvent("beforeinput", {
       inputType: "insertText",

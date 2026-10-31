@@ -7,6 +7,7 @@ import { CircleAlertIcon } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/kit/error-state";
+import { StaleBar } from "@/components/kit/stale-bar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { uiLocale } from "@/lib/locale";
 
@@ -20,6 +21,11 @@ export interface PanelProps {
   footer?: ReactNode;
   /** Still loading: `aria-busy`, so assistive tech waits for the content. */
   busy?: boolean;
+  /**
+   * The figures shown are the previous answer while the next loads (a new range): they
+   * keep full colour, and a `StaleBar` runs along the card's top (M4-4 R-c3). Also busy.
+   */
+  stale?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -31,6 +37,7 @@ export function Panel({
   action,
   footer,
   busy = false,
+  stale = false,
   className,
   children,
 }: PanelProps) {
@@ -38,13 +45,14 @@ export function Panel({
   return (
     <section
       aria-labelledby={id}
-      aria-busy={busy || undefined}
+      aria-busy={busy || stale || undefined}
       data-slot="dashboard-panel"
       className={cn(
-        "flex min-w-0 flex-col rounded-xl border bg-card text-card-foreground shadow-1",
+        "relative flex min-w-0 flex-col rounded-xl border bg-card text-card-foreground shadow-1",
         className,
       )}
     >
+      {stale ? <StaleBar className="inset-x-3" /> : null}
       <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pt-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-2">

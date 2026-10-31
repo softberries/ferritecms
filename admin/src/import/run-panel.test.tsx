@@ -63,7 +63,9 @@ test("polling runs while queued/running and stops at done/dead", async () => {
     [`/api/v1/import/jobs/${JOB}`]: () => json(answers[Math.min(calls++, answers.length - 1)]),
   });
   const onSettled = vi.fn();
-  renderWithRouter(<RunPanel jobId={JOB} onSettled={onSettled} onDismiss={vi.fn()} announce={vi.fn()} />);
+  renderWithRouter(
+    <RunPanel jobId={JOB} onSettled={onSettled} onDismiss={vi.fn()} announce={vi.fn()} />,
+  );
   await tick(0);
   expect(calls).toBe(1);
   await heading("Waiting for a worker");
