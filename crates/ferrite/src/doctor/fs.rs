@@ -287,13 +287,7 @@ pub(super) fn database_files(data: &Path, config: Option<&Config>) -> Finding {
     match crate::update::rollback::restore_tmps(&path, &config.data_dir.join("backups")) {
         crate::update::rollback::RestoreTmps::None => {}
         crate::update::rollback::RestoreTmps::Leftover(found) => {
-            for tmp in found {
-                warnings.push(format!(
-                    "{} is left from an interrupted `ferrite rollback --restore-snapshot` that \
-                     moved nothing: delete it",
-                    tmp.display()
-                ));
-            }
+            warnings.extend(found.iter().map(|leftover| leftover.advice()));
         }
         crate::update::rollback::RestoreTmps::Interrupted(why) => {
             errors.push(format!("the store refuses to open: {why}"));

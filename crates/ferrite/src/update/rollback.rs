@@ -428,6 +428,9 @@ async fn restore_snapshot(
         ),
     };
     let data_dir = &config.data_dir;
+    let backups = data_dir.join("backups");
+    // M4-4 fix round 2 (B1): never start over what an earlier run left.
+    refuse_leftovers(&db, &backups)?;
     let Some(snapshot) = &rec.snapshot else {
         bail!(
             "{UPGRADE_FILE} records no snapshot for this upgrade (nothing was migrated, or the \
@@ -442,7 +445,6 @@ async fn restore_snapshot(
         .and_then(|m| m.modified())
         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
         .unwrap_or_else(|_| "unknown".to_owned());
-    let backups = data_dir.join("backups");
     // Before asking: a running site is refused first. Held until the database is replaced.
     let _lock = lock_folder(data_dir)?;
     println!(
@@ -488,6 +490,96 @@ fn check_snapshot(snapshot: &Path) -> Result<()> {
             )
         }),
     }
+}
+
+/// M4-4 fix round 2 (B1): `--restore-snapshot` does not start while an earlier run's
+/// leftovers are there, the states the store's open refuses ([`restore_tmps`]) and a
+/// `backups/rolled-back-<ts>.db-wal`/`-shm` without its `rolled-back-<ts>.db` (or whose
+/// `.db` is a second name of `db`). A new run would move the current database aside and put
+/// the snapshot in place, and the old run's moved WAL would then sit beside a database it
+/// does not belong to, where the recovery advice would replay it into the snapshot.
+fn refuse_leftovers(db: &Path, backups: &Path) -> Result<()> {
+    const AGAIN: &str = "`rollback --restore-snapshot` does not start again until that is \
+                         done (a new run would put the snapshot beside files of another \
+                         database); nothing was changed";
+    match restore_tmps(db, backups) {
+        RestoreTmps::None => {}
+        RestoreTmps::Interrupted(why) => bail!("{why}. {AGAIN}"),
+        RestoreTmps::Leftover(found) => {
+            let advice: Vec<String> = found.iter().map(Leftover::advice).collect();
+            bail!("{}. {AGAIN}", advice.join("; "));
+        }
+    }
+    let mut stray = Vec::new();
+    for ts in side_file_runs(backups) {
+        let aside_db = backups.join(format!("rolled-back-{ts}.db"));
+        if std::fs::symlink_metadata(&aside_db).is_ok() && !same_file(&aside_db, db) {
+            // A run that moved the database too (finished, or undone): its files are kept.
+            continue;
+        }
+        for suffix in ["-wal", "-shm"] {
+            let aside = with_suffix(&aside_db, suffix);
+            if std::fs::symlink_metadata(&aside).is_err() {
+                continue;
+            }
+            let original = with_suffix(db, suffix);
+            if same_file(&aside, &original) {
+                stray.push(format!(
+                    "`rm {}` (a second name of {})",
+                    aside.display(),
+                    original.display()
+                ));
+            } else {
+                stray.push(format!(
+                    "{} has no {} beside it: a run that failed while putting files back left \
+                     it (its error named them). If {} is missing and that error said this \
+                     file is its WAL, `mv {} {}`; if it belongs to no database in place, \
+                     delete it",
+                    aside.display(),
+                    aside_db.display(),
+                    original.display(),
+                    aside.display(),
+                    original.display()
+                ));
+            }
+        }
+        if same_file(&aside_db, db) {
+            stray.push(format!(
+                "`rm {}` (a second name of {})",
+                aside_db.display(),
+                db.display()
+            ));
+        }
+    }
+    if !stray.is_empty() {
+        bail!(
+            "an earlier `rollback --restore-snapshot` left files in {}: {}. {AGAIN}",
+            backups.display(),
+            stray.join("; ")
+        );
+    }
+    Ok(())
+}
+
+/// The `<ts>` of every `rolled-back-<ts>.db-wal`/`-shm` in `backups`, sorted, once each.
+fn side_file_runs(backups: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(backups) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let rest = name.to_str()?.strip_prefix("rolled-back-")?;
+            let ts = rest
+                .strip_suffix(".db-wal")
+                .or_else(|| rest.strip_suffix(".db-shm"))?;
+            (!ts.is_empty()).then(|| ts.to_owned())
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// P73: the snapshot holds the schema the upgrade started at (`rec.schema_from`). A stale
@@ -629,12 +721,11 @@ pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
     match restore_tmps(db, backups) {
         RestoreTmps::None => Ok(()),
         RestoreTmps::Leftover(found) => {
-            for tmp in found {
+            for leftover in found {
                 tracing::warn!(
-                    "{} is left from an interrupted `ferrite rollback --restore-snapshot` \
-                     that moved nothing; {} is in place and is used: delete the leftover",
-                    tmp.display(),
-                    db.display()
+                    "{} is in place and is used; {}",
+                    db.display(),
+                    leftover.advice()
                 );
             }
             Ok(())
@@ -648,11 +739,37 @@ pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
 pub(crate) enum RestoreTmps {
     /// None is left.
     None,
-    /// Left by runs that moved nothing: `db` is complete. Delete them.
-    Leftover(Vec<PathBuf>),
+    /// Left by runs that moved nothing away from `db`: it is complete. Delete them.
+    Leftover(Vec<Leftover>),
     /// A run stopped halfway: opening `db` would create an empty site or lose its WAL.
     /// The text names the files and the commands that recover them.
     Interrupted(String),
+}
+
+/// A [`restore_tmp`] left by a run that moved nothing away from the database.
+pub(crate) struct Leftover {
+    pub(crate) tmp: PathBuf,
+    /// `rm` steps for second names a kill inside a move left in `backups/` (Minor A).
+    pub(crate) steps: Vec<String>,
+}
+
+impl Leftover {
+    /// What to do about it, for the open's warning and doctor.
+    pub(crate) fn advice(&self) -> String {
+        let also = if self.steps.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", and remove the second names of the files in place it left in backups/: {}",
+                self.steps.join("; ")
+            )
+        };
+        format!(
+            "{} is left from an interrupted `ferrite rollback --restore-snapshot` that moved \
+             nothing away: delete it{also}",
+            self.tmp.display()
+        )
+    }
 }
 
 pub(crate) fn restore_tmps(db: &Path, backups: &Path) -> RestoreTmps {
@@ -661,8 +778,11 @@ pub(crate) fn restore_tmps(db: &Path, backups: &Path) -> RestoreTmps {
         return RestoreTmps::None;
     };
     if std::fs::symlink_metadata(db).is_ok() {
+        let mut found = Vec::new();
         for (tmp, ts) in &leftovers {
-            if let Some(steps) = moved_side_files(db, backups, ts) {
+            let side = moved_side_files(db, backups, ts);
+            if side.moved {
+                let steps = side.steps;
                 return RestoreTmps::Interrupted(format!(
                     "{} is in place, but {} is left from an interrupted `ferrite rollback \
                      --restore-snapshot` that had already moved the database's -wal/-shm into \
@@ -675,16 +795,29 @@ pub(crate) fn restore_tmps(db: &Path, backups: &Path) -> RestoreTmps {
                     tmp.display()
                 ));
             }
+            found.push(Leftover {
+                tmp: tmp.clone(),
+                steps: side.steps,
+            });
         }
-        return RestoreTmps::Leftover(leftovers.into_iter().map(|(tmp, _)| tmp).collect());
+        return RestoreTmps::Leftover(found);
     }
     let aside = backups.join(format!("rolled-back-{ts}.db"));
     let back = if aside.is_file() {
+        let mut moves = vec![format!("`mv {} {}`", aside.display(), db.display())];
+        for suffix in ["-wal", "-shm"] {
+            let side = with_suffix(&aside, suffix);
+            if std::fs::symlink_metadata(&side).is_ok() {
+                moves.push(format!(
+                    "`mv {} {}`",
+                    side.display(),
+                    with_suffix(db, suffix).display()
+                ));
+            }
+        }
         format!(
-            "; or, to keep the database that was current instead, `mv {} {}` (and its -wal \
-             and -shm, if there, to the same name plus -wal and -shm) and delete {}",
-            aside.display(),
-            db.display(),
+            "; or, to keep the database that was current instead, {} and delete {}",
+            moves.join(", "),
             tmp.display()
         )
     } else {
@@ -706,12 +839,14 @@ pub(crate) fn restore_tmps(db: &Path, backups: &Path) -> RestoreTmps {
 /// place (`rolled-back-<ts>.db` absent, or the same file as `db` when the kill came inside
 /// that move) a moved `-wal`/`-shm` means `db` lacks its WAL. Returns the shell steps that
 /// put the files back, or `None` when nothing was moved away from `db`.
-fn moved_side_files(db: &Path, backups: &Path, ts: &str) -> Option<Vec<String>> {
+/// Second names a kill inside a move left (`rolled-back-<ts>.db*` that are the same file as
+/// the one in place) only need an `rm`, even when nothing was moved away (review Minor A).
+fn moved_side_files(db: &Path, backups: &Path, ts: &str) -> SideFiles {
     let aside_db = backups.join(format!("rolled-back-{ts}.db"));
     let db_linked = same_file(&aside_db, db);
     if std::fs::symlink_metadata(&aside_db).is_ok() && !db_linked {
         // `db` itself was moved; whatever is in place now is not this run's to judge.
-        return None;
+        return SideFiles::default();
     }
     let mut steps = Vec::new();
     let mut moved = false;
@@ -737,13 +872,19 @@ fn moved_side_files(db: &Path, backups: &Path, ts: &str) -> Option<Vec<String>> 
             ));
         }
     }
-    if !moved {
-        return None;
-    }
     if db_linked {
         steps.push(format!("`rm {}`", aside_db.display()));
     }
-    Some(steps)
+    SideFiles { moved, steps }
+}
+
+/// What [`moved_side_files`] found for one run.
+#[derive(Debug, Default)]
+struct SideFiles {
+    /// A `-wal`/`-shm` is no longer beside `db`: opening it would lose its WAL.
+    moved: bool,
+    /// The shell steps that put things back (`mv`), or remove second names (`rm`).
+    steps: Vec<String>,
 }
 
 /// Whether `a` and `b` are the same file (device and inode); `false` when either is

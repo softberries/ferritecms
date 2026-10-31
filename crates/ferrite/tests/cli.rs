@@ -435,6 +435,33 @@ fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
     assert!(out.contains("database version: 12"), "{out}");
 }
 
+/// M4-4 fix round 2 (Minor A): killed inside the `-wal` move (the link made, the source not
+/// yet unlinked), nothing is missing beside the database, so the open only warns, and the
+/// warning names the `rm` of the second name too.
+#[cfg(unix)]
+#[test]
+fn a_restore_tmp_with_a_linked_wal_warns_with_the_rm() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let link = data
+        .join("backups")
+        .join("rolled-back-20260101T000000Z.db-wal");
+    std::fs::hard_link(data.join("ferrite.db-wal"), &link).expect("link");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(err.contains(&format!("rm {}", link.display())), "{err}");
+}
+
 #[test]
 fn init_refuses_existing_database_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");

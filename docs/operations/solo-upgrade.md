@@ -160,6 +160,8 @@ systemctl start ferrite
   is in place without its WAL: the service refuses to start as well (opened that way, the
   transactions in the WAL would be lost) and names the `mv` commands that put
   `backups/rolled-back-<ts>.db-wal` and `-shm` back. Run them, delete the `.tmp`, start.
+  Do not just run the rollback again: it refuses while any of these leftovers are there
+  (it would put the snapshot beside the first run's WAL), and says what to do first.
 - **Media uploaded since the upgrade** is referenced only by the moved-aside database. The
   daily media GC deletes those files after `media.gc_grace_days` (default 7). If you may
   want that content back, copy the media folder aside first or raise the grace period.

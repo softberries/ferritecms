@@ -796,6 +796,99 @@ fn restore_snapshot_refuses_a_snapshot_of_another_schema() {
     bins.assert_unswapped();
 }
 
+/// M4-4 fix round 2 (B1): a run interrupted by hand (the copy staged, the WAL moved aside,
+/// `ferrite.db` not yet moved) and then started again refuses before anything moves,
+/// naming the recovery first: a second run would put the snapshot beside the first run's
+/// WAL. So does a leftover copy from a run that moved nothing, and a moved WAL whose run
+/// left no copy.
+#[test]
+fn restore_snapshot_refuses_to_start_over_an_interrupted_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bins = Bins::new(tmp.path(), Some(0));
+    let (data, rec) = upgraded_site(tmp.path(), LOSSY_FROM);
+    set_meta(&data, "rollback_test_marker", "kept");
+    let db = data.join("ferrite.db");
+    let snapshot = data.join(rec.snapshot.as_ref().unwrap());
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(&snapshot, &staged).unwrap();
+    let backups = data.join("backups");
+    let (wal, aside_wal) = (
+        data.join("ferrite.db-wal"),
+        backups.join("rolled-back-20260101T000000Z.db-wal"),
+    );
+    if wal.exists() {
+        std::fs::rename(&wal, &aside_wal).unwrap();
+    } else {
+        std::fs::write(&aside_wal, b"the first run's WAL").unwrap();
+    }
+    let db_bytes = std::fs::read(&db).unwrap();
+    let snapshot_bytes = std::fs::read(&snapshot).unwrap();
+    let again = || {
+        rollback(&bins.current)
+            .args(["--schema", "--restore-snapshot", "--yes", "--data"])
+            .arg(&data)
+            .output()
+            .unwrap()
+    };
+    let unchanged = |err: &str| {
+        assert!(err.contains("does not start again"), "{err}");
+        assert!(err.contains("nothing was changed"), "{err}");
+        assert_eq!(std::fs::read(&db).unwrap(), db_bytes, "{err}");
+        assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes, "{err}");
+        let moved: Vec<String> = names(&backups, "rolled-back-")
+            .into_iter()
+            .filter(|n| !n.contains("20260101T000000Z"))
+            .collect();
+        assert!(moved.is_empty(), "a second run moved {moved:?}: {err}");
+        assert_eq!(upgrade::load(&data).unwrap().as_ref(), Some(&rec));
+        bins.assert_unswapped();
+    };
+
+    // The WAL moved: the recovery (put it back) comes first.
+    let out = again();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("mv {} {}", aside_wal.display(), wal.display())),
+        "{err}"
+    );
+    assert!(
+        err.find("mv ").unwrap() < err.find("does not start again").unwrap(),
+        "{err}"
+    );
+    unchanged(&err);
+
+    // Recovered by the steps, but the copy is still there: delete it first.
+    std::fs::rename(&aside_wal, &wal).unwrap();
+    let out = again();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    unchanged(&err);
+
+    // A moved WAL whose run left no copy (a failed undo): refused as well.
+    std::fs::remove_file(&staged).unwrap();
+    std::fs::write(
+        backups.join("rolled-back-20260102T000000Z.db-wal"),
+        b"a stray WAL",
+    )
+    .unwrap();
+    let out = again();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("rolled-back-20260102T000000Z.db-wal"), "{err}");
+    assert!(err.contains("does not start again"), "{err}");
+    assert_eq!(std::fs::read(&db).unwrap(), db_bytes, "{err}");
+    bins.assert_unswapped();
+
+    // Once it is gone the rollback runs.
+    std::fs::remove_file(backups.join("rolled-back-20260102T000000Z.db-wal")).unwrap();
+    let out = again();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(meta(&data, "rollback_test_marker"), None);
+    bins.assert_swapped();
+}
+
 // ---- Postgres ----
 
 struct PgSchema {

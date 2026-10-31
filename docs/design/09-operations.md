@@ -323,7 +323,12 @@ not hold here.
      backups/rolled-back-<ts>.db-wal ferrite.db-wal` (and `-shm`, plus `rm
      backups/rolled-back-<ts>.db` for the second name) and then the copy's deletion. Only
      a leftover copy beside a `ferrite.db` from which nothing moved (a run killed during
-     the copy) just warns (M4-4 P70, amended by R-c2).
+     the copy, or inside a move, which leaves a second name in `backups/` that the warning
+     says to `rm`) just warns (M4-4 P70, amended by R-c2). `--restore-snapshot` itself
+     does not start again over any of these, nor over a `backups/rolled-back-<ts>.db-wal`
+     or `-shm` without its `rolled-back-<ts>.db` (a failed undo): it names the recovery
+     first and changes nothing, since a second run would put the snapshot beside the first
+     run's moved WAL, which the recovery advice would then replay into it.
    - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
      SQLite would roll it back into the snapshot.
    - The database must be on the data folder's filesystem (the moves into `backups/` are
@@ -1249,7 +1254,8 @@ snapshot or a snapshot at another schema with `--restore-snapshot`, no confirmat
 locked); a usage error (clap) exits 2. An interrupted `--restore-snapshot` that left only
 `ferrite.db.restore-<ts>.tmp` makes every command that opens the store refuse until it is
 moved into place, and so does one that left `ferrite.db` in place after moving its
-`-wal`/`-shm` into `backups/`, until those are moved back (§2 b, M4-4 P70, R-c2).
+`-wal`/`-shm` into `backups/`, until those are moved back (§2 b, M4-4 P70, R-c2); a new
+`--restore-snapshot` refuses over such leftovers too, naming the recovery first.
 After a schema rollback `schema_meta.last_binary_version` names the older binary (§2 b).
 Test seam (`test-seams` builds only): a hidden `--test-current-exe PATH`.
 
