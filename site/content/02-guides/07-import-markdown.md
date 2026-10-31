@@ -32,8 +32,8 @@ folders (names starting with `.`) are skipped, and symbolic links are never foll
 The page title is, in order: the `title` in the front matter, else the first `# heading`
 (which is then taken out of the body), else a title made from the name: the file name
 for a file, the folder name for a folder's `index.md` or `README.md`, and "Home" for the
-top-level index, with an `NN-` prefix dropped and dashes turned into spaces
-(`01-getting-started` becomes "Getting started"). Start each file with one
+top-level index, with an `NN-` prefix dropped, dashes and underscores turned into spaces
+and the first letter capitalised (`01-getting-started` becomes "Getting started"). Start each file with one
 `# Title` and use `##` and `###` for its sections.
 
 ## Front matter
