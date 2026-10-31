@@ -273,8 +273,12 @@ fn tags(html: &str) -> Vec<Tag> {
         }
         i = j.min(b.len());
         if !end_tag && (name == "script" || name == "style") {
+            // Byte offsets survive ASCII lowercasing, so `</SCRIPT>` ends the text too.
             let close = format!("</{name}");
-            i = html[i..].find(&close).map_or(b.len(), |e| i + e);
+            i = html[i..]
+                .to_ascii_lowercase()
+                .find(&close)
+                .map_or(b.len(), |e| i + e);
         }
         out.push(Tag {
             name: if end_tag { format!("/{name}") } else { name },
@@ -287,13 +291,13 @@ fn tags(html: &str) -> Vec<Tag> {
 #[test]
 fn tags_reads_every_attribute_form_and_only_markup() {
     let html = "<!doctype html><!-- <a href=\"/c\"> --><a\nhref='/s' id=x><A HREF=/u>\
-                <link rel=\"x\"\thref=\"&#x2f;e&#x2f;\"></a><script>if (a<b) {}</script>\
-                <pre>&lt;a href=\"/no\"&gt;</pre>";
+                <link rel=\"x\"\thref=\"&#x2f;e&#x2f;\"></a><script>if (a<b) {}</SCRIPT>\
+                <pre>&lt;a href=\"/no\"&gt;</pre><a href=\"/after\">";
     let hrefs: Vec<String> = tags(html)
         .iter()
         .filter_map(|t| t.attr("href").map(str::to_string))
         .collect();
-    assert_eq!(hrefs, ["/s", "/u", "/e/"]);
+    assert_eq!(hrefs, ["/s", "/u", "/e/", "/after"]);
     assert!(tags(html).iter().any(|t| t.name == "/a"));
     assert_eq!(tags(html)[0].attr("id"), Some("x"));
 }
