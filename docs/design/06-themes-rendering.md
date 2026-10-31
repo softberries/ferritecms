@@ -548,10 +548,10 @@ Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) us
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
 sanitised with `ammonia`. A `codeBlock` renders as `<pre tabindex="0"><code
-class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b R-b17), and the
-plugin sanitiser keeps `tabindex="0"` on `pre` only. M3 (P11) adds an `embed` node (`provider` `youtube` or `vimeo`,
-`url`), rendered as a privacy-mode player `<iframe>` (`youtube-nocookie.com`,
-`player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
+class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b
+R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only. M3 (P11) adds an
+`embed` node (`provider` `youtube` or `vimeo`, `url`), rendered as a privacy-mode
+player `<iframe>` (`youtube-nocookie.com`, `player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
 recognise renders as a paragraph with a link), and an optional plain-text `caption` on
 `image` (`<figure>…<figcaption>`; without one the output is a bare `<img>` as before).
 `blocks::is_editor_safe` is the twin of the admin editor's node and mark lists; both are
@@ -744,7 +744,7 @@ serves it. CI runs the project as its own step in the `admin-e2e` job (the
 
 Code blocks scroll sideways in all three themes. Core's `<pre tabindex="0">` (§5) makes
 them keyboard-scrollable, and each theme's `:focus-visible` ring shows on them. The docs
-install page failed axe `scrollable-region-focusable` (WCAG 2.1.1) before that. Not checked: Firefox and
-WebKit, the phone layout, a comment thread with comments in it (the demo seed writes
+install page failed axe `scrollable-region-focusable` (WCAG 2.1.1) before that. Not
+checked: Firefox and WebKit, the phone layout, a comment thread with comments in it (the demo seed writes
 none, so the post shows the empty thread and the comment form, which are checked), and
 the contact-form plugin's own pages.
