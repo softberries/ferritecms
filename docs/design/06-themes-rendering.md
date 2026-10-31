@@ -547,9 +547,11 @@ empty footer (no plugin calls).
 Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) using the
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
-sanitised with `ammonia`. M3 (P11) adds an `embed` node (`provider` `youtube` or `vimeo`,
-`url`), rendered as a privacy-mode player `<iframe>` (`youtube-nocookie.com`,
-`player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
+sanitised with `ammonia`. A `codeBlock` renders as `<pre tabindex="0"><code
+class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b
+R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only. M3 (P11) adds an
+`embed` node (`provider` `youtube` or `vimeo`, `url`), rendered as a privacy-mode
+player `<iframe>` (`youtube-nocookie.com`, `player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
 recognise renders as a paragraph with a link), and an optional plain-text `caption` on
 `image` (`<figure>…<figcaption>`; without one the output is a bare `<img>` as before).
 `blocks::is_editor_safe` is the twin of the admin editor's node and mark lists; both are
@@ -720,5 +722,29 @@ or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/busi
   links keep their own focus ring where `:has()` is missing.
 - Contrast, computed for the default accent with the WCAG formula, is listed at the top
   of its `style.css` (every text pair at least 4.5:1 in both schemes). `ferrite seed demo
-  --profile business` writes content shaped for it (09 §8). WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
-themes are not set up yet.
+  --profile business` writes content shaped for it (09 §8).
+
+**Accessibility checks** (M4-3b P64). WCAG 2.2 AA is the goal for every starter theme.
+`admin/e2e/public-themes.spec.ts` runs axe with the admin's tags (`wcag2a`, `wcag2aa`,
+`wcag21a`, `wcag21aa`, `wcag22aa`) in the light and the dark scheme, in Chromium at the
+desktop viewport, in the Playwright project `public-themes-chromium`. Global setup gives
+each theme a SQLite site of its own with the content it is checked on, written before
+`serve` starts. Each theme is activated through the API, and the spec waits until the node
+serves it. CI runs the project as its own step in the `admin-e2e` job (the
+`chromium-sqlite` leg).
+
+- `blog` on `seed demo`: the front page, a post, a page, a category archive, a search
+  and a 404.
+- `business` on `seed demo --profile business`: the front page, a child page, the
+  contact page, a search and a 404. The contact page is checked twice: as it renders by
+  default, and with `contact_form` on (the theme's form markup, without the plugin).
+- `docs` on the repository's `site/content` (`import markdown --front-page`): the front
+  page, a nested page, a search and a 404. A keyboard check runs too: the first Tab
+  reaches the skip link, and Enter moves focus to `<main>`.
+
+Code blocks scroll sideways in all three themes. Core's `<pre tabindex="0">` (§5) makes
+them keyboard-scrollable, and each theme's `:focus-visible` ring shows on them. The docs
+install page failed axe `scrollable-region-focusable` (WCAG 2.1.1) before that. Not
+checked: Firefox and WebKit, the phone layout, a comment thread with comments in it (the demo seed writes
+none, so the post shows the empty thread and the comment form, which are checked), and
+the contact-form plugin's own pages.

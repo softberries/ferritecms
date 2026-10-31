@@ -1,6 +1,8 @@
 // Starts the E2E sites once per run: one per selected project (`projects.ts`), each with
 // its own data folder (and, for `chromium-pg`, its own schema `e2e_<random>` in
-// FERRITE_TEST_PG_URL), so engines and backends never share state. Logs the harness
+// FERRITE_TEST_PG_URL), so engines and backends never share state; with
+// `public-themes-chromium`, one SQLite site per starter theme with that theme's content
+// (keys `public-themes-chromium-<theme>`, the same harness accounts). Logs the harness
 // accounts in over the API and saves their storage states, publishes the sites to the
 // workers through the environment, and returns the teardown.
 
@@ -9,7 +11,14 @@ import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { request } from "@playwright/test";
 import { writeContactSheet } from "./contact-sheet";
-import { selectedProjects, SNAP_PROJECT, type SiteProject } from "./projects";
+import {
+  PUBLIC_THEMES,
+  publicThemesSelected,
+  selectedProjects,
+  SNAP_PROJECT,
+  themeSiteKey,
+  type Backend,
+} from "./projects";
 import {
   authFile,
   E2E_STATE_DIR,
@@ -25,7 +34,8 @@ import { ACCOUNTS, account, forwardedFor } from "./users";
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const projects = selectedProjects();
-  if (projects.length === 0) throw new Error("no E2E project selected");
+  const themes = publicThemesSelected();
+  if (projects.length === 0 && !themes) throw new Error("no E2E project selected");
   const pgUrl = process.env.FERRITE_TEST_PG_URL;
   if (projects.some((p) => p.backend === "pg") && !pgUrl) {
     // CI defines `chromium-pg` without the URL so that a job missing it fails (10 §2).
@@ -39,18 +49,29 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   else console.log(`E2E: no review screenshots or contact sheet outside ${SNAP_PROJECT}`);
 
   const schemas: string[] = [];
-  const started = await Promise.allSettled(
-    projects.map((p) => {
-      if (p.backend === "sqlite") return startSite({ name: p.name });
-      const schema = `e2e_${randomBytes(6).toString("hex")}`;
-      schemas.push(schema);
-      return startSite({ name: p.name, db: { url: pgUrl ?? "", schema } });
-    }),
-  );
-  const sites: [SiteProject, Site][] = [];
+  // Each site by its key: a project's name, or a public theme's site (`themeSiteKey`).
+  const wanted: { key: string; backend: Backend; start: () => Promise<Site> }[] = [
+    ...projects.map((p) => ({
+      key: p.name,
+      backend: p.backend,
+      start: () => {
+        if (p.backend === "sqlite") return startSite({ name: p.name });
+        const schema = `e2e_${randomBytes(6).toString("hex")}`;
+        schemas.push(schema);
+        return startSite({ name: p.name, db: { url: pgUrl ?? "", schema } });
+      },
+    })),
+    ...(themes ? PUBLIC_THEMES : []).map(({ theme, content }) => ({
+      key: themeSiteKey(theme),
+      backend: "sqlite" as const,
+      start: () => startSite({ name: themeSiteKey(theme), content }),
+    })),
+  ];
+  const started = await Promise.allSettled(wanted.map((w) => w.start()));
+  const sites: [(typeof wanted)[number], Site][] = [];
   started.forEach((r, i) => {
-    const p = projects[i];
-    if (p && r.status === "fulfilled") sites.push([p, r.value]);
+    const w = wanted[i];
+    if (w && r.status === "fulfilled") sites.push([w, r.value]);
   });
 
   const teardown = async () => {
@@ -63,12 +84,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     const failed = started.find((r) => r.status === "rejected");
     if (failed) throw failed.reason;
     const published: Record<string, SiteInfo> = {};
-    for (const [project, site] of sites) {
-      await saveStorageStates(project.name, site);
-      const totp = await enrollTotp(project.name, site);
+    for (const [{ key, backend }, site] of sites) {
+      await saveStorageStates(key, site);
+      const totp = await enrollTotp(key, site);
       const { url, data, mailDir, resetmePassword } = site;
-      published[project.name] = {
-        backend: project.backend,
+      published[key] = {
+        backend,
         url,
         data,
         mailDir,

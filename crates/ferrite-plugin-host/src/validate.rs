@@ -30,8 +30,9 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 /// (on [`CITE_TAGS`], which ammonia does not check as a URL);
 /// `rel="noopener noreferrer"` on every link, plus additions so core's own markup
 /// survives a sanitising plugin: `a[target]`; `code[class]` restricted to `language-*`
-/// classes (code blocks); and core's `embed` markup (M3 P11): `figure[class]` only as
-/// one of [`EMBED_FIGURE_CLASSES`], and an `<iframe>` only with a player `src`
+/// classes and `pre[tabindex]` only as `0` (code blocks); and core's `embed` markup (M3
+/// P11): `figure[class]` only as one of [`EMBED_FIGURE_CLASSES`], and an `<iframe>` only
+/// with a player `src`
 /// ([`embed_player_src_allowed`]), core's exact `sandbox` and `referrerpolicy`, and
 /// otherwise just `title`, `loading="lazy"` and `allowfullscreen`. An attribute with
 /// another value is dropped, and an iframe left without its `src`, `sandbox` or
@@ -48,12 +49,14 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
         .link_rel(Some("noopener noreferrer"))
         .add_tag_attributes("a", ["target"])
         .add_tag_attributes("code", ["class"])
+        .add_tag_attributes("pre", ["tabindex"])
         .add_tag_attributes("figure", ["class"])
         .add_tags(["iframe"])
         .add_tag_attributes("iframe", IFRAME_ATTRIBUTES)
         .attribute_filter(|element, attribute, value| {
             let keep = match (element, attribute) {
                 ("code", "class") => return language_classes(value),
+                ("pre", "tabindex") => value == "0",
                 ("figure", "class") => EMBED_FIGURE_CLASSES.contains(&value),
                 ("iframe", "src") => embed_player_src_allowed(value),
                 ("iframe", "sandbox") => value == EMBED_SANDBOX,
@@ -535,16 +538,46 @@ mod tests {
         let out = sanitized(
             "<p onclick=\"x()\">a</p><script>alert(1)</script>\
              <a href=\"javascript:alert(1)\">j</a><a href=\"/ok\">k</a>\
-             <pre><code class=\"language-rust\">fn</code></pre><style>p{}</style>",
+             <pre tabindex=\"0\"><code class=\"language-rust\">fn</code></pre><style>p{}</style>",
         );
         assert_eq!(
             out,
             Ok(FilterValue::Html(
                 "<p>a</p><a rel=\"noopener noreferrer\">j</a>\
                  <a href=\"/ok\" rel=\"noopener noreferrer\">k</a>\
-                 <pre><code class=\"language-rust\">fn</code></pre>"
+                 <pre tabindex=\"0\"><code class=\"language-rust\">fn</code></pre>"
                     .into()
             ))
+        );
+    }
+
+    #[test]
+    fn only_cores_code_block_focus_stop_survives() {
+        // Core renders `<pre tabindex="0">` (R-b17); any other `tabindex` is dropped, and
+        // so is one on another element.
+        assert_eq!(
+            sanitized(
+                "<pre tabindex=\"1\">a</pre><pre tabindex=\"-1\">b</pre><p tabindex=\"0\">c</p>"
+            ),
+            Ok(FilterValue::Html("<pre>a</pre><pre>b</pre><p>c</p>".into()))
+        );
+    }
+
+    #[test]
+    fn a_near_miss_or_duplicate_tabindex_is_dropped() {
+        // Only the exact value `0` passes; with duplicates the first attribute counts.
+        assert_eq!(
+            sanitized(
+                "<pre tabindex=\"00\">a</pre><pre tabindex=\" 0\">b</pre>\
+                 <pre tabindex=\"+0\">c</pre><pre tabindex=\"1\" tabindex=\"0\">d</pre>"
+            ),
+            Ok(FilterValue::Html(
+                "<pre>a</pre><pre>b</pre><pre>c</pre><pre>d</pre>".into()
+            ))
+        );
+        assert_eq!(
+            sanitized("<PRE TABINDEX=\"0\">e</PRE>"),
+            Ok(FilterValue::Html("<pre tabindex=\"0\">e</pre>".into()))
         );
     }
 
