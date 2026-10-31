@@ -1253,7 +1253,9 @@ media item (shown somewhere with `![…]`) points at that media file.
 a `--front-page` that is not public,
 3 another import running, 1 on any error. These are checked before a run starts, so they
 write nothing and leave no run: `--front-page` with another type, a folder that is not a
-folder or cannot be scanned, and a `--type` that does not exist, is `media`, or is not
+folder or cannot be scanned, a folder over the scan's limits (more than 5000 Markdown files,
+5000 folders holding pages, 50 000 folders in all, or 256 MiB of Markdown; the message names
+the limit; 08 §8, M4-4 P78), and a `--type` that does not exist, is `media`, or is not
 hierarchical while the folder nests pages. An error after the run started marks that run
 `failed` (each batch it committed stays). With SQLite `serve` holds the data folder's lock:
 stop it first. Media variants are made by the next `serve`.
