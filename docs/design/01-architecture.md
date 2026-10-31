@@ -175,7 +175,7 @@ exist yet. The only Cargo features are the `test-seams` ones of `ferrite`, `ferr
 crate edges, only external dependencies (`minisign-verify`, `rustls-acme`,
 `tokio-rustls`, `webpki-roots`, `flate2` and `jiff`; `minisign` and `rcgen` for tests).
 M4-3b added one crate, `ferrite-import-md` (edges above), and one external dependency,
-`pulldown-cmark` (`html` feature only).
+`pulldown-cmark` (`html` feature only; it brings `pulldown-cmark-escape`).
 
 ## 2. Runtime components
 

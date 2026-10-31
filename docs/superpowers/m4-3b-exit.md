@@ -12,9 +12,9 @@ full gates.*
 
 **Result (2026-10-31, branch `m4-3b-exit` from `m4-3` at `ba6d738`):** every exit check
 passed on macOS 26.6 (arm64) with local PostgreSQL 17.11 (port 54329), `rustc` 1.99.1,
-Node 24.18.0 and pnpm 10.28.2. Nothing was found that needed a code fix. The first workspace test run
-had one timing failure under load; the second, on an idle machine, had none (§2). Nothing was pushed, tagged, published or
-hosted.
+Node 24.18.0 and pnpm 10.28.2. Nothing was found that needed a code fix. The first
+workspace test run had one timing failure under load; the second, on an idle machine, had
+none (§2). Nothing was pushed, tagged, published or hosted.
 
 | Exit check | Verified by | Result |
 |---|---|---|
@@ -37,7 +37,8 @@ the controller's ledger):
 2. **Markdown to blocks** (`e0d1fe2`; P62): new crate `ferrite-import-md` — TOML front
    matter between `+++` lines, the folder scan (`index.md`/`README.md` as a folder's page,
    `NN-` order prefixes, 5000 files, 1 MiB each, symlinks never followed), CommonMark plus
-   GFM tables and strikethrough through `pulldown-cmark` `=0.13.6` and the WordPress
+   GFM tables and strikethrough through `pulldown-cmark` `=0.13.6` (and its
+   `pulldown-cmark-escape`) and the WordPress
    crate's HTML converter (R-b4, R-b5).
 3. **`page_tree()` and `query(order=)`** (`35f31c3`; P56–P58, R-b1, R-b10):
    `SiteReader::tree(kind)` with the sitemap's visibility, at most 1000 nodes
@@ -100,10 +101,11 @@ Built. Serve it with:
 exit=0
 ```
 
-`serve` as printed. `/sitemap.xml` names `sitemap-page-1.xml` with 26 URLs; each answered
-200 with exactly one `<h1>` (`/`, the root index's `/home/`, `/getting-started/` and its 3
-pages, `/guides/` and its 7, `/developers/` and its 3, `/operations/` and its 6,
-`/reference/` and `/reference/cli/`). `/` 200, `/?s=theme` 200, `/nope/` 404. Code blocks
+`serve` as printed. `/sitemap.xml` names `sitemap-page-1.xml`: 26 sitemap URLs, plus `/`
+fetched on its own. Each sitemap URL answered 200 with exactly one `<h1>` (the root index's
+`/home/`, `/getting-started/` and its 3 pages, `/guides/` and its 7, `/developers/` and its
+3, `/operations/` and its 6, `/reference/` and `/reference/cli/`); `/` 200 with one `<h1>`,
+`/?s=theme` 200, `/nope/` 404. Code blocks
 are `<pre tabindex="0">` (4 on the Install page); headings carry ids
 (`build-from-source`, `release-binaries-not-published-yet`, …). `/` has the canonical
 `http://localhost:8311/` and `/home/` the canonical `http://localhost:8311/home/` (the
@@ -113,8 +115,8 @@ duplicate front page, §7).
 1440 × 900 and 375 × 812, light and dark, plus the "Pages" toggle opened at 375 px; the
 same in Firefox and WebKit in light (28 docs shots). Measured in each engine: no
 horizontal page scroll at either width (`scrollWidth == clientWidth`), one `<h1>`, the
-sidebar nav and the TOC visible at 1440 px and hidden at 375 px, 26 sidebar links visible
-once "Pages" is opened, `docs.js`'s anchors (3, 5 and 14 on the three pages) and one Copy
+sidebar nav and the TOC visible at 1440 px and hidden at 375 px, 26 sidebar links in the
+DOM once "Pages" is opened (the closed sections' links are in collapsed `<details>`), `docs.js`'s anchors (3, 5 and 14 on the three pages) and one Copy
 button per code block (4 and 2), no console error.
 
 What the shots show:
@@ -133,8 +135,8 @@ What the shots show:
   search; a closed "Pages" toggle sits above the breadcrumbs; no TOC; text wraps without
   overflow. On the configuration page the Copy button sits above the code block (under
   30rem) and the long command scrolls inside the block, not the page.
-- **375 px, "Pages" open** (dark): the whole tree under the toggle, with Getting started
-  open on the trail and Install current. The first capture was taken during the 0.15 s
+- **375 px, "Pages" open** (dark): the section list under the toggle (Introduction, then
+  Getting started open on the trail with Install current, the other four sections closed). The first capture was taken during the 0.15 s
   chevron rotation and showed it still pointing right; re-taken after 0.4 s the computed
   transform is `rotate(45deg)` (pointing down) — a capture artefact, not a defect.
 - **Firefox and WebKit** (light, both widths): the same layout as Chromium, sidebar and TOC
@@ -283,6 +285,12 @@ map, the docs-site and axe commands); README.md (status, the docs site); 01 §1 
 - The seeded business pages live under the front page (`/home/garden-design/`), as pages
   follow their parent's slug (WordPress does the same); `business`'s `single.html` has no
   comment thread.
+- Accepted in the task reviews, recorded here: `ImportBatch::mapped`'s filter has no direct
+  core test (covered by the `import_md` not-in-source tests and the store contract test);
+  the `import_md` tests' store open retries a SQLite "in use" error for up to 5 s (a
+  test-only retry; the CLI's own open has none); `page_tree`'s flat nodes (`ancestors`,
+  `prev`, `next`, grandchildren) carry `children = []`, so a template must not use
+  `node.children` on them to decide "is a section" (Task 2 concern 3).
 - Pale accent colours fall under 4.5:1 in light mode in both new themes (stated in the CSS
   and the setting's label, as in `blog`).
 
@@ -295,7 +303,7 @@ map, the docs-site and axe commands); README.md (status, the docs site); 01 §1 
 | The docs site on Postgres | R-b2: `docs_site.rs` runs on SQLite | the tree and the Markdown import tests on both backends (Tasks 2 and 6) |
 | A real SMTP provider for the contact form | a local plain-SMTP sink | M4-3a's checks; the mailer's TLS modes are M2a-2a's |
 | The docs site hosted anywhere (domain, TLS, a static mirror) | the user's decision (P63) | §6 |
-| 31 of the 351 claims in `site/VERIFIED.md`: one not run (the `git clone`), 30 verified with a part not run (no release or image published, no S3 bucket, no SMTP provider, no https site or Let's Encrypt, the `[backup]` schedule, the compose example, a TOTP sign-in, the interactive install prompt) | not runnable here; each row says what and why | the code, design docs, `--help` and tests each row cites (§8) |
+| 61 of the 351 claims in `site/VERIFIED.md`: one not run (the `git clone`), 60 verified with a part not run or resting on the design, a runbook or `--help` (no release or image published, no S3 bucket, no SMTP provider, no https site or Let's Encrypt, the `[backup]` schedule, the compose example, a TOTP sign-in, the interactive install prompt, error cases not provoked, admin screens not opened, tests cited but not re-run) | not runnable here; each row says what and why | the code, design docs, `--help` and tests each row cites (§8) |
 | A Markdown dry run longer than 120 s | not run (read from the fence code, Task 6) | 09 §8 states it |
 | The full admin E2E matrix (`firefox-sqlite`, `webkit-sqlite`, `chromium-pg`) after M4-3b | not run in this exit (no admin change in M4-3b; the brief asked for the public-themes project) | `chromium-sqlite` in full, 195 passed (§2), on the final tree with R-b17's `<pre tabindex>` |
 
@@ -338,19 +346,27 @@ theme-shipped content types. Next: M4-4.
 ## 8. Verified claims
 
 `site/VERIFIED.md` lists every claim in `site/content/` with what it was checked against
-(part 1 by Task 7, part 2 by Task 8, both re-checked in their reviews). Counted here by the
-wording of each row's Result column:
+(part 1 by Task 7, part 2 by Task 8, both re-checked in their reviews). Counted here with
+one rule, applied by a script to every row:
 
-| Section | Rows | Verified | Verified, a part not run (says why) | Not run |
+- **Not run:** the Result starts with "**Not run**".
+- **Verified, a part not run:** some part of the claim was neither executed nor read in the
+  code. The "Checked against" or Result column says a step was not run, re-run, provoked,
+  opened, exercised, tested, made, compiled, published, started, sent or tried (or "no …
+  run"), or the Result says a part rests only on the design docs, a runbook, the code's doc
+  comments or `--help` ("Verified against design", "from the help", "only 0 run").
+- **Verified:** everything else: run, or read in the code or tests at a cited place.
+
+| Section | Rows | Verified | Verified, a part not run | Not run |
 |---|---|---|---|---|
-| Introduction | 11 | 11 | 0 | 0 |
+| Introduction | 11 | 10 | 1 | 0 |
 | Getting started | 47 | 39 | 7 | 1 |
-| Guides | 88 | 83 | 5 | 0 |
-| Developers | 81 | 79 | 2 | 0 |
-| Operations | 99 | 84 | 15 | 0 |
-| Reference | 18 | 17 | 1 | 0 |
+| Guides | 88 | 74 | 14 | 0 |
+| Developers | 81 | 72 | 9 | 0 |
+| Operations | 99 | 72 | 27 | 0 |
+| Reference | 18 | 16 | 2 | 0 |
 | The site build | 7 | 7 | 0 | 0 |
-| **Total** | **351** | **320** | **30** | **1** |
+| **Total** | **351** | **290** | **60** | **1** |
 
 "Verified" means run (on 2026-10-31, debug builds of the task branches) or read in the code
 with `file:line`. The one row not run is the `git clone` of the install page. No row is
@@ -368,5 +384,5 @@ Claims in this file:
 | The WordPress counts equal M3-1's (§1 c) | `m3-1-exit.md` §1 and §2 against this run | verified |
 | Each starter theme is under 150 KB (ROADMAP, 01) | `embedded_themes_stay_small` (in §2's run) | verified |
 | No migration, no WIT change, no REST change (What shipped) | no new file under `crates/ferrite-store-*/migrations/` or `wit/` from `041b94c` to `ba6d738`; `openapi_snapshot_is_current` passes (§2) | verified |
-| `pulldown-cmark` is the only new external dependency (01) | `git diff 7c24df6 ba6d738 -- Cargo.toml` | verified |
+| `pulldown-cmark` is the only new direct external dependency; `Cargo.lock` gains it and its `pulldown-cmark-escape` (01) | `git diff 7c24df6 ba6d738 -- Cargo.toml Cargo.lock` | verified |
 | 29 commits, 174 files, +17 033 / −296 (What shipped) | `git log --no-merges 041b94c..ba6d738 \| wc -l`; `git diff --shortstat 041b94c ba6d738` | verified |

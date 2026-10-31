@@ -104,7 +104,7 @@ OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress importer:
 parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter, `run` over `ImportService`; ->
-`ferrite-core`, `ferrite-import-wp`, `ferrite-media`),
+`ferrite-core`, `ferrite-import-wp`, `ferrite-media`, `ferrite-domain`),
 `ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
 renderer; M4-3b: `page_tree`), `ferrite-core` (services, permalinks, `SiteReader` (M4-3b:
@@ -203,10 +203,11 @@ folder's page; with SQLite `serve` must be stopped; prints the counts and one
 refused images or broken links, 3 another import running, 1 error; a re-run of the same
 `--source` (default the folder's name) updates changed files and keeps pages edited here).
 Build the docs site: `site/build.sh OUT_DIR [URL]` (a fresh folder;
-`FERRITE=target/release/ferrite` to use a built binary, default `cargo run -q -p ferrite --`; it runs `init`, `user create
---login docs`, `import markdown site/content --front-page --source ferrite-docs` and `theme
-activate docs`, fails on an import exit 2, then prints the `serve` command;
-`site/README.md`). `cargo test -p ferrite --test docs_site` builds and link-checks it;
+`FERRITE=target/release/ferrite` to use a built binary, default `cargo run -q -p ferrite
+--`; it runs `init`, `user create --login docs`, `import markdown site/content --front-page
+--source ferrite-docs` and `theme activate docs`, fails on an import exit 2, then prints the
+`serve` command; `site/README.md`). `cargo test -p ferrite --test docs_site` builds and
+link-checks it;
 `pnpm -C admin e2e --project public-themes-chromium` runs axe on the three starter themes
 (after `cargo build --release -p ferrite`; `admin/README.md`).
 Move, copy and back up a site (09 §4 and §8; with SQLite `serve` must be stopped for each
