@@ -1434,3 +1434,201 @@ fn incomplete_snapshots_are_ignored_and_pruned() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert!(stdout(&out).contains(&snaps[0]), "{}", text(&out));
 }
+
+/// Rewrites a repository snapshot's `ferrite.db` with `sql` and fixes its manifest entry,
+/// so the snapshot passes the integrity check with the changed database.
+fn rewrite_snapshot_db(repo: &Path, snapshot: &str, sql: &str) {
+    let dir = repo.join("snapshots").join(snapshot);
+    let db = dir.join("ferrite.db");
+    let sql = sql.to_owned();
+    let path = db.clone();
+    block_on(async move {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete);
+        let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
+        sqlx::query(AssertSqlSafe(sql))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.unwrap();
+    });
+    let bytes = std::fs::read(&db).unwrap();
+    let path = dir.join("manifest.json");
+    let mut m: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let entry = m["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|f| f["path"] == "ferrite.db")
+        .unwrap();
+    entry["bytes"] = serde_json::json!(bytes.len());
+    entry["sha256"] = serde_json::json!(hex(&bytes));
+    std::fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+}
+
+/// P68: a restore that is in place but whose final check fails (here a migration the
+/// backup's database records as failed) exits 2 and says the site was restored.
+#[test]
+fn restore_that_cannot_check_the_result_exits_2() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &["--no-media"]);
+    let snap = snapshots(&repo)[0].clone();
+    rewrite_snapshot_db(
+        &repo,
+        &snap,
+        "UPDATE _sqlx_migrations SET success = 0 WHERE version = 2",
+    );
+    let target = tmp.path().join("r");
+    let out = restore(&repo, &target, &[]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(target.join("ferrite.db").is_file(), "{}", text(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("restored into {}", target.display()))
+            && err.contains("could not check"),
+        "{}",
+        text(&out)
+    );
+}
+
+/// P68: with --force (or an absent target) a restored `[media] root` that is absolute and
+/// inside the folder being replaced would leave the restored site without its media; it is
+/// refused before anything moves.
+#[test]
+fn restore_force_refuses_a_media_root_inside_the_old_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &[]);
+    let target = tmp.path().join("site");
+    init(&target);
+    let old_db = std::fs::read(target.join("ferrite.db")).unwrap();
+    let inside = target.join("media");
+    let mut c = ferrite();
+    c.arg("restore")
+        .arg(&archive)
+        .arg("--data")
+        .arg(&target)
+        .arg("--force")
+        .env("FERRITE_MEDIA__ROOT", inside.to_str().unwrap());
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&inside.display().to_string()) && err.contains("nothing was changed"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(std::fs::read(target.join("ferrite.db")).unwrap(), old_db);
+    let names: Vec<String> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .all(|n| !n.contains("pre-restore") && !n.contains("restoring")),
+        "{names:?}"
+    );
+    // No blob went into the old folder's media store either.
+    assert!(!inside.join("artifacts").exists());
+
+    // An absent target with a media root inside it: refused, nothing created.
+    let absent = tmp.path().join("absent");
+    let mut c = ferrite();
+    c.arg("restore")
+        .arg(&archive)
+        .arg("--data")
+        .arg(&absent)
+        .env(
+            "FERRITE_MEDIA__ROOT",
+            absent.join("media").to_str().unwrap(),
+        );
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(!absent.exists(), "{}", text(&out));
+
+    // An empty target keeps working: it is not moved, so the root inside it is fine.
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut c = ferrite();
+    c.arg("restore")
+        .arg(&archive)
+        .arg("--data")
+        .arg(&empty)
+        .env("FERRITE_MEDIA__ROOT", empty.join("media").to_str().unwrap());
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(empty.join("media").join("artifacts").is_dir());
+}
+
+/// P68: a blob missing from the repository may be a `--keep` prune racing the restore; the
+/// message says so.
+#[test]
+fn restore_with_a_pruned_blob_names_keep() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &[]);
+    let (hash, _) = media_blob(&source);
+    std::fs::remove_file(blob_path(&repo, &hash)).unwrap();
+    let target = tmp.path().join("r");
+    let out = restore(&repo, &target, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&hash) && err.contains("--keep"),
+        "{}",
+        text(&out)
+    );
+    assert!(!target.exists());
+}
+
+/// P69: a snapshot taken by the `site.backup` job holds that job's row as `running`; the
+/// restored copy marks it done (its lease would otherwise run the backup again), and leaves
+/// other running rows to the reaper.
+#[test]
+fn restore_marks_the_snapshots_backup_row_done() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = seeded(tmp.path(), "source");
+    for (id, kind) in [("01", "site.backup"), ("02", "media.variants")] {
+        exec(
+            &source,
+            &format!(
+                "INSERT INTO jobs (id, kind, payload, unique_key, run_at, status, attempts, \
+                 locked_by, locked_until, created_at) VALUES (zeroblob(15) || x'{id}', \
+                 '{kind}', '{{}}', '{kind}:0', 1, 'running', 1, 'node', 9999999999999999, 1)"
+            ),
+        );
+    }
+    let archive = tmp.path().join("b.tar.zst");
+    ok_backup(&source, &archive, &["--no-media"]);
+    let target = tmp.path().join("r");
+    let out = restore(&archive, &target, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    type Row = (String, String, Option<String>, Option<i64>, Option<i64>);
+    let rows: Vec<Row> = block_on(async {
+        let mut conn = sqlite(&target).await;
+        sqlx::query_as(
+            "SELECT kind, status, locked_by, locked_until, finished_at FROM jobs \
+             WHERE unique_key IN ('site.backup:0', 'media.variants:0') ORDER BY kind",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+    });
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let (kind, status, by, until, finished) = &rows[1];
+    assert_eq!(
+        (kind.as_str(), status.as_str(), by, until),
+        ("site.backup", "done", &None, &None),
+        "{rows:?}"
+    );
+    assert!(finished.is_some(), "{rows:?}");
+    assert_eq!(rows[0].1, "running", "{rows:?}");
+    // The source keeps its own rows.
+    assert_eq!(count(&source, "jobs WHERE status = 'running'"), 2);
+}
