@@ -366,7 +366,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order: with the default `menu_order` 0 everywhere, `limit=3` gives the three oldest-created items, shown by title, not the first three by title. This deviates from P58's "`menu_order` ascending, then title" for the rows picked, and is an accepted limit of M4-3b (final review A-M2); set `menu_order` to choose the rows). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
 | `page_tree(post=none, kind=none)` | the public items of one type as a tree (M4-3b P56, P57; below) | `archive:<kind>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
@@ -673,7 +673,8 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   previous/next pager in the centre (46rem wide at most); "On this page" on the right from
   80rem. Under 60rem one column, and the tree's `<nav>` is hidden until the
   `<details>` "Pages" right before it (a sibling holding only its `<summary>`, closed) is
-  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`). From 60rem the
+  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`); the summary's
+  `aria-controls="nav"` names the nav it shows, since the disclosure itself is empty. From 60rem the
   disclosure is hidden and the nav always shows, so the sidebar needs no script and no
   `::details-content` in any engine. The `footer` menu sits in the footer.
 - **Data.** `base.html` reads `page_tree(post=post, kind=nav_type)` once (one bridge
@@ -701,7 +702,8 @@ Plain CSS, system font stacks, no font files or images, light and dark from
 - **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
   pages work without it; a second run adds nothing) puts each body heading with an id
   in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link
-  to this section">#</a>`, a sibling, so the heading's accessible name stays its text,
+  to section: <heading text>">#</a>`, a sibling, so the heading's accessible name stays its
+  text and each anchor's name is its own (a list of links tells them apart),
   and, where
   `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
   button that reports through a visually hidden `role="status"` text. No syntax
@@ -754,7 +756,8 @@ serves it. CI runs the project as its own step in the `admin-e2e` job (the
   default, and with `contact_form` on (the theme's form markup, without the plugin).
 - `docs` on the repository's `site/content` (`import markdown --front-page`): the front
   page, a nested page, a search and a 404. A keyboard check runs too: the first Tab
-  reaches the skip link, and Enter moves focus to `<main>`.
+  reaches the skip link, and Enter moves focus to `<main>`; and each heading anchor's
+  name is `Link to section: <heading>`, all distinct.
 
 Code blocks scroll sideways in all three themes. Core's `<pre tabindex="0">` (§5) makes
 them keyboard-scrollable, and each theme's `:focus-visible` ring shows on them. The docs

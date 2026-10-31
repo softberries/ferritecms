@@ -293,6 +293,12 @@ map, the docs-site and axe commands); README.md (status, the docs site); 01 §1 
   `node.children` on them to decide "is a section" (Task 2 concern 3).
 - Pale accent colours fall under 4.5:1 in light mode in both new themes (stated in the CSS
   and the setting's label, as in `blog`).
+- `query(order="menu")` (and `SiteReader::latest` with `ListOrder::Menu`) picks its rows by
+  `(menu_order, id)` and sorts them by title only afterwards: with the default
+  `menu_order` 0, `limit=3` gives the three oldest-created items shown by title, not the
+  first three by title. This deviates from P58's "`menu_order` ascending, then title" for
+  the rows picked (final review A-M2; 06 §4 says so; the store order that would fix it is
+  in §7).
 
 ## 5. Not verified
 
@@ -336,7 +342,13 @@ In [ROADMAP](../ROADMAP.md), M4-4, "Deferred from M4-3b":
   plugin's pages);
 - `query(order="menu")` ties across a `limit` follow id order (a store order with the title
   would make it exact);
-- the first Linux CI runs of the new tests.
+- the first Linux CI runs of the new tests;
+- the final review's Minors that were not fixed (§9): the tree's full-row read, tree
+  excerpts bypassing `content.excerpt`, card images spending the bridge budget, the
+  `page_tree()` memo past 16 pairs, `menu_order_cmp`'s allocations, the Markdown import's
+  ~5 GB worst case and its folder count, a WXR sharing a Markdown source name, the stale
+  binary poll message, `build.sh` and IPv6 loopback URLs, and the inline styles a future
+  public CSP would need to allow.
 
 "Later" has the items the plan left out on purpose: syntax highlighting, search snippets and
 section-scoped search, a static export (`ferrite site export --html`), versioned docs,

@@ -175,7 +175,10 @@ fn menus() -> BTreeMap<String, MenuTree> {
         MenuTree {
             items: vec![
                 menu_node("Home", "/"),
-                menu_node("About", "/about/"),
+                MenuNode {
+                    children: vec![menu_node("Team", "/about/team/")],
+                    ..menu_node("About", "/about/")
+                },
                 menu_node("News", "/post/"),
                 menu_node("Contact", "/contact/"),
             ],
@@ -208,6 +211,9 @@ fn assert_frame(theme: &Theme, html: &str) {
         "<footer class=\"site-footer\">",
         "<nav class=\"site-nav\" aria-label=\"Primary\">",
         "<nav class=\"footer-nav\" aria-label=\"Footer\">",
+        // Lists styled without markers keep their list semantics in Safari (C-M4).
+        "<ul class=\"menu\" role=\"list\">",
+        "<ul class=\"menu__sub\" role=\"list\">",
         "Larkspur &lt;Studio&gt;",
         "<style>:root{--accent:#0f766e}</style>",
         "</footer>\n<p class=\"plugin-footer\">Plugin footer</p>\n</body>",
@@ -221,6 +227,9 @@ fn assert_frame(theme: &Theme, html: &str) {
     );
     assert_eq!(html.matches("<main").count(), 1, "{html}");
     assert_eq!(html.matches("<h1").count(), 1, "one h1:\n{html}");
+    for bare in ["<ul class=\"menu\">", "<ul class=\"menu__sub\">"] {
+        assert!(!html.contains(bare), "{bare} without role=list:\n{html}");
+    }
     for raw in ["True", "False", "None", "undefined"] {
         assert!(!html.contains(raw), "raw {raw} printed:\n{html}");
     }

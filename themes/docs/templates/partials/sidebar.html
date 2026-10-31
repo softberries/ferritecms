@@ -2,7 +2,8 @@
     children gets a `<details>` for its subtree, open on the current trail; its link
     stays outside the `<summary>`, so following it and toggling are separate controls.
     On narrow screens a "Pages" disclosure right before the nav shows or hides it (the
-    stylesheet hides the nav while the disclosure is closed); from 60rem the disclosure
+    stylesheet hides the nav while the disclosure is closed; the summary's `aria-controls`
+    names the nav, since the disclosure itself is empty); from 60rem the disclosure
     is hidden and the nav always shows. No script and no `::details-content` needed. At most 1000 nodes and 65 levels (`page_tree`'s
     limits), which the default fuel and recursion limit cover. -#}
 {%- macro tree_list(nodes) %}
@@ -21,7 +22,7 @@
 {%- endmacro %}
 {%- if tree and tree.items %}
 <div class="docs-sidebar">
-<details class="docs-pages-toggle"><summary>Pages</summary></details>
+<details class="docs-pages-toggle"><summary aria-controls="nav">Pages</summary></details>
 <nav class="docs-nav" id="nav" aria-label="Pages">
 {{- tree_list(tree.items) }}
 {%- if tree.truncated %}

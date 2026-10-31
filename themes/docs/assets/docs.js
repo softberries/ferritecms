@@ -1,5 +1,5 @@
 // FerriteCMS docs theme: progressive enhancement only (M4-3b P59). Every page works
-// without it. Adds a "link to this section" anchor after each heading with an id and a
+// without it. Adds a "link to section" anchor after each heading with an id and a
 // Copy button to code blocks. No network requests. Running it twice adds nothing.
 (() => {
   "use strict";
@@ -17,7 +17,8 @@
     const a = document.createElement("a");
     a.className = "heading-anchor";
     a.href = "#" + h.id;
-    a.setAttribute("aria-label", "Link to this section");
+    // A name per section, so a list of links tells the anchors apart.
+    a.setAttribute("aria-label", "Link to section: " + h.textContent.trim());
     a.textContent = "#";
     row.append(h, a);
   }

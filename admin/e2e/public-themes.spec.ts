@@ -2,8 +2,9 @@
 // a site of its own with the content it is checked on (`projects.ts`, ruling R-b16):
 // `blog` on `seed demo`, `business` on `seed demo --profile business`, `docs` on the
 // repository's `site/content` imported with `--front-page`. Each `describe` activates its
-// theme through the API, waits until the node serves it, runs `expectAccessible` (the
-// admin's tags, in both colour schemes) on each page, and puts `blog` back afterwards.
+// theme through the API, waits until the node serves it, and runs `expectAccessible` (the
+// admin's tags, in both colour schemes) on each page. Nothing is put back: each theme's
+// site is its own and is thrown away after the run.
 // Runs in the `public-themes-chromium` project only (`pnpm e2e --project
 // public-themes-chromium`), its own CI step.
 //
@@ -123,10 +124,6 @@ for (const { theme } of PUBLIC_THEMES) {
       test.setTimeout(HOOK_TIMEOUT_MS);
       await activate(siteKey, theme);
     });
-    test.afterAll(async () => {
-      test.setTimeout(HOOK_TIMEOUT_MS);
-      await activate(siteKey, "blog");
-    });
 
     for (const check of PAGES[theme]) {
       test(`${theme}_${check.name}_is_accessible`, async ({ page, guard, expectAccessible }) => {
@@ -186,6 +183,22 @@ for (const { theme } of PUBLIC_THEMES) {
           ),
           "the focused code block shows a focus ring",
         ).toBe(true);
+      });
+
+      test("docs_heading_anchors_have_distinct_names", async ({ page }) => {
+        // `docs.js` names each anchor after its heading (final review C-M6), so a list of
+        // links tells them apart.
+        await visit(page, "/getting-started/install/", 200);
+        const anchors = page.locator("main .heading-anchor");
+        await expect(anchors.first()).toBeAttached();
+        const names = await anchors.evaluateAll((els) =>
+          els.map((el) => el.getAttribute("aria-label") ?? ""),
+        );
+        const headings = await page
+          .locator("main .heading-row > :is(h1, h2, h3, h4, h5, h6)")
+          .evaluateAll((els) => els.map((el) => (el.textContent ?? "").trim()));
+        expect(names).toEqual(headings.map((h) => `Link to section: ${h}`));
+        expect(new Set(names).size, names.join(" | ")).toBe(names.length);
       });
     }
   });
