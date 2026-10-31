@@ -2,9 +2,10 @@
 //! published-only, cached and refreshed by one poll.
 
 use axum::http::StatusCode;
-use ferrite_core::OptionService;
-use ferrite_domain::ContentStatus;
+use ferrite_core::{OptionService, site::FRONT_PAGE_OPTION};
+use ferrite_domain::{ContentId, ContentStatus, NewContent, Timestamp};
 use ferrite_http::app::feeds::DISCOURAGE_INDEXING_OPTION;
+use ferrite_store::Store;
 use quick_xml::{Reader, events::Event};
 use serde_json::json;
 
@@ -360,7 +361,169 @@ async fn sitemap_split_and_escaping(app: App) -> App {
     app
 }
 
+/// URLs per sitemap file in the golden site.
+const GOLDEN_FILE_LEN: usize = 3;
+/// The checked-in output of [`sitemaps_are_unchanged`]; `FERRITE_UPDATE_GOLDEN=1`
+/// rewrites it.
+const GOLDEN: &str = "tests/fixtures/sitemaps.golden.txt";
+
+/// 2023-11-14T22:13:20Z plus `secs` seconds.
+fn at(secs: i64) -> Timestamp {
+    Timestamp::from_micros(1_700_000_000_000_000 + secs * 1_000_000).unwrap()
+}
+
+/// Inserts a row with the fixed id `n` and fixed times (published when `published` is
+/// set, else a draft), so the sitemaps are the same on every run and backend.
+async fn fixed_row(
+    app: &App,
+    n: u128,
+    kind: &str,
+    slug: &str,
+    parent: Option<ContentId>,
+    published: Option<Timestamp>,
+    updated: i64,
+) -> ContentId {
+    let id = ContentId::from_uuid(uuid::Uuid::from_u128(
+        0x0190_0000_0000_7000_8000_0000_0000_0000 + n,
+    ));
+    app.site
+        .store
+        .read()
+        .content()
+        .insert(&NewContent {
+            id,
+            kind: kind.into(),
+            status: if published.is_some() {
+                ContentStatus::Published
+            } else {
+                ContentStatus::Draft
+            },
+            slug: slug.into(),
+            parent_id: parent,
+            author_id: app.ada_user.id,
+            title: slug.into(),
+            excerpt: String::new(),
+            body: json!({"type": "doc", "content": []}),
+            body_html: None,
+            fields: json!({}),
+            menu_order: 0,
+            published_at: published,
+            scheduled_at: None,
+            created_at: Some(at(0)),
+            updated_at: Some(at(updated)),
+        })
+        .await
+        .unwrap();
+    id
+}
+
+/// Posts and pages that split into several files of [`GOLDEN_FILE_LEN`]: two posts
+/// share `published_at` across the first file boundary (ordered by id), the newest
+/// `updated_at` of a file is not its first row's, and the static front page `home`
+/// (with a child) sits in the second page file. Plus a draft and a future post.
+async fn golden_site(app: &App) {
+    for (n, slug, published, updated) in [
+        (1, "p-a", 100, 500),
+        (2, "p-b", 90, 95),
+        (3, "p-c", 80, 900),
+        (4, "p-d", 80, 81),
+        (5, "p-e", 70, 70),
+        (6, "p-f", 60, 1000),
+        (7, "p-g", 50, 55),
+    ] {
+        fixed_row(app, n, "post", slug, None, Some(at(published)), updated).await;
+    }
+    fixed_row(app, 8, "post", "p-draft", None, None, 2000).await;
+    let future =
+        Timestamp::from_micros(Timestamp::now().as_micros() + crate::common::HOUR).unwrap();
+    fixed_row(app, 9, "post", "p-future", None, Some(future), 3000).await;
+
+    let home = fixed_row(app, 21, "page", "home", None, Some(at(10)), 20).await;
+    fixed_row(app, 22, "page", "garden", Some(home), Some(at(40)), 45).await;
+    let about = fixed_row(app, 23, "page", "about", None, Some(at(30)), 300).await;
+    fixed_row(app, 24, "page", "team", Some(about), Some(at(20)), 25).await;
+    fixed_row(app, 25, "page", "contact", None, Some(at(5)), 6).await;
+    app.site
+        .store
+        .read()
+        .options()
+        .set(FRONT_PAGE_OPTION, &json!(home.to_string()), false)
+        .await
+        .unwrap();
+}
+
+/// A router over `store` whose sitemaps split every [`GOLDEN_FILE_LEN`] URLs.
+async fn golden_router(app: &App, store: Arc<dyn Store>) -> axum::Router {
+    let reader = Arc::new(
+        ferrite_core::SiteReader::new(
+            store.clone(),
+            Arc::new(ferrite_core::PermalinkRules::default()),
+            Arc::new(|hash: &ferrite_domain::ArtifactHash, name: &str| {
+                format!("/_media/{hash}/{name}")
+            }),
+            Arc::new(Timestamp::now),
+        )
+        .with_sitemap_file_len(GOLDEN_FILE_LEN),
+    );
+    let theme = crate::harness::load_theme(crate::harness::fixture("app-theme"));
+    let mut state = App::build_state(&app.site, reader, theme, true, App::config()).await;
+    state.store = store;
+    ferrite_http::build_app(Arc::new(state))
+}
+
+/// The `<loc>` texts of a sitemap index.
+fn locs(index: &str) -> Vec<String> {
+    index
+        .split("<loc>")
+        .skip(1)
+        .filter_map(|s| s.split_once("</loc>").map(|(l, _)| l.to_owned()))
+        .collect()
+}
+
+/// The index, every file it names and the first file past each kind's last, as one
+/// text: `== <path> <status>` lines, each followed by the body of a 200.
+async fn render_sitemaps(router: &axum::Router) -> String {
+    let index = send(router, request(Method::GET, "/sitemap.xml")).await;
+    assert_eq!(index.status, StatusCode::OK);
+    assert_eq!(well_formed(&index.body), "sitemapindex");
+    let mut paths: Vec<String> = locs(&index.body)
+        .iter()
+        .map(|l| l.strip_prefix(crate::common::SITE_URL).unwrap().to_owned())
+        .collect();
+    paths.extend(["/sitemap-post-4.xml".into(), "/sitemap-page-3.xml".into()]);
+    let mut out = format!("== /sitemap.xml 200\n{}", index.body);
+    for path in paths {
+        let r = send(router, request(Method::GET, &path)).await;
+        out.push_str(&format!("== {path} {}\n", r.status.as_u16()));
+        if r.status == StatusCode::OK {
+            assert_eq!(well_formed(&r.body), "urlset");
+            out.push_str(&r.body);
+        }
+    }
+    out
+}
+
+/// The sitemaps of [`golden_site`] (the index and every file) match the checked-in
+/// [`GOLDEN`] text, captured before the M4-4 rewrite of the sitemap reads: the same
+/// URLs, `lastmod`s and file split on both backends.
+async fn sitemaps_are_unchanged(app: App) -> App {
+    golden_site(&app).await;
+    let router = golden_router(&app, app.site.store.clone()).await;
+    let got = render_sitemaps(&router).await;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN);
+    if std::env::var_os("FERRITE_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&path, &got).unwrap();
+    }
+    let want = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        got, want,
+        "regenerate with FERRITE_UPDATE_GOLDEN=1 if the change is intended"
+    );
+    app
+}
+
 app_tests!(
+    sitemaps_are_unchanged,
     feed_last_build_date_follows_updates,
     sitemap_split_and_escaping,
     rss_feeds,
