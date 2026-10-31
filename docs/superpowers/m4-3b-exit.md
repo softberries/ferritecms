@@ -38,8 +38,7 @@ the controller's ledger):
    matter between `+++` lines, the folder scan (`index.md`/`README.md` as a folder's page,
    `NN-` order prefixes, 5000 files, 1 MiB each, symlinks never followed), CommonMark plus
    GFM tables and strikethrough through `pulldown-cmark` `=0.13.6` (and its
-   `pulldown-cmark-escape`) and the WordPress
-   crate's HTML converter (R-b4, R-b5).
+   `pulldown-cmark-escape`) and the WordPress crate's HTML converter (R-b4, R-b5).
 3. **`page_tree()` and `query(order=)`** (`35f31c3`; P56–P58, R-b1, R-b10):
    `SiteReader::tree(kind)` with the sitemap's visibility, at most 1000 nodes
    (`truncated`), `archive:<kind>` as its cache key; the theme helper `page_tree(post=,
@@ -116,8 +115,9 @@ duplicate front page, §7).
 same in Firefox and WebKit in light (28 docs shots). Measured in each engine: no
 horizontal page scroll at either width (`scrollWidth == clientWidth`), one `<h1>`, the
 sidebar nav and the TOC visible at 1440 px and hidden at 375 px, 26 sidebar links in the
-DOM once "Pages" is opened (the closed sections' links are in collapsed `<details>`), `docs.js`'s anchors (3, 5 and 14 on the three pages) and one Copy
-button per code block (4 and 2), no console error.
+DOM once "Pages" is opened (the closed sections' links are in collapsed `<details>`),
+`docs.js`'s anchors (3, 5 and 14 on the three pages) and one Copy button per code block
+(4 and 2), no console error.
 
 What the shots show:
 
@@ -136,8 +136,8 @@ What the shots show:
   overflow. On the configuration page the Copy button sits above the code block (under
   30rem) and the long command scrolls inside the block, not the page.
 - **375 px, "Pages" open** (dark): the section list under the toggle (Introduction, then
-  Getting started open on the trail with Install current, the other four sections closed). The first capture was taken during the 0.15 s
-  chevron rotation and showed it still pointing right; re-taken after 0.4 s the computed
+  Getting started open on the trail with Install current, the other four sections
+  closed). The first capture was taken during the 0.15 s chevron rotation and showed it still pointing right; re-taken after 0.4 s the computed
   transform is `rotate(45deg)` (pointing down) — a capture artefact, not a defect.
 - **Firefox and WebKit** (light, both widths): the same layout as Chromium, sidebar and TOC
   in place at 1440 px, the toggle and its tree at 375 px. This is a visual check only; axe
@@ -347,7 +347,9 @@ theme-shipped content types. Next: M4-4.
 
 `site/VERIFIED.md` lists every claim in `site/content/` with what it was checked against
 (part 1 by Task 7, part 2 by Task 8, both re-checked in their reviews). Counted here with
-one rule, applied by a script to every row:
+one rule, applied to every row (by a scratch script, not kept); a few rows sit on the
+boundary (`migrate down`'s "only its refusal", a "from the code" operations row), so the
+split is a judgement at the margin, about ±2 rows:
 
 - **Not run:** the Result starts with "**Not run**".
 - **Verified, a part not run:** some part of the claim was neither executed nor read in the
