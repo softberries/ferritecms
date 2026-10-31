@@ -228,6 +228,7 @@ async fn scheduled_backup_while_serving_restores() {
             every: Duration::from_secs(2),
             payload: json!({"v": 1}),
             max_attempts: SITE_BACKUP_MAX_ATTEMPTS,
+            offset: Duration::ZERO,
         }]),
         scheduler_tick: Some(Duration::from_millis(100)),
         runner: RunnerOverrides {

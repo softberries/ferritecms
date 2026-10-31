@@ -85,6 +85,9 @@ pub fn site_backup(
         every: Duration::from_secs(every),
         payload: json!({"v": 1}),
         max_attempts: SITE_BACKUP_MAX_ATTEMPTS,
+        // At the period start: 00:00 UTC (Thursdays for weekly); `artifacts.gc` runs at
+        // 03:00 (M4-4 P75).
+        offset: Duration::ZERO,
     };
     Ok(Some((handler, periodic)))
 }
