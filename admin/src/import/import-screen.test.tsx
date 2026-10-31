@@ -365,3 +365,40 @@ test("a busy start without a running run links to the queued import jobs", async
   const link = await screen.findByRole("link", { name: "See the queued import jobs" });
   expect(link.getAttribute("href")).toBe("/admin/system/jobs?status=queued&kind=import.wordpress");
 });
+
+test("the run's live region is in the page before the start, then says the phase", async () => {
+  stubXhr(202, { job_id: JOB, status: "queued", attempts: 0 });
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [] }),
+    [`/api/v1/import/jobs/${JOB}`]: () => json({ job_id: JOB, status: "queued", attempts: 0 }),
+  });
+  renderWithRouter(<Harness />);
+  // The start puts the job in the cache, so the panel mounts knowing its phase: the
+  // region must already be there, empty, for that first phase to be a change.
+  await screen.findByRole("button", { name: "Start import" });
+  const live = document.querySelector<HTMLElement>("[data-slot=import-run-live]")!;
+  expect(live).toHaveAttribute("aria-live", "polite");
+  expect(live).toBeEmptyDOMElement();
+  await chooseAndStart();
+  await screen.findByRole("heading", { name: "Waiting for a worker" });
+  await vi.waitFor(() => expect(live).toHaveTextContent("Import queued."));
+  expect(document.querySelector("[data-slot=import-run-live]")).toBe(live);
+});
+
+test("a job already cached at load is said once the region has settled", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queued = { job_id: JOB, status: "queued" as const, attempts: 0 };
+  client.setQueryData(qk.import.job(JOB), queued);
+  stubRoutes({
+    "/api/v1/import/runs": () => json({ items: [] }),
+    [`/api/v1/import/jobs/${JOB}`]: () => json(queued),
+  });
+  renderWithRouter(<Harness initial={JOB} />, client);
+  // The panel mounts with its phase in the same commit as the screen: the region is in
+  // the page, still empty right after, and speaks a moment later in the same node.
+  await screen.findByRole("heading", { name: "Waiting for a worker" });
+  const live = document.querySelector<HTMLElement>("[data-slot=import-run-live]")!;
+  expect(live).toBeEmptyDOMElement();
+  await vi.waitFor(() => expect(live).toHaveTextContent("Import queued."));
+  expect(document.querySelector("[data-slot=import-run-live]")).toBe(live);
+});

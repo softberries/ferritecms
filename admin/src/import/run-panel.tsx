@@ -2,7 +2,8 @@
 // running (`importJobQuery`) and left alone once it is done or dead. Its phase, the step
 // stepper, when it started and its last heartbeat, the counts per kind, the error, and
 // the report: the page in a new tab, the JSON as a download (a failed run's partial
-// report too). Phase changes are announced once, by a live region that mounts empty.
+// report too). Phase changes are announced once, through the screen's live region
+// (`announce`), which is in the page before the panel.
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
@@ -54,11 +55,22 @@ export interface RunPanelProps {
   onDismiss: () => void;
   /** Move focus to the panel's heading once it shows (the start card just went away). */
   focusHeading?: boolean;
+  /**
+   * Says `text` through a polite live region that is already in the page (the screen's,
+   * `data-slot="import-run-live"`): each phase or step change, once.
+   */
+  announce: (text: string) => void;
 }
 
 const TERMINAL: ReadonlySet<ImportPhase> = new Set(["done", "failed"]);
 
-export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: RunPanelProps) {
+export function RunPanel({
+  jobId,
+  onSettled,
+  onDismiss,
+  focusHeading = false,
+  announce,
+}: RunPanelProps) {
   const { t } = useTranslation("import");
   const job = useQuery(importJobQuery(jobId));
   const phase = job.data ? importPhase(job.data) : null;
@@ -71,26 +83,17 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
     onSettled?.(job.data);
   }, [job.data, terminal, jobId, onSettled]);
 
-  // The live region renders empty, before the job is read (every branch below renders
-  // it first, so it stays the same element); its text is written once it is in the page
-  // (and on each phase or step change), so the first phase ("Import queued.") is read too.
-  const live = useRef<HTMLSpanElement>(null);
-  const region = (
-    <span
-      ref={live}
-      data-slot="import-run-live"
-      className="sr-only"
-      aria-live="polite"
-      aria-atomic="true"
-    />
-  );
+  // Each phase or step change is said once, through the screen's live region (it is in
+  // the page before this panel mounts, so even a phase known at mount, from a job the
+  // start put in the cache, is a change it announces).
   useEffect(() => {
-    if (!phase || !live.current) return;
-    live.current.textContent =
+    if (!phase) return;
+    announce(
       phase === "running"
         ? t("run.announce.running", { step: step ? t(`run.step.${step as "parse"}`) : "" })
-        : t(`run.announce.${phase}`);
-  }, [phase, step, t]);
+        : t(`run.announce.${phase}`),
+    );
+  }, [phase, step, t, announce]);
 
   const heading = useRef<HTMLHeadingElement>(null);
   const focused = useRef(false);
@@ -104,38 +107,27 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
   if (job.isError && !job.data) {
     if (job.error instanceof ApiError && job.error.status === 404) {
       return (
-        <>
-          {region}
-          <EmptyState
-            icon={SearchXIcon}
-            title={t("run.notFound")}
-            body={t("description")}
-            action={
-              <Button variant="outline" onClick={onDismiss}>
-                {t("run.another")}
-              </Button>
-            }
-          />
-        </>
+        <EmptyState
+          icon={SearchXIcon}
+          title={t("run.notFound")}
+          body={t("description")}
+          action={
+            <Button variant="outline" onClick={onDismiss}>
+              {t("run.another")}
+            </Button>
+          }
+        />
       );
     }
-    return (
-      <>
-        {region}
-        <ErrorState error={job.error} retry={() => void job.refetch()} />
-      </>
-    );
+    return <ErrorState error={job.error} retry={() => void job.refetch()} />;
   }
   if (!job.data || !phase) {
     return (
-      <>
-        {region}
-        <div aria-busy="true" data-slot="import-run-loading" className="rounded-xl border p-5">
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="mt-6 h-10 w-full" />
-          <Skeleton className="mt-6 h-24 w-full" />
-        </div>
-      </>
+      <div aria-busy="true" data-slot="import-run-loading" className="rounded-xl border p-5">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="mt-6 h-10 w-full" />
+        <Skeleton className="mt-6 h-24 w-full" />
+      </div>
     );
   }
   const data = job.data;
@@ -143,9 +135,7 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
   const error = run?.error ?? (phase === "failed" || phase === "retrying" ? data.last_error : null);
 
   return (
-    <>
-      {region}
-      <section
+    <section
         data-slot="import-run"
         data-phase={phase}
         aria-label={t("run.label")}
@@ -227,7 +217,6 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
           </footer>
         ) : null}
       </section>
-    </>
   );
 }
 

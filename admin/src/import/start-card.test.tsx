@@ -1,6 +1,6 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { setCsrfToken } from "@/api/csrf";
 import { renderWithRouter } from "@/test/render";
 import { StartCard } from "./start-card";
@@ -299,6 +299,12 @@ test("focus follows the upload and progress is announced at milestones", async (
 });
 
 test("in_progress_wait_offers_retry", async () => {
+  // Fake timers that still follow the real clock (user-event's own delays keep working):
+  // the end of the automatic wait is reached with `advanceTimersByTime`, not a sleep.
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const user = await startedCard();
   const key = sent[0]!.headers["Idempotency-Key"];
   // While the one automatic retry waits (`Retry-After`, at most 10 s), Retry runs it now.
@@ -311,7 +317,9 @@ test("in_progress_wait_offers_retry", async () => {
   // wait would have ended.
   sent[1]!.onerror?.();
   await screen.findByRole("button", { name: "Retry" });
-  await new Promise((resolve) => setTimeout(resolve, 1_300));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
   expect(sent).toHaveLength(2);
 });
 
