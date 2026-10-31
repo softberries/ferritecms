@@ -245,13 +245,21 @@ path, so `/` canonicals `/`). The target keeps `?cpage=N` (a comment page) and n
 `cpage` is the only query parameter in a single item's cache key, so the redirect is cached
 like the page under the request path, with the page's dependency keys plus
 `option:reading.front_page`; changing the option refreshes it (and the old front page's
-permalink is a page again). `/` is the `Front` route and never redirects; the front page's
-children keep their paths (`/home/x/`); a page of the same slug under another parent, or any
-page while the front page lists posts, is an ordinary page; a preview (`/_preview/<id>`)
-renders the item itself. Logged-in requests get the same 301 (`private, no-store`, like any
-logged-in answer). Links built from `PageItem.url` (listings, cards, breadcrumbs, menus,
-redirect rows that point at the permalink) still name the permalink and take one hop; the
-content tree (§4) names the front page `/`.
+permalink is a page again). The 301 carries `Cache-Control: public, max-age=3600`: without
+it browsers keep a 301 as long as they like, and this one depends on an option, not on a
+moved URL; after `reading.front_page` changes, the page cache drops the entry at once, but a
+browser holding the 301 would keep sending the old front page's permalink to `/`, where
+another page now is. One hour keeps repeat visits cheap and bounds that. `/` is the `Front`
+route and never redirects; the front page's children keep their paths (`/home/x/`); a page of
+the same slug under another parent, or any page while the front page lists posts, is an
+ordinary page; a preview (`/_preview/<id>`) renders the item itself. Logged-in requests get the
+same 301 (`private, no-store`, like any logged-in answer). `/home` (no slash) reaches `/` in
+two hops: the router's canonical 301 to `/home/` (it has no store), then this one. The content
+tree (§4) and `SiteReader::links` (menus, the comment form's redirect and back links) name the
+front page `/`; links built from `PageItem.url` (listings, cards, `related`, feeds, breadcrumbs
+from items, plugin `Post.url`, the API's `url`) and redirect rows that point at the permalink
+still name it and take one hop. Making hydration name it `/` would also break this check:
+`content()` matches `item.url` against the request path, so `/home/` would become a 404.
 
 **Term archives** (P25). `/{taxonomy}/{slug}/` lists the public items of every public type the
 taxonomy applies to (its `content_types` but media, at most 20, through `ContentQuery.kinds`),

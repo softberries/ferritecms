@@ -525,6 +525,9 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         .iter()
         .any(|u| resolve(u, "/", &origin).as_deref() == Some("/"));
     let mut front_permalink = None;
+    // Each page's sidebar links, checked against the front page's permalink after the
+    // loop (pages before the permalink in sitemap order too).
+    let mut sidebars: Vec<(String, Vec<String>)> = Vec::new();
     for url in &urls {
         let mut path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
         let mut page = get(port, &path);
@@ -554,11 +557,7 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         if !tree_links.iter().any(|l| l == "/") {
             problems.push(format!("{path}: the sidebar does not link `/`"));
         }
-        if let Some(p) = &front_permalink
-            && tree_links.contains(p)
-        {
-            problems.push(format!("{path}: the sidebar links the front page as {p}"));
-        }
+        sidebars.push((path.clone(), tree_links));
         let scan = scan(&page.body);
         if scan.h1 != 1 {
             problems.push(format!("{path}: {} <h1> elements", scan.h1));
@@ -606,6 +605,13 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         urls.len(),
         checked.keys().collect::<BTreeSet<_>>()
     );
+    if let Some(p) = &front_permalink {
+        for (path, links) in &sidebars {
+            if links.contains(p) {
+                problems.push(format!("{path}: the sidebar links the front page as {p}"));
+            }
+        }
+    }
     // The TOC check above must not pass because no page had a TOC.
     assert!(with_toc >= 1, "no page has a <nav class=\"docs-toc\">");
     assert!(

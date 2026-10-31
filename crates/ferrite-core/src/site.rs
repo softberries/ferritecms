@@ -840,7 +840,9 @@ impl SiteReader {
     /// ancestors (hierarchical types) of the public ones; no authors, media or body
     /// rendering. Records `post:<id>` for every id asked for, shown or not, so
     /// publishing a hidden target refreshes the page, plus the keys of the terms and
-    /// ancestors the URLs use.
+    /// ancestors the URLs use. The static front page links `/` (M4-4 P67, its permalink
+    /// redirects there): when any item is public, one option read and
+    /// `option:reading.front_page`.
     pub async fn links(
         &self,
         ids: &[ContentId],
@@ -866,10 +868,21 @@ impl SiteReader {
                     .filter(|i| has_public_page(i, now)),
             );
         }
+        let front = if items.is_empty() {
+            None
+        } else {
+            deps.insert(option_key(FRONT_PAGE_OPTION));
+            front_page_id(repos).await?
+        };
         let out = public_paths(repos, rules, items, &mut deps)
             .await?
             .into_iter()
             .map(|(item, url)| {
+                let url = if front == Some(item.id) {
+                    "/".to_owned()
+                } else {
+                    url
+                };
                 (
                     item.id,
                     ItemLink {

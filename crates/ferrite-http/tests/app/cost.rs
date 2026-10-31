@@ -15,9 +15,11 @@ use crate::common::SITE_URL;
 use crate::harness::{App, SITE_TITLE, load_theme, request, send};
 
 /// Most store calls a zero-result search page with both demo menus may take.
-const SEARCH_PAGE_BOUND: usize = 18;
-/// Most store calls the two demo menus (7 entries) may add to a page.
-const MENUS_BOUND: usize = 8;
+const SEARCH_PAGE_BOUND: usize = 20;
+/// Most store calls the two demo menus (7 entries) may add to a page: since M4-4 (P67)
+/// each menu with a public item entry also reads `reading.front_page` once
+/// (`SiteReader::links` names the front page `/`), one call per menu.
+const MENUS_BOUND: usize = 10;
 
 fn entry(position: i32, kind: MenuItemKind, target: Option<uuid::Uuid>, url: &str) -> MenuItem {
     MenuItem {

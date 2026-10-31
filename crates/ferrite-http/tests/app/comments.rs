@@ -43,6 +43,7 @@ app_tests!(
     pending_comments_never_render,
     attribute_breaking_input_is_inert,
     redirects_stay_on_the_post,
+    front_page_comments_redirect_to_root,
     reply_forms_follow_the_stored_depth,
 );
 
@@ -716,6 +717,30 @@ async fn redirects_stay_on_the_post(app: App) -> App {
         .await;
     assert_error_page(&r, 422, "the comment must be", "/hello/");
     assert!(!r.body.contains("evil.example"), "{}", r.body);
+    app
+}
+
+/// M4-4 P67: a comment on the static front page redirects to `/`, where the page is,
+/// not to its permalink (which would answer another 301).
+async fn front_page_comments_redirect_to_root(app: App) -> App {
+    let post = app.post("Hello", "hello", &[]).await;
+    ferrite_core::OptionService::new(app.site.store.clone())
+        .set(
+            &app.admin,
+            ferrite_core::site::FRONT_PAGE_OPTION,
+            &serde_json::json!(post.id.to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+    let r = app
+        .send(form(pairs(&guest(post.id, "On the front page"))))
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{r:?}");
+    assert_eq!(r.header("location"), Some("/#comment-pending"));
+    // An error page links back to `/` too.
+    let r = app.send(form(pairs(&guest(post.id, "")))).await;
+    assert_error_page(&r, 422, "the comment must be", "/");
     app
 }
 
