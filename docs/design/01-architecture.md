@@ -429,8 +429,8 @@ most 16 sends in flight (more are refused), each bounded by 10 s, run in backgro
 so no plugin call or request waits for SMTP, and cancelled at shutdown inside the
 background-stop second (only an explicit shutdown cancels; a dropped queue lets its sends
 finish). Plugin mail subjects are prefixed with `[<site.title>] `, the title cut to 100
-characters, and left out when it is empty or contains control characters (checked once
-when `serve` builds the services). Every mailer refuses (never folds) control characters, CR/LF and
+characters (`ferrite_core::mail::subject_title`, the rule core mails use), and left out when it is empty or contains control characters (checked at each
+send; an unreadable `site.title` option gives the configured title, M4-4 P77). Every mailer refuses (never folds) control characters, CR/LF and
 Unicode line separators in subjects and addresses. Without `[mail]` the plugin
 `mail.notify-admins` import answers "mail is not configured".
 

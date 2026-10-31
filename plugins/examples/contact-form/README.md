@@ -137,7 +137,7 @@ HTML-escaped, although the sandbox would not run a script anyway.
 | Field | Rule |
 |---|---|
 | `name` | required, 1 to 100 characters |
-| `email` | required, 3 to 254 characters, exactly one `@` with text on both sides, no whitespace or control character |
+| `email` | required, 3 to 254 characters, exactly one `@` with text on both sides, no whitespace, control or format (Cf: zero-width, bidirectional override, soft hyphen) character |
 | `subject` | optional, up to 150 characters |
 | `message` | required, 10 to 5000 characters |
 | `website` | the honeypot: must be empty |

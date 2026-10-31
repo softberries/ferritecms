@@ -8,7 +8,7 @@ use ferrite_core::{
     auth::SiteKey,
     events::{invalidate, option_key, post_key},
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
-    mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
+    mail::{MailQueue, Mailer, OutgoingMail, check_address, subject_title},
     settings,
     site::ListOrder,
 };
@@ -38,10 +38,6 @@ pub const MAIL_PER_PLUGIN_HOUR: u32 = 10;
 /// Most admins one plugin mail goes to (P18).
 pub const MAIL_MAX_ADMINS: u32 = 50;
 const MAIL_WINDOW: Duration = Duration::from_secs(3600);
-/// Longest site title used as the plugin-mail subject prefix, in characters: with the
-/// brackets and a 200-char plugin subject the subject stays below
-/// `ferrite_core::mail::MAX_SUBJECT_CHARS` (400).
-pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 
 /// Store-backed services for the plugin imports. Capability and key-scope checks are
 /// the host's (`ferrite-plugin-host`); this layer adds visibility:
@@ -142,10 +138,14 @@ impl StoreHostServices {
     /// site title at send time (P51): the `site.title` option, else the configured one
     /// ([`with_site_title`](Self::with_site_title)).
     ///
-    /// The title is checked at each send, so it cannot break a plugin mail (review M3):
-    /// one that is not header-safe (control characters, line separators) is not used
-    /// (no prefix, logged), and a longer one is cut to `MAIL_TITLE_PREFIX_CHARS`. An
-    /// empty title gives no prefix.
+    /// The title is checked at each send, so it cannot break a plugin mail (review M3),
+    /// by the rules core mails use (`ferrite_core::mail::subject_title`): one that is
+    /// not header-safe (control characters, line separators) is not used (no prefix,
+    /// logged), and a longer one is cut to
+    /// `ferrite_core::mail::MAX_SUBJECT_TITLE_CHARS` (100; with the brackets and a
+    /// 200-char plugin subject the subject stays below `MAX_SUBJECT_CHARS`, 400). An
+    /// empty title gives no prefix; an unreadable `site.title` option gives the
+    /// configured title.
     pub fn with_mailer(mut self, queue: Arc<MailQueue>) -> Self {
         self.mail = Some(queue);
         self
@@ -487,13 +487,8 @@ impl HostServices for StoreHostServices {
         if bcc.is_empty() {
             return Err("no active admin has a usable e-mail address".to_owned());
         }
-        // The option read failing costs the prefix, not the mail.
-        let title = settings::site_title(self.store.as_ref(), &self.site_title)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(plugin, error = %e, "site title unreadable; using the configured one");
-                self.site_title.clone()
-            });
+        // The option read failing costs the stored title, not the mail.
+        let title = settings::site_title_or_configured(self.store.as_ref(), &self.site_title).await;
         let subject = format!("{}{subject}", mail_prefix(&title));
         let mail = OutgoingMail {
             to: Vec::new(),
@@ -505,21 +500,21 @@ impl HostServices for StoreHostServices {
     }
 }
 
-/// `"[<title>] "` for plugin-mail subjects: nothing for an empty or header-unsafe
-/// title, at most `MAIL_TITLE_PREFIX_CHARS` characters of it otherwise.
+/// `"[<title>] "` for plugin-mail subjects, from core's [`subject_title`] (trimmed, at
+/// most `MAX_SUBJECT_TITLE_CHARS` characters): nothing for an empty or header-unsafe
+/// title (the latter logged).
 fn mail_prefix(site_title: &str) -> String {
-    let title = site_title.trim();
-    if title.is_empty() {
-        return String::new();
+    match subject_title(site_title) {
+        Some(title) => format!("[{title}] "),
+        None => {
+            if !site_title.trim().is_empty() {
+                tracing::warn!(
+                    "site.title contains control characters; plugin mail subjects get no site prefix"
+                );
+            }
+            String::new()
+        }
     }
-    if !header_safe(title) {
-        tracing::warn!(
-            "site.title contains control characters; plugin mail subjects get no site prefix"
-        );
-        return String::new();
-    }
-    let cut: String = title.chars().take(MAIL_TITLE_PREFIX_CHARS).collect();
-    format!("[{}] ", cut.trim_end())
 }
 
 /// The core definition of a loaded manifest's setting (the value rules are shared,

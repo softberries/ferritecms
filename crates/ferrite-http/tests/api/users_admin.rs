@@ -14,6 +14,7 @@ use crate::{
 
 api_tests!(
     users_filter_params,
+    blank_q_lists_all_users,
     admin_resets_another_users_totp,
     own_email_change_needs_password
 );
@@ -30,6 +31,20 @@ async fn logins(api: &Api, b: &Bearer, query: &str) -> Vec<String> {
         .iter()
         .map(|i| i["login"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// P77: a blank `q` (empty or only whitespace) is no search, as on `/redirects`,
+/// `/media` and `/content`; other filters still apply.
+async fn blank_q_lists_all_users(api: Api) -> Api {
+    let ada = api.user("ada", Role::Admin, false).await;
+    let b = api.bearer(&ada, &["*"]).await;
+    api.user("bob", Role::Editor, false).await;
+    api.user("dee", Role::Author, false).await;
+    for q in ["q=", "q=%20%20", "q=%09"] {
+        assert_eq!(logins(&api, &b, q).await, ["ada", "bob", "dee"], "{q}");
+    }
+    assert_eq!(logins(&api, &b, "q=%20&role=editor").await, ["bob"]);
+    api
 }
 
 async fn users_filter_params(api: Api) -> Api {
@@ -73,14 +88,14 @@ async fn users_filter_params(api: Api) -> Api {
         ["cy"]
     );
 
-    // `q`: 1..=100 characters after trimming (422 on `q`).
-    for bad in ["q=%20%20".to_owned(), format!("q={}", "a".repeat(101))] {
-        let p = b
-            .get(&api, &format!("{USERS}?{bad}"))
-            .await
-            .assert_problem(422, "validation");
-        assert_eq!(p["errors"][0]["field"], "q", "{bad}");
-    }
+    // `q`: at most 100 characters after trimming (422 on `q`); blank is no search
+    // (`blank_q_lists_all_users`).
+    let bad = format!("q={}", "a".repeat(101));
+    let p = b
+        .get(&api, &format!("{USERS}?{bad}"))
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "q", "{bad}");
     assert!(
         logins(&api, &b, &format!("q={}", "a".repeat(100)))
             .await

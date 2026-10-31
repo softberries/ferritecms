@@ -9,11 +9,13 @@ use serde_json::{Value, json};
 
 use crate::{
     api_tests,
-    harness::{Api, Bearer},
+    harness::{Api, Bearer, Part},
 };
 
 api_tests!(
     relation_types_over_http,
+    check_relations_hides_unreadable_items,
+    check_parent_hides_unreadable_parents,
     types_crud_over_http,
     terms_crud_over_http,
     editor_cannot_create_types
@@ -681,6 +683,136 @@ async fn relation_types_over_http(api: Api) -> Api {
         .await;
     assert_eq!(p.status, StatusCode::CREATED, "{p:?}");
     api
+}
+
+/// P77: a relation to an item the caller cannot read counts as missing (accepted), so
+/// a `422` naming the field's types never tells an author that someone else's draft
+/// exists or what type it has. Readable items are still checked: the author's own
+/// draft, a published item, and media only for a token that may read media.
+async fn check_relations_hides_unreadable_items(api: Api) -> Api {
+    let (_, admin) = admin(&api).await;
+    let book = json!({"name": "book", "label": "Books", "fields": [
+        {"name": "related", "kind": "relation", "types": ["page"]}
+    ]});
+    let r = admin
+        .send(&api, Method::POST, TYPES, Some(&book), None)
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let draft = new_post(&api, &admin, "Admin draft").await;
+    let live = new_post(&api, &admin, "Admin live").await;
+    let r = admin
+        .send(
+            &api,
+            Method::POST,
+            &format!("/api/v1/content/post/{live}/publish"),
+            None,
+            Some(1),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#;
+    let r = admin
+        .upload(
+            &api,
+            &[Part::file("dot.svg", "image/svg+xml", svg.as_bytes())],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    let media = r.json()["id"].as_str().unwrap().to_owned();
+
+    let bea = api.user("bea", Role::Author, false).await;
+    let all = api.bearer(&bea, &["*"]).await;
+    let no_media = api.bearer(&bea, &["content:write"]).await;
+    let own = new_post(&api, &all, "Bea draft").await;
+    let book = |b: &Bearer, related: &str| {
+        let body = json!({"title": "B", "fields": {"related": related}});
+        let b = Bearer(b.0.clone());
+        let api = &api;
+        async move {
+            b.send(api, Method::POST, "/api/v1/content/book", Some(&body), None)
+                .await
+        }
+    };
+    // Unreadable: another author's draft, and media for a token without `media:read`.
+    for (b, id) in [(&all, &draft), (&no_media, &media)] {
+        let r = book(b, id).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{id}: {r:?}");
+    }
+    // Readable items of the wrong type are still refused, naming the types.
+    for (b, id) in [
+        (&all, &own),
+        (&all, &live),
+        (&all, &media),
+        (&no_media, &own),
+    ] {
+        let p = book(b, id).await.assert_problem(422, "validation");
+        assert_eq!(p["errors"][0]["field"], "fields.related", "{id}: {p}");
+        let message = p["errors"][0]["detail"].as_str().unwrap();
+        assert!(message.contains("type page"), "{p}");
+    }
+    api
+}
+
+/// P77 for `parent_id`: a parent the caller cannot read gets exactly the answer of a
+/// missing one (status and body), whatever its type or status; a readable parent of
+/// the wrong type is still named as such.
+async fn check_parent_hides_unreadable_parents(api: Api) -> Api {
+    let (_, admin) = admin(&api).await;
+    let draft_page = api_page(&api, &admin).await;
+    let draft_post = new_post(&api, &admin, "Admin draft").await;
+    let bea = api.user("bea", Role::Author, false).await;
+    let b = api.bearer(&bea, &["*"]).await;
+    let own_post = new_post(&api, &b, "Bea draft").await;
+    let page_under = |parent: String| {
+        let body = json!({"title": "Child", "parent_id": parent});
+        let b = Bearer(b.0.clone());
+        let api = &api;
+        async move {
+            b.send(api, Method::POST, "/api/v1/content/page", Some(&body), None)
+                .await
+        }
+    };
+    let missing = page_under(uuid::Uuid::now_v7().to_string()).await;
+    assert_eq!(
+        missing.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{missing:?}"
+    );
+    let p = missing.json();
+    assert_eq!(p["errors"][0]["field"], "parent_id", "{p}");
+    assert_eq!(p["errors"][0]["detail"], "unknown parent", "{p}");
+    for unreadable in [&draft_page, &draft_post] {
+        let r = page_under(unreadable.clone()).await;
+        assert_eq!(r.status, missing.status, "{unreadable}: {r:?}");
+        assert_eq!(r.json(), p, "{unreadable}");
+    }
+    let p = page_under(own_post).await.assert_problem(422, "validation");
+    assert_eq!(
+        p["errors"][0]["detail"], "parent must be of type \"page\"",
+        "{p}"
+    );
+    // The admin reads the draft page: it is a valid parent.
+    let r = admin
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/page",
+            Some(&json!({"title": "Child", "parent_id": draft_page})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    api
+}
+
+/// The id of a new draft post of `b`'s user.
+async fn new_post(api: &Api, b: &Bearer, title: &str) -> String {
+    let body = json!({"title": title});
+    let r = b
+        .send(api, Method::POST, "/api/v1/content/post", Some(&body), None)
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
+    r.json()["id"].as_str().unwrap().to_owned()
 }
 
 /// The id of a new page.

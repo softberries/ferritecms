@@ -751,13 +751,53 @@ fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// The HTTP client options of the S3 store. `env` is the environment of the
+/// no-credentials path (empty with explicit keys, which read no environment): its
+/// `AWS_*` client keys (a proxy, `AWS_ALLOW_HTTP`, HTTP/1 only, pool settings), parsed
+/// as `AmazonS3Builder::from_env` parses them, are kept, because
+/// `with_client_options` replaces everything `from_env` read. Then our timeouts, which
+/// win over the environment's: no total-request timeout (large artifacts stream for as
+/// long as they need), connects within 5 s, a body read that stalls for 30 s fails.
+/// `allow_http` (`[media.s3] allow_http`) only turns plain HTTP on; `false` leaves the
+/// environment's `AWS_ALLOW_HTTP`.
+fn s3_client_options(
+    env: impl IntoIterator<Item = (String, String)>,
+    allow_http: bool,
+) -> ClientOptions {
+    let mut opts = ClientOptions::new();
+    for (key, value) in env {
+        if !key.starts_with("AWS_") {
+            continue;
+        }
+        if let Ok(AmazonS3ConfigKey::Client(key)) = key.to_ascii_lowercase().parse() {
+            opts = opts.with_config(key, value);
+        }
+    }
+    if allow_http {
+        opts = opts.with_allow_http(true);
+    }
+    opts.with_timeout_disabled()
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_read_timeout(Duration::from_secs(30))
+}
+
+/// The process environment as `AmazonS3Builder::from_env` sees it (UTF-8 pairs only).
+fn utf8_env() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect()
+}
+
 fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
     install_crypto_provider();
-    let mut builder = match (&cfg.access_key_id, &cfg.secret_access_key) {
-        (None, None) => AmazonS3Builder::from_env(),
-        (Some(id), Some(secret)) => AmazonS3Builder::new()
-            .with_access_key_id(id)
-            .with_secret_access_key(secret.expose()),
+    let (mut builder, env) = match (&cfg.access_key_id, &cfg.secret_access_key) {
+        (None, None) => (AmazonS3Builder::from_env(), utf8_env()),
+        (Some(id), Some(secret)) => (
+            AmazonS3Builder::new()
+                .with_access_key_id(id)
+                .with_secret_access_key(secret.expose()),
+            Vec::new(),
+        ),
         _ => {
             return Err(MediaError::Config(
                 "s3 access_key_id and secret_access_key must be set together".into(),
@@ -767,16 +807,7 @@ fn build_s3(cfg: &S3Config) -> Result<object_store::aws::AmazonS3, MediaError> {
     builder = builder
         .with_bucket_name(&cfg.bucket)
         .with_region(&cfg.region)
-        // Must come before `with_allow_http`: it replaces the whole `ClientOptions`.
-        .with_client_options(
-            // No total-request timeout: large artifacts stream for as long as they need.
-            // Connects must succeed within 5 s; a body read that stalls for 30 s fails.
-            ClientOptions::new()
-                .with_timeout_disabled()
-                .with_connect_timeout(Duration::from_secs(5))
-                .with_read_timeout(Duration::from_secs(30)),
-        )
-        .with_allow_http(cfg.allow_http)
+        .with_client_options(s3_client_options(env, cfg.allow_http))
         .with_virtual_hosted_style_request(cfg.virtual_hosted_style)
         .with_retry(RetryConfig {
             max_retries: 2,
@@ -923,5 +954,73 @@ mod tests {
         let placed = store.put_artifact(data).await.unwrap();
         assert_eq!(placed.hash, hash);
         assert!(!placed.created);
+    }
+
+    /// The S3 client options keep what the environment's `AWS_*` client keys set (as
+    /// `AmazonS3Builder::from_env` reads them: a proxy, `AWS_ALLOW_HTTP`, HTTP/1 only),
+    /// with our timeouts on top (no total timeout, whatever `AWS_TIMEOUT` says), and
+    /// `allow_http` from the config only turns plain HTTP on.
+    #[test]
+    fn build_s3_keeps_environment_client_options() {
+        use object_store::ClientConfigKey as K;
+        let env = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        let opts = s3_client_options(
+            env(&[
+                ("AWS_PROXY_URL", "http://proxy.test:3128"),
+                ("AWS_ALLOW_HTTP", "true"),
+                ("AWS_HTTP1_ONLY", "true"),
+                ("AWS_TIMEOUT", "5 seconds"),
+                ("AWS_CONNECT_TIMEOUT", "1 minute"),
+                ("AWS_BUCKET", "elsewhere"),
+                ("PROXY_URL", "http://not-aws.test"),
+                ("aws_user_agent", "lower-case keys are not read"),
+            ]),
+            false,
+        );
+        let ours = ClientOptions::new()
+            .with_connect_timeout(Duration::from_secs(5))
+            .with_read_timeout(Duration::from_secs(30));
+        assert_eq!(
+            opts.get_config_value(&K::ProxyUrl).as_deref(),
+            Some("http://proxy.test:3128")
+        );
+        assert_eq!(
+            opts.get_config_value(&K::AllowHttp).as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            opts.get_config_value(&K::Http1Only).as_deref(),
+            Some("true")
+        );
+        assert_eq!(opts.get_config_value(&K::Timeout), None);
+        assert_eq!(
+            opts.get_config_value(&K::ConnectTimeout),
+            ours.get_config_value(&K::ConnectTimeout)
+        );
+        assert_eq!(
+            opts.get_config_value(&K::ReadTimeout),
+            ours.get_config_value(&K::ReadTimeout)
+        );
+        assert_eq!(
+            opts.get_config_value(&K::UserAgent),
+            ClientOptions::new().get_config_value(&K::UserAgent)
+        );
+
+        let plain = s3_client_options(Vec::new(), false);
+        assert_eq!(
+            plain.get_config_value(&K::AllowHttp).as_deref(),
+            Some("false")
+        );
+        assert_eq!(plain.get_config_value(&K::ProxyUrl), None);
+        let http = s3_client_options(env(&[("AWS_ALLOW_HTTP", "false")]), true);
+        assert_eq!(
+            http.get_config_value(&K::AllowHttp).as_deref(),
+            Some("true")
+        );
     }
 }

@@ -49,8 +49,10 @@ pub(crate) fn parse_media_url(url: &str, create: bool) -> anyhow::Result<MediaSt
 }
 
 /// The settings the builder would not take from the environment itself: `build_s3` always
-/// sets region, plain-HTTP and addressing style, so those are read here. The credentials, the
-/// endpoint and the placement options stay unset and so come from the environment.
+/// sets region and addressing style, so those are read here. `AWS_ALLOW_HTTP` is read here
+/// too, although `build_s3` now keeps the environment's client options (it only turns
+/// plain HTTP on, never off). The credentials, the endpoint and the placement options stay
+/// unset and so come from the environment.
 fn s3_from_env(bucket: String) -> S3Config {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     let flag = |name: &str| {

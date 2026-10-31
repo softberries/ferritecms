@@ -147,11 +147,11 @@ byte range actually served (`0..size` when no range was requested). Validation i
 `get_range` (same `NotFound` / `Range` errors and messages). Inverted and empty ranges are answered
 with a metadata-only request. Dropping the stream aborts the transfer.
 
-S3 client options (`build_s3`, object_store 0.14.2 `ClientOptions`; set before `with_allow_http`, which would otherwise be overwritten, and they replace any client options read by `from_env`): `with_timeout_disabled()`
+S3 client options (`build_s3` through `s3_client_options`, object_store 0.14.2 `ClientOptions`; M4-4): with no keys in the config, the environment's `AWS_*` client keys (`AWS_PROXY_URL`, `AWS_ALLOW_HTTP`, `AWS_HTTP1_ONLY`, pool and keep-alive keys, parsed as `from_env` parses them) are kept, since `with_client_options` replaces what `from_env` read; `[media.s3] allow_http = true` turns plain HTTP on, `false` leaves `AWS_ALLOW_HTTP`; explicit keys read no environment. Then ours, which win over the environment's timeouts (a test checks the built options): `with_timeout_disabled()`
 (no total-request timeout; the 30 s default would cut off large streams), `with_connect_timeout(5 s)`
 (same as the default, set explicitly), `with_read_timeout(30 s)` (per-read idle timeout; the
 default is none). Retries are unchanged (2 retries, 20 s retry timeout). These options were checked
-against `src/client/mod.rs`; they are not exercised by a test (the in-process test server cannot
+against `src/client/mod.rs`; their effect on requests is not exercised by a test (the in-process test server cannot
 stall).
 
 ### Public URLs

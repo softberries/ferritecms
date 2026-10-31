@@ -12,7 +12,7 @@ export type RedirectDto = SchemaRedirectDto;
 /** The CSV download (a plain link; the session cookie authorises it). */
 export const exportRedirectsUrl = "/api/v1/redirects/export";
 
-/** `GET /redirects`; a blank `q` is a `422`, so it is left out. */
+/** `GET /redirects`; a blank `q` is left out (the API takes it as no search too). */
 export function listRedirects(
   query: { q?: string; cursor?: string; limit?: number } = {},
   options: { signal?: AbortSignal } = {},

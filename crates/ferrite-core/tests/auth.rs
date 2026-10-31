@@ -19,7 +19,7 @@ use ferrite_core::{
 };
 use ferrite_domain::{Role, Secret, Timestamp, User, UserStatus};
 use ferrite_store::Store;
-use ferrite_store_tests::{TestDb, backend_tests};
+use ferrite_store_tests::{FailingOptionsStore, TestDb, backend_tests};
 
 const PASSWORD: &str = "correct horse battery";
 const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -1575,6 +1575,37 @@ async fn reset_rate_limits(db: &TestDb) {
     assert_eq!(memory.wait_for(4, MAIL_WAIT).await.len(), 4);
 }
 
+/// P77: a failed `site.title` read costs the stored title, not the mail: the reset mail
+/// (and the TOTP issuer) use the configured title, and the request still answers `Ok`
+/// (no `500` that only a real account could trigger).
+async fn reset_mail_falls_back_when_the_title_read_fails(db: &TestDb) {
+    let clock = Clock::new();
+    db.store()
+        .read()
+        .options()
+        .set("site.title", &serde_json::json!("Stored Title"), true)
+        .await
+        .unwrap();
+    let failing: Arc<dyn Store> =
+        Arc::new(FailingOptionsStore::new(db.shared_store(), "site.title"));
+    let auth = auth_on(failing, &clock);
+    let (memory, queue) = mail_queue();
+    let kim = make_user(db, "kim", Role::Author).await;
+
+    request_reset(&auth, &queue, "kim", ip(1)).await.unwrap();
+    let sent = memory.wait_for(1, MAIL_WAIT).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].subject, "[Test Site] Password reset");
+    assert!(sent[0].text.contains("on Test Site."), "{}", sent[0].text);
+
+    let setup = auth
+        .totp_setup(&Actor::new(kim.id, kim.role))
+        .await
+        .unwrap();
+    let url = &setup.otpauth_url;
+    assert!(url.contains("Test") && !url.contains("Stored"), "{url}");
+}
+
 backend_tests!(
     login_issues_session_and_resolves,
     unknown_user_wrong_password_and_disabled_look_the_same,
@@ -1597,4 +1628,5 @@ backend_tests!(
     reset_ends_sessions_keeps_tokens,
     reset_keeps_totp,
     reset_rate_limits,
+    reset_mail_falls_back_when_the_title_read_fails,
 );

@@ -416,6 +416,7 @@ fn import_error(e: ImportError) -> JobError {
         | ImportError::TooLarge { .. }
         | ImportError::Utf8 { .. }
         | ImportError::Missing { .. }
+        | ImportError::Source { .. }
         | ImportError::Archive { .. } => JobError::Permanent(e.to_string()),
         other => JobError::Retry(other.to_string()),
     }
@@ -442,6 +443,9 @@ mod tests {
         assert!(permanent(import_error(ImportError::Archive {
             path: "u.zip".into(),
             msg: "bad".into()
+        })));
+        assert!(permanent(import_error(ImportError::Source {
+            value: "markdown:docs".into()
         })));
         assert!(permanent(core_error(CoreError::Forbidden(
             "an active admin"

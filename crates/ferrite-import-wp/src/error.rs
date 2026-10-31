@@ -22,6 +22,14 @@ pub enum ImportError {
     Utf8 { offset: u64 },
     #[error("missing {what} at byte {offset}")]
     Missing { what: &'static str, offset: u64 },
+    /// `<wp:base_blog_url>` is a URL, but not an `http(s)` one with a host (M4-4 P77):
+    /// it would not name a WordPress site, and `markdown:<name>` is the Markdown
+    /// importer's source. `value` is cut to 200 characters.
+    #[error(
+        "wp:base_blog_url {value:?} is not an http(s) URL; set it to the old site's \
+         http:// or https:// address"
+    )]
+    Source { value: String },
     /// A file or folder of the run (the WXR file, the work folder, an upload) failed.
     #[error("{}: {source}", path.display())]
     File {

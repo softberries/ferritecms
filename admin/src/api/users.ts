@@ -21,7 +21,7 @@ export const MAX_USER_QUERY = 100;
 
 /**
  * `GET /users` (`manage_users`): one page by login. `q` is trimmed and a blank one left
- * out (the API answers `422` for it).
+ * out (the API takes a blank `q` as no search too).
  */
 export function listUsers(
   query: UserFilters & { cursor?: string; limit?: number } = {},
