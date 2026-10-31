@@ -18,6 +18,6 @@ pub use error::MdError;
 pub use front::{FrontMatter, split_front_matter};
 pub use run::{MdOptions, MdReport, needs_hierarchy, run};
 pub use scan::{
-    FORMAT, MAX_DEPTH, MAX_FILE_BYTES, MAX_FILES, MdDoc, Miss, Problem, Scan, Target, lexical,
-    locate, map_id, resolve, scan,
+    FORMAT, MAX_DEPTH, MAX_FILE_BYTES, MAX_FILES, MAX_TOTAL_BYTES, MAX_VISITED_FOLDERS, MdDoc,
+    Miss, Problem, Scan, Target, lexical, locate, map_id, resolve, scan,
 };
