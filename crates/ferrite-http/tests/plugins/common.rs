@@ -304,8 +304,8 @@ impl Site {
                 published_at: published.map(|o| Timestamp::from_micros(now + o).unwrap()),
                 scheduled_at: (status == ContentStatus::Scheduled)
                     .then(|| Timestamp::from_micros(now + HOUR).unwrap()),
-                    created_at: None,
-                    updated_at: None,
+                created_at: None,
+                updated_at: None,
             })
             .await
             .unwrap();

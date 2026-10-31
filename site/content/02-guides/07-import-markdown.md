@@ -58,7 +58,7 @@ description = "How to install the binary."
 | `order` | the order among siblings, instead of the `NN-` prefix |
 | `draft` | `true` imports the page as a draft |
 | `date` | the publish date (RFC 3339 with an offset); a date in the future schedules the page |
-| `description` | the excerpt and the SEO description |
+| `description` | the excerpt and the SEO description (line breaks and runs of spaces become one space; cut to 500 characters, reported as `description-cut`) |
 
 Any other key, invalid TOML, or a YAML block between `---` lines makes the file skipped
 and reported. Convert YAML front matter to TOML first.
@@ -70,10 +70,13 @@ The Markdown is CommonMark plus tables and strikethrough.
 - A relative link to another `.md` file or folder of the import, such as
   `[Install](../01-getting-started/01-install.md)`, points at that page on the site.
   Fragments (`#section`) are kept.
-- A link to a `.md` file that is not part of the import is reported as broken.
+- A link to a `.md` file that is not part of the import is reported as broken, and so is
+  a link to any other file in the folder, such as a PDF: only pages and the images shown
+  with `![…](…)` are imported, so the link would not work on the site.
 - A relative image inside the folder (`![Diagram](images/flow.png)`) is uploaded as a
   media item. An image outside the folder is never read and is reported.
-- `http://` and `https://` links and images are kept as they are.
+- `http://` and `https://` links and images are kept as they are. A protocol-relative
+  image (`//host/x.png`) is dropped and reported; write it with `https:`.
 
 ## The front page
 
@@ -101,6 +104,10 @@ The command prints the counts, for example
 problem with the file it concerns. The exit code is 0 when all is well, 2 when files were
 skipped or images or links were missing or broken, 3 when another import is running, and
 1 on an error.
+
+If an import was stopped (killed, or the machine went down), the next one exits 3 with
+"an import is already running (no heartbeat for 120 s; take it over)". Run it again with
+`--takeover` once two minutes have passed since the stopped run's last heartbeat.
 
 ## Limits
 

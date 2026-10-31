@@ -642,10 +642,7 @@ mod tests {
         );
         // An uppercase attribute name is still `id`; a duplicate keeps the first.
         assert_eq!(clean("<H2 ID=\"ok\">h</H2>"), "<h2 id=\"ok\">h</h2>");
-        assert_eq!(
-            clean("<h2 id=\"Bad\" id=\"ok\">h</h2>"),
-            "<h2>h</h2>"
-        );
+        assert_eq!(clean("<h2 id=\"Bad\" id=\"ok\">h</h2>"), "<h2>h</h2>");
     }
 
     /// Exactly what core's renderer emits for an `embed` node (`blocks/render.rs`).

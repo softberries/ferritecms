@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use ferrite_core::content::SeoPatch;
+use ferrite_core::content::seo::MAX_SEO_DESCRIPTION;
 use ferrite_domain::Timestamp;
 use serde::Deserialize;
 
@@ -17,8 +19,12 @@ pub struct FrontMatter {
     /// RFC 3339 with an offset: a TOML offset date-time or a string; kept to the
     /// microsecond.
     pub date: Option<Timestamp>,
-    /// The excerpt and the SEO description.
+    /// The excerpt and the SEO description: whitespace and control characters collapsed
+    /// to single spaces, trimmed, and cut to [`MAX_SEO_DESCRIPTION`] characters; `None`
+    /// when nothing is left.
     pub description: Option<String>,
+    /// The description was longer than [`MAX_SEO_DESCRIPTION`] characters and was cut.
+    pub description_cut: bool,
 }
 
 /// Splits `text` into its front matter and the Markdown after it.
@@ -91,7 +97,7 @@ struct Raw {
     #[serde(default)]
     draft: bool,
     date: Option<toml::Spanned<toml::Value>>,
-    description: Option<String>,
+    description: Option<toml::Spanned<String>>,
 }
 
 /// The TOML block, or the byte offset in it and the message of what is wrong.
@@ -124,14 +130,60 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
             })?)
         }
     };
+    // NUL is stripped (Postgres refuses it in text), as the WordPress import does.
+    let title = raw
+        .title
+        .map(|t| toml::Spanned::new(t.span(), t.get_ref().replace('\0', "")));
+    let (description, description_cut) = match raw.description {
+        None => (None, false),
+        Some(d) => {
+            let offset = d.span().start.min(block.len());
+            let (text, cut) = clean_description(d.get_ref());
+            // A backstop: the cleaned text always passes core's SEO check.
+            let check = SeoPatch {
+                description: Some(Some(text.clone())),
+                ..SeoPatch::default()
+            };
+            check.check().map_err(|e| (offset, e.to_string()))?;
+            ((!text.is_empty()).then_some(text), cut)
+        }
+    };
     Ok(FrontMatter {
-        title: not_blank("title", raw.title, block)?,
+        title: not_blank("title", title, block)?,
         slug: not_blank("slug", raw.slug, block)?,
         order: raw.order,
         draft: raw.draft,
         date,
-        description: raw.description,
+        description,
+        description_cut,
     })
+}
+
+/// `text` with every run of whitespace and control characters made one space, trimmed,
+/// and cut to [`MAX_SEO_DESCRIPTION`] characters (`true` when it was cut), so core's SEO
+/// check accepts it (final review B-I1; the WordPress import cuts the same way).
+fn clean_description(text: &str) -> (String, bool) {
+    let mut out = String::with_capacity(text.len());
+    let mut gap = false;
+    for c in text.chars() {
+        if c.is_whitespace() || c.is_control() {
+            gap = !out.is_empty();
+        } else {
+            if gap {
+                out.push(' ');
+                gap = false;
+            }
+            out.push(c);
+        }
+    }
+    match out.char_indices().nth(MAX_SEO_DESCRIPTION) {
+        Some((at, _)) => {
+            out.truncate(at);
+            out.truncate(out.trim_end().len());
+            (out, true)
+        }
+        None => (out, false),
+    }
 }
 
 /// `value` unless it is empty or only whitespace: then the offset of `key`'s value and
@@ -193,6 +245,7 @@ mod tests {
                 draft: true,
                 date: Some(ts("2026-10-30T12:00:00Z")),
                 description: Some("How to install.".into()),
+                description_cut: false,
             }
         );
         assert_eq!(body, "# Body\n");
@@ -279,6 +332,45 @@ mod tests {
         let (fm, body) = split("\u{feff}# x\r\n").unwrap();
         assert_eq!(fm, FrontMatter::default());
         assert_eq!(body, "# x\r\n");
+    }
+
+    /// Final review B-I1: a description core's SEO check would refuse is cleaned the way
+    /// the WordPress import cleans one, never a failed run.
+    #[test]
+    fn a_multi_line_description_is_collapsed() {
+        let text =
+            "+++\ndescription = \"\"\"\n  How to\n\tinstall\\u0000\\u001b  it.\r\n\"\"\"\n+++\n";
+        let (fm, _) = split(text).unwrap();
+        assert_eq!(fm.description.as_deref(), Some("How to install it."));
+        assert!(!fm.description_cut);
+        // Only whitespace and control characters: no description.
+        let (fm, _) = split("+++\ndescription = \"\\n\\t \"\n+++\n").unwrap();
+        assert_eq!(fm.description, None);
+    }
+
+    #[test]
+    fn a_long_description_is_cut_on_a_char_boundary() {
+        let long = "é".repeat(600);
+        let (fm, _) = split(&format!("+++\ndescription = \"{long}\"\n+++\n")).unwrap();
+        let d = fm.description.unwrap();
+        assert_eq!(d.chars().count(), MAX_SEO_DESCRIPTION);
+        assert_eq!(d, "é".repeat(MAX_SEO_DESCRIPTION));
+        assert!(fm.description_cut);
+        // Exactly the limit is kept whole.
+        let exact = "d".repeat(MAX_SEO_DESCRIPTION);
+        let (fm, _) = split(&format!("+++\ndescription = \"{exact}\"\n+++\n")).unwrap();
+        assert_eq!(fm.description.as_deref(), Some(exact.as_str()));
+        assert!(!fm.description_cut);
+    }
+
+    #[test]
+    fn nul_is_stripped_from_the_title() {
+        let (fm, _) = split("+++\ntitle = \"Ins\\u0000tall\"\n+++\n").unwrap();
+        assert_eq!(fm.title.as_deref(), Some("Install"));
+        // A title of NUL only is empty.
+        let (line, msg) = line_of(split("+++\n\ntitle = \"\\u0000\"\n+++\n").unwrap_err());
+        assert_eq!(line, 3);
+        assert!(msg.contains("title"), "{msg}");
     }
 
     #[test]

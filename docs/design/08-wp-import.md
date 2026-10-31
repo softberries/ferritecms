@@ -230,7 +230,7 @@ pipeline above, but it shares the run and map rules:
   | `order` | `menu_order`; else `NN` of an `NN-name` file name, else 0 |
   | `draft` | `true`: the page is a draft, whatever `date` says |
   | `date` | RFC 3339 with an offset. Later than the run's start: the page is `scheduled` at that date (`scheduled_at` and its `content.publish_scheduled` job, R-b13). Once a scheduled page goes live, its publishing bumps the item's version, so later changes to its file are `kept (edited here)` and its links are no longer fixed up, as for a WordPress item the import scheduled (§6). Earlier: published with that date. Absent: published, dated by an earlier run's import of it, else the run's start |
-  | `description` | the excerpt and the SEO description |
+  | `description` | the excerpt and the SEO description: every run of whitespace and control characters becomes one space, trimmed, cut to `MAX_SEO_DESCRIPTION` (500) characters on a char boundary (a `description-cut` notice), so core's SEO check always accepts it (final review B-I1); a value it would still refuse skips the file as `bad-front-matter`. NUL is stripped from `title` |
 
 - **Re-runs**, as for WordPress items (§2, P4):
 
@@ -270,7 +270,8 @@ pipeline above, but it shares the run and map rules:
   `slug-changed`; links resolve to each page's real path.
 - **Front page.** `--front-page` writes `reading.front_page` (map kind `option`, id 1, the
   value's hash) on the first run, and on a re-run only while the site still holds what
-  the import last set; else the site's choice is kept, reported `front-page-kept`. Only a
+  the import last set; else the site's choice is kept, reported `front-page-kept` (and the
+  report names no `front page`). Only a
   root index that is public after the run (published, dated no later than now) is set;
   a draft or a scheduled one is reported `front-page-not-public` (exit 2) and the setting
   is left as it was (R-b12).
@@ -279,7 +280,10 @@ pipeline above, but it shares the run and map rules:
   or `missing-image`, a symlinked `.md` file or folder `outside`, and the rest of the
   folder still imports (exit 2). A rooted image source (`/x.png`) is a URL on the site:
   it is reported `outside`, never read from disk, and kept in the body as written; a
-  relative one that is not imported is left out of the body. This holds for a folder that
+  relative one that is not imported is left out of the body. A protocol-relative image
+  (`//host/x.png`) is dropped (the converter keeps only `http(s)` sources) and reported
+  `outside`. A link to a file in the folder that is not a page (a PDF, an image only linked
+  to) is kept as written and reported `broken-link`: nothing imports it. This holds for a folder that
   does not change during the run: every path component is checked with `lstat` before a
   file is opened and only the last one is opened with `O_NOFOLLOW`, so a folder above it
   swapped for a symlink in between could be followed (the folder is the operator's own).

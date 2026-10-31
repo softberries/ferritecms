@@ -197,10 +197,11 @@ wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it),
 `import:read` to read; `409` while another import is queued or running).
 Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
 markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
-[--source NAME]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
+[--source NAME] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
 folder's page; with SQLite `serve` must be stopped; prints the counts and one
 `<kind>  <file>  <detail>` line per problem; exit 0 done, 2 skipped files, missing or
-refused images or broken links, 3 another import running, 1 error; a re-run of the same
+refused images or broken links, 3 another import running (`--takeover` takes over one with
+no heartbeat for 120 s), 1 error; a re-run of the same
 `--source` (default the folder's name) updates changed files and keeps pages edited here).
 Build the docs site: `site/build.sh OUT_DIR [URL]` (a fresh folder;
 `FERRITE=target/release/ferrite` to use a built binary, default `cargo run -q -p ferrite

@@ -448,10 +448,19 @@ fn is_page_link(href: &str) -> bool {
 impl Rewrite for Rw<'_> {
     fn image(&self, src: &str) -> ImageRef {
         let lower = src.to_ascii_lowercase();
-        if lower.starts_with("http://") || lower.starts_with("https://") || src.starts_with("//") {
+        if lower.starts_with("http://") || lower.starts_with("https://") {
             return ImageRef::Url(src.to_owned());
         }
         let file = self.from.to_owned();
+        if src.starts_with("//") {
+            // Protocol-relative: the converter keeps only http(s) sources, so it is
+            // dropped; reported rather than lost silently (final review B-M6).
+            self.problem(Problem::OutsideDir {
+                file,
+                target: shown(src),
+            });
+            return ImageRef::Missing(src.to_owned());
+        }
         match locate(self.root, self.from, src) {
             Ok(t) => {
                 if let Some(id) = self.media.get(&t.rel) {
@@ -506,9 +515,10 @@ impl Rewrite for Rw<'_> {
                     None => href.to_owned(),
                 },
                 None => {
-                    if t.path.is_dir() || t.rel.to_ascii_lowercase().ends_with(".md") {
-                        broken();
-                    }
+                    // A Markdown file or folder that is not in the import, or another
+                    // file in the folder (a PDF, an image linked, not shown): not
+                    // imported, so the link would 404 on the site (final review B-M5).
+                    broken();
                     href.to_owned()
                 }
             },
@@ -962,10 +972,8 @@ async fn front_page(
     let set = front_page_in(&mut batch, id, cx.opts.dry_run).await;
     match w.close(batch, set).await? {
         FrontPage::NotPublic => report.problems.push(Problem::FrontPageNotPublic { file }),
-        FrontPage::Kept => {
-            report.front_page = Some(file.clone());
-            report.problems.push(Problem::FrontPageKept { file });
-        }
+        // Not set: the site's choice stays, so the report names no front page.
+        FrontPage::Kept => report.problems.push(Problem::FrontPageKept { file }),
         FrontPage::Set => report.front_page = Some(file),
     }
     Ok(())

@@ -4,6 +4,7 @@ use std::fmt;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
+use ferrite_core::content::seo::MAX_SEO_DESCRIPTION;
 use ferrite_core::slug::slugify;
 use sha2::{Digest, Sha256};
 
@@ -69,6 +70,9 @@ pub enum Problem {
     },
     /// The file was skipped: it is larger than [`MAX_FILE_BYTES`].
     TooLarge { file: String },
+    /// The front matter `description` was longer than the SEO description's limit and
+    /// was cut to it (it is the excerpt and the SEO description).
+    DescriptionCut { file: String },
     /// A symlink (never followed), or an image or link leaving the folder.
     OutsideDir { file: String, target: String },
     /// A relative image source not found inside the folder.
@@ -112,6 +116,7 @@ impl Problem {
         match self {
             Self::BadFrontMatter { .. } => "bad-front-matter",
             Self::TooLarge { .. } => "too-large",
+            Self::DescriptionCut { .. } => "description-cut",
             Self::OutsideDir { .. } => "outside",
             Self::MissingImage { .. } => "missing-image",
             Self::BrokenLink { .. } => "broken-link",
@@ -135,6 +140,7 @@ impl Problem {
         match self {
             Self::BadFrontMatter { file, .. }
             | Self::TooLarge { file }
+            | Self::DescriptionCut { file }
             | Self::OutsideDir { file, .. }
             | Self::MissingImage { file, .. }
             | Self::BrokenLink { file, .. }
@@ -159,6 +165,10 @@ impl Problem {
                 format!("line {line}: skipped, {message}")
             }
             Self::TooLarge { .. } => format!("skipped, larger than {MAX_FILE_BYTES} bytes"),
+            Self::DescriptionCut { .. } => format!(
+                "the description is longer than {MAX_SEO_DESCRIPTION} characters; cut to \
+                 {MAX_SEO_DESCRIPTION}"
+            ),
             Self::OutsideDir { target, .. } => {
                 format!("{target} is outside the folder or a symlink, not read")
             }
@@ -203,11 +213,13 @@ impl Problem {
 
     /// Whether the problem is only a notice: the run still exits 0 with it (a
     /// synthesized section, a changed slug, a page no longer in the folder, a changed
-    /// image, a front page kept). The others make the exit code 2 (P62).
+    /// image, a front page kept, a description cut). The others make the exit code 2
+    /// (P62).
     pub fn is_notice(&self) -> bool {
         matches!(
             self,
             Self::SynthesizedSection { .. }
+                | Self::DescriptionCut { .. }
                 | Self::SlugChanged { .. }
                 | Self::NotInSource { .. }
                 | Self::ImageChanged { .. }
@@ -582,6 +594,11 @@ impl Walker {
         fallback_title: String,
     ) {
         let (front, source, hash) = read;
+        if front.description_cut {
+            self.scan
+                .problems
+                .push(Problem::DescriptionCut { file: rel.clone() });
+        }
         self.scan.docs.push(MdDoc {
             rel,
             parent: parent.map(str::to_owned),
