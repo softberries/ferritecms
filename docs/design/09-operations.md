@@ -974,7 +974,8 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     assets only take lines in `SHA256SUMS`.
   - **Reproducible archives** (M4-4 P83): `package.sh` and `package-plugins.sh` pack through
     `.github/scripts/repro-tar.sh`, so the same files give the same bytes whatever the
-    runner, the stage folder, the umask or the copy times: modes normalised (folders and
+    stage folder, the umask or the copy times (the bytes still depend on the runner image's
+    tar and gzip versions): modes normalised (folders and
     `ferrite` 0755, other files 0644), every mtime 1970-01-01 00:00 UTC, an explicit
     `LC_ALL=C`-sorted, NUL-separated member list without `./` (`--no-recursion`, `--null -T`), `ustar` (no pax headers),
     owner and group 0 without names, and `gzip -n -9` (never `tar -z`, whose bsdtar variant

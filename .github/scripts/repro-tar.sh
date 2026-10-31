@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Sourced by package.sh and package-plugins.sh (M4-4 P83): packs a staged tree into a
-# reproducible `.tar.gz`, so the same files give the same bytes whatever the runner, the
-# stage path, the umask, the copy times or the user.
+# reproducible `.tar.gz`, so the same files give the same bytes whatever the stage path,
+# the umask, the copy times or the user. The bytes still depend on the runner image's tar
+# and gzip versions (and on GNU tar versus bsdtar).
 #
 #   repro_pack STAGE OUT_FILE MEMBER...
 #
