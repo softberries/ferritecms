@@ -814,9 +814,13 @@ button:hover {
   font-size: 0.9em;
 }
 
+/* Long lines wrap: a sideways-scrolling block would need a keyboard focus stop (WCAG
+   2.1.1, axe scrollable-region-focusable), and core renders `<pre>` without one. */
 .prose pre {
   padding: var(--space-s);
   overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: var(--band);
   border: 1px solid var(--line);
   border-radius: var(--radius);

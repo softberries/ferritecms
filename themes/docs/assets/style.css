@@ -332,8 +332,12 @@ code, pre { font-family: var(--mono); font-size: 0.875em; }
   border-radius: 4px;
   overflow-wrap: anywhere;
 }
+/* Long lines wrap: a sideways-scrolling block would need a keyboard focus stop (WCAG
+   2.1.1, axe scrollable-region-focusable), and core renders `<pre>` without one. */
 pre {
   overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   padding: 1rem 1.125rem;
   background: var(--code-bg);
   border: 1px solid var(--rule);
