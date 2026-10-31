@@ -6,7 +6,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/home/garden/</loc><lastmod>2023-11-14T22:14:05Z</lastmod></url><url><loc>https://example.com/about/</loc><lastmod>2023-11-14T22:18:20Z</lastmod></url><url><loc>https://example.com/about/team/</loc><lastmod>2023-11-14T22:13:45Z</lastmod></url></urlset>
 == /sitemap-page-2.xml 200
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/home/</loc><lastmod>2023-11-14T22:13:40Z</lastmod></url><url><loc>https://example.com/contact/</loc><lastmod>2023-11-14T22:13:26Z</lastmod></url></urlset>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/</loc><lastmod>2023-11-14T22:13:40Z</lastmod></url><url><loc>https://example.com/contact/</loc><lastmod>2023-11-14T22:13:26Z</lastmod></url></urlset>
 == /sitemap-post-1.xml 200
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/p-a/</loc><lastmod>2023-11-14T22:21:40Z</lastmod></url><url><loc>https://example.com/p-b/</loc><lastmod>2023-11-14T22:14:55Z</lastmod></url><url><loc>https://example.com/p-d/</loc><lastmod>2023-11-14T22:14:41Z</lastmod></url></urlset>

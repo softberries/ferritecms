@@ -8,10 +8,11 @@ use ferrite_domain::{
     RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, ListPart, MAX_ID_FILTER, MAX_META_KEYS, MAX_SLUG_PREFIX_RESULTS,
-    MetaRepo, RevisionRepo, StoreError, check_content_filters, check_id_list, check_len,
-    check_limit, content_cursor, content_list_plan, encode_content_cursor, media_kind_sql,
-    slug_has_prefix, slug_prefix_bounds, validate_json, validate_text,
+    ContentRepo, ContentTypeRepo, FileBound, ListPart, MAX_ID_FILTER, MAX_META_KEYS,
+    MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo, StoreError, check_content_filters,
+    check_file_bounds, check_id_list, check_len, check_limit, content_cursor, content_list_plan,
+    encode_content_cursor, file_bounds_from_rows, media_kind_sql, slug_has_prefix,
+    slug_prefix_bounds, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{QueryBuilder, Sqlite};
@@ -283,6 +284,35 @@ impl ContentRepo for SqliteRepos {
         push_filters(&mut qb, query);
         let n: i64 = run!(&self.reader, |e| qb.build_query_scalar().fetch_one(e))?;
         Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    async fn file_bounds(
+        &self,
+        query: &ContentQuery,
+        file_len: u32,
+    ) -> Result<Vec<FileBound>, StoreError> {
+        check_file_bounds(query, file_len)?;
+        let len = i64::from(file_len);
+        // Rows ranked in the `list` order; each file's last row (every `len`-th and the
+        // very last) carries the file's newest `updated_at`.
+        let mut qb = QueryBuilder::<Sqlite>::new(
+            "SELECT published_at, id, lastmod FROM (\
+               SELECT published_at, id, rn, total, \
+                 MAX(updated_at) OVER (PARTITION BY (rn - 1) / ",
+        );
+        qb.push_bind(len).push(
+            ") AS lastmod FROM (\
+               SELECT published_at, id, updated_at, \
+                 ROW_NUMBER() OVER (ORDER BY published_at DESC, id DESC) AS rn, \
+                 COUNT(*) OVER () AS total \
+               FROM content_items WHERE published_at IS NOT NULL",
+        );
+        push_filters(&mut qb, query);
+        qb.push(") AS ranked) AS files WHERE rn % ")
+            .push_bind(len)
+            .push(" = 0 OR rn = total ORDER BY rn");
+        let rows: Vec<(i64, Uuid, i64)> = run!(&self.reader, |e| qb.build_query_as().fetch_all(e))?;
+        file_bounds_from_rows(rows)
     }
 
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<ContentItem>, StoreError> {

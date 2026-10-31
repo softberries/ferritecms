@@ -12,10 +12,12 @@
 //! * **Sitemaps**: `/sitemap.xml` indexes `/sitemap-<kind>-<n>.xml` for every public
 //!   content type with public items; each file lists up to
 //!   [`SITEMAP_FILE_LEN`](ferrite_core::site::SITEMAP_FILE_LEN) URLs with `lastmod`
-//!   (published only, via `SiteReader::sitemap`). A file number past the last one is
-//!   404 from one count query (`SiteReader::sitemap_files`), without walking. Building
-//!   the index walks every type's files once (the cost of one full sitemap read per
-//!   type, on a cache miss). The set of content types is read per index render but
+//!   (published only, via `SiteReader::sitemap`); the static front page is listed as
+//!   `/`. `SiteReader::sitemap_files` gives, from one store query per type that loads
+//!   no rows (M4-4 P76), each file's start cursor and `lastmod` (the newest
+//!   `updated_at` of its items): the index is built from it alone, a file seeks to its
+//!   start and walks only its own rows, and a file number past the last one is 404
+//!   without walking. The set of content types is read per index render but
 //!   types are only registered at startup (see `ferrite_core::events`), so a new type
 //!   appears after the restart that registers it; no dependency key covers types.
 //! * **robots.txt**: `User-agent: *`, `Disallow: /` when option
@@ -141,52 +143,29 @@ pub(crate) async fn sitemap(
                 .filter(|n| n != MEDIA_KIND)
                 .collect();
             for kind in kinds {
-                let mut cursor: Option<String> = None;
-                let mut n = 0u32;
-                loop {
-                    let read = state.reader.sitemap(&kind, cursor.as_deref()).await?;
-                    deps.extend(read.deps);
-                    let page = read.value;
-                    if page.entries.is_empty() {
-                        break;
-                    }
-                    n += 1;
+                let files = state.reader.sitemap_files(&kind).await?;
+                deps.extend(files.deps);
+                for (n, file) in (1..).zip(&files.value) {
                     out.push_str("<sitemap>");
-                    tag(
-                        &mut out,
-                        "loc",
-                        &format!("{base}/sitemap-{}-{n}.xml", encode_segment(&kind)),
-                    );
-                    if let Some(last) = page.entries.iter().map(|e| e.lastmod).max() {
-                        tag(&mut out, "lastmod", &w3c(last));
-                    }
+                    let loc = format!("{base}/sitemap-{}-{n}.xml", encode_segment(&kind));
+                    tag(&mut out, "loc", &loc);
+                    tag(&mut out, "lastmod", &w3c(file.lastmod));
                     out.push_str("</sitemap>");
-                    match page.next_cursor {
-                        Some(c) => cursor = Some(c),
-                        None => break,
-                    }
                 }
             }
             out.push_str("</sitemapindex>\n");
             Ok(Some(cached_page(XML, out, deps)))
         }
         SitemapPart::Kind { kind, n } => {
-            // Past the last file: 404 from one count, before walking any rows.
+            // Past the last file: 404 from the bounds, before walking any rows; else
+            // seek to the file's start and walk its rows only.
             let files = state.reader.sitemap_files(kind).await?;
             deps.extend(files.deps);
-            if *n > files.value {
+            let index = n.checked_sub(1).and_then(|i| usize::try_from(i).ok());
+            let Some(file) = index.and_then(|i| files.value.get(i)) else {
                 return Ok(None);
-            }
-            let mut cursor: Option<String> = None;
-            for _ in 1..*n {
-                let read = state.reader.sitemap(kind, cursor.as_deref()).await?;
-                deps.extend(read.deps);
-                match read.value.next_cursor {
-                    Some(c) => cursor = Some(c),
-                    None => return Ok(None),
-                }
-            }
-            let read = state.reader.sitemap(kind, cursor.as_deref()).await?;
+            };
+            let read = state.reader.sitemap(kind, file.after.as_deref()).await?;
             deps.extend(read.deps);
             if read.value.entries.is_empty() {
                 return Ok(None);

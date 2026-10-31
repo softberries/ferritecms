@@ -296,6 +296,17 @@ pub struct SitemapPage {
     pub next_cursor: Option<String>,
 }
 
+/// Where one sitemap file of a type starts, and its `lastmod`
+/// ([`SiteReader::sitemap_files`](super::SiteReader::sitemap_files)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SitemapFile {
+    /// The cursor to pass to [`SiteReader::sitemap`](super::SiteReader::sitemap) for
+    /// this file; `None` for the first.
+    pub after: Option<String>,
+    /// The newest `updated_at` of the file's items.
+    pub lastmod: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SitemapEntry {
     pub url: String,

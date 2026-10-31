@@ -328,7 +328,12 @@ anonymous entries.
 **Feeds and sitemaps** (`crates/ferrite-http/src/app/feeds.rs`): RSS 2.0 for posts (`/feed/`)
 and for terms, the latest 20 public items each; a term without public posts is 404 (R7).
 `/sitemap.xml` indexes per-type files of up to 50 000 URLs with `lastmod`, published items
-only. `robots.txt` disallows everything when option `reading.discourage_indexing` is `true` and
+only, newest first; the static front page is listed as `/` (M4-4 P67), its children under
+their own paths. `SiteReader::sitemap_files` gives each file's start cursor and `lastmod`
+(the newest `updated_at` of its items) from one store query per type that loads no rows
+(`ContentRepo::file_bounds`, M4-4 P76): the index is built from it alone, and
+`/sitemap-<kind>-<n>.xml` seeks to file `n`'s cursor and reads only its own rows (a number
+past the last file is 404). `robots.txt` disallows everything when option `reading.discourage_indexing` is `true` and
 names the sitemap index. Feeds, sitemaps and `robots.txt` go through the page cache. Atom feeds
 are not built (deferred, ROADMAP M4).
 
@@ -472,7 +477,7 @@ node, for up to 16 of them per render (a template drawing more is correct, just 
 
 **What is in it.** `SiteReader::tree(kind)` lists the type's public items with exactly the
 sitemap's visibility and paths (`published_at <= now`, the same ancestor and primary-term
-loading, the same permalink rules; the sitemap and the tree share one walk), in pages of
+loading, the same permalink rules; a sitemap file and the tree share one walk), in pages of
 200 rows ordered by `menu_order` then id. The static front page's node has the URL `/`
 (M4-4 P67: its permalink redirects there, §3); its children keep their paths. Media, an
 unknown type and a type without public items give `none`. At most **1 000 nodes**

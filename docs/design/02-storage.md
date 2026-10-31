@@ -238,6 +238,15 @@ The `user_meta` table already exists in `0001_init` but has no repository yet.
   uses `exclude`, which always holds at least the item itself.
 - **`ContentRepo::count(&query)`** uses the same WHERE clause as `list` and ignores `limit`,
   `cursor` and `order`.
+- **`ContentRepo::file_bounds(&query, file_len) -> Vec<FileBound { after, lastmod }>`**
+  (M4-4 P76, the sitemap's reads): the rows of `query` that have a `published_at`, in the
+  `PublishedDesc` order of `list`, split into files of `file_len` rows; per file the `list`
+  cursor it starts after (the previous file's last `(published_at, id)`, `None` for the
+  first) and the newest `updated_at` of its rows. One query on both backends: `ROW_NUMBER()`
+  over `published_at DESC[ NULLS LAST], id DESC` (the `content_items_published_list_idx`
+  order), `MAX(updated_at)` per `(rn - 1) / file_len`, keeping every `file_len`-th row and
+  the last; no row bodies. Same WHERE clause as `list`; `limit` and `cursor` are ignored;
+  another order or a `file_len` of 0 is `Invalid`. Rows without `published_at` are in no file.
 - **`get_many(ids)`** on content, users and media: at most 200 ids, one query, result in
   the order of `ids`, missing ids skipped, a repeated id returned once at its first
   position, more than 200 is `Invalid`. `MetaRepo::get_many(ids, keys)` takes at most 200

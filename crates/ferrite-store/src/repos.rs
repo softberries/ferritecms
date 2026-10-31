@@ -273,6 +273,20 @@ pub trait ContentRepo: Send + Sync {
     /// Counts the items matching the query's filters (`limit`, `cursor` and `order` are
     /// ignored). Uses the same WHERE clause as `list`.
     async fn count(&self, query: &ContentQuery) -> Result<u64, StoreError>;
+    /// Splits the rows of `query` that have a `published_at`, newest first (the order of
+    /// `list` with [`ContentOrder::PublishedDesc`](ferrite_domain::ContentOrder)), into
+    /// files of `file_len` rows, and returns each file's bound in order: none for no
+    /// rows. A file's rows are the first `file_len` rows `list` returns from
+    /// [`FileBound::after`]; rows without a `published_at` (which `list` sorts last)
+    /// are in no file. One query (a window over the filtered rows' keys, no row
+    /// bodies), so a sitemap index or file `n` reads no rows of the files before it
+    /// (M4-4 P76). Uses the same WHERE clause as `list`; `limit` and `cursor` are
+    /// ignored. Another `order` or a `file_len` of 0 is `Invalid`.
+    async fn file_bounds(
+        &self,
+        query: &ContentQuery,
+        file_len: u32,
+    ) -> Result<Vec<FileBound>, StoreError>;
     /// Fetches up to [`MAX_ID_FILTER`](crate::MAX_ID_FILTER) items by id in one query,
     /// returned in the order of `ids`; missing ids are skipped and a repeated id yields
     /// its item once (at its first position). More ids is `Invalid`.
@@ -554,6 +568,16 @@ pub trait ArtifactRepo: Send + Sync {
         before: Timestamp,
         protected: &[ArtifactHash],
     ) -> Result<bool, StoreError>;
+}
+
+/// One file of a listing split by [`ContentRepo::file_bounds`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileBound {
+    /// The `list` cursor the file starts after (the previous file's last row); `None`
+    /// for the first file.
+    pub after: Option<String>,
+    /// The newest `updated_at` of the file's rows.
+    pub lastmod: Timestamp,
 }
 
 /// What one [`ArtifactRepo::mark_orphans`] pass changed.

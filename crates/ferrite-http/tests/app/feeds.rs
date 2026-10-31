@@ -522,8 +522,41 @@ async fn sitemaps_are_unchanged(app: App) -> App {
     app
 }
 
+/// The index reads no content rows (one aggregate per type), and file `n` lists only
+/// its own rows: it seeks to its start instead of walking the files before it.
+async fn sitemap_reads_seek(app: App) -> App {
+    golden_site(&app).await;
+    let counting = Arc::new(ferrite_store_tests::CountingStore::new(
+        app.site.store.clone(),
+    ));
+    let router = golden_router(&app, counting.clone()).await;
+    for (path, rows) in [
+        ("/sitemap.xml", 0),
+        ("/sitemap-post-1.xml", 3),
+        ("/sitemap-post-2.xml", 3),
+        ("/sitemap-post-3.xml", 1),
+        ("/sitemap-page-2.xml", 2),
+        ("/sitemap-post-4.xml", 0),
+    ] {
+        counting.reset();
+        let r = send(&router, request(Method::GET, path)).await;
+        assert!(
+            matches!(r.status, StatusCode::OK | StatusCode::NOT_FOUND),
+            "{path}: {r:?}"
+        );
+        eprintln!(
+            "{path}: {} store calls, {} listed rows",
+            counting.calls(),
+            counting.listed_rows()
+        );
+        assert_eq!(counting.listed_rows(), rows, "{path}");
+    }
+    app
+}
+
 app_tests!(
     sitemaps_are_unchanged,
+    sitemap_reads_seek,
     feed_last_build_date_follows_updates,
     sitemap_split_and_escaping,
     rss_feeds,

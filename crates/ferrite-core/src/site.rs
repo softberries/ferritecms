@@ -75,8 +75,8 @@ use crate::{
 use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
-    srcset,
+    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapFile, SitemapPage, TermPublic,
+    UserPublic, srcset,
 };
 pub use tree::{ContentTree, TreeNode};
 
@@ -322,20 +322,34 @@ impl SiteReader {
         self
     }
 
-    /// How many sitemap files `kind` has: `ceil(public items / file length)`, from one
-    /// count query (no rows loaded); 0 for media. Records `archive:<kind>`.
-    pub async fn sitemap_files(&self, kind: &str) -> Result<SiteRead<u32>, CoreError> {
+    /// The sitemap files of `kind` (`ceil(public items / file length)` of them), each
+    /// with the cursor that starts it in [`sitemap`](Self::sitemap) and its `lastmod`
+    /// (the newest `updated_at` of its items): one store query that loads no rows
+    /// (`ContentRepo::file_bounds`, M4-4 P76); none for media. Records
+    /// `archive:<kind>`.
+    pub async fn sitemap_files(&self, kind: &str) -> Result<SiteRead<Vec<SitemapFile>>, CoreError> {
         let now = (self.clock)();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
         if kind == MEDIA_KIND {
-            return Ok(public(0, deps));
+            return Ok(public(Vec::new(), deps));
         }
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
-        let count = self.store.read().content().count(&q).await?;
-        let files = count.div_ceil(self.sitemap_file_len as u64);
-        Ok(public(u32::try_from(files).unwrap_or(u32::MAX), deps))
+        let len = u32::try_from(self.sitemap_file_len).unwrap_or(u32::MAX);
+        let files = self
+            .store
+            .read()
+            .content()
+            .file_bounds(&q, len)
+            .await?
+            .into_iter()
+            .map(|b| SitemapFile {
+                after: b.after,
+                lastmod: b.lastmod,
+            })
+            .collect();
+        Ok(public(files, deps))
     }
 
     /// The published item of `kind` at `path_parts`: the decoded slug segments after
@@ -722,11 +736,14 @@ impl SiteReader {
     }
 
     /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] (or the length a test seam
-    /// set) public items, newest first, as URL and `updated_at`. Pass the returned cursor back for the next file.
+    /// set) public items, newest first, as URL and `updated_at`, from `cursor` (a
+    /// [`SitemapFile::after`], or the returned cursor of the previous file). The
+    /// static front page (`reading.front_page`) is listed as `/` (M4-4 P67), as in
+    /// [`tree`](Self::tree); its children keep their paths.
     ///
-    /// Deps are `archive:<kind>` only: every content write (and every term write)
-    /// emits it, which covers any URL change; per-item keys for 50 000 URLs would only
-    /// bloat the cache index.
+    /// Deps are `archive:<kind>`: every content write (and every term write) emits
+    /// it, which covers any URL change; per-item keys for 50 000 URLs would only bloat
+    /// the cache index. Plus `option:reading.front_page`.
     pub async fn sitemap(
         &self,
         kind: &str,
@@ -746,12 +763,18 @@ impl SiteReader {
         if kind == MEDIA_KIND {
             return Ok(public(out, deps));
         }
+        deps.insert(option_key(FRONT_PAGE_OPTION));
+        let front = front_page_id(repos).await?;
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
         walk_paths(repos, rules, &mut q, self.sitemap_file_len, |item, url| {
             out.entries.push(SitemapEntry {
-                url,
+                url: if front == Some(item.id) {
+                    "/".to_owned()
+                } else {
+                    url
+                },
                 lastmod: item.updated_at,
             });
         })
