@@ -53,6 +53,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
+  --color-popover-edge: var(--popover-edge);
   --color-input: var(--input);
   --color-overlay: var(--overlay);
   --color-ring: var(--ring);

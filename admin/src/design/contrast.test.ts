@@ -120,6 +120,24 @@ describe("design tokens", () => {
     }
   });
 
+  it("popup_edge_stands_out_in_dark", () => {
+    // Dark popups have no shadow (`--shadow-*` are `none`): their edge alone sets a menu
+    // off from the page and from the card it opens over. The old `foreground/10` ring
+    // gave about 1.26:1 there; the edge must be clearly stronger than that and than
+    // `border` (decoration, so no WCAG minimum applies).
+    const { dark, light } = tokens;
+    const edge = dark["popover-edge"];
+    expect(edge, "popover-edge in dark").toBeDefined();
+    const ratio = (bg: string) => contrastRatio(over(edge!, dark[bg]!), oklchToSrgb(dark[bg]!));
+    expect(ratio("background")).toBeGreaterThanOrEqual(1.7);
+    expect(ratio("popover")).toBeGreaterThanOrEqual(1.6);
+    expect(ratio("background")).toBeGreaterThan(
+      contrastRatio(oklchToSrgb(dark.border!), oklchToSrgb(dark.background!)),
+    );
+    // Light popups keep their shadow; the edge there is the hairline `border`.
+    expect(light["popover-edge"]).toEqual(light.border);
+  });
+
   it("status_private_derives_from_foreground", () => {
     for (const mode of MODES) {
       const { foreground, "status-private": priv } = tokens[mode];
