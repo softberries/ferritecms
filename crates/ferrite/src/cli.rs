@@ -156,8 +156,9 @@ pub enum Command {
     /// checks the version, the configuration, file modes and ownership, the database, the
     /// media store, the cluster, the clock, the backup target, SMTP, TLS and the latest
     /// release (09 §8). It creates and writes no file, folder, key or schema, works while
-    /// `serve` runs, and never prints a secret. `--offline` skips the checks that need the
-    /// network.
+    /// `serve` runs, and never prints a secret. `--offline` skips the checks that reach
+    /// other services (S3, SMTP, the ACME directory, the release lookup); the database is
+    /// still opened.
     ///
     /// Exit code: 3 when the database schema is newer than this binary allows, else 1 when
     /// a check is an error, else 2 when one is a warning, else 0.

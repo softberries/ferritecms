@@ -104,8 +104,8 @@ are refused, and a hook whose capability is not declared is refused too.
 - **`[routes]`** keys start with `/` and are served at `/_p/<name><path>`. `methods`
   defaults to `["GET"]`, `rate_limit` (`N/s`, `N/min` or `N/h`) to `10/min` per client
   address, and `cross_origin = true` lets other sites post to the route (such a request
-reaches the plugin anonymously). Responses are
-  never cached and are served with a sandboxing `Content-Security-Policy`.
+  reaches the plugin anonymously). Responses are never cached and are served with a
+  sandboxing `Content-Security-Policy`.
 - **`[settings]`** types are those of theme settings plus `secret`, which the admin never
   shows back. The plugin reads its settings through the `settings` import.
 - **`[limits]`** may lower the site's defaults freely. Asking for more needs the admin's
@@ -198,10 +198,18 @@ ferrite_sdk::export_plugin! {
 }
 ```
 
-A filter function takes the value and a `&Ctx` and returns the same type: `Head` for
-`render.head`, `String` for HTML and text hooks. `Ctx` gives the request
-(`ctx.request()`), the current item (`ctx.current_post()`), key-value storage
-(`ctx.kv()`), HTTP (`ctx.http()`) and settings (`ctx.setting(key)`). `Head` adds tags
+The functions' types:
+
+- a filter is `fn(T, &Ctx) -> Result<T>`, with `T` = `Head` for `render.head` and
+  `String` for the HTML and text hooks;
+- an action is `fn(ActionEvent, &Ctx) -> Result<()>`;
+- a route is `fn(RouteRequest, &Ctx) -> Result<RouteResponse>`, matched on its exact
+  path; an unknown path answers 404.
+
+`Ctx` gives the request being rendered (`ctx.request()`) and the current item
+(`ctx.current_post()`, which needs `content.read`); both are set for filters only, and
+are empty in actions and routes. In every hook it gives key-value storage (`ctx.kv()`),
+HTTP (`ctx.http()`) and the plugin's settings (`ctx.setting(key)`). `Head` adds tags
 with `meta`, `og`, `link`, `link_typed`, `json_ld` and `title`, and asks what is already
 there with `has_meta_name`, `has_meta_property` and `meta_property`.
 

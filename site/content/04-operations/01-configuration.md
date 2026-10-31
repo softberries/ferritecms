@@ -63,7 +63,7 @@ starting with `FERRITE_TEST_` are not configuration and are never read as keys.
 |---|---|---|
 | `listen` | `"127.0.0.1:8080"` | the plain HTTP address |
 | `trusted_proxies` | `[]` | CIDRs or addresses of reverse proxies whose `X-Forwarded-For` is believed |
-| `metrics_listen` | not set | an address for `GET /metrics`; must not share `listen`'s port ([Monitoring](05-monitoring.md)) |
+| `metrics_listen` | not set | an address for `GET /metrics`; must not use `listen`'s port on the same address, or on `0.0.0.0`/`::` on either side ([Monitoring](05-monitoring.md)) |
 
 ## [server.tls]
 

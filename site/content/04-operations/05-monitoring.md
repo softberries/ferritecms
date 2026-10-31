@@ -78,8 +78,12 @@ secret. With S3 media it writes, reads and deletes one probe object under `tmp/`
 
 ```sh
 ferrite doctor --data ./mysite
-ferrite doctor --data ./mysite --offline     # no network: skips S3, SMTP, ACME and the release lookup
+ferrite doctor --data ./mysite --offline
 ```
+
+`--offline` skips the checks that reach other services (S3, SMTP, the ACME directory,
+the release lookup). The database is still opened, which on Postgres is a network
+connection, and a running node's own listeners are still probed (`net.listen`).
 
 It prints one line per check, `<status>  <check>  <detail>`, the status one of `ok`,
 `info`, `warn`, `error` or `skip`, and then a summary line. The 25 checks:

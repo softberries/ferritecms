@@ -57,13 +57,15 @@ impl Drop for Serve {
     }
 }
 
-fn serve(data: &Path, port: u16) -> Serve {
+/// Starts `serve` and waits for its "Listening on" line. Its stderr goes to `log`, which
+/// the panic shows when it does not start.
+fn serve(data: &Path, port: u16, log: &Path) -> Serve {
     let mut cmd = ferrite();
     cmd.args(["serve", "--data"])
         .arg(data)
         .env("FERRITE_SERVER__LISTEN", format!("127.0.0.1:{port}"))
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(std::fs::File::create(log).expect("serve log"));
     let mut child = cmd.spawn().expect("spawn serve");
     let stdout = child.stdout.take().expect("stdout");
     let (tx, rx) = std::sync::mpsc::channel();
@@ -76,8 +78,10 @@ fn serve(data: &Path, port: u16) -> Serve {
         }
     });
     let serve = Serve(child);
-    rx.recv_timeout(Duration::from_secs(60))
-        .expect("serve did not report its address");
+    if let Err(e) = rx.recv_timeout(Duration::from_secs(60)) {
+        let stderr = std::fs::read_to_string(log).unwrap_or_default();
+        panic!("serve did not report its address ({e}); its stderr:\n{stderr}");
+    }
     serve
 }
 
@@ -184,27 +188,205 @@ fn unescape_decodes_named_and_numeric_references() {
     assert_eq!(unescape("&nope; & &#xZZ;"), "&nope; & &#xZZ;");
 }
 
-/// Every `name="…"` attribute value in `html`.
-fn attr_values(html: &str, name: &str) -> Vec<String> {
-    let needle = format!(" {name}=\"");
-    html.split(needle.as_str())
-        .skip(1)
-        .filter_map(|rest| rest.split_once('"').map(|(v, _)| unescape(v)))
-        .collect()
+/// One start tag (`name` lowercase, attributes decoded) or end tag (`name` is `/nav`).
+#[derive(Debug, PartialEq)]
+struct Tag {
+    name: String,
+    attrs: Vec<(String, String)>,
 }
 
-/// The path of a same-site URL (`/x/` or `http://127.0.0.1:PORT/x/`), without its fragment;
-/// `None` for another site, a fragment-only link or another scheme.
-fn same_site_path(href: &str, origin: &str) -> Option<String> {
-    let rest = if let Some(rest) = href.strip_prefix(origin) {
-        if rest.is_empty() { "/" } else { rest }
-    } else if href.starts_with('/') && !href.starts_with("//") {
-        href
-    } else {
+impl Tag {
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// The tags of `html` in document order. Attributes may be double-quoted, single-quoted
+/// or unquoted and separated by any whitespace, newlines included. Only real markup is
+/// read: comments, `<!doctype>` and the text inside `<script>` and `<style>` are skipped,
+/// and escaped text (`&lt;a href=…` in a code block) is not a tag.
+fn tags(html: &str) -> Vec<Tag> {
+    let b = html.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(off) = html[i..].find('<') {
+        i += off + 1;
+        if html[i..].starts_with("!--") {
+            i = html[i..].find("-->").map_or(b.len(), |e| i + e + 3);
+            continue;
+        }
+        let end_tag = b.get(i) == Some(&b'/');
+        let start = if end_tag { i + 1 } else { i };
+        let mut j = start;
+        while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
+            j += 1;
+        }
+        if j == start || !b[start].is_ascii_alphabetic() {
+            continue;
+        }
+        let name = html[start..j].to_ascii_lowercase();
+        let mut attrs = Vec::new();
+        loop {
+            while j < b.len() && (b[j].is_ascii_whitespace() || b[j] == b'/') {
+                j += 1;
+            }
+            if j >= b.len() || b[j] == b'>' {
+                j += 1;
+                break;
+            }
+            let n0 = j;
+            while j < b.len() && !b[j].is_ascii_whitespace() && !b"=>/".contains(&b[j]) {
+                j += 1;
+            }
+            let attr_name = html[n0..j].to_ascii_lowercase();
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let mut value = String::new();
+            if b.get(j) == Some(&b'=') {
+                j += 1;
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                match b.get(j) {
+                    Some(&q) if q == b'"' || q == b'\'' => {
+                        let v0 = j + 1;
+                        let v1 = html[v0..].find(q as char).map_or(b.len(), |e| v0 + e);
+                        value = unescape(&html[v0..v1]);
+                        j = (v1 + 1).min(b.len());
+                    }
+                    _ => {
+                        let v0 = j;
+                        while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'>' {
+                            j += 1;
+                        }
+                        value = unescape(&html[v0..j]);
+                    }
+                }
+            }
+            if !attr_name.is_empty() {
+                attrs.push((attr_name, value));
+            }
+        }
+        i = j.min(b.len());
+        if !end_tag && (name == "script" || name == "style") {
+            let close = format!("</{name}");
+            i = html[i..].find(&close).map_or(b.len(), |e| i + e);
+        }
+        out.push(Tag {
+            name: if end_tag { format!("/{name}") } else { name },
+            attrs,
+        });
+    }
+    out
+}
+
+#[test]
+fn tags_reads_every_attribute_form_and_only_markup() {
+    let html = "<!doctype html><!-- <a href=\"/c\"> --><a\nhref='/s' id=x><A HREF=/u>\
+                <link rel=\"x\"\thref=\"&#x2f;e&#x2f;\"></a><script>if (a<b) {}</script>\
+                <pre>&lt;a href=\"/no\"&gt;</pre>";
+    let hrefs: Vec<String> = tags(html)
+        .iter()
+        .filter_map(|t| t.attr("href").map(str::to_string))
+        .collect();
+    assert_eq!(hrefs, ["/s", "/u", "/e/"]);
+    assert!(tags(html).iter().any(|t| t.name == "/a"));
+    assert_eq!(tags(html)[0].attr("id"), Some("x"));
+}
+
+/// Where `href` on the page at `page_path` points on this site: a path with its query,
+/// without its fragment. Root-relative (`/x/`), relative (`x/`, `../x/`, `?q`), the site's
+/// origin (`http://127.0.0.1:PORT/x/`) and protocol-relative to it (`//127.0.0.1:PORT/x/`)
+/// are this site; `None` for a fragment-only link, another site or another scheme.
+fn resolve(href: &str, page_path: &str, origin: &str) -> Option<String> {
+    let href = href.split('#').next().unwrap_or("");
+    if href.is_empty() {
         return None;
+    }
+    let host = origin.split_once("://").map_or(origin, |(_, h)| h);
+    let path = if let Some(rest) = href.strip_prefix(origin) {
+        match rest {
+            "" => "/".to_string(),
+            r if r.starts_with(['/', '?']) => r.to_string(),
+            _ => return None,
+        }
+    } else if let Some(rest) = href.strip_prefix("//") {
+        match rest.strip_prefix(host)? {
+            "" => "/".to_string(),
+            r if r.starts_with(['/', '?']) => r.to_string(),
+            _ => return None,
+        }
+    } else if href.starts_with('/') {
+        href.to_string()
+    } else if href
+        .split(['/', '?'])
+        .next()
+        .is_some_and(|first| first.contains(':'))
+    {
+        // `mailto:`, `https://other.example/`, …
+        return None;
+    } else if let Some(query) = href.strip_prefix('?') {
+        let base = page_path.split('?').next().unwrap_or("/");
+        return Some(format!("{base}?{query}"));
+    } else {
+        let base = page_path.split('?').next().unwrap_or("/");
+        let dir = &base[..base.rfind('/').map_or(0, |i| i + 1)];
+        format!("{dir}{href}")
     };
-    let path = rest.split('#').next().unwrap_or("");
-    (!path.is_empty()).then(|| path.to_string())
+    let (p, query) = match path.split_once('?') {
+        Some((p, q)) => (p.to_string(), Some(q.to_string())),
+        None => (path, None),
+    };
+    let mut segs: Vec<&str> = Vec::new();
+    for s in p.split('/').skip(1) {
+        match s {
+            "." => {}
+            ".." => {
+                segs.pop();
+            }
+            s => segs.push(s),
+        }
+    }
+    let mut out = format!("/{}", segs.join("/"));
+    if (p.ends_with("/.") || p.ends_with("/..")) && !out.ends_with('/') {
+        out.push('/');
+    }
+    if let Some(q) = query {
+        out.push('?');
+        out.push_str(&q);
+    }
+    Some(out)
+}
+
+#[test]
+fn resolve_handles_every_link_form() {
+    let o = "http://127.0.0.1:9";
+    let page = "/guides/themes/";
+    assert_eq!(resolve("/a/", page, o).as_deref(), Some("/a/"));
+    assert_eq!(resolve("x/", page, o).as_deref(), Some("/guides/themes/x/"));
+    assert_eq!(resolve("../x/", page, o).as_deref(), Some("/guides/x/"));
+    assert_eq!(resolve("../../", page, o).as_deref(), Some("/"));
+    assert_eq!(
+        resolve("?s=a", page, o).as_deref(),
+        Some("/guides/themes/?s=a")
+    );
+    assert_eq!(resolve("http://127.0.0.1:9", page, o).as_deref(), Some("/"));
+    assert_eq!(resolve("../..", page, o).as_deref(), Some("/"));
+    assert_eq!(resolve("x/..", page, o).as_deref(), Some("/guides/themes/"));
+    assert_eq!(
+        resolve("http://127.0.0.1:9/a/#b", page, o).as_deref(),
+        Some("/a/")
+    );
+    assert_eq!(resolve("//127.0.0.1:9/a/", page, o).as_deref(), Some("/a/"));
+    assert_eq!(resolve("//127.0.0.1:90/a/", page, o), None);
+    assert_eq!(resolve("http://127.0.0.1:90/a/", page, o), None);
+    assert_eq!(resolve("https://example.com/", page, o), None);
+    assert_eq!(resolve("mailto:a@example.com", page, o), None);
+    assert_eq!(resolve("#top", page, o), None);
 }
 
 /// The status a link ends at: its own, or that of the target of one 301/308.
@@ -216,7 +398,7 @@ fn final_status(port: u16, origin: &str, path: &str) -> Result<(), String> {
             let to = r
                 .location
                 .ok_or_else(|| format!("{} without Location", r.status))?;
-            let to_path = same_site_path(&to, origin)
+            let to_path = resolve(&to, path, origin)
                 .ok_or_else(|| format!("{} to another site: {to}", r.status))?;
             let t = get(port, &to_path);
             if t.status == 200 {
@@ -229,24 +411,52 @@ fn final_status(port: u16, origin: &str, path: &str) -> Result<(), String> {
     }
 }
 
-/// The ids in the "On this page" nav (`<nav class="docs-toc" …>`) that have no matching
-/// `id="…"` on the page.
-fn toc_problems(html: &str) -> Vec<String> {
-    let Some(start) = html.find("<nav class=\"docs-toc\"") else {
-        return Vec::new();
-    };
-    let nav = &html[start..];
-    let nav = &nav[..nav.find("</nav>").expect("toc nav is closed")];
-    let ids: BTreeSet<String> = attr_values(html, "id").into_iter().collect();
-    attr_values(nav, "href")
-        .into_iter()
-        .filter_map(|h| h.strip_prefix('#').map(str::to_string))
-        .filter(|id| !ids.contains(id))
-        .collect()
+/// What one page holds for the checks.
+struct PageScan {
+    h1: usize,
+    /// `h2`/`h3` elements with an `id` (the body's headings; the docs theme's own
+    /// headings have none).
+    headings: usize,
+    /// The `href`s inside `<nav class="docs-toc" …>`, `None` when the page has no such nav.
+    toc: Option<Vec<String>>,
+    ids: BTreeSet<String>,
+    hrefs: Vec<String>,
 }
 
-fn h1_count(html: &str) -> usize {
-    html.matches("<h1>").count() + html.matches("<h1 ").count()
+fn scan(html: &str) -> PageScan {
+    let mut p = PageScan {
+        h1: 0,
+        headings: 0,
+        toc: None,
+        ids: BTreeSet::new(),
+        hrefs: Vec::new(),
+    };
+    let mut in_toc = false;
+    for t in tags(html) {
+        if let Some(id) = t.attr("id") {
+            p.ids.insert(id.to_string());
+        }
+        match t.name.as_str() {
+            "h1" => p.h1 += 1,
+            "h2" | "h3" if t.attr("id").is_some() => p.headings += 1,
+            "nav"
+                if t.attr("class")
+                    .is_some_and(|c| c.split_whitespace().any(|c| c == "docs-toc")) =>
+            {
+                in_toc = true;
+                p.toc.get_or_insert_with(Vec::new);
+            }
+            "/nav" => in_toc = false,
+            _ => {}
+        }
+        if let Some(href) = t.attr("href") {
+            p.hrefs.push(href.to_string());
+            if in_toc && let Some(toc) = p.toc.as_mut() {
+                toc.push(href.to_string());
+            }
+        }
+    }
+    p
 }
 
 #[test]
@@ -287,13 +497,13 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         .arg("docs");
     ok(activate, "theme activate docs");
 
-    let _serve = serve(&data, port);
+    let _serve = serve(&data, port, &tmp.path().join("serve.log"));
 
     let index = get(port, "/sitemap.xml");
     assert_eq!(index.status, 200, "/sitemap.xml");
     let mut urls = Vec::new();
     for file in locs(&index.body) {
-        let path = same_site_path(&file, &origin).unwrap_or_else(|| panic!("sitemap {file}"));
+        let path = resolve(&file, "/", &origin).unwrap_or_else(|| panic!("sitemap {file}"));
         let part = get(port, &path);
         assert_eq!(part.status, 200, "{file}");
         urls.extend(locs(&part.body));
@@ -306,22 +516,39 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
 
     let mut checked: HashMap<String, Result<(), String>> = HashMap::new();
     let mut problems = Vec::new();
+    let mut with_toc = 0;
     for url in &urls {
-        let path = same_site_path(url, &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
+        let path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
         let page = get(port, &path);
         if page.status != 200 {
             problems.push(format!("{path}: answers {}", page.status));
             continue;
         }
-        let h1 = h1_count(&page.body);
-        if h1 != 1 {
-            problems.push(format!("{path}: {h1} <h1> elements"));
+        let scan = scan(&page.body);
+        if scan.h1 != 1 {
+            problems.push(format!("{path}: {} <h1> elements", scan.h1));
         }
-        for id in toc_problems(&page.body) {
-            problems.push(format!("{path}: TOC link #{id} has no matching id"));
+        match &scan.toc {
+            Some(toc) => {
+                with_toc += 1;
+                for href in toc {
+                    match href.strip_prefix('#') {
+                        Some(id) if scan.ids.contains(id) => {}
+                        _ => problems
+                            .push(format!("{path}: TOC link {href} is not an id on the page")),
+                    }
+                }
+            }
+            // The docs theme shows "On this page" for two or more level 2 and 3
+            // headings (`show_toc` is on by default), so a missing nav is a regression.
+            None if scan.headings >= 2 => problems.push(format!(
+                "{path}: {} h2/h3 headings but no <nav class=\"docs-toc\">",
+                scan.headings
+            )),
+            None => {}
         }
-        for href in attr_values(&page.body, "href") {
-            let Some(target) = same_site_path(&href, &origin) else {
+        for href in &scan.hrefs {
+            let Some(target) = resolve(href, &path, &origin) else {
                 continue;
             };
             if SKIPPED_PREFIXES.iter().any(|p| target.starts_with(p)) {
@@ -344,6 +571,8 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         urls.len(),
         checked.keys().collect::<BTreeSet<_>>()
     );
+    // The TOC check above must not pass because no page had a TOC.
+    assert!(with_toc >= 1, "no page has a <nav class=\"docs-toc\">");
     assert!(
         problems.is_empty(),
         "{} problems over {} pages:\n{}",
