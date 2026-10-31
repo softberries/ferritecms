@@ -147,9 +147,43 @@ export function trimSeo(text: string): string {
  * over-long paste is cut at a code-point boundary.
  */
 export function clampSeo(text: string, max: number): string {
-  if ([...trimSeo(text)].length <= max) return text;
+  if (seoLength(text) <= max) return text;
   const lead = [...(/^\p{White_Space}*/u.exec(text)?.[0] ?? "")].length;
   return [...text].slice(0, lead + max).join("");
+}
+
+/** The length the server checks: code points of the trimmed text. */
+export function seoLength(text: string): number {
+  return [...trimSeo(text)].length;
+}
+
+/**
+ * The value an edit from `prev` to `next` leaves under the limit `max`, as a native
+ * `maxLength` would: an edit that fits is kept; one made while `prev` is already at the
+ * limit is refused (`prev`, so typing inside full text does not push its end off); one
+ * that jumps past it (a paste) is cut by {@link clampSeo}.
+ */
+export function limitSeoEdit(prev: string, next: string, max: number): string {
+  if (seoLength(next) <= max) return next;
+  if (seoLength(prev) >= max) return prev;
+  return clampSeo(next, max);
+}
+
+/**
+ * A `beforeinput` listener that refuses typed text (`insertText`) which would take the
+ * field past `max` (as {@link seoLength} counts), so the caret stays where it is; a
+ * paste goes through and is cut by {@link limitSeoEdit}.
+ */
+export function refuseSeoOverflow(max: number): (e: Event) => void {
+  return (e) => {
+    const input = e as InputEvent;
+    const el = e.target as HTMLInputElement | HTMLTextAreaElement;
+    if (input.inputType !== "insertText" || !input.data) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const after = el.value.slice(0, start) + input.data + el.value.slice(end);
+    if (seoLength(after) > max) e.preventDefault();
+  };
 }
 
 /**

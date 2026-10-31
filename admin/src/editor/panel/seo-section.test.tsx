@@ -191,4 +191,44 @@ describe("seo_section", () => {
     // The description has its own region.
     expect(document.querySelector("[data-slot=seo-description-live]")).toBeEmptyDOMElement();
   });
+
+  test("typing_at_the_limit_is_refused_like_max_length", () => {
+    // Full text: a typed character is refused before it lands (the caret stays put), and
+    // an edit that still arrives longer is not applied, so the end is never pushed off.
+    const full = "a".repeat(200);
+    const { doc, setMeta } = docWith({ ...EMPTY, title: full });
+    renderSeo(doc);
+    const title = screen.getByRole("textbox", { name: "SEO title" }) as HTMLInputElement;
+    title.setSelectionRange(10, 10);
+    const typed = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "b",
+      bubbles: true,
+      cancelable: true,
+    });
+    title.dispatchEvent(typed);
+    expect(typed.defaultPrevented).toBe(true);
+    // Replacing a selection with one character fits, so it is let through.
+    title.setSelectionRange(10, 12);
+    const replace = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "b",
+      bubbles: true,
+      cancelable: true,
+    });
+    title.dispatchEvent(replace);
+    expect(replace.defaultPrevented).toBe(false);
+    fireEvent.change(title, { target: { value: `${"a".repeat(10)}b${"a".repeat(190)}` } });
+    expect(setMeta).not.toHaveBeenCalled();
+  });
+
+  test("the preview trims like the server, keeping a BOM", () => {
+    const { doc } = docWith({ ...EMPTY, title: "﻿" });
+    const { container } = renderSeo(doc);
+    // A BOM-only title is stored and shown by the site: the preview does not fall back
+    // to the item title.
+    expect(container.querySelector("[data-slot=search-preview]")).not.toHaveTextContent(
+      "Harbour notes",
+    );
+  });
 });

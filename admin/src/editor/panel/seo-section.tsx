@@ -15,7 +15,7 @@
 // drawer says so.
 
 import { EyeOffIcon, RotateCcwIcon } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import type { SchemaRobotsDto } from "@/api/schema";
@@ -32,7 +32,9 @@ import {
   MAX_CANONICAL,
   type SeoDraft,
   canonicalAccepted,
-  clampSeo,
+  limitSeoEdit,
+  refuseSeoOverflow,
+  seoLength,
   trimSeo,
 } from "../editor-state";
 import { sortedRobots } from "../conflict";
@@ -53,7 +55,22 @@ const SEO_LIMITS = {
   description: { max: 500, soft: 160 },
 } as const;
 
-const chars = (s: string) => [...s].length;
+/**
+ * A ref for a field limited to `max` (as the server counts): typed text past the limit
+ * is refused before it lands (`beforeinput`), so the caret stays put, as with a native
+ * `maxLength`.
+ */
+function useSeoLimit(max: number) {
+  return useCallback(
+    (el: HTMLInputElement | HTMLTextAreaElement | null) => {
+      if (!el) return;
+      const refuse = refuseSeoOverflow(max);
+      el.addEventListener("beforeinput", refuse);
+      return () => el.removeEventListener("beforeinput", refuse);
+    },
+    [max],
+  );
+}
 
 /**
  * A server message about `path` as a sentence: core starts it with the path
@@ -89,8 +106,8 @@ export function SeoSection({
   const canonical = trimSeo(seo.canonical);
   // Search engines show the canonical address; a half-typed one is not shown.
   const url = canonical !== "" && canonicalAccepted(canonical) ? canonical : ownUrl;
-  const previewTitle = seo.title.trim() || doc.title.trim() || t("title.untitled");
-  const previewDescription = seo.description.trim() || doc.meta.excerpt.trim();
+  const previewTitle = trimSeo(seo.title) || doc.title.trim() || t("title.untitled");
+  const previewDescription = trimSeo(seo.description) || doc.meta.excerpt.trim();
   const empty =
     seo.title === "" && seo.description === "" && seo.canonical === "" && seo.robots.length === 0;
   return (
@@ -177,6 +194,7 @@ function CanonicalField({
 }) {
   const { t } = useTranslation("editor");
   const [left, setLeft] = useState(false);
+  const limitRef = useSeoLimit(MAX_CANONICAL);
   const error =
     serverError ?? (left && !canonicalAccepted(value) ? t("seo.canonicalInvalid") : undefined);
   return (
@@ -201,7 +219,11 @@ function CanonicalField({
           // A long address scrolls inside the field: the whole one on hover.
           title={value || undefined}
           onBlur={() => setLeft(true)}
-          onChange={(e) => onChange(clampSeo(e.target.value, MAX_CANONICAL))}
+          ref={limitRef}
+          onChange={(e) => {
+            const next = limitSeoEdit(value, e.target.value, MAX_CANONICAL);
+            if (next !== value) onChange(next);
+          }}
         />
       )}
     </FormField>
@@ -286,8 +308,9 @@ function SeoInput({
   const hintId = useId();
   const errorId = useId();
   const { max, soft } = SEO_LIMITS[kind];
+  const limitRef = useSeoLimit(max);
   // As the server counts: code points of the trimmed text.
-  const n = chars(trimSeo(value));
+  const n = seoLength(value);
   const over = n > soft;
   const nf = new Intl.NumberFormat(uiLocale());
   // The live region speaks when the count crosses a limit (into or out of "over the soft
@@ -313,14 +336,19 @@ function SeoInput({
     placeholder,
     "aria-describedby": error ? `${hintId} ${errorId}` : hintId,
     ...(error ? { "aria-invalid": true } : {}),
-    onChange: (e: { target: { value: string } }) => onChange(clampSeo(e.target.value, max)),
+    onChange: (e: { target: { value: string } }) => {
+      const next = limitSeoEdit(value, e.target.value, max);
+      if (next !== value) onChange(next);
+    },
   };
   let control: ReactNode;
-  if (kind === "title") control = <Input {...common} data-slot="seo-title" className="text-sm" />;
-  else {
+  if (kind === "title") {
+    control = <Input {...common} ref={limitRef} data-slot="seo-title" className="text-sm" />;
+  } else {
     control = (
       <Textarea
         {...common}
+        ref={limitRef}
         data-slot="seo-description"
         rows={3}
         className="min-h-20 resize-y text-sm"
