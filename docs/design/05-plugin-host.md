@@ -834,7 +834,8 @@ value is passed on and the call counts as a failure (§8).
   protocol-relative); `cite` on `blockquote`/`q`/`del`/`ins` dropped (ammonia does not check
   it as a URL);
   `rel="noopener noreferrer"` on every link, plus `a[target]`
-  and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
+  and `code[class]` restricted to `language-*` classes, and `pre[tabindex]` only as `0`
+  (core's code blocks, M4-3b R-b17). Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives
   only if no non-raw plugin runs after it. Raw HTML is meant to be shown as a high-risk
   permission at install (M2 admin).
