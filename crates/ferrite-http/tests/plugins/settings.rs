@@ -71,6 +71,7 @@ fn patch(v: Value) -> Map<String, Value> {
 }
 
 async fn secrets_open_only_for_the_owner(site: Site) -> Site {
+    let site = crate::with_generous_deadlines(site);
     let admin = Site::actor(&site.user("root", Role::Admin).await);
     let ext = ExtensionAdmin::new(site.store.clone(), site.key.clone());
     // One component installed as two plugins with the same settings keys.
@@ -167,6 +168,7 @@ async fn secrets_open_only_for_the_owner(site: Site) -> Site {
 /// (`limit`), text -> secret (`api_key`, a plaintext never "set"), secret -> text
 /// (`title`, the old secret never opened for a plain key). The view flags each key.
 async fn type_changed_settings_fall_back_after_update(site: Site) -> Site {
+    let site = crate::with_generous_deadlines(site);
     let admin = Site::actor(&site.user("root", Role::Admin).await);
     let ext = ExtensionAdmin::new(site.store.clone(), site.key.clone());
     let hash = site.put_artifact(plugin_wasm("settings-probe")).await;

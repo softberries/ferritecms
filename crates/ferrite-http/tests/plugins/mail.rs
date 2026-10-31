@@ -65,7 +65,13 @@ pub(crate) fn mail_services(
 /// [`mail_host`] with `title` as the configured site title.
 async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
     let (services, mailer) = mail_services(site, title);
-    let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
+    // A 5 s render deadline: no test here is about deadlines, and the render-path case
+    // asserts what the plugin returned (`with_generous_deadlines`).
+    let config = HostConfig {
+        render_deadline: Duration::from_secs(5),
+        ..HostConfig::default()
+    };
+    let host = Arc::new(PluginHost::new(config, services).unwrap());
     site.install(name).await;
     let report = PluginReloader::new(site.store.clone(), site.media.clone(), host.clone())
         .reload()
