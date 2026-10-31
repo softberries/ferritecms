@@ -64,7 +64,7 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
   `content`, `comment`, `menu`, `option`, `redirect`) lets a re-run update instead of
   duplicate. `source` is the normalised `<wp:base_blog_url>`, which must be an `http(s)`
   URL with a host, so a WXR never shares the map rows of a `markdown:<name>` source
-  (M4-4 P77). Any other value fails the run before it starts (no run row, no report;
+  (M4-4 P77). Any other non-empty value (an empty one is reported missing) fails the run before it starts (no run row, no report;
   CLI exit 1, a permanent job failure) with `ImportError::Source`: "wp:base_blog_url
   "<value>" is not an http(s) URL; set it to the old site's http:// or https:// address"
   (the value cut to 200 characters). WordPress always exports an `http(s)` address, so

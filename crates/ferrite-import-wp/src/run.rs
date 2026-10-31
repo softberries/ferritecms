@@ -739,14 +739,19 @@ fn read_channel(path: &Path) -> Result<Channel, ImportError> {
 /// P77): another scheme (`markdown:<name>` is the Markdown importer's source, `file:`,
 /// `ftp:`) is refused, so a WXR never runs under another importer's map rows.
 fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
-    let url = url::Url::parse(base_blog_url.trim()).map_err(|_| ImportError::Missing {
-        what: "a valid wp:base_blog_url",
-        offset: 0,
-    })?;
-    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-        return Err(ImportError::Source {
-            value: base_blog_url.trim().chars().take(200).collect(),
+    let value = base_blog_url.trim();
+    if value.is_empty() {
+        return Err(ImportError::Missing {
+            what: "a valid wp:base_blog_url",
+            offset: 0,
         });
+    }
+    let refused = || ImportError::Source {
+        value: value.chars().take(200).collect(),
+    };
+    let url = url::Url::parse(value).map_err(|_| refused())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(refused());
     }
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
@@ -910,7 +915,10 @@ mod tests {
             normalise_source("https://example.test:443").unwrap(),
             "https://example.test"
         );
-        assert!(normalise_source("").is_err());
+        assert!(matches!(
+            normalise_source(" "),
+            Err(ImportError::Missing { .. })
+        ));
     }
 
     /// P77: a source is an `http(s)` URL with a host, so a WXR cannot run under the
@@ -925,6 +933,8 @@ mod tests {
             "file:///var/www",
             "mailto:a@example.test",
             "data:text/plain,x",
+            "not a url",
+            "example.test/blog",
         ] {
             match normalise_source(bad) {
                 Err(e @ ImportError::Source { .. }) => {
