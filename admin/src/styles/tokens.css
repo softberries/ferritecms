@@ -145,10 +145,12 @@ html[data-density="compact"] {
 
   --chart-5: oklch(0.72 0.14 300);
 
-  /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows. */
-  --shadow-1: none;
-  --shadow-2: none;
-  --shadow-3: none;
+  /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows.
+     Transparent rather than `none`: Tailwind lists `--tw-shadow` after the ring in one
+     `box-shadow`, and a `none` item makes the whole declaration invalid (no ring). */
+  --shadow-1: 0 0 0 0 oklch(0 0 0 / 0);
+  --shadow-2: 0 0 0 0 oklch(0 0 0 / 0);
+  --shadow-3: 0 0 0 0 oklch(0 0 0 / 0);
 }
 
 /*

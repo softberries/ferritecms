@@ -121,7 +121,7 @@ describe("design tokens", () => {
   });
 
   it("popup_edge_stands_out_in_dark", () => {
-    // Dark popups have no shadow (`--shadow-*` are `none`): their edge alone sets a menu
+    // Dark popups cast no visible shadow (`--shadow-*` are transparent): their edge alone sets a menu
     // off from the page and from the card it opens over. The old `foreground/10` ring
     // gave about 1.26:1 there; the edge must be clearly stronger than that and than
     // `border` (decoration, so no WCAG minimum applies).
@@ -136,6 +136,21 @@ describe("design tokens", () => {
     );
     // Light popups keep their shadow; the edge there is the hairline `border`.
     expect(light["popover-edge"]).toEqual(light.border);
+  });
+
+  it("dark_shadows_keep_rings", () => {
+    // Tailwind composes `box-shadow` from a list (inset, ring offset, ring, then
+    // `--tw-shadow`). `none` is not a valid list item, so a dark `--shadow-*: none` made
+    // the whole declaration invalid and dropped the ring of every element that also has
+    // a `shadow-*` class (dropdowns, selects, popovers, hover cards: no edge at all).
+    const dark = /(?:^|\n)\.dark\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
+    for (const name of TOKENS.shadow) {
+      const value = new RegExp(`--${name}\\s*:\\s*([^;]+);`).exec(dark)?.[1]?.trim();
+      expect(value, `--${name} in .dark`).toBeDefined();
+      expect(value, `--${name} in .dark`).not.toMatch(/\bnone\b/);
+      // Still invisible: a fully transparent colour.
+      expect(value, `--${name} in .dark`).toMatch(/\/\s*0\s*\)$/);
+    }
   });
 
   it("status_private_derives_from_foreground", () => {

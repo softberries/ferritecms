@@ -129,7 +129,8 @@ Derived tokens (`var()` in `tokens.css`, so they follow the mode):
   (and their sub-menus), selects, popovers and hover cards. Light: = `border` (those
   popups also cast `--shadow-2`); dark: 0.36 0.01 260, about 1.77:1 on `background`
   and 1.68:1 on `card`, because dark popups cast no shadow and the generated
-  `ring-foreground/10` (about 1.26:1) left a menu nearly edgeless over a card.
+  `ring-foreground/10` (about 1.26:1) left a menu nearly edgeless over a card (and,
+  until the dark shadows stopped being `none`, §4, not drawn at all).
   Decoration, so no WCAG minimum; `popup_edge_stands_out_in_dark` keeps it above
   `border` and at ≥ 1.7:1 / 1.6:1. Dialogs, alert dialogs, sheets and cards keep their
   rings: they sit on the scrim or are not popups.
@@ -215,8 +216,12 @@ contrast pair unchanged.
   - Utilities `shadow-1`…`shadow-3`; Tailwind's own names map onto them so generated
     components follow the scale: `shadow-2xs`/`xs`/`sm` → 1, `md` → 2, `lg`/`xl`/`2xl`
     → 3.
-  - In dark mode all three are `none`: elevation comes from a 1 px `border` plus a
-    lighter `card` (0.195 on a 0.165 `background`).
+  - In dark mode all three are a transparent `0 0 0 0 oklch(0 0 0 / 0)`: elevation
+    comes from a 1 px `border` plus a lighter `card` (0.195 on a 0.165 `background`).
+    Not `none` (M4-4): Tailwind writes `--tw-shadow` as the last item of one
+    `box-shadow` list after the ring, and a `none` item made the whole declaration
+    invalid, so every element with both a `shadow-*` and a `ring-*` class (the popups'
+    edge among them) lost its ring in dark mode (`dark_shadows_keep_rings`).
 - Density through `html[data-density]`:
 
   | Variable | `comfortable` (default) | `compact` | Utility |
