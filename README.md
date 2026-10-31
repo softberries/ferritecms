@@ -23,6 +23,10 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 > example plugins (SEO, analytics, a contact form; [`plugins/examples/`](plugins/examples/))
 > and `ferrite doctor` are built. See [`docs/BRIEF.md`](docs/BRIEF.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
+Documentation for site owners and operators is written as Markdown in [`site/`](site/)
+(build it locally as a FerriteCMS site with `site/build.sh`; see
+[`site/README.md`](site/README.md)).
+
 Running a site: [`packaging/systemd/README.md`](packaging/systemd/README.md) (install
 under systemd), [`docs/operations/solo-upgrade.md`](docs/operations/solo-upgrade.md)
 (update, roll back, HTTPS) and
