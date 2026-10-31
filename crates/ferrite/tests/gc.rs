@@ -544,6 +544,7 @@ async fn gc_dry_run_changes_nothing(db: Arc<TestDb>) {
             deleted_tmp: 1,
             failed: 0,
             deletes_skipped: None,
+            owner_refused: false,
             claimed_from: None,
         }
     );
@@ -593,6 +594,10 @@ async fn gc_second_site_on_one_store_deletes_nothing(db: Arc<TestDb>) {
             .is_some_and(|w| w.contains("wrote ferrite-owner.json")),
         "{first:?}"
     );
+    assert!(
+        !first.owner_refused,
+        "the first pass is not a refusal (P74)"
+    );
     let marker = m.store.read_owner().await.unwrap().expect("marker written");
     assert_eq!(marker.install_id, install_a);
     assert!(m.dir.path().join("ferrite-owner.json").is_file());
@@ -614,6 +619,7 @@ async fn gc_second_site_on_one_store_deletes_nothing(db: Arc<TestDb>) {
             .is_some_and(|w| w.contains(&install_a)),
         "{skipped:?}"
     );
+    assert!(skipped.owner_refused, "{skipped:?}");
     assert_eq!(
         (skipped.deleted_rows, skipped.deleted_blobs),
         (0, 0),
@@ -990,6 +996,110 @@ async fn media_gc_cli_exit_codes() {
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
 }
 
+/// P74: a store another install owns (or whose marker cannot be read) is refused: exit 2,
+/// dry run too, with the reason on the line; `--claim` makes it this site's (exit 0).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn media_gc_exits_2_when_the_store_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path();
+    let init = ferrite(args(&["init", "--url", SITE_URL], data), Vec::new()).await;
+    assert_eq!(init.status.code(), Some(0), "{}", text(&init));
+    let marker = data.join("media").join("ferrite-owner.json");
+    std::fs::write(
+        &marker,
+        serde_json::to_vec(&OwnerMarker {
+            install_id: "0192aaaa-0000-7000-8000-000000000000".into(),
+            site_id: "another site".into(),
+            claimed_at: "2026-10-29T00:00:00.000000Z".into(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    for list in [&["media", "gc"][..], &["media", "gc", "--dry-run"]] {
+        let out = ferrite(args(list, data), Vec::new()).await;
+        assert_eq!(out.status.code(), Some(2), "{list:?}: {}", text(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stdout)
+                .contains("; deletes skipped: the media store belongs to install 0192aaaa"),
+            "{}",
+            text(&out)
+        );
+    }
+    // An unreadable marker is refused the same way.
+    std::fs::write(&marker, b"not json").unwrap();
+    let out = ferrite(args(&["media", "gc"], data), Vec::new()).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("cannot be read"),
+        "{}",
+        text(&out)
+    );
+    let out = ferrite(args(&["media", "gc", "--claim"], data), Vec::new()).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let out = ferrite(args(&["media", "gc"], data), Vec::new()).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), EMPTY_LINE);
+}
+
+/// P74: a pass in which a delete failed did less than asked: exit 2, the count on the
+/// line. (Skipped where permissions are not enforced, e.g. as root.)
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn media_gc_exits_2_when_a_delete_fails() {
+    use sha2::Digest;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path();
+    let init = ferrite(args(&["init", "--url", SITE_URL], data), Vec::new()).await;
+    assert_eq!(init.status.code(), Some(0), "{}", text(&init));
+    // The first pass writes the marker and stays 0.
+    let out = ferrite(args(&["media", "gc"], data), Vec::new()).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    // An old blob with no row, in a folder this user cannot delete from.
+    let bytes = b"an unrecorded blob";
+    let hash = ferrite_domain::to_hex(&sha2::Sha256::digest(bytes));
+    let folder = data.join("media").join("artifacts").join(&hash[..2]);
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(&hash);
+    std::fs::write(&file, bytes).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - 3 * DAY)
+        .unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let probe = folder.join("probe");
+    let enforced = std::fs::write(&probe, b"x").is_err();
+    let _ = std::fs::remove_file(&probe);
+    if !enforced {
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("SKIP: permissions are not enforced for this user");
+        return;
+    }
+    let out = ferrite(
+        args(&["media", "gc", "--grace-days", "1"], data),
+        Vec::new(),
+    )
+    .await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(", failed 1"),
+        "{}",
+        text(&out)
+    );
+    assert!(file.exists());
+    // Once the delete can succeed the pass is 0 again.
+    let out = ferrite(
+        args(&["media", "gc", "--grace-days", "1"], data),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(!file.exists());
+}
+
 /// Postgres: another GC holding the lock is exit 3.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn media_gc_cli_busy_exit_3() {
@@ -1046,4 +1156,24 @@ fn serve_registers_artifacts_gc() {
     for kind in ["content.publish_due", "plugin.purge_sweep"] {
         assert!(periodics.iter().any(|p| p.kind == kind), "{kind}");
     }
+}
+
+/// P75: `artifacts.gc` is due at 03:00 UTC (keyed by the day, as before), apart from a
+/// daily `site.backup` at 00:00.
+#[test]
+fn artifacts_gc_runs_at_three() {
+    let gc = ferrite::jobs::artifacts_gc_periodic();
+    assert_eq!(gc.offset, 3 * HOUR);
+    // 2026-10-23T00:00:00Z, and 01:30 that day.
+    let day = 1_792_713_600_i64;
+    let now = Timestamp::from_micros((day + 5_400) * 1_000_000).unwrap();
+    let job = gc.job_at(now);
+    assert_eq!(
+        job.unique_key.as_deref(),
+        Some(&*format!("artifacts.gc:{day}"))
+    );
+    assert_eq!(
+        job.run_at.unwrap().to_rfc3339(),
+        "2026-10-23T03:00:00+00:00"
+    );
 }
