@@ -1241,7 +1241,8 @@ pub trait ImportRepo: Send + Sync {
     ) -> Result<bool, StoreError>;
     /// [`abandon_stale`](Self::abandon_stale) for a start by job `job` (M3-2 P27 as
     /// built): also only when the run has no job, is `job`'s own, or its job is not
-    /// `running` (no such job included). One statement, like `abandon_stale`.
+    /// live (no such job included): live is `running` with a lease that has not expired
+    /// at `now` (M4-4 P80). One statement, like `abandon_stale`.
     async fn abandon_stale_for_job(
         &self,
         id: ImportRunId,

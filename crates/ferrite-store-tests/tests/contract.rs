@@ -35,6 +35,7 @@ backend_tests!(
     fence_true_only_for_matching_running_token,
     abandon_stale_only_when_still_stale,
     abandon_stale_for_job_spares_live_jobs,
+    an_expired_lease_does_not_keep_a_run_live,
     import_map_upsert_and_get,
     import_map_list_pages_by_wp_id,
     content_insert_keeps_explicit_timestamps,

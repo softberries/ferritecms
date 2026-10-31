@@ -477,6 +477,59 @@ pub async fn abandon_stale_for_job_spares_live_jobs(db: &TestDb) {
     }
 }
 
+/// P80 (real clock): the owner job of a stale run counts as live only while it is
+/// `running` and its lease has not expired. A job whose runner died keeps `running` with
+/// a lease in the past until the reaper reclaims it; its stale run is abandoned at once.
+/// The leases come from the store's clock (Postgres `now()`), so `now` here is the real
+/// clock plus a margin, not the fixed epoch of the other tests.
+pub async fn an_expired_lease_does_not_keep_a_run_live(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let jobs = repos.jobs();
+    let admin = fixture_user(store).await;
+    let job = |kind: &str| ferrite_domain::NewJob::new(kind, json!({}));
+    let me = jobs.enqueue(&job("t.me")).await.unwrap().unwrap();
+    let expired = jobs.enqueue(&job("t.expired")).await.unwrap().unwrap();
+    let live = jobs.enqueue(&job("t.live")).await.unwrap().unwrap();
+    let node = ferrite_domain::NodeId::new();
+    for (kind, lease) in [("t.expired", 1), ("t.live", 600)] {
+        let claimed = jobs
+            .claim(node, &[kind.to_owned()], 1, Duration::from_secs(lease))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1, "{kind}");
+    }
+    let now = Timestamp::now();
+    let soon = Timestamp::from_micros(now.as_micros() + 60_000_000).unwrap();
+    for (owner, abandoned) in [(expired, true), (live, false)] {
+        assert_eq!(
+            jobs.get(owner).await.unwrap().unwrap().status,
+            ferrite_domain::JobStatus::Running
+        );
+        let run = ImportRun {
+            job_id: Some(owner),
+            ..new_run(admin.id, "https://wp.example")
+        };
+        imports.create_run(&run).await.unwrap();
+        assert_eq!(
+            imports
+                .abandon_stale_for_job(run.id, now, soon, me)
+                .await
+                .unwrap(),
+            abandoned,
+            "{owner:?}"
+        );
+        let state = imports.get_run(run.id).await.unwrap().unwrap().state;
+        if abandoned {
+            assert_eq!(state, ImportRunState::Abandoned);
+        } else {
+            assert_eq!(state, ImportRunState::Running);
+            assert!(imports.abandon_stale(run.id, now, soon).await.unwrap());
+        }
+    }
+}
+
 /// Postgres only: a takeover's `abandon_stale` waits for a batch that fenced (fresh
 /// heartbeat) and then sees the new heartbeat, so it abandons nothing.
 pub async fn abandon_stale_rechecks_after_fence(db: Arc<TestDb>) {
