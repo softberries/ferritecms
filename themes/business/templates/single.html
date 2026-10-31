@@ -1,0 +1,28 @@
+{#- A post (or any non-page item): date, title, featured image, body and terms. The
+    theme shows no comment thread. -#}
+{% extends "base.html" %}
+{% block body_class %}is-single{% endblock %}
+{% block content %}
+<article class="entry">
+  <header class="entry-header wrap wrap--prose">
+    {%- if post.date %}
+    <p class="entry-date"><time datetime="{{ post.date }}">{{ post.date | date("%-d %B %Y") }}</time></p>
+    {%- endif %}
+    <h1 class="entry-title">{{ post.title }}</h1>
+  </header>
+  {% include "partials/entry-hero.html" %}
+  <div class="entry-content prose wrap wrap--prose">
+    {{ post.body | safe }}
+  </div>
+  {%- if post.terms %}
+  <footer class="entry-footer wrap wrap--prose">
+    <h2 class="visually-hidden">Topics</h2>
+    <ul class="terms" role="list">
+      {%- for t in post.terms %}
+      <li><a href="{{ t.url }}" rel="tag">{{ t.name }}</a></li>
+      {%- endfor %}
+    </ul>
+  </footer>
+  {%- endif %}
+</article>
+{% endblock %}

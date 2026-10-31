@@ -1,25 +1,25 @@
 // FerriteCMS docs theme: progressive enhancement only (M4-3b P59). Every page works
-// without it. Adds a "link to this section" anchor to each heading with an id and a
-// Copy button to code blocks. No network requests.
+// without it. Adds a "link to this section" anchor after each heading with an id and a
+// Copy button to code blocks. No network requests. Running it twice adds nothing.
 (() => {
   "use strict";
-  const pages = document.querySelector(".docs-sidebar__pages");
-  if (pages && !CSS.supports("selector(::details-content)")) {
-    // Older browsers cannot show a closed <details> as the wide-screen sidebar.
-    const wide = matchMedia("(min-width: 60rem)");
-    const sync = () => { if (wide.matches) pages.open = true; };
-    sync();
-    wide.addEventListener("change", sync);
-  }
+  const root = document.documentElement;
+  if (root.dataset.docsJs) return;
+  root.dataset.docsJs = "1";
   const body = document.querySelector(".prose");
   if (!body) return;
   for (const h of body.querySelectorAll("h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]")) {
+    // The anchor follows the heading (not inside it), so the heading's accessible name
+    // stays its text; the row positions it at the heading's end.
+    const row = document.createElement("div");
+    row.className = "heading-row";
+    h.before(row);
     const a = document.createElement("a");
     a.className = "heading-anchor";
     a.href = "#" + h.id;
     a.setAttribute("aria-label", "Link to this section");
     a.textContent = "#";
-    h.append(" ", a);
+    row.append(h, a);
   }
   if (!navigator.clipboard || !window.isSecureContext) return;
   const status = document.createElement("p");

@@ -1,8 +1,9 @@
 {#- The page tree (`tree`, from `page_tree()` in base.html) as nested lists. A node with
     children gets a `<details>` for its subtree, open on the current trail; its link
     stays outside the `<summary>`, so following it and toggling are separate controls.
-    On narrow screens the whole tree sits in a "Pages" disclosure; on wide screens the
-    stylesheet shows it as a sidebar. At most 1000 nodes and 65 levels (`page_tree`'s
+    On narrow screens a "Pages" disclosure right before the nav shows or hides it (the
+    stylesheet hides the nav while the disclosure is closed); from 60rem the disclosure
+    is hidden and the nav always shows. No script and no `::details-content` needed. At most 1000 nodes and 65 levels (`page_tree`'s
     limits), which the default fuel and recursion limit cover. -#}
 {%- macro tree_list(nodes) %}
 <ul class="tree" role="list">
@@ -20,14 +21,12 @@
 {%- endmacro %}
 {%- if tree and tree.items %}
 <div class="docs-sidebar">
-<details class="docs-sidebar__pages">
-<summary class="docs-sidebar__toggle">Pages</summary>
+<details class="docs-pages-toggle"><summary>Pages</summary></details>
 <nav class="docs-nav" id="nav" aria-label="Pages">
 {{- tree_list(tree.items) }}
 {%- if tree.truncated %}
 <p class="docs-nav__note">Only the first 1000 pages are listed.</p>
 {%- endif %}
 </nav>
-</details>
 </div>
 {%- endif %}

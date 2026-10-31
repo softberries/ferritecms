@@ -80,13 +80,13 @@ the page with the slug `contact`):
 <form method="post" action="{{ plugin_route("contact-form", "/submit") }}">
   <input type="hidden" name="return" value="{{ request.path }}">
   <label for="cf-name">Name</label>
-  <input id="cf-name" name="name" autocomplete="name" required>
+  <input id="cf-name" name="name" autocomplete="name" maxlength="100" required>
   <label for="cf-email">E-mail</label>
-  <input id="cf-email" name="email" type="email" autocomplete="email" required>
+  <input id="cf-email" name="email" type="email" autocomplete="email" maxlength="254" required>
   <label for="cf-subject">Subject (optional)</label>
-  <input id="cf-subject" name="subject">
+  <input id="cf-subject" name="subject" maxlength="150">
   <label for="cf-message">Message</label>
-  <textarea id="cf-message" name="message" required></textarea>
+  <textarea id="cf-message" name="message" minlength="10" maxlength="5000" required></textarea>
   <div style="position:absolute;left:-10000px" aria-hidden="true">
     <label for="cf-website">Leave this field empty</label>
     <input id="cf-website" name="website" tabindex="-1" autocomplete="off">
@@ -96,7 +96,11 @@ the page with the slug `contact`):
 ```
 
 `plugin_route` gives `/_p/contact-form/submit`, and `return` brings the visitor back to the page
-the form was on. The `website` field is a trap for bots: people never see it, so a post that
+the form was on. The `maxlength` and `minlength` values are the limits under "Fields".
+Browsers count UTF-16 code units, so an emoji counts as two: `maxlength` is therefore never
+looser than the plugin's limit, while `minlength` is only a hint (five emoji pass the
+browser's 10 and fail the plugin's, as does text the plugin trims). The `website` field is
+a trap for bots: people never see it, so a post that
 fills it is dropped (see "Spam and abuse"). Keep it hidden with CSS, not with `type="hidden"`,
 which a bot can tell apart. The page itself stays cacheable: the form holds nothing per
 visitor.

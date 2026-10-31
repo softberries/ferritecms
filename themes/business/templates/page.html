@@ -1,0 +1,22 @@
+{#- A page: title, excerpt, featured image and body, then its child pages as feature
+    cards (`page_tree(post).children`, in menu order). -#}
+{% extends "base.html" %}
+{% block body_class %}is-page{% endblock %}
+{% block content %}
+<article class="entry entry--page">
+  <header class="entry-header wrap">
+    <h1 class="entry-title">{{ post.title }}</h1>
+    {%- if post.excerpt %}
+    <p class="entry-lede">{{ post.excerpt }}</p>
+    {%- endif %}
+  </header>
+  {% include "partials/entry-hero.html" %}
+  {%- block page_body %}
+  <div class="entry-content prose wrap wrap--prose">
+    {{ post.body | safe }}
+  </div>
+  {%- endblock %}
+</article>
+{%- set tree = page_tree(post) %}
+{%- if tree and tree.children %}{% with nodes = tree.children %}{% include "partials/features.html" %}{% endwith %}{% endif %}
+{% endblock %}
