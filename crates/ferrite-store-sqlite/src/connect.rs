@@ -3,6 +3,7 @@
 use std::{
     fs::{File, TryLockError},
     path::{Path, PathBuf},
+    sync::{Mutex, PoisonError},
     time::Duration,
 };
 
@@ -100,13 +101,38 @@ impl SqliteStore {
             backups_dir: opts.backups_dir.unwrap_or_else(|| db_dir.join("backups")),
             keep_snapshot: opts.keep_snapshot,
             locks: crate::lock::Locks::default(),
-            _lock: lock,
+            folder_lock: lock,
         })
     }
 }
 
-/// Holds an exclusive OS lock on `<dir>/ferrite.lock`; a second store on the folder fails fast.
-fn lock_folder(dir: &Path) -> Result<File, StoreError> {
+/// The exclusive OS lock on `<dir>/ferrite.lock` a store holds. It is released
+/// explicitly (`unlock`, not only by closing the descriptor), on [`SqliteStore`]'s `close`
+/// or on drop: a holder of the store in this process that is not dropped yet (a task, a
+/// service clone; the likelier case) or, for a moment, a copy of the descriptor that a
+/// child process inherits while it is spawned, then cannot keep the folder locked after
+/// the store is done with it (M4-4).
+pub(crate) struct FolderLock(Mutex<Option<File>>);
+
+impl FolderLock {
+    /// Unlocks and closes the lock file; later calls do nothing.
+    pub(crate) fn release(&self) {
+        let file = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(file) = file {
+            // On an error the descriptor's close still drops the lock, as before.
+            let _ = file.unlock();
+        }
+    }
+}
+
+impl Drop for FolderLock {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// Takes an exclusive OS lock on `<dir>/ferrite.lock`; a second store on the folder fails fast.
+fn lock_folder(dir: &Path) -> Result<FolderLock, StoreError> {
     std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
     let path = dir.join(LOCK_FILE);
     let file = File::options()
@@ -116,7 +142,7 @@ fn lock_folder(dir: &Path) -> Result<File, StoreError> {
         .open(&path)
         .map_err(|e| io_err(&path, e))?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
+        Ok(()) => Ok(FolderLock(Mutex::new(Some(file)))),
         Err(TryLockError::WouldBlock) => Err(StoreError::Database(format!(
             "data folder is in use: {} is locked by another process",
             path.display()
@@ -145,6 +171,30 @@ mod tests {
         );
         drop(first);
         SqliteStore::open(opts).await.unwrap();
+    }
+
+    /// M4-4: `close` releases the folder lock even while another holder (a task not yet
+    /// dropped, a descriptor a spawning child inherited) still keeps the store alive, so
+    /// the next command on the folder can open it at once.
+    #[tokio::test]
+    async fn close_releases_the_folder_lock() {
+        use ferrite_store::Store;
+
+        let dir = tempfile::tempdir().unwrap();
+        let opts = SqliteOptions::new(dir.path().join("ferrite.db"));
+        let first = std::sync::Arc::new(SqliteStore::open(opts.clone()).await.unwrap());
+        let still_held = first.clone();
+        first.close().await;
+        drop(first);
+        let second = SqliteStore::open(opts.clone()).await.unwrap();
+        // The new store holds the lock again.
+        let err = SqliteStore::open(opts).await.err().unwrap();
+        assert!(
+            matches!(&err, StoreError::Database(m) if m.contains("in use")),
+            "{err:?}"
+        );
+        drop(still_held);
+        drop(second);
     }
 
     #[tokio::test]

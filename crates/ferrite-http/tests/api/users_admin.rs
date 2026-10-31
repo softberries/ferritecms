@@ -188,103 +188,110 @@ async fn admin_resets_another_users_totp(api: Api) -> Api {
 
 async fn own_email_change_needs_password(api: Api) -> Api {
     let ada = api.user("ada", Role::Admin, false).await;
-    let ann = api.user("ann", Role::Author, false).await;
-    api.align_to_window(Duration::from_secs(40)).await;
-    // The login takes one slot of ann's per-login bucket (5/min).
-    let mut c = api.logged_in("ann").await;
-    let me = format!("{USERS}/{}", ann.id);
+    let (a, ada) = (&api, &ada);
+    // Every hit on the per-login bucket in one window. A run again starts in the next
+    // window with a new account and new addresses: the first run changed `ann`'s e-mail.
+    api.in_one_window(Duration::from_secs(40), |n| async move {
+        let login = format!("ann{n}");
+        let at = |name: &str| format!("{name}{n}@example.com");
+        let ann = a.user(&login, Role::Author, false).await;
+        // The login takes one slot of ann's per-login bucket (5/min).
+        let mut c = a.logged_in(&login).await;
+        let me = format!("{USERS}/{}", ann.id);
 
-    let p = c
-        .send(
-            &api,
-            Method::PATCH,
-            &me,
-            Some(&json!({"email": "new@example.com"})),
-            None,
-        )
-        .await
-        .assert_problem(422, "validation");
-    assert_eq!(p["errors"][0]["field"], "current_password");
-    // A change of case only is a change; a display name sent with it is not saved.
-    for body in [
-        json!({"email": "ANN@example.com"}),
-        json!({"email": "new@example.com", "display_name": "X"}),
-    ] {
         let p = c
-            .send(&api, Method::PATCH, &me, Some(&body), None)
+            .send(
+                a,
+                Method::PATCH,
+                &me,
+                Some(&json!({"email": at("new")})),
+                None,
+            )
             .await
             .assert_problem(422, "validation");
-        assert_eq!(p["errors"][0]["field"], "current_password", "{body}");
-    }
-    let r = c.get(&api, &me).await.json();
-    assert_eq!(r["email"], "ann@example.com");
-    assert_eq!(r["display_name"], "ann");
-    // The current e-mail and a display name need no password.
-    let r = c
-        .send(
-            &api,
-            Method::PATCH,
-            &me,
-            Some(&json!({"email": "ann@example.com", "display_name": "Ann B"})),
-            None,
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::OK, "{r:?}");
-    let r = c
-        .send(
-            &api,
-            Method::PATCH,
-            &me,
-            Some(&json!({"email": "new@example.com", "current_password": PASSWORD})),
-            None,
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::OK, "{r:?}");
-    assert_eq!(r.json()["email"], "new@example.com");
+        assert_eq!(p["errors"][0]["field"], "current_password");
+        // A change of case only is a change; a display name sent with it is not saved.
+        for body in [
+            json!({"email": format!("ANN{n}@example.com")}),
+            json!({"email": at("new"), "display_name": "X"}),
+        ] {
+            let p = c
+                .send(a, Method::PATCH, &me, Some(&body), None)
+                .await
+                .assert_problem(422, "validation");
+            assert_eq!(p["errors"][0]["field"], "current_password", "{body}");
+        }
+        let r = c.get(a, &me).await.json();
+        assert_eq!(r["email"], at("ann"));
+        assert_eq!(r["display_name"], login);
+        // The current e-mail and a display name need no password.
+        let r = c
+            .send(
+                a,
+                Method::PATCH,
+                &me,
+                Some(&json!({"email": at("ann"), "display_name": "Ann B"})),
+                None,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        let r = c
+            .send(
+                a,
+                Method::PATCH,
+                &me,
+                Some(&json!({"email": at("new"), "current_password": PASSWORD})),
+                None,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        assert_eq!(r.json()["email"], at("new"));
 
-    // An admin changes another user's e-mail without a password.
-    let admin = api.bearer(&ada, &["*"]).await;
-    let r = admin
-        .send(
-            &api,
-            Method::PATCH,
-            &me,
-            Some(&json!({"email": "third@example.com"})),
-            None,
-        )
-        .await;
-    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+        // An admin changes another user's e-mail without a password.
+        let admin = a.bearer(ada, &["*"]).await;
+        let r = admin
+            .send(
+                a,
+                Method::PATCH,
+                &me,
+                Some(&json!({"email": at("third")})),
+                None,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{r:?}");
 
-    // Wrong passwords are 403 and share the per-login bucket with /auth/password: the
-    // login and the right password above took two slots, three more are left.
-    for _ in 0..3 {
+        // Wrong passwords are 403 and share the per-login bucket with /auth/password: the
+        // login and the right password above took two slots, three more are left.
+        for _ in 0..3 {
+            c.send(
+                a,
+                Method::PATCH,
+                &me,
+                Some(&json!({"email": at("x"), "current_password": "wrong password!!"})),
+                None,
+            )
+            .await
+            .assert_problem(403, "forbidden");
+        }
         c.send(
-            &api,
+            a,
             Method::PATCH,
             &me,
-            Some(&json!({"email": "x@example.com", "current_password": "wrong password!!"})),
+            Some(&json!({"email": at("x"), "current_password": PASSWORD})),
             None,
         )
         .await
-        .assert_problem(403, "forbidden");
-    }
-    c.send(
-        &api,
-        Method::PATCH,
-        &me,
-        Some(&json!({"email": "x@example.com", "current_password": PASSWORD})),
-        None,
-    )
-    .await
-    .assert_problem(429, "rate-limited");
-    c.post(
-        &api,
-        "/api/v1/auth/password",
-        json!({"current": PASSWORD, "new": "another long password"}),
-    )
-    .await
-    .assert_problem(429, "rate-limited");
-    let r = admin.get(&api, &me).await;
-    assert_eq!(r.json()["email"], "third@example.com");
+        .assert_problem(429, "rate-limited");
+        c.post(
+            a,
+            "/api/v1/auth/password",
+            json!({"current": PASSWORD, "new": "another long password"}),
+        )
+        .await
+        .assert_problem(429, "rate-limited");
+        let r = admin.get(a, &me).await;
+        assert_eq!(r.json()["email"], at("third"));
+    })
+    .await;
     api
 }

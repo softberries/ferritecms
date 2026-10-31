@@ -182,3 +182,14 @@ function parse(from: string, to: string[], raw: string): Mail {
   }
   return { from, to, headers, text, receivedAt: Date.now() };
 }
+
+/**
+ * The link and token of the first reset mail to `email` received at or after `after` (ms
+ * since the epoch) by the sink of `site` (its `mailDir`).
+ */
+export async function resetLink(site: { mailDir: string }, email: string, after: number) {
+  const mail = await mailbox(site.mailDir).waitFor(email, { after });
+  const m = /(\S+\/admin\/reset-password)#token=([A-Za-z0-9._~-]+)/.exec(mail.text);
+  if (!m?.[1] || !m[2]) throw new Error(`no reset link in:\n${mail.text}`);
+  return { url: `${m[1]}#token=${m[2]}`, token: m[2] };
+}

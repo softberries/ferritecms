@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ferrite::NodeOptions;
 use ferrite::extensions::install_plugin_file;
+use ferrite_store_tests::window::in_one_window;
 
 use crate::harness::{Cluster, SETUP, Spec, manifest, send, wait_until};
 use crate::test_support;
@@ -13,24 +14,6 @@ use crate::test_support;
 /// `route-flood`'s `rate_limit` ("5/min").
 const LIMIT: usize = 5;
 const WINDOW: Duration = Duration::from_secs(60);
-
-/// Sleeps into the next window when fewer than `need` are left of this one (F10, F27).
-async fn align_to_window(c: &Cluster, need: Duration) {
-    let w = i64::try_from(WINDOW.as_micros()).unwrap();
-    let now = c
-        .store(0)
-        .read()
-        .nodes()
-        .db_now()
-        .await
-        .unwrap()
-        .as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn route_flood_is_limited_across_nodes() {
@@ -82,32 +65,42 @@ async fn route_flood_is_limited_across_nodes() {
             .await
         }
     };
-    align_to_window(&c, Duration::from_secs(30)).await;
-    for i in 0..LIMIT {
-        let (status, head, body) = post(i % 2, "198.51.100.1").await;
-        assert_eq!(
-            status,
-            200,
-            "post {} on node {}: {head}\n{body}",
-            i + 1,
-            i % 2
-        );
-        assert!(
-            head.contains("content-security-policy: sandbox allow-forms; form-action 'self'"),
-            "{head}"
-        );
-    }
-    // The sixth, on whichever node, is refused: the count is shared.
-    let (status, head, _) = post(LIMIT % 2, "198.51.100.1").await;
-    assert_eq!(status, 429, "{head}");
-    assert!(head.contains("retry-after: "), "{head}");
-    let (status, _, _) = post((LIMIT + 1) % 2, "198.51.100.1").await;
-    assert_eq!(status, 429);
-    // A second client still passes, on both nodes.
-    for node in 0..2 {
-        let (status, head, _) = post(node, "198.51.100.2").await;
-        assert_eq!(status, 200, "second client on node {node}: {head}");
-    }
+    // Every post in one window (F10, F27); a run again starts in the next one.
+    in_one_window(
+        c.store(0).as_ref(),
+        WINDOW,
+        Duration::from_secs(30),
+        |_| async move {
+            for i in 0..LIMIT {
+                let (status, head, body) = post(i % 2, "198.51.100.1").await;
+                assert_eq!(
+                    status,
+                    200,
+                    "post {} on node {}: {head}\n{body}",
+                    i + 1,
+                    i % 2
+                );
+                assert!(
+                    head.contains(
+                        "content-security-policy: sandbox allow-forms; form-action 'self'"
+                    ),
+                    "{head}"
+                );
+            }
+            // The sixth, on whichever node, is refused: the count is shared.
+            let (status, head, _) = post(LIMIT % 2, "198.51.100.1").await;
+            assert_eq!(status, 429, "{head}");
+            assert!(head.contains("retry-after: "), "{head}");
+            let (status, _, _) = post((LIMIT + 1) % 2, "198.51.100.1").await;
+            assert_eq!(status, 429);
+            // A second client still passes, on both nodes.
+            for node in 0..2 {
+                let (status, head, _) = post(node, "198.51.100.2").await;
+                assert_eq!(status, 200, "second client on node {node}: {head}");
+            }
+        },
+    )
+    .await;
     // The site keeps serving.
     let (status, _) = c.get(0, "/").await;
     assert_eq!(status, 200);

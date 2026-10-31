@@ -31,7 +31,23 @@ pub(super) async fn store(config: Option<&Config>, offline: bool) -> (Finding, O
     };
     match &config.media {
         MediaSection::Local { root, .. } => local(config, root),
-        MediaSection::S3 { .. } => s3(config, offline).await,
+        MediaSection::S3 {
+            bucket,
+            region,
+            endpoint,
+            access_key_id,
+            prefix,
+            ..
+        } => {
+            let place = s3_place(
+                bucket,
+                region,
+                endpoint.as_deref(),
+                access_key_id.is_some(),
+                prefix,
+            );
+            s3(config, place, offline).await
+        }
     }
 }
 
@@ -78,42 +94,40 @@ fn local(config: &Config, root: &Path) -> (Finding, Option<MediaStore>) {
     }
 }
 
-/// An S3 store: the write, read and delete probe (not with `--offline`).
-async fn s3(config: &Config, offline: bool) -> (Finding, Option<MediaStore>) {
-    let place: String = match &config.media {
-        MediaSection::Local { root, .. } => return local(config, root),
-        MediaSection::S3 {
-            bucket,
-            region,
-            endpoint,
-            access_key_id,
-            prefix,
-            ..
-        } => {
-            let at = match endpoint.as_deref() {
-                Some(e) => format!("at {}", without_userinfo(e)),
-                None => format!("in AWS region {region}"),
-            };
-            let prefix = if prefix.is_empty() {
-                String::new()
-            } else {
-                format!(", prefix {prefix}")
-            };
-            let keys = if access_key_id.is_some() {
-                ""
-            } else {
-                ", credentials from this shell's AWS_* environment"
-            };
-            let place = format!("s3 bucket {bucket} {at}{prefix}{keys}");
-            if offline {
-                return (
-                    Finding::skip(ID, format!("{place}: not probed (--offline)")),
-                    None,
-                );
-            }
-            place
-        }
+/// How `media.store` names an S3 store: bucket, endpoint (without any credentials in it)
+/// or region, prefix, and where the keys come from (never the keys).
+fn s3_place(
+    bucket: &str,
+    region: &str,
+    endpoint: Option<&str>,
+    configured_keys: bool,
+    prefix: &str,
+) -> String {
+    let at = match endpoint {
+        Some(e) => format!("at {}", without_userinfo(e)),
+        None => format!("in AWS region {region}"),
     };
+    let prefix = if prefix.is_empty() {
+        String::new()
+    } else {
+        format!(", prefix {prefix}")
+    };
+    let keys = if configured_keys {
+        ""
+    } else {
+        ", credentials from this shell's AWS_* environment"
+    };
+    format!("s3 bucket {bucket} {at}{prefix}{keys}")
+}
+
+/// An S3 store named `place`: the write, read and delete probe (not with `--offline`).
+async fn s3(config: &Config, place: String, offline: bool) -> (Finding, Option<MediaStore>) {
+    if offline {
+        return (
+            Finding::skip(ID, format!("{place}: not probed (--offline)")),
+            None,
+        );
+    }
     // A server's error body can name the access key id.
     let clean = |e: String| scrub_s3_keys(e, Some(config));
     let media = match crate::site::open_media(config) {

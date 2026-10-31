@@ -1,3 +1,4 @@
+import { createRef } from "react";
 import { act, render, screen } from "@testing-library/react";
 import { beforeAll, expect, test } from "vitest";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "./command";
@@ -44,4 +45,17 @@ test("active_descendant_follows_options_remounted_with_the_same_values", async (
     expect(id).toBe(selected?.id);
     expect(document.getElementById(id ?? "")).not.toBeNull();
   }
+});
+
+test("ref_reaches_the_command_root_and_is_cleared_on_unmount", () => {
+  const ref = createRef<HTMLDivElement>();
+  const { unmount } = render(
+    <Command ref={ref}>
+      <CommandList />
+    </Command>,
+  );
+  expect(ref.current).toHaveAttribute("cmdk-root");
+  expect(ref.current).toHaveAttribute("data-slot", "command");
+  unmount();
+  expect(ref.current).toBeNull();
 });

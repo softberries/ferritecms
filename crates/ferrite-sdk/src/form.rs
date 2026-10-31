@@ -114,6 +114,20 @@ mod tests {
     }
 
     #[test]
+    fn lowercase_hex_escapes_decode() {
+        assert_eq!(parse_urlencoded(b"n=%c5%82").unwrap(), vec![pair("n", "ł")]);
+    }
+
+    #[test]
+    fn a_multibyte_sequence_cannot_span_pairs() {
+        // The body is split on `&` before decoding: each half is invalid UTF-8 alone.
+        assert_eq!(
+            parse_urlencoded(b"a=%C5&b=%82"),
+            Err(FormError::InvalidUtf8)
+        );
+    }
+
+    #[test]
     fn empty_body_and_empty_segments() {
         assert!(parse_urlencoded(b"").unwrap().is_empty());
         assert_eq!(parse_urlencoded(b"&a=1&&").unwrap(), vec![pair("a", "1")]);

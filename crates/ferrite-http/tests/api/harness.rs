@@ -550,25 +550,17 @@ impl Api {
         with_client(build_site(self.app.clone(), api))
     }
 
-    /// Waits for the next rate-limit window (database clock) unless at least `need` of
-    /// the current one is left (F10).
-    pub async fn align_to_window(&self, need: Duration) {
-        let w = i64::try_from(WINDOW.as_micros()).unwrap();
-        let now = self
-            .store
-            .read()
-            .nodes()
-            .db_now()
-            .await
-            .unwrap()
-            .as_micros();
-        let left = w - now.rem_euclid(w);
-        if left < i64::try_from(need.as_micros()).unwrap() {
-            tokio::time::sleep(
-                Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50),
-            )
+    /// Runs `scenario` with its hits in one rate-limit window (database clock): waits
+    /// for the next one unless at least `need` of the current one is left, and runs it
+    /// again in the next window when it failed after the window rolled over (F10;
+    /// [`in_one_window`](ferrite_store_tests::window::in_one_window)).
+    pub async fn in_one_window<F, Fut>(&self, need: Duration, scenario: F)
+    where
+        F: FnMut(u32) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        ferrite_store_tests::window::in_one_window(self.store.as_ref(), WINDOW, need, scenario)
             .await;
-        }
     }
 }
 

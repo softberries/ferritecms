@@ -85,9 +85,15 @@ async fn job_exclusivity_three_nodes() {
 }
 
 const STALL: &str = "test.stall";
-const LEASE: Duration = Duration::from_secs(2);
+/// Six renewal intervals of margin: a loaded host (a browser, a build and the test run
+/// together) delayed node 0's renewals past a 2 s lease, and node 1 took the job from a
+/// live node (M4-4).
+const LEASE: Duration = Duration::from_secs(6);
+/// Under 2/3 of the lease (`RunnerConfig::extend_every`); half of it is also the
+/// runner's store-call timeout, so 1 s gives a renewal 500 ms on a loaded database.
+const EXTEND_EVERY: Duration = Duration::from_secs(1);
 
-/// Lease 2 s, renewed every 500 ms; node 0's handler never returns.
+/// Lease 6 s, renewed every second; node 0's handler never returns.
 fn short_lease(log: &Arc<Mutex<Vec<Run>>>, i: usize) -> NodeOptions {
     NodeOptions {
         extra_handlers: vec![Recorder::handler(
@@ -99,7 +105,7 @@ fn short_lease(log: &Arc<Mutex<Vec<Run>>>, i: usize) -> NodeOptions {
         )],
         runner: RunnerOverrides {
             lease: Some(LEASE),
-            extend_every: Some(Duration::from_millis(500)),
+            extend_every: Some(EXTEND_EVERY),
             idle_poll: None,
         },
         ..quiet()
@@ -136,21 +142,27 @@ async fn lease_expiry_after_crashed_node() {
     })
     .await;
     // Node 1 joins while node 0 is alive: node 0 renews its lease, so node 1 must not
-    // take the job for longer than one lease.
+    // take the job for longer than one lease; checked all along, not once at the end.
     c.start(1, short_lease(&log, 1)).await;
-    tokio::time::sleep(LEASE + Duration::from_millis(500)).await;
-    let job = store.read().jobs().get(id).await.unwrap().unwrap();
-    assert_eq!(job.status, JobStatus::Running, "{job:?}");
-    assert_eq!(
-        job.locked_by,
-        Some(node0),
-        "a live node keeps its lease: {job:?}"
-    );
-    assert_eq!(job.attempts, 1, "{job:?}");
+    let watch_until = tokio::time::Instant::now() + LEASE + Duration::from_millis(500);
+    loop {
+        let job = store.read().jobs().get(id).await.unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Running, "{job:?}");
+        assert_eq!(
+            job.locked_by,
+            Some(node0),
+            "a live node keeps its lease: {job:?}"
+        );
+        assert_eq!(job.attempts, 1, "{job:?}");
+        if tokio::time::Instant::now() >= watch_until {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     c.crash(0).await;
     let took =
         wait_until(
-            LEASE + Duration::from_secs(2),
+            LEASE + Duration::from_secs(10),
             "node 1 finishes the job",
             || {
                 let store = store.clone();

@@ -210,6 +210,11 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   };
   await page.route("**/api/v1/system/metrics/series?*", hold);
   await section.getByRole("radio", { name: "7 days" }).click();
+  // The pointer to the top-left corner: the snaps below resize the viewport, and a pointer left
+  // where the radio was can come to rest on a Recent drafts row, whose hover preloads the
+  // editor (`defaultPreload: "intent"`). That card lists every author's drafts, so the
+  // preload of one another test deleted meanwhile answers 404.
+  await page.mouse.move(0, 0);
   await expect(traffic).toHaveAttribute("aria-busy", "true");
   await expect(traffic.locator("[data-slot=stale-bar]")).toBeAttached();
   await expect(traffic.getByTestId("errors-chart")).toBeVisible();

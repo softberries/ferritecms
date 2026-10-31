@@ -503,6 +503,18 @@ impl Registry {
         self.inner.wake.notify_one();
     }
 
+    /// Writes one heartbeat with `meta()` and waits for it, bounded by
+    /// [`HEARTBEAT_EVERY`]: a node that joined with an empty meta publishes its state
+    /// before it serves, so its row is complete from the first request (M4-4). A failure
+    /// is logged; the heartbeat task writes the meta again at its next beat.
+    pub async fn beat_once(&self, meta: &(dyn Fn() -> Value + Send + Sync)) {
+        match tokio::time::timeout(HEARTBEAT_EVERY, self.inner.beat(meta)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "node heartbeat failed"),
+            Err(_) => tracing::warn!("node heartbeat timed out"),
+        }
+    }
+
     /// Removes this node's row (clean shutdown); a missing row is fine.
     pub async fn leave(&self) -> Result<(), StoreError> {
         self.inner

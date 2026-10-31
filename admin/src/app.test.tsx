@@ -88,9 +88,11 @@ test("renders_the_shell_with_translated_title", async () => {
   const name = i18n.t("app.name");
   expect(name).toBe("FerriteCMS");
   // The dashboard's route chunk imports Recharts; its first transform in Vitest takes
-  // about a second, longer than the default `findBy` timeout.
+  // about a second cold and several under load, longer than the default `findBy` timeout.
+  // The test's own timeout (below) is longer than this wait, so a slow transform fails
+  // here with the query's message, not with a bare test timeout.
   expect(
-    await screen.findByRole("heading", { level: 1, name: "Dashboard" }, { timeout: 5000 }),
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" }, { timeout: 15_000 }),
   ).toBeInTheDocument();
   expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
   expect(await screen.findByRole("link", { name: "Posts" })).toHaveAttribute(
@@ -100,7 +102,7 @@ test("renders_the_shell_with_translated_title", async () => {
   await waitFor(() => {
     expect(document.title).toBe(`Dashboard · ${name}`);
   });
-});
+}, 20_000);
 
 test("unknown_admin_path_is_not_found_inside_the_shell", async () => {
   stubApi();

@@ -1957,6 +1957,7 @@ dependencies = [
  "ferrite-store",
  "ferrite-store-postgres",
  "ferrite-store-sqlite",
+ "futures",
  "semver",
  "serde_json",
  "sqlx",

@@ -19,7 +19,10 @@ use ferrite_core::{
 };
 use ferrite_domain::{Role, Secret, Timestamp, User, UserStatus};
 use ferrite_store::Store;
-use ferrite_store_tests::{FailingOptionsStore, TestDb, backend_tests};
+use ferrite_store_tests::{
+    FailingOptionsStore, TestDb, backend_tests,
+    window::{align_to_window, in_one_window},
+};
 
 const PASSWORD: &str = "correct horse battery";
 const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -124,18 +127,6 @@ async fn audit_actions(store: &dyn Store) -> Vec<String> {
         .await
         .unwrap();
     page.items.into_iter().map(|a| a.action).collect()
-}
-
-/// Sleeps until 50 ms past the next `window` boundary of the database clock when fewer
-/// than `need` remain in the current window, so a test's hits share one window (F10).
-async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {
-    let w = i64::try_from(window.as_micros()).unwrap();
-    let now = store.read().nodes().db_now().await.unwrap().as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
-    }
 }
 
 /// A `Totp` for generating codes from a [`TotpSetup`].
@@ -299,33 +290,41 @@ async fn login_rate_limit_spans_nodes(db: &TestDb) {
     for login in ["ann", "ben", "cat", "dan"] {
         make_user(db, login, Role::Author).await;
     }
-    align_to_window(db.store(), MINUTE, Duration::from_secs(40)).await;
+    let (a, b) = (&a, &b);
+    // Every hit in one minute window; a run again starts in a fresh one.
+    in_one_window(
+        db.store(),
+        MINUTE,
+        Duration::from_secs(40),
+        |_| async move {
+            // Ten failed attempts from one IP, alternating nodes, spread over three logins so
+            // the per-login limit (5/min) is never reached (F9).
+            let logins = [
+                "ann", "ann", "ann", "ann", "ben", "ben", "ben", "ben", "cat", "cat",
+            ];
+            for (i, login) in logins.iter().enumerate() {
+                let node = if i % 2 == 0 { a } else { b };
+                let r = node.login(attempt(login, "wrong password!", ip(1))).await;
+                assert!(unauthenticated(r), "attempt {}", i + 1);
+            }
+            // The 11th from that IP is refused even with the right password, on either node.
+            assert!(rate_limited(b.login(attempt("dan", PASSWORD, ip(1))).await));
+            assert!(rate_limited(a.login(attempt("dan", PASSWORD, ip(1))).await));
 
-    // Ten failed attempts from one IP, alternating nodes, spread over three logins so
-    // the per-login limit (5/min) is never reached (F9).
-    let logins = [
-        "ann", "ann", "ann", "ann", "ben", "ben", "ben", "ben", "cat", "cat",
-    ];
-    for (i, login) in logins.iter().enumerate() {
-        let node = if i % 2 == 0 { &a } else { &b };
-        let r = node.login(attempt(login, "wrong password!", ip(1))).await;
-        assert!(unauthenticated(r), "attempt {}", i + 1);
-    }
-    // The 11th from that IP is refused even with the right password, on either node.
-    assert!(rate_limited(b.login(attempt("dan", PASSWORD, ip(1))).await));
-    assert!(rate_limited(a.login(attempt("dan", PASSWORD, ip(1))).await));
-
-    // Another IP, same login: "ann" has 4 hits; the 5th passes to verification, the 6th
-    // is refused even with the right password.
-    assert!(unauthenticated(
-        a.login(attempt("ann", "wrong password!", ip(2))).await
-    ));
-    assert!(rate_limited(b.login(attempt("ANN", PASSWORD, ip(3))).await));
-    // Other logins from fresh IPs still work.
-    assert!(matches!(
-        a.login(attempt("dan", PASSWORD, ip(4))).await.unwrap(),
-        LoginOutcome::Session(_)
-    ));
+            // Another IP, same login: "ann" has 4 hits; the 5th passes to verification, the
+            // 6th is refused even with the right password.
+            assert!(unauthenticated(
+                a.login(attempt("ann", "wrong password!", ip(2))).await
+            ));
+            assert!(rate_limited(b.login(attempt("ANN", PASSWORD, ip(3))).await));
+            // Other logins from fresh IPs still work.
+            assert!(matches!(
+                a.login(attempt("dan", PASSWORD, ip(4))).await.unwrap(),
+                LoginOutcome::Session(_)
+            ));
+        },
+    )
+    .await;
 }
 
 async fn session_idle_and_absolute_expiry(db: &TestDb) {
@@ -707,65 +706,75 @@ async fn totp_login_needs_both_factors(db: &TestDb) {
 async fn totp_attempts_are_rate_limited(db: &TestDb) {
     let clock = Clock::new();
     let auth = auth_on(db.shared_store(), &clock);
-    let ann = make_user(db, "ann", Role::Author).await;
-    let ben = make_user(db, "ben", Role::Author).await;
-    align_to_window(db.store(), MINUTE, Duration::from_secs(30)).await;
+    let (auth, clock) = (&auth, &clock);
+    // Every hit in one minute window. A run again starts in a fresh one, with new
+    // accounts: the first run may have enrolled `ben`.
+    in_one_window(
+        db.store(),
+        MINUTE,
+        Duration::from_secs(30),
+        |n| async move {
+            let ann = make_user(db, &format!("ann{n}"), Role::Author).await;
+            let ben = make_user(db, &format!("ben{n}"), Role::Author).await;
 
-    // totp_confirm: 5 attempts a minute (each also re-checks the password on the login
-    // bucket); the 6th is refused even when right.
-    let ann_actor = Actor::new(ann.id, ann.role);
-    let setup = auth.totp_setup(&ann_actor).await.unwrap();
-    let totp = authenticator(&setup);
-    let wrong = wrong_code(&totp, clock.secs());
-    for i in 0..5 {
-        assert!(
-            matches!(
-                auth.totp_confirm(&ann_actor, None, &setup.enrollment, &wrong, PASSWORD)
-                    .await,
-                Err(CoreError::InvalidField { field: "code", .. })
-            ),
-            "attempt {}",
-            i + 1
-        );
-    }
-    let code = totp.generate(clock.secs()).to_string();
-    assert!(rate_limited(
-        auth.totp_confirm(&ann_actor, None, &setup.enrollment, &code, PASSWORD)
-            .await
-    ));
-    assert!(stored(db.store(), &ann).await.totp_secret.is_none());
+            // totp_confirm: 5 attempts a minute (each also re-checks the password on the login
+            // bucket); the 6th is refused even when right.
+            let ann_actor = Actor::new(ann.id, ann.role);
+            let setup = auth.totp_setup(&ann_actor).await.unwrap();
+            let totp = authenticator(&setup);
+            let wrong = wrong_code(&totp, clock.secs());
+            for i in 0..5 {
+                assert!(
+                    matches!(
+                        auth.totp_confirm(&ann_actor, None, &setup.enrollment, &wrong, PASSWORD)
+                            .await,
+                        Err(CoreError::InvalidField { field: "code", .. })
+                    ),
+                    "attempt {}",
+                    i + 1
+                );
+            }
+            let code = totp.generate(clock.secs()).to_string();
+            assert!(rate_limited(
+                auth.totp_confirm(&ann_actor, None, &setup.enrollment, &code, PASSWORD)
+                    .await
+            ));
+            assert!(stored(db.store(), &ann).await.totp_secret.is_none());
 
-    // login_totp: the confirm used one hit; 4 wrong codes, then the right one is refused.
-    let totp = enrol(&auth, &clock, &ben).await;
-    clock.advance(Duration::from_secs(30));
-    let ch = challenge(&auth, "ben", PASSWORD).await;
-    let wrong = wrong_code(&totp, clock.secs());
-    for i in 0..4 {
-        assert!(
-            unauthenticated(auth.login_totp(&ch, &wrong, None, None).await),
-            "attempt {}",
-            i + 1
-        );
-    }
-    let code = totp.generate(clock.secs()).to_string();
-    assert!(rate_limited(auth.login_totp(&ch, &code, None, None).await));
-    assert_eq!(stored(db.store(), &ben).await.last_login_at, None);
+            // login_totp: the confirm used one hit; 4 wrong codes, then the right one is refused.
+            let totp = enrol(auth, clock, &ben).await;
+            clock.advance(Duration::from_secs(30));
+            let ch = challenge(auth, &ben.login, PASSWORD).await;
+            let wrong = wrong_code(&totp, clock.secs());
+            for i in 0..4 {
+                assert!(
+                    unauthenticated(auth.login_totp(&ch, &wrong, None, None).await),
+                    "attempt {}",
+                    i + 1
+                );
+            }
+            let code = totp.generate(clock.secs()).to_string();
+            assert!(rate_limited(auth.login_totp(&ch, &code, None, None).await));
+            assert_eq!(stored(db.store(), &ben).await.last_login_at, None);
 
-    // totp_disable's password re-check shares the login bucket: the confirm's re-check
-    // and one login so far, 3 wrong passwords, then the right one is refused.
-    let ben_actor = Actor::new(ben.id, ben.role);
-    for i in 0..3 {
-        assert!(
-            matches!(
-                auth.totp_disable(&ben_actor, "wrong password!").await,
-                Err(CoreError::Forbidden(_))
-            ),
-            "attempt {}",
-            i + 1
-        );
-    }
-    assert!(rate_limited(auth.totp_disable(&ben_actor, PASSWORD).await));
-    assert!(stored(db.store(), &ben).await.totp_secret.is_some());
+            // totp_disable's password re-check shares the login bucket: the confirm's re-check
+            // and one login so far, 3 wrong passwords, then the right one is refused.
+            let ben_actor = Actor::new(ben.id, ben.role);
+            for i in 0..3 {
+                assert!(
+                    matches!(
+                        auth.totp_disable(&ben_actor, "wrong password!").await,
+                        Err(CoreError::Forbidden(_))
+                    ),
+                    "attempt {}",
+                    i + 1
+                );
+            }
+            assert!(rate_limited(auth.totp_disable(&ben_actor, PASSWORD).await));
+            assert!(stored(db.store(), &ben).await.totp_secret.is_some());
+        },
+    )
+    .await;
 }
 
 async fn csrf_token_is_bound_to_the_session(db: &TestDb) {
@@ -932,19 +941,27 @@ async fn tokens_scoped_counted_and_rate_limited(db: &TestDb) {
     );
 
     // Unknown bearer tokens: 10 per minute per IP.
-    align_to_window(db.store(), MINUTE, Duration::from_secs(30)).await;
-    for i in 0..10 {
-        let r = auth.resolve_token(&format!("fer_unknown{i}"), ip(7)).await;
-        assert!(r.unwrap().is_none(), "attempt {}", i + 1);
-    }
-    assert!(rate_limited(auth.resolve_token("fer_unknown", ip(7)).await));
-    // Another IP is not limited.
-    assert!(
-        auth.resolve_token("fer_unknown", ip(8))
-            .await
-            .unwrap()
-            .is_none()
-    );
+    let auth = &auth;
+    in_one_window(
+        db.store(),
+        MINUTE,
+        Duration::from_secs(30),
+        |_| async move {
+            for i in 0..10 {
+                let r = auth.resolve_token(&format!("fer_unknown{i}"), ip(7)).await;
+                assert!(r.unwrap().is_none(), "attempt {}", i + 1);
+            }
+            assert!(rate_limited(auth.resolve_token("fer_unknown", ip(7)).await));
+            // Another IP is not limited.
+            assert!(
+                auth.resolve_token("fer_unknown", ip(8))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        },
+    )
+    .await;
 }
 
 async fn rehash_on_login_when_params_change(db: &TestDb) {
@@ -1041,24 +1058,27 @@ async fn hit_limit_counts_per_scope_and_client(db: &TestDb) {
     let a = auth_on(db.shared_store(), &clock);
     let b = auth_on(peer.clone().unwrap_or_else(|| db.shared_store()), &clock);
     let window = Duration::from_secs(5);
-    align_to_window(db.store(), window, Duration::from_secs(3)).await;
-    for i in 0..3 {
-        let node = if i % 2 == 0 { &a } else { &b };
-        node.hit_limit("route:x:1", ip(1), 3, window).await.unwrap();
-    }
-    match a.hit_limit("route:x:1", ip(1), 3, window).await {
-        Err(CoreError::RateLimited { retry_after_secs }) => {
-            assert!((1..=5).contains(&retry_after_secs), "{retry_after_secs}");
+    let (an, bn) = (&a, &b);
+    in_one_window(db.store(), window, Duration::from_secs(3), |_| async move {
+        for i in 0..3 {
+            let node = if i % 2 == 0 { an } else { bn };
+            node.hit_limit("route:x:1", ip(1), 3, window).await.unwrap();
         }
-        other => panic!("expected RateLimited, got {other:?}"),
-    }
-    // Another client, another scope, and no address at all are separate buckets.
-    b.hit_limit("route:x:1", ip(2), 3, window).await.unwrap();
-    b.hit_limit("route:x:2", ip(1), 3, window).await.unwrap();
-    for _ in 0..3 {
-        a.hit_limit("route:x:1", None, 3, window).await.unwrap();
-    }
-    assert!(a.hit_limit("route:x:1", None, 3, window).await.is_err());
+        match an.hit_limit("route:x:1", ip(1), 3, window).await {
+            Err(CoreError::RateLimited { retry_after_secs }) => {
+                assert!((1..=5).contains(&retry_after_secs), "{retry_after_secs}");
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+        // Another client, another scope, and no address at all are separate buckets.
+        bn.hit_limit("route:x:1", ip(2), 3, window).await.unwrap();
+        bn.hit_limit("route:x:2", ip(1), 3, window).await.unwrap();
+        for _ in 0..3 {
+            an.hit_limit("route:x:1", None, 3, window).await.unwrap();
+        }
+        assert!(an.hit_limit("route:x:1", None, 3, window).await.is_err());
+    })
+    .await;
     // The per-plugin client hash: keyed, bounded, per plugin, not the session hash.
     let v4: IpAddr = "198.51.100.1".parse().unwrap();
     let mapped = IpAddr::V6(Ipv4Addr::new(198, 51, 100, 1).to_ipv6_mapped());
@@ -1536,43 +1556,53 @@ async fn reset_keeps_totp(db: &TestDb) {
 /// (whatever the IP); a limited request sends nothing.
 async fn reset_rate_limits(db: &TestDb) {
     let clock = Clock::new();
-    let auth = auth_on(db.shared_store(), &clock);
-    let (memory, queue) = mail_queue();
-    make_user(db, "kim", Role::Author).await;
-    align_to_window(db.store(), MINUTE, Duration::from_secs(20)).await;
+    let auth = &auth_on(db.shared_store(), &clock);
     align_to_window(db.store(), HOUR, Duration::from_secs(20)).await;
+    // Every minute hit in one window. A run again starts in the next minute, with new
+    // account inputs (their hour buckets keep the first run's hits) and a new mailer.
+    in_one_window(
+        db.store(),
+        MINUTE,
+        Duration::from_secs(20),
+        |n| async move {
+            let (memory, queue) = mail_queue();
+            let kim = format!("kim{n}");
+            make_user(db, &kim, Role::Author).await;
+            for i in 0..5 {
+                request_reset(auth, &queue, &format!("ghost{n}-{i}"), ip(1))
+                    .await
+                    .unwrap();
+            }
+            assert!(rate_limited(request_reset(auth, &queue, &kim, ip(1)).await));
+            // Another address is another bucket.
+            request_reset(auth, &queue, &format!("ghost{n}-9"), ip(2))
+                .await
+                .unwrap();
 
-    for i in 0..5 {
-        request_reset(&auth, &queue, &format!("ghost{i}"), ip(1))
-            .await
-            .unwrap();
-    }
-    assert!(rate_limited(
-        request_reset(&auth, &queue, "kim", ip(1)).await
-    ));
-    // Another address is another bucket.
-    request_reset(&auth, &queue, "ghost9", ip(2)).await.unwrap();
-
-    // Per account input, across addresses (and case), within the hour.
-    for (n, (input, last)) in [("kim", 10), (" KIM ", 11), ("kim", 12)]
-        .into_iter()
-        .enumerate()
-    {
-        request_reset(&auth, &queue, input, ip(last)).await.unwrap();
-        assert_eq!(memory.wait_for(n + 1, MAIL_WAIT).await.len(), n + 1);
-    }
-    match request_reset(&auth, &queue, "kim", ip(13)).await {
-        Err(CoreError::RateLimited { retry_after_secs }) => {
-            assert!((1..=3600).contains(&retry_after_secs), "{retry_after_secs}");
-        }
-        other => panic!("expected RateLimited, got {other:?}"),
-    }
-    assert_eq!(memory.wait_for(4, NO_MAIL_GRACE).await.len(), 3);
-    // The e-mail address is its own input bucket.
-    request_reset(&auth, &queue, "kim@example.com", ip(14))
-        .await
-        .unwrap();
-    assert_eq!(memory.wait_for(4, MAIL_WAIT).await.len(), 4);
+            // Per account input, across addresses (and case), within the hour.
+            let shouted = format!(" {} ", kim.to_uppercase());
+            for (i, (input, last)) in [(&kim, 10), (&shouted, 11), (&kim, 12)]
+                .into_iter()
+                .enumerate()
+            {
+                request_reset(auth, &queue, input, ip(last)).await.unwrap();
+                assert_eq!(memory.wait_for(i + 1, MAIL_WAIT).await.len(), i + 1);
+            }
+            match request_reset(auth, &queue, &kim, ip(13)).await {
+                Err(CoreError::RateLimited { retry_after_secs }) => {
+                    assert!((1..=3600).contains(&retry_after_secs), "{retry_after_secs}");
+                }
+                other => panic!("expected RateLimited, got {other:?}"),
+            }
+            assert_eq!(memory.wait_for(4, NO_MAIL_GRACE).await.len(), 3);
+            // The e-mail address is its own input bucket.
+            request_reset(auth, &queue, &format!("{kim}@example.com"), ip(14))
+                .await
+                .unwrap();
+            assert_eq!(memory.wait_for(4, MAIL_WAIT).await.len(), 4);
+        },
+    )
+    .await;
 }
 
 /// P77: a failed `site.title` read costs the stored title, not the mail: the reset mail

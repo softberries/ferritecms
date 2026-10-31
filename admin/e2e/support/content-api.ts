@@ -7,6 +7,7 @@
 
 import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import type { FixtureFile } from "./files";
+import { ownMedia } from "./own-media";
 import { authFile } from "./server";
 import type { Role } from "./users";
 
@@ -33,6 +34,8 @@ export interface Media {
   version: number;
   sanitized: boolean;
   author_id: string;
+  /** The original's `/_media/<sha256>/<name>`. */
+  url: string;
   variants: { name: string; url: string; width: number; height: number }[];
 }
 
@@ -333,9 +336,12 @@ export class ContentApi {
     await this.ctx.delete(`/api/v1/types/${name}`, { headers: this.headers() });
   }
 
-  /** `POST /media` (multipart) with an optional title and alt text. */
+  /**
+   * `POST /media` (multipart) with an optional title and alt text; noted as the running
+   * test's own upload (`own-media.ts`), so a 404 of its file fails the test.
+   */
   async upload(file: FixtureFile, extra: { title?: string; alt?: string } = {}): Promise<Media> {
-    return this.ok(
+    const media: Media = await this.ok(
       await this.ctx.post("/api/v1/media", {
         headers: this.headers(),
         multipart: {
@@ -346,6 +352,8 @@ export class ContentApi {
       }),
       `upload ${file.name}`,
     );
+    ownMedia.note(media.url);
+    return media;
   }
 
   async getMedia(id: string): Promise<Media> {
