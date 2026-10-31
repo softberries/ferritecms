@@ -296,6 +296,41 @@ describe("seo_section", () => {
     expect(field.selectionStart).toBe(5 + "\u{1F30A}bc".length);
   });
 
+  test("a_huge_paste_is_cut_at_once_without_splitting_a_pair", () => {
+    // Pasting a whole article into the 500-character description must not hang the tab:
+    // the cut is found in a few passes, not one pass per pasted character.
+    const emoji = "\u{1F30A}";
+    const { doc, setMeta } = docWith({ ...EMPTY, description: "xyz" });
+    renderSeo(doc);
+    const description = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Meta description",
+    });
+    description.setSelectionRange(2, 2);
+    // 50 000 code points; room for 497, which ends on a whole pair.
+    const pasted = `${"a".repeat(496)}${emoji}${"a".repeat(49_503)}`;
+    expect([...pasted]).toHaveLength(50_000);
+    const paste = beforeInput("insertFromPaste", null, pasted);
+    const started = performance.now();
+    act(() => {
+      description.dispatchEvent(paste);
+    });
+    const took = performance.now() - started;
+    expect(paste.defaultPrevented).toBe(true);
+    const kept = `xy${"a".repeat(496)}${emoji}z`;
+    expect([...kept]).toHaveLength(500);
+    expect(setMeta).toHaveBeenCalledTimes(1);
+    const next = setMeta.mock.calls[0]?.[0] as { seo: SeoDraft };
+    expect(next.seo.description).toBe(kept);
+    // No lone surrogate: the cut did not split the pair.
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+        next.seo.description,
+      ),
+    ).toBe(false);
+    // Generous, so a slow runner does not flake it; the quadratic cut took many seconds.
+    expect(took).toBeLessThan(250);
+  });
+
   test("the preview trims like the server, keeping a BOM", () => {
     const { doc } = docWith({ ...EMPTY, title: "﻿" });
     const { container } = renderSeo(doc);

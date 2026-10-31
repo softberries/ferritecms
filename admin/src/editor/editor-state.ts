@@ -198,10 +198,17 @@ export function refuseSeoOverflow(max: number): (e: Event) => void {
     if (seoLength(before + text + rest) <= max) return;
     e.preventDefault();
     if (input.inputType !== "insertFromPaste" && input.inputType !== "insertFromDrop") return;
-    // The longest start of the pasted text that still fits.
+    // The longest start of the pasted text (in code points, so never half a surrogate
+    // pair) that still fits. The trimmed length never shrinks as the start grows, so
+    // bisection finds it in O(log n) length checks, not one per pasted character.
     const chars = [...text];
-    let fit = chars.length - 1;
-    while (fit > 0 && seoLength(before + chars.slice(0, fit).join("") + rest) > max) fit--;
+    const fits = (n: number) => seoLength(before + chars.slice(0, n).join("") + rest) <= max;
+    let fit = 0;
+    for (let hi = chars.length - 1; fit < hi;) {
+      const mid = Math.ceil((fit + hi) / 2);
+      if (fits(mid)) fit = mid;
+      else hi = mid - 1;
+    }
     if (fit <= 0) return;
     el.setRangeText(chars.slice(0, fit).join(""), start, end, "end");
     el.dispatchEvent(new Event("input", { bubbles: true }));
