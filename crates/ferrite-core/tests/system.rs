@@ -3,12 +3,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use ferrite_core::{Actor, CoreError, Scopes, SystemService};
+use ferrite_core::{
+    Actor, CoreError, Scopes, SystemService,
+    mail::{MailQueue, MemoryMailer},
+};
 use ferrite_domain::{JobStatus, NewJob, NewNode, NewUser, NodeId, Role, UserId, UserStatus};
 use ferrite_store::{Compat, Store};
 use std::{sync::Arc, time::Duration};
 
-use ferrite_store_tests::{TestDb, backend_tests, backend_tests_spawning};
+use ferrite_store_tests::{FailingOptionsStore, TestDb, backend_tests, backend_tests_spawning};
 use serde_json::json;
 
 async fn actor(store: &dyn Store, role: Role) -> Actor {
@@ -148,9 +151,34 @@ async fn node_meta_errors_are_scrubbed_on_read(db: &TestDb) {
     assert_eq!(node.meta["plugins"]["seo"]["version"], "1.0.0");
 }
 
+/// P77: a failed `site.title` read costs the stored title, not the test mail: it is
+/// queued with the configured title in its subject.
+async fn test_mail_falls_back_when_the_title_read_fails(db: &TestDb) {
+    db.store()
+        .read()
+        .options()
+        .set("site.title", &json!("Stored Title"), true)
+        .await
+        .unwrap();
+    let failing: Arc<dyn Store> =
+        Arc::new(FailingOptionsStore::new(db.shared_store(), "site.title"));
+    let system = SystemService::new(failing);
+    let admin = actor(db.store(), Role::Admin).await;
+    let memory = Arc::new(MemoryMailer::new());
+    let queue = MailQueue::new(memory.clone());
+    system
+        .send_test_mail(&admin, Some(&queue), "https://example.test", "Test Site")
+        .await
+        .unwrap();
+    let sent = memory.wait_for(1, Duration::from_secs(5)).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].subject, "Test e-mail from Test Site");
+}
+
 backend_tests!(
     system_reads_need_manage_system,
     node_meta_errors_are_scrubbed_on_read,
+    test_mail_falls_back_when_the_title_read_fails,
 );
 
 /// Review M1: two nodes (Postgres `peer()`; SQLite one store, whose writes are

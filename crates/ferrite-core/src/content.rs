@@ -609,9 +609,8 @@ pub(crate) async fn save_with_free_slug(
 /// (M2b-3 P52), as `InvalidKey` at the value's path (`fields.chapters[1].related`). The
 /// items are read in one `get_many` per [`MAX_ID_FILTER`] distinct ids (one for any
 /// usual item); a missing item is accepted, as [`fields`] says, and so is one `actor`
-/// cannot read (M4-4 P77: [`can_read`], media only with `media:read`, as
-/// `ContentService::refs` answers), so the answer never tells whether someone else's
-/// draft exists or what type it has.
+/// cannot read (M4-4 P77, [`readable_target`]), so the answer never tells whether
+/// someone else's draft exists or what type it has.
 async fn check_relations(
     repos: &dyn Repos,
     actor: &Actor,
@@ -626,11 +625,10 @@ async fn check_relations(
     ids.sort_unstable();
     ids.dedup();
     let now = Timestamp::now();
-    let media = require_read(actor, Area::Media).is_ok();
     let mut kinds = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(MAX_ID_FILTER) {
         for item in repos.content().get_many(chunk).await? {
-            if can_read(actor, &item, now) && (media || item.kind != MEDIA_KIND) {
+            if readable_target(actor, &item, now) {
                 kinds.insert(item.id, item.kind);
             }
         }
@@ -846,9 +844,17 @@ pub(crate) async fn check_item(
     fields::validate_item(&ty.fields, fields)?;
     check_relations(repos, actor, &ty.fields, fields).await?;
     if let Some((parent, child)) = new_parent {
-        check_parent(repos, ty, child, parent).await?;
+        check_parent(repos, actor, ty, child, parent).await?;
     }
     Ok(())
+}
+
+/// Whether `actor` may see that `item` exists when it names it in a write (a relation
+/// target, a parent): [`can_read`] at `now`, and media only with `media:read`, the
+/// rule of `ContentService::refs` (M4-4 P77).
+fn readable_target(actor: &Actor, item: &ContentItem, now: Timestamp) -> bool {
+    can_read(actor, item, now)
+        && (item.kind != MEDIA_KIND || require_read(actor, Area::Media).is_ok())
 }
 
 /// Type `kind` from `types` (every registered type).
@@ -860,10 +866,13 @@ fn content_type<'a>(types: &'a [ContentType], kind: &str) -> Result<&'a ContentT
 }
 
 /// A parent is allowed only for a hierarchical type `ty`; it must exist, be of the same
-/// type and not be trashed. For an existing item (`child`), it must not be the item
-/// itself or one of its descendants.
+/// type and not be trashed. One `actor` cannot read ([`readable_target`]) is an
+/// "unknown parent", exactly as a missing one, so the answer never tells whether
+/// someone else's draft exists or what type it has (M4-4 P77). For an existing item
+/// (`child`), it must not be the item itself or one of its descendants.
 async fn check_parent(
     repos: &dyn Repos,
+    actor: &Actor,
     ty: &ContentType,
     child: Option<ContentId>,
     parent: ContentId,
@@ -877,7 +886,12 @@ async fn check_parent(
             ),
         ));
     }
-    let Some(mut item) = repos.content().get(parent).await? else {
+    let Some(mut item) = repos
+        .content()
+        .get(parent)
+        .await?
+        .filter(|item| readable_target(actor, item, Timestamp::now()))
+    else {
         return Err(CoreError::invalid_field("parent_id", "unknown parent"));
     };
     if item.kind != ty.name {

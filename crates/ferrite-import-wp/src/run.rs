@@ -744,9 +744,8 @@ fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
         offset: 0,
     })?;
     if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-        return Err(ImportError::Missing {
-            what: "an http(s) wp:base_blog_url",
-            offset: 0,
+        return Err(ImportError::Source {
+            value: base_blog_url.trim().chars().take(200).collect(),
         });
     }
     Ok(url.as_str().trim_end_matches('/').to_owned())
@@ -928,11 +927,22 @@ mod tests {
             "data:text/plain,x",
         ] {
             match normalise_source(bad) {
-                Err(ImportError::Missing { what, .. }) => {
-                    assert_eq!(what, "an http(s) wp:base_blog_url", "{bad}");
+                Err(e @ ImportError::Source { .. }) => {
+                    assert_eq!(
+                        e.to_string(),
+                        format!(
+                            "wp:base_blog_url {bad:?} is not an http(s) URL; set it to the \
+                             old site's http:// or https:// address"
+                        )
+                    );
                 }
-                other => panic!("{bad}: expected Missing, got {other:?}"),
+                other => panic!("{bad}: expected Source, got {other:?}"),
             }
+        }
+        let long = format!("ftp://{}", "a".repeat(300));
+        match normalise_source(&long) {
+            Err(ImportError::Source { value }) => assert_eq!(value.chars().count(), 200),
+            other => panic!("expected Source, got {other:?}"),
         }
     }
 

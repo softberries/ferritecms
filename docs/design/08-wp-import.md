@@ -63,8 +63,17 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
   database (migration `0009_import`, both backends; kinds `user`, `term`, `media`,
   `content`, `comment`, `menu`, `option`, `redirect`) lets a re-run update instead of
   duplicate. `source` is the normalised `<wp:base_blog_url>`, which must be an `http(s)`
-  URL with a host (else the run fails before it starts, a permanent job failure; M4-4
-  P77), so a WXR never shares the map rows of a `markdown:<name>` source. The hash covers what is
+  URL with a host, so a WXR never shares the map rows of a `markdown:<name>` source
+  (M4-4 P77). Any other value fails the run before it starts (no run row, no report;
+  CLI exit 1, a permanent job failure) with `ImportError::Source`: "wp:base_blog_url
+  "<value>" is not an http(s) URL; set it to the old site's http:// or https:// address"
+  (the value cut to 200 characters). WordPress always exports an `http(s)` address, so
+  only a hand-made file hits this. A site that an earlier version imported from such a
+  file cannot re-run it as it is: once the file names the old `http(s)` address it is a
+  new source, so the earlier run's map rows are not used and posts, pages, media,
+  comments and menus come over again as new items (users and terms are matched as on any
+  import). The operator deletes what the earlier run made, or imports into a fresh site,
+  or keeps the earlier import and does not re-run it. The hash covers what is
   written (the converted item, the resolved menu, the option value). A re-run leaves an
   unchanged hash alone, updates an item still at the version the import left, and keeps
   (and reports) one edited here since (P4). Terms and comments are matched, not updated

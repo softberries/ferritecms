@@ -15,6 +15,7 @@ use crate::{
 api_tests!(
     relation_types_over_http,
     check_relations_hides_unreadable_items,
+    check_parent_hides_unreadable_parents,
     types_crud_over_http,
     terms_crud_over_http,
     editor_cannot_create_types
@@ -749,6 +750,58 @@ async fn check_relations_hides_unreadable_items(api: Api) -> Api {
         let message = p["errors"][0]["detail"].as_str().unwrap();
         assert!(message.contains("type page"), "{p}");
     }
+    api
+}
+
+/// P77 for `parent_id`: a parent the caller cannot read gets exactly the answer of a
+/// missing one (status and body), whatever its type or status; a readable parent of
+/// the wrong type is still named as such.
+async fn check_parent_hides_unreadable_parents(api: Api) -> Api {
+    let (_, admin) = admin(&api).await;
+    let draft_page = api_page(&api, &admin).await;
+    let draft_post = new_post(&api, &admin, "Admin draft").await;
+    let bea = api.user("bea", Role::Author, false).await;
+    let b = api.bearer(&bea, &["*"]).await;
+    let own_post = new_post(&api, &b, "Bea draft").await;
+    let page_under = |parent: String| {
+        let body = json!({"title": "Child", "parent_id": parent});
+        let b = Bearer(b.0.clone());
+        let api = &api;
+        async move {
+            b.send(api, Method::POST, "/api/v1/content/page", Some(&body), None)
+                .await
+        }
+    };
+    let missing = page_under(uuid::Uuid::now_v7().to_string()).await;
+    assert_eq!(
+        missing.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{missing:?}"
+    );
+    let p = missing.json();
+    assert_eq!(p["errors"][0]["field"], "parent_id", "{p}");
+    assert_eq!(p["errors"][0]["detail"], "unknown parent", "{p}");
+    for unreadable in [&draft_page, &draft_post] {
+        let r = page_under(unreadable.clone()).await;
+        assert_eq!(r.status, missing.status, "{unreadable}: {r:?}");
+        assert_eq!(r.json(), p, "{unreadable}");
+    }
+    let p = page_under(own_post).await.assert_problem(422, "validation");
+    assert_eq!(
+        p["errors"][0]["detail"], "parent must be of type \"page\"",
+        "{p}"
+    );
+    // The admin reads the draft page: it is a valid parent.
+    let r = admin
+        .send(
+            &api,
+            Method::POST,
+            "/api/v1/content/page",
+            Some(&json!({"title": "Child", "parent_id": draft_page})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{r:?}");
     api
 }
 
