@@ -1566,7 +1566,7 @@ pub async fn media_file_is_published_only(db: &TestDb) {
 /// `sitemap_files`: one bound per file of the file length (`with_sitemap_file_len`),
 /// from one store call: file `n` starts at its bound's cursor, where file `n - 1`
 /// stops, and its `lastmod` is the newest `updated_at` of its entries.
-pub async fn sitemap_files_count_and_split(db: &TestDb) {
+pub async fn sitemap_files_bounds_and_split(db: &TestDb) {
     let store = db.shared_store();
     let r = reader(store.clone()).with_sitemap_file_len(2);
     let author = user(store.as_ref(), "smw", Role::Author).await;
@@ -2048,7 +2048,7 @@ backend_tests!(
     inline_image_narrower_than_theme,
     inline_svg_has_no_srcset,
     media_is_published_only,
-    sitemap_files_count_and_split,
+    sitemap_files_bounds_and_split,
     media_file_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,

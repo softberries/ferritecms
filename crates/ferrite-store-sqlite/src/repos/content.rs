@@ -293,24 +293,29 @@ impl ContentRepo for SqliteRepos {
     ) -> Result<Vec<FileBound>, StoreError> {
         check_file_bounds(query, file_len)?;
         let len = i64::from(file_len);
-        // Rows ranked in the `list` order; each file's last row (every `len`-th and the
-        // very last) carries the file's newest `updated_at`.
+        // Rows ranked in the `list` order; one aggregate per file (no second sort) gives
+        // its last row and newest `updated_at`; only the boundary rows (every `len`-th
+        // and the very last) reach the join, for their keys.
         let mut qb = QueryBuilder::<Sqlite>::new(
-            "SELECT published_at, id, lastmod FROM (\
-               SELECT published_at, id, rn, total, \
-                 MAX(updated_at) OVER (PARTITION BY (rn - 1) / ",
-        );
-        qb.push_bind(len).push(
-            ") AS lastmod FROM (\
+            "WITH ranked AS (\
                SELECT published_at, id, updated_at, \
-                 ROW_NUMBER() OVER (ORDER BY published_at DESC, id DESC) AS rn, \
-                 COUNT(*) OVER () AS total \
+                 ROW_NUMBER() OVER (ORDER BY published_at DESC, id DESC) AS rn \
                FROM content_items WHERE published_at IS NOT NULL",
         );
         push_filters(&mut qb, query);
-        qb.push(") AS ranked) AS files WHERE rn % ")
-            .push_bind(len)
-            .push(" = 0 OR rn = total ORDER BY rn");
+        qb.push(
+            "), files AS (\
+               SELECT MAX(rn) AS last, MAX(updated_at) AS lastmod FROM ranked \
+               GROUP BY (rn - 1) / ",
+        )
+        .push_bind(len)
+        .push(
+            ") SELECT r.published_at, r.id, f.lastmod \
+             FROM ranked r JOIN files f ON f.last = r.rn \
+             WHERE r.rn % ",
+        )
+        .push_bind(len)
+        .push(" = 0 OR r.rn = (SELECT MAX(last) FROM files) ORDER BY f.last");
         let rows: Vec<(i64, Uuid, i64)> = run!(&self.reader, |e| qb.build_query_as().fetch_all(e))?;
         file_bounds_from_rows(rows)
     }

@@ -372,17 +372,24 @@ fn at(secs: i64) -> Timestamp {
     Timestamp::from_micros(1_700_000_000_000_000 + secs * 1_000_000).unwrap()
 }
 
-/// Inserts a row with the fixed id `n` and fixed times (published when `published` is
-/// set, else a draft), so the sitemaps are the same on every run and backend.
+/// Published at `secs` after [`at`]'s base (a [`fixed_row`] state).
+fn public(secs: i64) -> Option<(ContentStatus, Timestamp)> {
+    Some((ContentStatus::Published, at(secs)))
+}
+
+/// Inserts a row with the fixed id `n` and fixed times, so the sitemaps are the same on
+/// every run and backend: `state` is the status and `published_at`, `None` a draft
+/// without a publish time.
 async fn fixed_row(
     app: &App,
     n: u128,
     kind: &str,
     slug: &str,
     parent: Option<ContentId>,
-    published: Option<Timestamp>,
+    state: Option<(ContentStatus, Timestamp)>,
     updated: i64,
 ) -> ContentId {
+    let (status, published) = state.map_or((ContentStatus::Draft, None), |(s, t)| (s, Some(t)));
     let id = ContentId::from_uuid(uuid::Uuid::from_u128(
         0x0190_0000_0000_7000_8000_0000_0000_0000 + n,
     ));
@@ -393,11 +400,7 @@ async fn fixed_row(
         .insert(&NewContent {
             id,
             kind: kind.into(),
-            status: if published.is_some() {
-                ContentStatus::Published
-            } else {
-                ContentStatus::Draft
-            },
+            status,
             slug: slug.into(),
             parent_id: parent,
             author_id: app.ada_user.id,
@@ -408,7 +411,7 @@ async fn fixed_row(
             fields: json!({}),
             menu_order: 0,
             published_at: published,
-            scheduled_at: None,
+            scheduled_at: published.filter(|_| status == ContentStatus::Scheduled),
             created_at: Some(at(0)),
             updated_at: Some(at(updated)),
         })
@@ -420,7 +423,10 @@ async fn fixed_row(
 /// Posts and pages that split into several files of [`GOLDEN_FILE_LEN`]: two posts
 /// share `published_at` across the first file boundary (ordered by id), the newest
 /// `updated_at` of a file is not its first row's, and the static front page `home`
-/// (with a child) sits in the second page file. Plus a draft and a future post.
+/// (with a child) sits in the second page file. Plus rows no sitemap may list, with
+/// publish times among the listed ones and the newest `updated_at`s (a leak would move
+/// the split or a `lastmod`): a draft, a future post, and trashed, private, scheduled
+/// (with a past publish time) and pending posts and pages.
 async fn golden_site(app: &App) {
     for (n, slug, published, updated) in [
         (1, "p-a", 100, 500),
@@ -431,18 +437,45 @@ async fn golden_site(app: &App) {
         (6, "p-f", 60, 1000),
         (7, "p-g", 50, 55),
     ] {
-        fixed_row(app, n, "post", slug, None, Some(at(published)), updated).await;
+        fixed_row(app, n, "post", slug, None, public(published), updated).await;
     }
     fixed_row(app, 8, "post", "p-draft", None, None, 2000).await;
     let future =
         Timestamp::from_micros(Timestamp::now().as_micros() + crate::common::HOUR).unwrap();
-    fixed_row(app, 9, "post", "p-future", None, Some(future), 3000).await;
+    let future = Some((ContentStatus::Published, future));
+    fixed_row(app, 9, "post", "p-future", None, future, 3000).await;
+    for (n, kind, slug, status, published, updated) in [
+        (10, "post", "p-trash", ContentStatus::Trash, 75, 5000),
+        (11, "post", "p-private", ContentStatus::Private, 85, 5001),
+        (
+            12,
+            "post",
+            "p-scheduled",
+            ContentStatus::Scheduled,
+            65,
+            5002,
+        ),
+        (13, "post", "p-pending", ContentStatus::Pending, 95, 5003),
+        (26, "page", "old-page", ContentStatus::Trash, 35, 5004),
+        (27, "page", "private-page", ContentStatus::Private, 15, 5005),
+        (
+            28,
+            "page",
+            "scheduled-page",
+            ContentStatus::Scheduled,
+            25,
+            5006,
+        ),
+    ] {
+        let state = Some((status, at(published)));
+        fixed_row(app, n, kind, slug, None, state, updated).await;
+    }
 
-    let home = fixed_row(app, 21, "page", "home", None, Some(at(10)), 20).await;
-    fixed_row(app, 22, "page", "garden", Some(home), Some(at(40)), 45).await;
-    let about = fixed_row(app, 23, "page", "about", None, Some(at(30)), 300).await;
-    fixed_row(app, 24, "page", "team", Some(about), Some(at(20)), 25).await;
-    fixed_row(app, 25, "page", "contact", None, Some(at(5)), 6).await;
+    let home = fixed_row(app, 21, "page", "home", None, public(10), 20).await;
+    fixed_row(app, 22, "page", "garden", Some(home), public(40), 45).await;
+    let about = fixed_row(app, 23, "page", "about", None, public(30), 300).await;
+    fixed_row(app, 24, "page", "team", Some(about), public(20), 25).await;
+    fixed_row(app, 25, "page", "contact", None, public(5), 6).await;
     app.site
         .store
         .read()
