@@ -134,15 +134,35 @@ export interface SeoDraft {
 export const MAX_CANONICAL = 2048;
 
 /**
+ * `text` trimmed the way the server trims SEO values (Rust `str::trim`: Unicode
+ * White_Space). Unlike JS `trim()` it keeps U+FEFF (a BOM is not White_Space).
+ */
+export function trimSeo(text: string): string {
+  return text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+}
+
+/**
+ * `text` cut so the server's limit holds: at most `max` characters (code points, as the
+ * server counts) once trimmed. Edge whitespace is kept (the server trims it away); an
+ * over-long paste is cut at a code-point boundary.
+ */
+export function clampSeo(text: string, max: number): string {
+  if ([...trimSeo(text)].length <= max) return text;
+  const lead = [...(/^\p{White_Space}*/u.exec(text)?.[0] ?? "")].length;
+  return [...text].slice(0, lead + max).join("");
+}
+
+/**
  * Whether the server takes `text` as `seo.canonical` (core `check_canonical`): blank (it
  * deletes the value), or, trimmed, an absolute `http(s)` URL with a host, without
- * whitespace or control characters, at most {@link MAX_CANONICAL} characters.
+ * whitespace (Unicode White_Space) or control characters (Cc), at most
+ * {@link MAX_CANONICAL} characters.
  */
 export function canonicalAccepted(text: string): boolean {
-  const s = text.trim();
+  const s = trimSeo(text);
   if (s === "") return true;
-  // eslint-disable-next-line no-control-regex
-  if ([...s].length > MAX_CANONICAL || /[\s\u0000-\u001f\u007f-\u009f]/u.test(s)) return false;
+  const bad = /[\p{White_Space}\p{Cc}]/u;
+  if ([...s].length > MAX_CANONICAL || bad.test(s)) return false;
   try {
     const url = new URL(s);
     return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
@@ -194,8 +214,8 @@ export function metaOf(item: ContentDto | null): MetaDraft {
       };
 }
 
-/** A typed SEO value as the API takes it: blank is `null` (delete). */
-const seoValue = (s: string): string | null => (s.trim() === "" ? null : s);
+/** A typed SEO value as the API takes it: blank (as the server trims) is `null` (delete). */
+const seoValue = (s: string): string | null => (trimSeo(s) === "" ? null : s);
 
 /** The directives as the API takes them: none is `null` (delete). */
 const robotsValue = (robots: readonly SchemaRobotsDto[]): SchemaRobotsDto[] | null =>

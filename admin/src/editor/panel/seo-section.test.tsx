@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import type { EditorDocument, SeoDraft } from "../editor-state";
+import { type EditorDocument, type SeoDraft, canonicalAccepted, seoOfDraft } from "../editor-state";
 import { SeoSection } from "./seo-section";
 
 /** The members of the document `SeoSection` reads, around a `setMeta` spy. */
@@ -113,5 +113,82 @@ describe("seo_section", () => {
     expect(container.querySelector("[data-slot=search-preview]")).toHaveTextContent(
       "elsewhere.example › orig",
     );
+  });
+
+  test("seo_max_length_counts_code_points", () => {
+    // The server counts characters (code points) of the trimmed text; a native
+    // `maxLength` counts UTF-16 units and cut 100 emoji off at a limit of 200.
+    const { doc, setMeta } = docWith(EMPTY);
+    renderSeo(doc);
+    const title = screen.getByRole("textbox", { name: "SEO title" });
+    const description = screen.getByRole("textbox", { name: "Meta description" });
+    const canonical = screen.getByRole("textbox", { name: "Canonical URL" });
+    for (const el of [title, description, canonical]) expect(el).not.toHaveAttribute("maxlength");
+
+    const emoji = "\u{1F30A}";
+    fireEvent.change(title, { target: { value: emoji.repeat(150) } });
+    expect(setMeta).toHaveBeenLastCalledWith({ seo: { ...EMPTY, title: emoji.repeat(150) } });
+    // An over-long paste is cut at the limit, on a code-point boundary.
+    fireEvent.change(title, { target: { value: emoji.repeat(250) } });
+    expect(setMeta).toHaveBeenLastCalledWith({ seo: { ...EMPTY, title: emoji.repeat(200) } });
+    // The server trims edge whitespace before it counts, so that does not count here.
+    fireEvent.change(title, { target: { value: `  ${"a".repeat(200)}\t ` } });
+    expect(setMeta).toHaveBeenLastCalledWith({
+      seo: { ...EMPTY, title: `  ${"a".repeat(200)}\t ` },
+    });
+    fireEvent.change(description, { target: { value: emoji.repeat(501) } });
+    expect(setMeta).toHaveBeenLastCalledWith({
+      seo: { ...EMPTY, description: emoji.repeat(500) },
+    });
+    fireEvent.change(canonical, { target: { value: `https://a.test/${"é".repeat(2100)}` } });
+    const last = setMeta.mock.lastCall?.[0] as { seo: SeoDraft };
+    expect([...last.seo.canonical]).toHaveLength(2048);
+  });
+
+  test("bom_is_kept_like_the_server", () => {
+    // Rust's `trim()` (Unicode White_Space) keeps U+FEFF and `is_control` is Cc only, so
+    // the server stores a BOM-only value and accepts a canonical that ends in one; JS
+    // `trim()` and `\s` treat it as whitespace.
+    const bom = "﻿";
+    expect(seoOfDraft({ ...EMPTY, title: bom }).title).toBe(bom);
+    expect(seoOfDraft({ ...EMPTY, description: ` ${bom} ` }).description).toBe(` ${bom} `);
+    expect(canonicalAccepted(`https://a.test/${bom}`)).toBe(true);
+    // Real whitespace still trims away or is refused, as on the server.
+    expect(seoOfDraft({ ...EMPTY, title: "  　\n" }).title).toBeNull();
+    expect(canonicalAccepted(" https://a.test/ \n")).toBe(true);
+    expect(canonicalAccepted("https://a.test/a b")).toBe(false);
+    expect(canonicalAccepted("https://a.test/a b")).toBe(false);
+    expect(canonicalAccepted("https://a.test/a\u0085b")).toBe(false);
+  });
+
+  test("the counter's live region speaks only when a limit is crossed", () => {
+    const { doc } = docWith({ ...EMPTY, title: "a".repeat(59) });
+    const { rerender } = renderSeo(doc);
+    const live = document.querySelector<HTMLElement>("[data-slot=seo-title-live]")!;
+    // Mounted from the first render, empty, so its first words are read.
+    expect(live).toHaveAttribute("role", "status");
+    expect(live).toBeEmptyDOMElement();
+    const again = (title: string) =>
+      rerender(
+        <SeoSection
+          doc={docWith({ ...EMPTY, title }).doc}
+          siteUrl="https://example.com"
+          siteName="Example"
+          disabled={false}
+        />,
+      );
+    again("a".repeat(60));
+    expect(live).toBeEmptyDOMElement();
+    again("a".repeat(61));
+    expect(live).toHaveTextContent("Over 60 characters: search results may cut it off");
+    // Typing on past the soft limit says nothing new.
+    again("a".repeat(120));
+    expect(live).toHaveTextContent("Over 60 characters: search results may cut it off");
+    again("a".repeat(200));
+    expect(live).toHaveTextContent("200 characters, the most allowed");
+    again("a".repeat(30));
+    expect(live).toHaveTextContent("Within 60 characters");
+    // The description has its own region.
+    expect(document.querySelector("[data-slot=seo-description-live]")).toBeEmptyDOMElement();
   });
 });
