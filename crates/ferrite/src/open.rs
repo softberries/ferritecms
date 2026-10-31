@@ -23,6 +23,7 @@ pub enum OpenMode {
 pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<dyn Store>> {
     match config.database_kind() {
         DbKind::Sqlite { path } => {
+            crate::update::rollback::check_restore_tmps(&path, &config.data_dir.join("backups"))?;
             if mode == OpenMode::MustExist && !path.is_file() {
                 bail!(
                     "database not found at {}; run `ferrite init` first",
@@ -108,8 +109,8 @@ pub(crate) fn sqlite_side_file(db: &Path, suffix: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
-/// A read-only view of a SQLite database, only for `ferrite doctor` (M4-3a P49/P50, X3):
-/// one connection that takes no data-folder lock, opens no writer, runs no migration and
+/// A read-only view of a SQLite database, for `ferrite doctor` (M4-3a P49/P50, X3) and for
+/// `rollback --restore-snapshot`'s look at the snapshot's schema (M4-4 P73): one connection that takes no data-folder lock, opens no writer, runs no migration and
 /// creates no file, so it works while `serve` holds the store and takes no lock that would
 /// stop one from starting. Being read-only it never checkpoints the WAL; SQLite still updates the
 /// shared-memory index in `-shm` as every reader of a WAL database does.

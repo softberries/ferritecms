@@ -232,7 +232,7 @@ async fn schema_rollback(args: &RollbackArgs, data: &Path, bins: &Binaries) -> R
     let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
     if args.restore_snapshot {
-        restore_snapshot(args, &config, &rec, &ts)?;
+        restore_snapshot(args, &config, &rec, &me, &ts).await?;
     } else {
         schema_down(args, &config, &rec, &me, older.as_ref()).await?;
     }
@@ -331,6 +331,9 @@ async fn schema_down(
     let store = open_store(config, OpenMode::MustExist)
         .await
         .context("with SQLite stop `serve` first; nothing was changed")?;
+    if matches!(config.database_kind(), DbKind::Postgres { .. }) {
+        refuse_live_nodes(store.as_ref()).await?;
+    }
     let before = store.migration_status(me).await?.db_version;
     if before <= rec.schema_from {
         println!(
@@ -403,13 +406,15 @@ fn is_lossy_refusal(e: &anyhow::Error) -> bool {
         .any(|c| c.to_string().contains("has a lossy down"))
 }
 
-/// `--restore-snapshot`: confirms, takes the folder lock, moves the database (and its
-/// `-wal`/`-shm`) to `backups/rolled-back-<ts>.db[-wal|-shm]` and copies the recorded
-/// snapshot into place. Only the path `upgrade.json` records is used.
-fn restore_snapshot(
+/// `--restore-snapshot`: checks that the recorded snapshot holds the record's
+/// `schema_from` (P73), confirms, takes the folder lock, moves the database (and its
+/// `-wal`/`-shm`) to `backups/rolled-back-<ts>.db[-wal|-shm]` and copies the snapshot into
+/// place. Only the path `upgrade.json` records is used.
+async fn restore_snapshot(
     args: &RollbackArgs,
     config: &Config,
     rec: &UpgradeRecord,
+    me: &semver::Version,
     ts: &str,
 ) -> Result<()> {
     let db = match config.database_kind() {
@@ -432,6 +437,7 @@ fn restore_snapshot(
     };
     let snapshot = data_dir.join(snapshot);
     check_snapshot(&snapshot)?;
+    check_snapshot_schema(&snapshot, rec, me).await?;
     let taken = std::fs::metadata(&snapshot)
         .and_then(|m| m.modified())
         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
@@ -484,6 +490,65 @@ fn check_snapshot(snapshot: &Path) -> Result<()> {
     }
 }
 
+/// P73: the snapshot holds the schema the upgrade started at (`rec.schema_from`). A stale
+/// file at another schema (a record finalised late, a carried snapshot) is refused, not
+/// restored. Read-only: nothing is created beside the snapshot.
+async fn check_snapshot_schema(
+    snapshot: &Path,
+    rec: &UpgradeRecord,
+    me: &semver::Version,
+) -> Result<()> {
+    let read = async {
+        let db = crate::open::SqliteReadOnly::open(snapshot).await?;
+        db.migration_status(me).await
+    };
+    let status = read.await.with_context(|| {
+        format!(
+            "cannot read the schema of the snapshot {}; nothing was changed",
+            snapshot.display()
+        )
+    })?;
+    if status.db_version != rec.schema_from {
+        bail!(
+            "the snapshot {} is at schema {}, but {UPGRADE_FILE} says the upgrade started at \
+             schema {}: it is not this upgrade's snapshot, so it is not restored (roll back \
+             with `rollback --schema` without --restore-snapshot, or restore a backup); \
+             nothing was changed",
+            snapshot.display(),
+            status.db_version,
+            rec.schema_from
+        );
+    }
+    Ok(())
+}
+
+/// P72: refuses while the Postgres node registry shows a node whose heartbeat is fresher
+/// than [`ferrite_cluster::STALE_AFTER`] (by the database clock): on Postgres no folder
+/// lock keeps a running node out of the down migrations. A cluster whose nodes are all
+/// stopped is fine.
+async fn refuse_live_nodes(store: &dyn Store) -> Result<()> {
+    let nodes = store.read().nodes();
+    let read = async { anyhow::Ok((nodes.list().await?, nodes.db_now().await?)) };
+    let (all, now) = read
+        .await
+        .context("cannot read the node registry to check that no node runs; nothing was changed")?;
+    let live: Vec<String> = all
+        .iter()
+        .filter(|n| ferrite_cluster::is_live(now, n.heartbeat_at, ferrite_cluster::STALE_AFTER))
+        .map(|n| format!("{} (ferrite {})", n.name, n.version))
+        .collect();
+    if !live.is_empty() {
+        bail!(
+            "a node still runs on this database: {}. Stop every node first (a clean stop \
+             leaves the registry at once; after a crash wait {} s for its heartbeat to go \
+             stale), then retry; nothing was changed",
+            live.join(", "),
+            ferrite_cluster::STALE_AFTER.as_secs()
+        );
+    }
+    Ok(())
+}
+
 /// Takes `<data>/ferrite.lock` (the lock `serve` holds) without waiting.
 fn lock_folder(data_dir: &Path) -> Result<File> {
     let path = data_dir.join(LOCK_FILE);
@@ -511,6 +576,101 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut s = OsString::from(path.as_os_str());
     s.push(suffix);
     PathBuf::from(s)
+}
+
+/// The prefix and suffix of [`restore_tmp`]'s file name after the database's own name.
+const RESTORE_TMP_PREFIX: &str = ".restore-";
+const RESTORE_TMP_SUFFIX: &str = ".tmp";
+
+/// `<db>.restore-<ts>.tmp`: the copy of the snapshot [`replace_db`] stages beside `db`
+/// before renaming it into place (P70: opening the store looks for it).
+pub(crate) fn restore_tmp(db: &Path, ts: &str) -> PathBuf {
+    with_suffix(db, &format!("{RESTORE_TMP_PREFIX}{ts}{RESTORE_TMP_SUFFIX}"))
+}
+
+/// Every [`restore_tmp`] beside `db` with its `<ts>`, oldest first (an unreadable folder
+/// has none).
+pub(crate) fn leftover_restore_tmps(db: &Path) -> Vec<(PathBuf, String)> {
+    let (Some(dir), Some(name)) = (db.parent(), db.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let prefix = format!("{name}{RESTORE_TMP_PREFIX}");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(PathBuf, String)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let file = e.file_name();
+            let ts = file
+                .to_str()?
+                .strip_prefix(&prefix)?
+                .strip_suffix(RESTORE_TMP_SUFFIX)?
+                .to_owned();
+            (!ts.is_empty()).then(|| (restore_tmp(db, &ts), ts))
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out
+}
+
+/// P70: refuses to open a SQLite database that is missing while a [`restore_tmp`] is left
+/// beside it (a `rollback --restore-snapshot` killed after moving the database aside and
+/// before renaming the copy into place), so no empty database is created in its place;
+/// with the database present a leftover only warns.
+pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
+    let leftovers = leftover_restore_tmps(db);
+    let Some((tmp, ts)) = leftovers.last() else {
+        return Ok(());
+    };
+    if std::fs::symlink_metadata(db).is_ok() {
+        for (tmp, ts) in &leftovers {
+            let wal = backups.join(format!("rolled-back-{ts}.db-wal"));
+            let moved = if wal.is_file() {
+                format!(
+                    " (it had moved {}-wal to {}: if the site lacks recent changes, stop it \
+                     and look at that file)",
+                    db.display(),
+                    wal.display()
+                )
+            } else {
+                String::new()
+            };
+            tracing::warn!(
+                "{} is left from an interrupted `ferrite rollback --restore-snapshot`{moved}; \
+                 {} is in place and is used: delete the leftover",
+                tmp.display(),
+                db.display()
+            );
+        }
+        return Ok(());
+    }
+    let aside = backups.join(format!("rolled-back-{ts}.db"));
+    let back = if aside.is_file() {
+        format!(
+            "; or, to keep the database that was current instead, `mv {} {}` (and its -wal \
+             and -shm, if there, to the same name plus -wal and -shm) and delete {}",
+            aside.display(),
+            db.display(),
+            tmp.display()
+        )
+    } else {
+        String::new()
+    };
+    bail!(
+        "{} is missing and {} is left from an interrupted `ferrite rollback \
+         --restore-snapshot` (the snapshot's copy was staged but not renamed into place). \
+         Finish the restore with `mv {} {}`{back}; nothing was created",
+        db.display(),
+        tmp.display(),
+        tmp.display(),
+        db.display()
+    )
 }
 
 /// Moves `src` to `dst` without ever replacing an existing `dst`: a hard link (which
@@ -552,7 +712,7 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
     std::fs::create_dir_all(backups)
         .with_context(|| format!("cannot create {}", backups.display()))?;
     let mut staged = Staged {
-        path: with_suffix(db, &format!(".restore-{ts}.tmp")),
+        path: restore_tmp(db, ts),
         done: false,
     };
     std::fs::copy(snapshot, &staged.path).with_context(|| {
@@ -567,16 +727,26 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
         use std::os::unix::fs::MetadataExt;
         let meta =
             std::fs::metadata(db).with_context(|| format!("cannot read {}", db.display()))?;
-        match_owner_and_mode(&staged.path, meta.uid(), meta.gid(), meta.mode()).with_context(
-            || {
+        let kept = match_owner_and_mode(&staged.path, meta.uid(), meta.gid(), meta.mode())
+            .with_context(|| {
                 format!(
                     "cannot give {} the owner and mode of {} (run as root or as the \
                      database's owner); nothing was changed",
                     staged.path.display(),
                     db.display()
                 )
-            },
-        )?;
+            })?;
+        if let Some(own) = kept {
+            eprintln!(
+                "warning: {} has group {}, which this user cannot give the restored copy: it \
+                 keeps group {own}; run `chgrp {} {}` as root afterwards if the service reads \
+                 the database through its group",
+                db.display(),
+                meta.gid(),
+                meta.gid(),
+                db.display()
+            );
+        }
     }
     File::open(&staged.path)
         .and_then(|f| f.sync_all())
@@ -653,17 +823,58 @@ fn replace_db(db: &Path, snapshot: &Path, backups: &Path, ts: &str) -> Result<()
     Ok(())
 }
 
-/// Gives `path` the owner `uid`:`gid` (a `chown` only when it differs, so a non-root run
-/// on its own files needs none) and the permission bits of `mode`.
+/// What [`match_owner_and_mode`] changes of a file owned by `current` (uid, gid) to give
+/// it `want`.
 #[cfg(unix)]
-fn match_owner_and_mode(path: &Path, uid: u32, gid: u32, mode: u32) -> std::io::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnerPlan {
+    /// Owner and group match.
+    Keep,
+    /// The owner differs: a `chown` (only root may).
+    Chown,
+    /// Only the group differs: a `chgrp`, which the owner may do for a group it is in.
+    GroupOnly,
+}
+
+#[cfg(unix)]
+fn owner_plan(current: (u32, u32), want: (u32, u32)) -> OwnerPlan {
+    if current == want {
+        OwnerPlan::Keep
+    } else if current.0 == want.0 {
+        OwnerPlan::GroupOnly
+    } else {
+        OwnerPlan::Chown
+    }
+}
+
+/// Gives `path` the owner `uid`:`gid` (a `chown` only when it differs, so a non-root run
+/// on its own files needs none) and the permission bits of `mode`. A group change that is
+/// refused (the owner is not in that group, P73) keeps the file's own group, which is
+/// returned.
+#[cfg(unix)]
+fn match_owner_and_mode(
+    path: &Path,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+) -> std::io::Result<Option<u32>> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let current = std::fs::metadata(path)?;
-    if (current.uid(), current.gid()) != (uid, gid) {
-        // Before the mode: a chown may clear set-id bits.
-        std::os::unix::fs::chown(path, Some(uid), Some(gid))?;
+    let mut kept = None;
+    // Before the mode: a chown may clear set-id bits.
+    match owner_plan((current.uid(), current.gid()), (uid, gid)) {
+        OwnerPlan::Keep => {}
+        OwnerPlan::Chown => std::os::unix::fs::chown(path, Some(uid), Some(gid))?,
+        OwnerPlan::GroupOnly => match std::os::unix::fs::chown(path, None, Some(gid)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                kept = Some(current.gid());
+            }
+            Err(e) => return Err(e),
+        },
     }
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))?;
+    Ok(kept)
 }
 
 /// The staged copy of the snapshot, removed on drop unless renamed into place.
@@ -812,6 +1023,49 @@ mod tests {
         replace_db(&db, &snap, &tmp.path().join("backups"), "T").unwrap();
         assert_eq!(std::fs::read_to_string(&db).unwrap(), "snapshot");
         assert_eq!(std::fs::metadata(&db).unwrap().mode() & 0o7777, 0o600);
+    }
+
+    /// P73: only a group that differs is a `chgrp`, which a non-root owner may be refused
+    /// (and then keeps its own group with a warning); a different owner needs a `chown`.
+    /// The refused `chgrp` itself needs a group the test user is not in and the owner of
+    /// the file, so only this decision is tested here.
+    #[cfg(unix)]
+    #[test]
+    fn owner_plan_tells_a_group_change_from_an_owner_change() {
+        assert_eq!(owner_plan((1000, 100), (1000, 100)), OwnerPlan::Keep);
+        assert_eq!(owner_plan((1000, 100), (1000, 200)), OwnerPlan::GroupOnly);
+        assert_eq!(owner_plan((0, 0), (1000, 100)), OwnerPlan::Chown);
+        assert_eq!(owner_plan((0, 100), (1000, 100)), OwnerPlan::Chown);
+    }
+
+    /// P70: the staged copies beside `db` are found by the name `replace_db` gives them.
+    #[test]
+    fn restore_tmps_are_found_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("ferrite.db");
+        assert!(leftover_restore_tmps(&db).is_empty());
+        for name in [
+            "ferrite.db.restore-20260102T000000Z.tmp",
+            "ferrite.db.restore-20260101T000000Z.tmp",
+            "ferrite.db.restore-.tmp",
+            "ferrite.db-wal",
+            "other.db.restore-20260101T000000Z.tmp",
+        ] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        assert_eq!(
+            leftover_restore_tmps(&db),
+            vec![
+                (
+                    restore_tmp(&db, "20260101T000000Z"),
+                    "20260101T000000Z".to_owned()
+                ),
+                (
+                    restore_tmp(&db, "20260102T000000Z"),
+                    "20260102T000000Z".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]

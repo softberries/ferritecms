@@ -765,6 +765,37 @@ fn rollback_restore_snapshot_needs_confirmation() {
     unchanged(&rec);
 }
 
+/// P73: the snapshot must hold the schema the record says the upgrade started at; a stale
+/// file at another schema is refused before anything moves.
+#[test]
+fn restore_snapshot_refuses_a_snapshot_of_another_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bins = Bins::new(tmp.path(), Some(0));
+    let (data, mut rec) = upgraded_site(tmp.path(), LOSSY_FROM);
+    set_meta(&data, "rollback_test_marker", "kept");
+    rec.schema_from = LOSSY_FROM - 1;
+    upgrade::write(&data, &rec).unwrap();
+
+    let out = rollback(&bins.current)
+        .args(["--schema", "--restore-snapshot", "--yes", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("schema {LOSSY_FROM}"))
+            && err.contains(&format!("schema {}", LOSSY_FROM - 1))
+            && err.contains("nothing was changed"),
+        "{err}"
+    );
+    assert_eq!(db_version(&data), latest_schema_version());
+    assert_eq!(meta(&data, "rollback_test_marker").as_deref(), Some("kept"));
+    assert!(names(&data.join("backups"), "rolled-back-").is_empty());
+    assert_eq!(upgrade::load(&data).unwrap(), Some(rec));
+    bins.assert_unswapped();
+}
+
 // ---- Postgres ----
 
 struct PgSchema {
@@ -842,6 +873,65 @@ fn rollback_schema_downs_on_postgres() {
     assert_eq!(db_version(&data), LOSSY_FROM);
     bins.assert_swapped();
     assert_eq!(names(&data, "upgrade-rolled-back-").len(), 1);
+}
+
+/// Runs `sql` in the test's Postgres schema.
+fn pg_exec(pg: &PgSchema, sql: &str) {
+    let (url, sql) = (
+        pg.url.clone(),
+        format!("SET search_path TO \"{}\"; {sql}", pg.schema),
+    );
+    rt().block_on(async move {
+        let mut conn = PgConnection::connect(&url).await.unwrap();
+        sqlx::raw_sql(AssertSqlSafe(sql))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.unwrap();
+    });
+}
+
+/// P72: on Postgres the data-folder lock protects nothing, so `rollback --schema` refuses
+/// while the node registry shows a live node (naming it); once no node is live (a node
+/// that stopped long enough ago) it runs.
+#[test]
+fn rollback_schema_refuses_while_a_postgres_node_is_live() {
+    let Some(pg) = PgSchema::new() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, latest_schema_version() - 1);
+    let bins = Bins::with_old(tmp.path(), Some(0), rec.from.as_deref().unwrap());
+    pg_exec(
+        &pg,
+        "INSERT INTO nodes (id, name, version, schema_version, started_at, heartbeat_at) \
+         VALUES (gen_random_uuid(), 'web-1', '9.0.0', 12, now(), now())",
+    );
+
+    let out = rollback(&bins.current)
+        .args(["--schema", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("web-1") && err.contains("stop"), "{err}");
+    assert_eq!(db_version(&data), latest_schema_version());
+    bins.assert_unswapped();
+    assert_eq!(upgrade::load(&data).unwrap(), Some(rec));
+    assert!(names(&data, "upgrade-rolled-back-").is_empty());
+
+    // The node stopped a minute ago (a crash leaves its row; it is not live any more).
+    pg_exec(
+        &pg,
+        "UPDATE nodes SET heartbeat_at = now() - interval '60 seconds'",
+    );
+    let out = rollback(&bins.current)
+        .args(["--schema", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(db_version(&data), latest_schema_version() - 1);
+    bins.assert_swapped();
 }
 
 #[test]

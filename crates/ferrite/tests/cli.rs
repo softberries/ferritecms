@@ -305,6 +305,68 @@ fn status_on_missing_database_creates_nothing() {
     assert_eq!(std::fs::read_dir(&data).expect("readdir").count(), 0);
 }
 
+/// P70: a `rollback --restore-snapshot` killed between moving `ferrite.db` aside and
+/// renaming the staged copy into place leaves only `ferrite.db.restore-<ts>.tmp`. Opening
+/// the store then refuses (naming the file and the `mv` that finishes the restore) instead
+/// of creating an empty database that `serve` would migrate and serve.
+#[test]
+fn serve_refuses_when_only_a_restore_tmp_is_left() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let db = data.join("ferrite.db");
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::rename(&db, &staged).expect("stage");
+    let aside = data.join("backups").join("rolled-back-20260101T000000Z.db");
+    std::fs::write(&aside, b"the database that was current").expect("aside");
+
+    let mut serve = ferrite();
+    serve
+        .env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
+        .args(["serve", "--data"])
+        .arg(&data)
+        .timeout(std::time::Duration::from_secs(60));
+    let out = serve.assert().code(1).get_output().clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(
+        err.contains(&format!("mv {} {}", staged.display(), db.display())),
+        "{err}"
+    );
+    assert!(err.contains(&aside.display().to_string()), "{err}");
+    assert!(!db.exists(), "no empty database may be created");
+    // The other commands that may create the database refuse too.
+    ferrite()
+        .args(["migrate", "up", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1);
+    assert!(!db.exists());
+    assert!(staged.is_file());
+}
+
+/// P70: a staged copy left beside a database that is still in place (a run killed before
+/// it moved anything) only warns.
+#[test]
+fn a_leftover_restore_tmp_beside_the_db_only_warns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("WARN"), "{err}");
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(staged.is_file(), "the leftover is not deleted");
+}
+
 #[test]
 fn init_refuses_existing_database_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");
