@@ -108,7 +108,8 @@ async function activate(siteKey: string, theme: PublicTheme): Promise<void> {
           message:
             `the front page is drawn by ${theme}: its stylesheet must equal ${file}. A ` +
             `stylesheet that differs means the ferrite binary embeds an older copy of the ` +
-            `theme (built before the last edit): rebuild it with cargo build -p ferrite`,
+            `theme (built before the last edit): rebuild it (cargo build --release -p ferrite, ` +
+            `or the binary FERRITE_BIN names)`,
           timeout: PAGE_DRAWN_MS,
         },
       )
