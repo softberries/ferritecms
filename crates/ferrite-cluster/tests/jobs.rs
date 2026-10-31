@@ -921,6 +921,44 @@ pub async fn runner_shutdown_releases_in_flight(db: Arc<TestDb>) {
     );
 }
 
+/// A periodic whose offset is not below its period is refused when the scheduler is built
+/// (in release builds too), not shifted into a later period under this period's key.
+pub async fn scheduler_refuses_an_offset_past_its_period(db: Arc<TestDb>) {
+    let periodic = |offset| Periodic {
+        kind: "test.tick",
+        every: Duration::from_secs(60),
+        payload: json!({"v": 1}),
+        max_attempts: 3,
+        offset,
+    };
+    let tick = Duration::from_secs(10);
+    for offset in [Duration::from_secs(60), Duration::from_secs(3600)] {
+        let err = Scheduler::new(db.shared_store(), vec![periodic(offset)], tick)
+            .err()
+            .expect("refused");
+        assert!(
+            matches!(
+                &err,
+                ClusterError::PeriodicOffset {
+                    kind: "test.tick",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+    // The last second of the period is fine, and one bad periodic among good ones is
+    // still refused.
+    Scheduler::new(
+        db.shared_store(),
+        vec![periodic(Duration::from_secs(59))],
+        tick,
+    )
+    .unwrap();
+    let mixed = vec![periodic(Duration::ZERO), periodic(Duration::from_secs(61))];
+    assert!(Scheduler::new(db.shared_store(), mixed, tick).is_err());
+}
+
 pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
     let first = db.shared_store();
     let second = other_node_store(&db).await;
@@ -935,8 +973,12 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
     let stop = CancellationToken::new();
     let start_now = first.read().nodes().db_now().await.unwrap();
     let tick = Duration::from_millis(100);
-    let a = Scheduler::new(first.clone(), vec![periodic.clone()], tick).spawn(stop.clone());
-    let b = Scheduler::new(second, vec![periodic], tick).spawn(stop.clone());
+    let a = Scheduler::new(first.clone(), vec![periodic.clone()], tick)
+        .unwrap()
+        .spawn(stop.clone());
+    let b = Scheduler::new(second, vec![periodic], tick)
+        .unwrap()
+        .spawn(stop.clone());
     tokio::time::sleep(Duration::from_millis(3200)).await;
     stop.cancel();
     a.await.unwrap();
@@ -1105,6 +1147,7 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
+        .unwrap()
         .spawn(stop.clone());
     let runner = JobRunner::new(
         store.clone(),
@@ -1450,6 +1493,7 @@ backend_tests_spawning!(
     runner_releases_unknown_payload_version,
     runner_shutdown_releases_in_flight,
     scheduler_inserts_one_job_per_period,
+    scheduler_refuses_an_offset_past_its_period,
     builtin_prune_jobs_delete_by_age,
     sessions_prune_job_deletes_expired_and_idle,
     prune_removes_old_keys,

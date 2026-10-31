@@ -10,6 +10,8 @@ use serde_json::Value;
 use tokio::{task::JoinHandle, time::MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
+use crate::ClusterError;
+
 /// How often each node's scheduler tries to insert the current period's jobs.
 pub const SCHEDULER_TICK: Duration = Duration::from_secs(10);
 
@@ -38,15 +40,10 @@ impl Periodic {
     }
 
     /// The job of the period holding `db_now`: keyed by [`period_key`], due at the period
-    /// start plus [`Periodic::offset`] (in the past when a node ticks after it: due at once).
+    /// start plus [`Periodic::offset`] (in the past when a node ticks after it: due at
+    /// once). [`Scheduler::new`] refuses a periodic whose offset does not
+    /// [fit](Self::offset_fits).
     pub fn job_at(&self, db_now: Timestamp) -> NewJob {
-        debug_assert!(
-            self.offset_fits(),
-            "{}: offset {:?} is not below its period {:?}",
-            self.kind,
-            self.offset,
-            self.every
-        );
         let (key, start) = period_key(self.kind, self.every, db_now);
         let offset = i64::try_from(self.offset.as_micros()).unwrap_or(i64::MAX);
         let run_at = start
@@ -89,12 +86,25 @@ pub struct Scheduler {
 
 impl Scheduler {
     /// A scheduler ticking every `tick` ([`SCHEDULER_TICK`] in production).
-    pub fn new(store: Arc<dyn Store>, periodics: Vec<Periodic>, tick: Duration) -> Self {
-        Self {
+    /// [`ClusterError::PeriodicOffset`] when a periodic's offset is not below its period
+    /// (checked in every build, not per tick).
+    pub fn new(
+        store: Arc<dyn Store>,
+        periodics: Vec<Periodic>,
+        tick: Duration,
+    ) -> Result<Self, ClusterError> {
+        if let Some(p) = periodics.iter().find(|p| !p.offset_fits()) {
+            return Err(ClusterError::PeriodicOffset {
+                kind: p.kind,
+                offset: p.offset,
+                every: p.every,
+            });
+        }
+        Ok(Self {
             store,
             periodics,
             tick,
-        }
+        })
     }
 
     /// Ticks on the current runtime until `stop`; the first tick is immediate.

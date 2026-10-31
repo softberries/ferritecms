@@ -676,7 +676,8 @@ async fn boot(
         opts.periodics.unwrap_or(periodics),
         opts.scheduler_tick.unwrap_or(tick),
     );
-    let scheduler = Scheduler::new(store.clone(), periodics, tick);
+    let scheduler =
+        Scheduler::new(store.clone(), periodics, tick).context("cannot set up the scheduler")?;
 
     let listener = TcpListener::bind(config.server.listen)
         .await
