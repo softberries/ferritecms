@@ -372,7 +372,8 @@ fn loads_cleanly() {
     let js = std::str::from_utf8(&js).unwrap();
     for needle in [
         "heading-anchor",
-        "Link to this section",
+        // Each anchor is named after its heading (final review C-M6).
+        "\"Link to section: \" + h.textContent.trim()",
         "navigator.clipboard",
         // Runs once: a second run adds nothing.
         "if (root.dataset.docsJs) return;",
@@ -468,8 +469,9 @@ fn page_shows_sidebar_breadcrumbs_toc_and_pager() {
     assert_frame(&t, &html);
     for needle in [
         // The sidebar: a "Pages" disclosure right before the nav, not around it, so the
-        // nav never depends on a closed <details> (or a script) to show.
-        "<div class=\"docs-sidebar\">\n<details class=\"docs-pages-toggle\"><summary>Pages</summary></details>\n<nav class=\"docs-nav\" id=\"nav\" aria-label=\"Pages\">",
+        // nav never depends on a closed <details> (or a script) to show; the summary
+        // names the nav it shows (C-M5).
+        "<div class=\"docs-sidebar\">\n<details class=\"docs-pages-toggle\"><summary aria-controls=\"nav\">Pages</summary></details>\n<nav class=\"docs-nav\" id=\"nav\" aria-label=\"Pages\">",
         "<a class=\"tree__link\" href=\"&#x2f;database&#x2f;\" aria-current=\"page\">Database</a>",
         "<a class=\"tree__link\" href=\"&#x2f;guides&#x2f;\">Guides</a>",
         "<a class=\"tree__link\" href=\"&#x2f;reference&#x2f;\">Reference</a>",

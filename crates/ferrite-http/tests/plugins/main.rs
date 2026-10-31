@@ -493,19 +493,39 @@ async fn kv_use_is_volatile(site: Site) -> Site {
 
 async fn sanitised_content_filters(site: Site) -> Site {
     let author = site.user("ada", Role::Author).await;
+    // Core's markup a sanitising filter must keep: heading ids (P54) and code blocks
+    // (R-b17).
+    let body = json!({"type": "doc", "content": [
+        {"type": "heading", "attrs": {"level": 2},
+         "content": [{"type": "text", "text": "Install the binary"}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "Body of hello"}]},
+        {"type": "heading", "attrs": {"level": 3},
+         "content": [{"type": "text", "text": "Content"}]},
+        {"type": "codeBlock", "attrs": {"language": "rust"},
+         "content": [{"type": "text", "text": "fn main() {}"}]}
+    ]});
     let id = site
-        .post(
+        .post_with_body(
             &author,
             "hello",
             "Hello",
             ContentStatus::Published,
             Some(-HOUR),
+            body,
         )
         .await;
     site.install("html-inject").await;
     site.load().await;
     let mut item = public_item(&site, id).await;
     let before = item.html.clone();
+    assert!(
+        before.contains("<h2 id=\"install-the-binary\">")
+            && before.contains("<h3 id=\"content-1\">")
+            && before.contains("<pre tabindex=\"0\"><code class=\"language-rust\">"),
+        "{before}"
+    );
+    let toc: Vec<&str> = item.toc.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(toc, ["install-the-binary", "content-1"]);
     let mut trace = RenderTrace::default();
     let req = req_for(&item);
     filter_item(&site.host, &mut item, &req, &mut trace).await;

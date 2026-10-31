@@ -1,6 +1,6 @@
 //! Heading ids (M4-3b P54) and the table-of-contents entries built from them.
 
-use ferrite_domain::html::RESERVED_FRAGMENT_IDS;
+use ferrite_domain::html::is_reserved_fragment_id;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +19,8 @@ pub struct TocEntry {
 }
 
 /// GitHub's heading-id rule with its duplicate counter: one per document, so ids are
-/// unique within it and never one of [`RESERVED_FRAGMENT_IDS`].
+/// unique within it and never reserved ([`is_reserved_fragment_id`]: a theme's fixed id, or
+/// one it builds from a comment's id).
 #[derive(Debug)]
 pub(super) struct Anchors {
     used: HashSet<String>,
@@ -30,29 +31,33 @@ pub(super) struct Anchors {
 impl Anchors {
     pub(super) fn new() -> Self {
         Self {
-            used: RESERVED_FRAGMENT_IDS
-                .iter()
-                .map(|s| (*s).to_owned())
-                .collect(),
+            used: HashSet::new(),
             suffix: HashMap::new(),
         }
     }
 
     /// The unique id for a heading with this text: the base from [`base_id`], then
-    /// `-1`, `-2`, … when it is already taken.
+    /// `-1`, `-2`, … when it is already taken or reserved.
     pub(super) fn id(&mut self, text: &str) -> String {
         let base = base_id(text);
-        if self.used.insert(base.clone()) {
+        if self.take(&base) {
             return base;
         }
-        let n = self.suffix.entry(base.clone()).or_insert(0);
-        loop {
-            *n += 1;
+        let mut n = self.suffix.get(&base).copied().unwrap_or(0);
+        let id = loop {
+            n += 1;
             let candidate = format!("{base}-{n}");
-            if self.used.insert(candidate.clone()) {
-                return candidate;
+            if self.take(&candidate) {
+                break candidate;
             }
-        }
+        };
+        self.suffix.insert(base, n);
+        id
+    }
+
+    /// Marks `id` used unless it is reserved or already used.
+    fn take(&mut self, id: &str) -> bool {
+        !is_reserved_fragment_id(id) && self.used.insert(id.to_owned())
     }
 }
 
@@ -75,6 +80,7 @@ fn base_id(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrite_domain::html::RESERVED_FRAGMENT_IDS;
 
     fn one(text: &str) -> String {
         Anchors::new().id(text)
@@ -128,6 +134,55 @@ mod tests {
             assert_eq!(a.id(&reserved.to_uppercase()), format!("{reserved}-2"));
         }
         assert_eq!(one("Content"), "content-1");
+    }
+
+    /// Ids the themes build from a comment's id are never given either (final
+    /// re-review): a suffix moves the heading off them.
+    #[test]
+    fn comment_anchor_ids_are_never_given() {
+        let u = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+        let mut a = Anchors::new();
+        assert_eq!(a.id(&format!("Comment {u}")), format!("comment-{u}-1"));
+        assert_eq!(a.id(&format!("reply {u}")), format!("reply-{u}-1"));
+        assert_eq!(
+            a.id(&format!("Reply {u} email")),
+            format!("reply-{u}-email-1")
+        );
+        assert_eq!(a.id(&format!("comment {u}")), format!("comment-{u}-2"));
+    }
+
+    /// The plugin sanitiser keeps a heading id only when `heading_id_allowed` accepts
+    /// it, so every id the rule gives must pass it.
+    #[test]
+    fn every_given_id_survives_the_plugin_sanitiser() {
+        let mut a = Anchors::new();
+        let texts = [
+            "Install the binary",
+            "What's new?",
+            "Zażółć GĘŚLĄ",
+            "ΟΔΟΣ ΣΑΣ",
+            "İstanbul",
+            "ǅemal",
+            "Привет мир",
+            "日本語",
+            "🎉",
+            "",
+            "a  b",
+            "snake_case",
+            "Content",
+            "Comment pending",
+            "CF Name",
+            "Setup",
+            "Setup",
+            "\"><script>alert(1)</script>",
+        ];
+        for text in texts.into_iter().chain(RESERVED_FRAGMENT_IDS) {
+            let id = a.id(text);
+            assert!(
+                ferrite_domain::html::heading_id_allowed(&id),
+                "{text:?} gave {id:?}"
+            );
+        }
     }
 
     #[test]

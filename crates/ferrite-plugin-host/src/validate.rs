@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use ferrite_domain::html::{
     CITE_TAGS, EMBED_FIGURE_CLASSES, EMBED_REFERRER_POLICY, EMBED_SANDBOX, SAFE_URL_SCHEMES,
-    embed_player_src_allowed, relative_url_allowed,
+    embed_player_src_allowed, heading_id_allowed, relative_url_allowed,
 };
 
 use crate::capability::FilterType;
@@ -29,7 +29,10 @@ pub const MAX_ROUTE_HEADER_BYTES: usize = 4 * 1024;
 /// ones without `//`, a backslash, a control character or a leading space; no `cite`
 /// (on [`CITE_TAGS`], which ammonia does not check as a URL);
 /// `rel="noopener noreferrer"` on every link, plus additions so core's own markup
-/// survives a sanitising plugin: `a[target]`; `code[class]` restricted to `language-*`
+/// survives a sanitising plugin: `a[target]`; `id` on `h1`–`h6` only as an id core's
+/// heading rule can give ([`heading_id_allowed`]: lowercase alphanumerics, `-` and `_`,
+/// never a reserved fragment id; M4-3b P54), so `post.toc` and deep links keep working;
+/// `code[class]` restricted to `language-*`
 /// classes and `pre[tabindex]` only as `0` (code blocks); and core's `embed` markup (M3
 /// P11): `figure[class]` only as one of [`EMBED_FIGURE_CLASSES`], and an `<iframe>` only
 /// with a player `src`
@@ -57,6 +60,7 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
             let keep = match (element, attribute) {
                 ("code", "class") => return language_classes(value),
                 ("pre", "tabindex") => value == "0",
+                (h, "id") if HEADINGS.contains(&h) => heading_id_allowed(value),
                 ("figure", "class") => EMBED_FIGURE_CLASSES.contains(&value),
                 ("iframe", "src") => embed_player_src_allowed(value),
                 ("iframe", "sandbox") => value == EMBED_SANDBOX,
@@ -67,11 +71,17 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
             };
             keep.then(|| value.into())
         });
+    for tag in HEADINGS {
+        b.add_tag_attributes(tag, ["id"]);
+    }
     for tag in CITE_TAGS {
         b.rm_tag_attributes(tag, ["cite"]);
     }
     b
 });
+
+/// The elements that may keep an `id`: core gives headings one (M4-3b P54).
+const HEADINGS: [&str; 6] = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 /// The attributes an `<iframe>` may keep: those of core's `embed` markup.
 const IFRAME_ATTRIBUTES: [&str; 6] = [
@@ -579,6 +589,67 @@ mod tests {
             sanitized("<PRE TABINDEX=\"0\">e</PRE>"),
             Ok(FilterValue::Html("<pre tabindex=\"0\">e</pre>".into()))
         );
+    }
+
+    /// Core's heading ids (M4-3b P54) survive a sanitising plugin with the rest of core's
+    /// markup: a body as `blocks/render.rs` writes it comes through unchanged.
+    #[test]
+    fn a_core_rendered_body_survives() {
+        let body = "<h1 id=\"install-the-binary\">Install the binary</h1>\
+            <p>Text <strong>bold</strong> <em>it</em> <code>x</code></p>\
+            <h2 id=\"zażółć-gęślą\">Zażółć gęślą</h2>\
+            <h2 id=\"content-1\">Content</h2>\
+            <h3 id=\"section\">🎉</h3>\
+            <h4 id=\"setup-1-1\">Setup 1</h4>\
+            <h5 id=\"snake_case\">snake_case</h5>\
+            <h6 id=\"日本語\">日本語</h6>\
+            <pre tabindex=\"0\"><code class=\"language-rust\">fn main() {}</code></pre>\
+            <pre tabindex=\"0\"><code>plain</code></pre>\
+            <ul><li><p>a</p></li></ul><blockquote><h2 id=\"a-1\">A</h2></blockquote>";
+        assert_eq!(clean(body), body);
+    }
+
+    /// Only an id core could have given a heading stays: none on other elements, none
+    /// reserved, and none outside `base_id`'s output (lowercase alphanumerics, `-`, `_`).
+    #[test]
+    fn hostile_heading_ids_are_dropped() {
+        for id in [
+            "content",
+            "toc",
+            "comment-pending",
+            "cf-name",
+            "docs-search-page",
+            "Upper",
+            "a b",
+            "javascript:alert(1)",
+            "a\"b",
+            "a.b",
+            "a/b",
+            "",
+            " x",
+            "x\t",
+            // A theme's comment permalink and reply-form ids (final re-review).
+            "comment-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "reply-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "reply-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b-email",
+        ] {
+            let html = format!("<h2 id=\"{}\">h</h2>", id.replace('"', "&quot;"));
+            assert_eq!(clean(&html), "<h2>h</h2>", "{id:?}");
+        }
+        // What core gives such a heading stays.
+        let moved = "<h2 id=\"comment-0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b-1\">h</h2>";
+        assert_eq!(clean(moved), moved);
+        assert_eq!(
+            clean(
+                "<p id=\"x\">p</p><div id=\"x\">d</div><a id=\"x\" href=\"/\">a</a>\
+                 <pre id=\"x\">c</pre><span id=\"x\">s</span>"
+            ),
+            "<p>p</p><div>d</div><a href=\"/\" rel=\"noopener noreferrer\">a</a>\
+             <pre>c</pre><span>s</span>"
+        );
+        // An uppercase attribute name is still `id`; a duplicate keeps the first.
+        assert_eq!(clean("<H2 ID=\"ok\">h</H2>"), "<h2 id=\"ok\">h</h2>");
+        assert_eq!(clean("<h2 id=\"Bad\" id=\"ok\">h</h2>"), "<h2>h</h2>");
     }
 
     /// Exactly what core's renderer emits for an `embed` node (`blocks/render.rs`).

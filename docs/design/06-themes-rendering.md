@@ -366,7 +366,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order: with the default `menu_order` 0 everywhere, `limit=3` gives the three oldest-created items, shown by title, not the first three by title. This deviates from P58's "`menu_order` ascending, then title" for the rows picked, and is an accepted limit of M4-3b (final review A-M2); set `menu_order` to choose the rows). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
 | `page_tree(post=none, kind=none)` | the public items of one type as a tree (M4-3b P56, P57; below) | `archive:<kind>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
@@ -497,21 +497,37 @@ after an import:
 3. turn each space into `-`; runs are not collapsed (`"a  b"` is `a--b`).
 
 An empty result becomes `section`. A repeated id within one body gets `-1`, `-2`, …
-appended (`setup`, `setup-1`). The counter starts with the reserved ids `content`,
-`comments`, `respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`
-(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`), so a heading "Content" becomes
-`content-1` and cannot collide with a theme landmark; a theme should not use another id
+appended (`setup`, `setup-1`). The counter starts with the reserved ids
+(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`): the landmarks `content`, `comments`,
+`respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`, and every other fixed
+id the three starter themes write (`comment-pending`, `comments-title`, `comment-form` and
+its `comment-form-author|email|url|trap|comment` fields, `related-title`, `news-title`,
+`contact-form-title`, `search-main`, `search-error`, `docs-search-page`,
+`docs-search-error`, `cf-name|email|subject|message|website`; test `fixed_ids` in
+`ferrite-theme` reads the templates and fails on a fixed id missing from the list). So a
+heading "Content" becomes `content-1` and a heading "Comment pending" `comment-pending-1`,
+and neither can take a theme's landmark or `:target`. The ids a theme builds from a
+comment's id are reserved by pattern (`ferrite_domain::html::is_reserved_fragment_id`):
+`comment-<uuid>`, `reply-<uuid>` and `reply-<uuid>-author|email|url|trap|comment` (a
+heading "Comment <uuid>" gets `comment-<uuid>-1`). A theme should not use another fixed id
 that a heading could take. The kept characters need no escaping in the attribute, and the
 renderer escapes it anyway. Only headings with a valid level (1–6) that are not nested past
 `MAX_DEPTH` get an id; an invalid level renders as `<p>` without one. `html` blocks keep
 ammonia's rules (ids stripped), and no anchor link is added to the body (a theme can add
 one with a little JavaScript).
 
+The plugin sanitiser (05 §7, R22) keeps a heading's `id` only when
+`ferrite_domain::html::heading_id_allowed` accepts it: non-empty, only lowercase (Unicode)
+alphanumerics, `-` and `_` (the rule's output alphabet), and not reserved. Every id the rule
+gives passes (test `every_given_id_survives_the_plugin_sanitiser`), so a sanitising
+`content.body` filter keeps the TOC's targets; it drops an `id` on any other element and a
+heading id that the rule could not have given.
+
 `post.toc` is a list of `{level, id, text}` (`text` is the heading's plain text), in
 document order, for every heading the body renders. The theme chooses the levels it shows.
 It is computed with the body, before the plugin filters: when a `content.body` filter
 changes the HTML, `toc` stays as computed, so a filter that removes or renames a heading
-leaves a dead or stale entry.
+leaves a dead or stale entry (a filter that only adds markup keeps every entry live).
 
 ## 5. Rendering pipeline (as built)
 
@@ -549,7 +565,8 @@ TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust 
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
 sanitised with `ammonia`. A `codeBlock` renders as `<pre tabindex="0"><code
 class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b
-R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only. M3 (P11) adds an
+R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only, as it keeps a
+heading's `id` only in the heading rule's form (§4). M3 (P11) adds an
 `embed` node (`provider` `youtube` or `vimeo`, `url`), rendered as a privacy-mode
 player `<iframe>` (`youtube-nocookie.com`, `player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
 recognise renders as a paragraph with a link), and an optional plain-text `caption` on
@@ -658,7 +675,8 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   previous/next pager in the centre (46rem wide at most); "On this page" on the right from
   80rem. Under 60rem one column, and the tree's `<nav>` is hidden until the
   `<details>` "Pages" right before it (a sibling holding only its `<summary>`, closed) is
-  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`). From 60rem the
+  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`); the summary's
+  `aria-controls="nav"` names the nav it shows, since the disclosure itself is empty. From 60rem the
   disclosure is hidden and the nav always shows, so the sidebar needs no script and no
   `::details-content` in any engine. The `footer` menu sits in the footer.
 - **Data.** `base.html` reads `page_tree(post=post, kind=nav_type)` once (one bridge
@@ -680,14 +698,14 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   author and date archives), `search`, `404`, `500`; partials `sidebar`, `toc`,
   `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
   shared by page, single and index) and `listing`.
-- **Fixed ids** are reserved ones (`content`, `nav`, `toc`, `search`; 06 §4) or start
-  with `docs-` (`docs-search-page`, `docs-search-error`; test
-  `fixed_ids_are_reserved_or_prefixed`). A reserved id never collides with a heading id;
-  the `docs-` ones appear only on the search and 404 pages, which render no body.
+- **Fixed ids** are all reserved (`content`, `nav`, `toc`, `search`, `docs-search-page`,
+  `docs-search-error`; §4; tests `fixed_ids_are_reserved_or_prefixed` and `fixed_ids`), so
+  none collides with a heading id.
 - **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
   pages work without it; a second run adds nothing) puts each body heading with an id
   in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link
-  to this section">#</a>`, a sibling, so the heading's accessible name stays its text,
+  to section: <heading text>">#</a>`, a sibling, so the heading's accessible name stays its
+  text and each anchor's name is its own (a list of links tells them apart),
   and, where
   `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
   button that reports through a visually hidden `role="status"` text. No syntax
@@ -740,7 +758,8 @@ serves it. CI runs the project as its own step in the `admin-e2e` job (the
   default, and with `contact_form` on (the theme's form markup, without the plugin).
 - `docs` on the repository's `site/content` (`import markdown --front-page`): the front
   page, a nested page, a search and a 404. A keyboard check runs too: the first Tab
-  reaches the skip link, and Enter moves focus to `<main>`.
+  reaches the skip link, and Enter moves focus to `<main>`; and each heading anchor's
+  name is `Link to section: <heading>`, all distinct.
 
 Code blocks scroll sideways in all three themes. Core's `<pre tabindex="0">` (§5) makes
 them keyboard-scrollable, and each theme's `:focus-visible` ring shows on them. The docs

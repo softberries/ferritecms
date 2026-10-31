@@ -182,7 +182,9 @@ jobs:
       # Artifacts do not keep the executable bit.
       - run: chmod +x target/release/ferrite
       - run: pnpm -C admin exec playwright install --with-deps ${{ matrix.engine }}
-      - run: pnpm -C admin e2e --project ${{ matrix.project }}
+      - name: admin e2e
+        id: admin-e2e
+        run: pnpm -C admin e2e --project ${{ matrix.project }}
         env:
           FERRITE_TEST_PG_URL: ${{ matrix.pg_url }}
       # Uploaded before the public-themes run, which empties `test-results/artifacts/` and
@@ -198,10 +200,13 @@ jobs:
           if-no-files-found: ignore
       # The public starter themes under axe (M4-3b P64, ruling R-b16): Chromium on SQLite,
       # one site per theme (`blog` on `seed demo`, `business` on its seed profile, `docs` on
-      # `site/content`), in its own Playwright run; it runs even when the admin specs failed.
+      # `site/content`), in its own Playwright run; it runs even when the admin specs failed,
+      # but not when a setup step before them failed (the admin step did not run then).
       - name: public themes (axe)
         id: public-themes
-        if: (success() || failure()) && matrix.project == 'chromium-sqlite'
+        if: >-
+          (success() || failure()) && matrix.project == 'chromium-sqlite' &&
+          (steps.admin-e2e.outcome == 'success' || steps.admin-e2e.outcome == 'failure')
         run: pnpm -C admin e2e --project public-themes-chromium
       - uses: actions/upload-artifact@v4
         if: always() && steps.public-themes.outcome == 'failure'

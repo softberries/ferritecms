@@ -86,6 +86,9 @@ pub struct MarkdownArgs {
     /// folder's name). Re-runs of the same name update the pages they imported.
     #[arg(long)]
     pub source: Option<String>,
+    /// Take over an import whose process stopped (no heartbeat for 120 s).
+    #[arg(long)]
+    pub takeover: bool,
 }
 
 #[derive(Debug, Args)]
@@ -244,7 +247,7 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
                 &actor,
                 &format!("markdown:{name}"),
                 args.dry_run,
-                false,
+                args.takeover,
                 None,
             )
             .await

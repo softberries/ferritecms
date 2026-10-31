@@ -174,13 +174,14 @@ See [Import from WordPress](../02-guides/06-import-wordpress.md).
 ### import markdown
 
 ```text
-ferrite import markdown DIR --data DATA [--as LOGIN] [--type KIND] [--front-page] [--dry-run] [--source NAME]
+ferrite import markdown DIR --data DATA [--as LOGIN] [--type KIND] [--front-page] [--dry-run] [--source NAME] [--takeover]
 ```
 
 Imports a folder of Markdown files as pages (`--type`, default `page`). `--front-page`
 makes the root `index.md` (or `README.md`) the front page. `--source` names the import
 (default the folder's name); a re-run with the same name updates what changed in the
-files and keeps pages edited in the admin.
+files and keeps pages edited in the admin. `--takeover` takes over an import whose
+process stopped (no heartbeat for 120 s).
 
 Exit 0 done; 2 done, with skipped files, missing or refused images or broken links
 (each printed); 3 another import is running; 1 an error.

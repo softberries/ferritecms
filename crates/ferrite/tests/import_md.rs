@@ -210,6 +210,11 @@ both!(
     a_bad_type_writes_nothing,
     a_draft_root_index_is_not_the_front_page,
     a_future_date_schedules_the_page,
+    front_matter_core_would_refuse_is_cleaned,
+    a_stale_run_is_taken_over,
+    a_kept_front_page_is_not_reported_as_set,
+    unimported_links_and_protocol_relative_images_are_reported,
+    a_date_out_of_range_skips_the_file,
 );
 
 /// A 2×2 PNG.
@@ -792,6 +797,210 @@ async fn bad_front_matter_skips_the_file_exit_2(site: Site) {
     assert!(!p.contains_key("bad") && !p.contains_key("worse"));
 }
 
+/// Final review B-I1: front matter values core would refuse are cleaned, never a failed
+/// run: a multi-line description is collapsed, a 600-character one cut to 500 (a
+/// `description-cut` notice, exit 0), NUL is stripped from the title (Postgres refuses it).
+async fn front_matter_core_would_refuse_is_cleaned(site: Site) {
+    let (_root, dir) = tree();
+    write(
+        &dir,
+        "multi.md",
+        b"+++\ndescription = \"\"\"\nFirst line,\n\tsecond line.\n\"\"\"\n+++\n# Multi\n",
+    );
+    let long = "x".repeat(600);
+    write(
+        &dir,
+        "long.md",
+        format!("+++\ndescription = \"{long}\"\n+++\n# Long\n").as_bytes(),
+    );
+    write(
+        &dir,
+        "nul.md",
+        b"+++\ntitle = \"Nul\\u0000 title\"\ndescription = \"a\\u0000b\"\n+++\nText.\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("created 10, "), "{o}");
+    assert!(
+        o.contains("description-cut  long.md  the description is longer than 500 characters"),
+        "{o}"
+    );
+    let p = pages(&site).await;
+    assert_eq!(p["multi"].excerpt, "First line, second line.");
+    assert_eq!(p["long"].excerpt, "x".repeat(500));
+    assert_eq!(p["nul"].title, "Nul title");
+    assert_eq!(p["nul"].excerpt, "a b");
+    let store = site.store().await;
+    let seo = |id| {
+        let store = store.clone();
+        async move {
+            store
+                .read()
+                .meta()
+                .get(id, "seo.description")
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        seo(p["multi"].id).await,
+        Some(json!("First line, second line."))
+    );
+    assert_eq!(seo(p["long"].id).await, Some(json!("x".repeat(500))));
+    store.close().await;
+}
+
+/// Final review B-I2: a run whose process stopped (no heartbeat for 120 s) blocks the
+/// next import (exit 3) until `--takeover` takes it over.
+async fn a_stale_run_is_taken_over(site: Site) {
+    let store = site.store().await;
+    let user = store
+        .read()
+        .users()
+        .get_by_login("importer")
+        .await
+        .unwrap()
+        .unwrap();
+    let then = Timestamp::from_micros(Timestamp::now().as_micros() - 600 * 1_000_000).unwrap();
+    store
+        .read()
+        .imports()
+        .create_run(&ImportRun {
+            id: ImportRunId::new(),
+            source: "markdown:docs".into(),
+            token: [7; 16],
+            state: ImportRunState::Running,
+            started_by: user.id,
+            started_at: then,
+            heartbeat_at: then,
+            finished_at: None,
+            stats: json!({}),
+            dry_run: false,
+            job_id: None,
+            step: None,
+            report_hash: None,
+        })
+        .await
+        .unwrap();
+    store.close().await;
+    drop(store);
+    let (_root, dir) = tree();
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("take it over"),
+        "{}",
+        text(&out)
+    );
+    assert!(pages(&site).await.is_empty());
+    let out = site.import(&dir, &["--takeover"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(stdout(&out).contains("created 7, "), "{}", text(&out));
+}
+
+/// Final review B-M1: on a re-run after the front page was changed here, the report says
+/// `front-page-kept` and does not claim `front page: index.md`.
+async fn a_kept_front_page_is_not_reported_as_set(site: Site) {
+    let (_root, dir) = tree();
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let install = pages(&site).await.remove("install").unwrap();
+    let chosen = json!(install.id.to_string());
+    let store = site.store().await;
+    store
+        .read()
+        .options()
+        .set("reading.front_page", &chosen, false)
+        .await
+        .unwrap();
+    store.close().await;
+    drop(store);
+    let out = site.import(&dir, &["--front-page"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("front-page-kept  index.md  "), "{o}");
+    assert!(!o.contains("front page: "), "{o}");
+    assert_eq!(front_page_option(&site).await, Some(chosen));
+}
+
+/// Final review B-M5, B-M6 and its re-review: a link to a file in the folder that is
+/// not a page and not imported (so it 404s on the site), or to a missing file, is
+/// reported; a link to an image imported as media (it is also shown with `![…]`)
+/// points at that media file; a protocol-relative image (dropped) is reported.
+async fn unimported_links_and_protocol_relative_images_are_reported(site: Site) {
+    let (_root, dir) = tree();
+    write(&dir, "files/spec.pdf", b"%PDF-1.4\n");
+    write(&dir, "assets/only-linked.png", &png());
+    write(
+        &dir,
+        "links.md",
+        b"# Links\n\nThe [spec](files/spec.pdf), the [logo](assets/logo.png#x), \
+          [gone](files/gone.pdf), [only](assets/only-linked.png).\n\n\
+          ![Remote](//cdn.example.test/x.png)\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    for href in ["files/spec.pdf", "files/gone.pdf", "assets/only-linked.png"] {
+        assert!(
+            o.contains(&format!(
+                "broken-link  links.md  link {href} is not in the import"
+            )),
+            "{href}: {o}"
+        );
+    }
+    assert!(!o.contains("link assets/logo.png"), "{o}");
+    assert!(
+        o.contains("outside  links.md  //cdn.example.test/x.png "),
+        "{o}"
+    );
+    // Only the image shown with `![…]` is media; the link to it is its public URL.
+    assert_eq!(media_count(&site).await, 1);
+    let p = pages(&site).await;
+    let logo = image_srcs(&p["install"].body)[0]
+        .strip_prefix("ferrite:media/")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let store = site.store().await;
+    let media = store.read().media().get(logo).await.unwrap().unwrap();
+    store.close().await;
+    let url = format!("/_media/{}/logo.png#x", media.artifact_hash);
+    let links = &p["links"];
+    assert_eq!(
+        hrefs(&links.body),
+        [
+            "files/spec.pdf",
+            url.as_str(),
+            "files/gone.pdf",
+            "assets/only-linked.png"
+        ]
+    );
+    // The protocol-relative image is not in the body.
+    assert!(image_srcs(&links.body).is_empty(), "{}", links.body);
+}
+
+/// Final re-review: a front matter `date` outside years 1 to 9999 (Postgres
+/// `timestamptz` starts at 4713 BC) skips its file as `bad-front-matter`, never exit 1.
+async fn a_date_out_of_range_skips_the_file(site: Site) {
+    let (_root, dir) = tree();
+    write(
+        &dir,
+        "ancient.md",
+        b"+++\ntitle = \"Ancient\"\ndate = \"-005000-01-01T00:00:00Z\"\n+++\nText.\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("created 7, "), "{o}");
+    assert!(
+        o.contains("bad-front-matter  ancient.md  line 3: skipped, "),
+        "{o}"
+    );
+    assert!(!pages(&site).await.contains_key("ancient"));
+}
+
 /// What a dry run must leave as it was: content, options and the media files.
 async fn snapshot(site: &Site) -> String {
     let store = site.store().await;
@@ -908,6 +1117,7 @@ async fn exit_codes_documented() {
         "--front-page",
         "--dry-run",
         "--source",
+        "--takeover",
     ] {
         assert!(o.contains(flag), "{flag}: {o}");
     }
