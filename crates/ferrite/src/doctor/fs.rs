@@ -282,6 +282,23 @@ pub(super) fn database_files(data: &Path, config: Option<&Config>) -> Finding {
         }
         present.push(name);
     }
+    // M4-4 (review Minor 6): what an interrupted `rollback --restore-snapshot` left, as
+    // the store's open judges it (P70, R-c2), so it shows without reading the journal.
+    match crate::update::rollback::restore_tmps(&path, &config.data_dir.join("backups")) {
+        crate::update::rollback::RestoreTmps::None => {}
+        crate::update::rollback::RestoreTmps::Leftover(found) => {
+            for tmp in found {
+                warnings.push(format!(
+                    "{} is left from an interrupted `ferrite rollback --restore-snapshot` that \
+                     moved nothing: delete it",
+                    tmp.display()
+                ));
+            }
+        }
+        crate::update::rollback::RestoreTmps::Interrupted(why) => {
+            errors.push(format!("the store refuses to open: {why}"));
+        }
+    }
     if !errors.is_empty() {
         errors.extend(warnings);
         return Finding::error(ID, errors.join("; "));

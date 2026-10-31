@@ -30,9 +30,23 @@ pub struct Periodic {
 }
 
 impl Periodic {
+    /// Whether [`Periodic::offset`] is below the period as [`period_key`] counts it (whole
+    /// seconds, at least 1 s): otherwise `run_at` would fall in a later period under this
+    /// period's key.
+    pub fn offset_fits(&self) -> bool {
+        self.offset < Duration::from_secs(self.every.as_secs().max(1))
+    }
+
     /// The job of the period holding `db_now`: keyed by [`period_key`], due at the period
     /// start plus [`Periodic::offset`] (in the past when a node ticks after it: due at once).
     pub fn job_at(&self, db_now: Timestamp) -> NewJob {
+        debug_assert!(
+            self.offset_fits(),
+            "{}: offset {:?} is not below its period {:?}",
+            self.kind,
+            self.offset,
+            self.every
+        );
         let (key, start) = period_key(self.kind, self.every, db_now);
         let offset = i64::try_from(self.offset.as_micros()).unwrap_or(i64::MAX);
         let run_at = start
@@ -166,6 +180,13 @@ mod tests {
             max_attempts: 3,
             offset: Duration::ZERO,
         };
+        assert!(periodic.offset_fits());
+        periodic.offset = Duration::from_secs(86_400);
+        assert!(
+            !periodic.offset_fits(),
+            "an offset of a whole period does not fit"
+        );
+        periodic.offset = Duration::ZERO;
         let plain = periodic.job_at(at(1, 30, 0));
         assert_eq!(
             plain.unique_key.as_deref(),

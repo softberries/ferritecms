@@ -1164,6 +1164,9 @@ fn serve_registers_artifacts_gc() {
 fn artifacts_gc_runs_at_three() {
     let gc = ferrite::jobs::artifacts_gc_periodic();
     assert_eq!(gc.offset, 3 * HOUR);
+    for p in ferrite::jobs::core_periodics() {
+        assert!(p.offset_fits(), "{p:?}");
+    }
     // 2026-10-23T00:00:00Z, and 01:30 that day.
     let day = 1_792_713_600_i64;
     let now = Timestamp::from_micros((day + 5_400) * 1_000_000).unwrap();

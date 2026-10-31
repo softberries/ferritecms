@@ -308,6 +308,14 @@ mod tests {
 
     use super::*;
 
+    /// M4-4 P75: every built-in periodic's offset is below its period.
+    #[test]
+    fn builtin_offsets_fit_their_periods() {
+        for p in periodics() {
+            assert!(p.offset_fits(), "{p:?}");
+        }
+    }
+
     #[test]
     fn failure_retention_is_at_least_a_day() {
         let min = Duration::from_secs(60);

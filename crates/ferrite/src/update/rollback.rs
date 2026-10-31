@@ -621,34 +621,62 @@ pub(crate) fn leftover_restore_tmps(db: &Path) -> Vec<(PathBuf, String)> {
 
 /// P70: refuses to open a SQLite database that is missing while a [`restore_tmp`] is left
 /// beside it (a `rollback --restore-snapshot` killed after moving the database aside and
-/// before renaming the copy into place), so no empty database is created in its place;
-/// with the database present a leftover only warns.
+/// before renaming the copy into place), so no empty database is created in its place.
+/// With the database present it also refuses when the run had already moved its `-wal` or
+/// `-shm` (M4-4 R-c2, [`moved_side_files`]): opened without its WAL, committed transactions
+/// would be lost. A leftover that moved nothing only warns.
 pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
+    match restore_tmps(db, backups) {
+        RestoreTmps::None => Ok(()),
+        RestoreTmps::Leftover(found) => {
+            for tmp in found {
+                tracing::warn!(
+                    "{} is left from an interrupted `ferrite rollback --restore-snapshot` \
+                     that moved nothing; {} is in place and is used: delete the leftover",
+                    tmp.display(),
+                    db.display()
+                );
+            }
+            Ok(())
+        }
+        RestoreTmps::Interrupted(why) => bail!("{why}"),
+    }
+}
+
+/// What [`restore_tmp`]s beside `db` mean (P70, R-c2): read by the store's open
+/// ([`check_restore_tmps`]) and by `ferrite doctor`'s `fs.database_files`.
+pub(crate) enum RestoreTmps {
+    /// None is left.
+    None,
+    /// Left by runs that moved nothing: `db` is complete. Delete them.
+    Leftover(Vec<PathBuf>),
+    /// A run stopped halfway: opening `db` would create an empty site or lose its WAL.
+    /// The text names the files and the commands that recover them.
+    Interrupted(String),
+}
+
+pub(crate) fn restore_tmps(db: &Path, backups: &Path) -> RestoreTmps {
     let leftovers = leftover_restore_tmps(db);
     let Some((tmp, ts)) = leftovers.last() else {
-        return Ok(());
+        return RestoreTmps::None;
     };
     if std::fs::symlink_metadata(db).is_ok() {
         for (tmp, ts) in &leftovers {
-            let wal = backups.join(format!("rolled-back-{ts}.db-wal"));
-            let moved = if wal.is_file() {
-                format!(
-                    " (it had moved {}-wal to {}: if the site lacks recent changes, stop it \
-                     and look at that file)",
+            if let Some(steps) = moved_side_files(db, backups, ts) {
+                return RestoreTmps::Interrupted(format!(
+                    "{} is in place, but {} is left from an interrupted `ferrite rollback \
+                     --restore-snapshot` that had already moved the database's -wal/-shm into \
+                     {}: opened without its WAL, the transactions committed there would be \
+                     lost. Put the files back first: {}; then delete {}. Nothing was opened",
                     db.display(),
-                    wal.display()
-                )
-            } else {
-                String::new()
-            };
-            tracing::warn!(
-                "{} is left from an interrupted `ferrite rollback --restore-snapshot`{moved}; \
-                 {} is in place and is used: delete the leftover",
-                tmp.display(),
-                db.display()
-            );
+                    tmp.display(),
+                    backups.display(),
+                    steps.join("; "),
+                    tmp.display()
+                ));
+            }
         }
-        return Ok(());
+        return RestoreTmps::Leftover(leftovers.into_iter().map(|(tmp, _)| tmp).collect());
     }
     let aside = backups.join(format!("rolled-back-{ts}.db"));
     let back = if aside.is_file() {
@@ -662,7 +690,7 @@ pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
     } else {
         String::new()
     };
-    bail!(
+    RestoreTmps::Interrupted(format!(
         "{} is missing and {} is left from an interrupted `ferrite rollback \
          --restore-snapshot` (the snapshot's copy was staged but not renamed into place). \
          Finish the restore with `mv {} {}`{back}; nothing was created",
@@ -670,7 +698,70 @@ pub(crate) fn check_restore_tmps(db: &Path, backups: &Path) -> Result<()> {
         tmp.display(),
         tmp.display(),
         db.display()
-    )
+    ))
+}
+
+/// M4-4 R-c2 (amends P70): what a [`replace_db`] killed before `db` itself left
+/// `backups/rolled-back-<ts>.db`: its `-wal` and `-shm` move first, so with `db` still in
+/// place (`rolled-back-<ts>.db` absent, or the same file as `db` when the kill came inside
+/// that move) a moved `-wal`/`-shm` means `db` lacks its WAL. Returns the shell steps that
+/// put the files back, or `None` when nothing was moved away from `db`.
+fn moved_side_files(db: &Path, backups: &Path, ts: &str) -> Option<Vec<String>> {
+    let aside_db = backups.join(format!("rolled-back-{ts}.db"));
+    let db_linked = same_file(&aside_db, db);
+    if std::fs::symlink_metadata(&aside_db).is_ok() && !db_linked {
+        // `db` itself was moved; whatever is in place now is not this run's to judge.
+        return None;
+    }
+    let mut steps = Vec::new();
+    let mut moved = false;
+    for suffix in ["-wal", "-shm"] {
+        let aside = with_suffix(&aside_db, suffix);
+        if std::fs::symlink_metadata(&aside).is_err() {
+            continue;
+        }
+        let original = with_suffix(db, suffix);
+        if std::fs::symlink_metadata(&original).is_err() {
+            moved = true;
+            steps.push(format!("`mv {} {}`", aside.display(), original.display()));
+        } else if same_file(&aside, &original) {
+            // A kill inside that move: the link is a second name of the file in place.
+            steps.push(format!("`rm {}`", aside.display()));
+        } else {
+            moved = true;
+            steps.push(format!(
+                "{} and {} both exist and differ (the database was opened since the move): \
+                 compare them by hand before going on",
+                original.display(),
+                aside.display()
+            ));
+        }
+    }
+    if !moved {
+        return None;
+    }
+    if db_linked {
+        steps.push(format!("`rm {}`", aside_db.display()));
+    }
+    Some(steps)
+}
+
+/// Whether `a` and `b` are the same file (device and inode); `false` when either is
+/// missing, and on platforms without inodes.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        false
+    }
 }
 
 /// Moves `src` to `dst` without ever replacing an existing `dst`: a hard link (which

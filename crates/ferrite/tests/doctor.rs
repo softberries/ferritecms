@@ -481,6 +481,35 @@ fn is_root() -> bool {
     std::fs::File::open(&f).is_ok()
 }
 
+/// M4-4 (review Minor 6): `fs.database_files` reports what an interrupted
+/// `rollback --restore-snapshot` left: a copy beside an intact database is a warning, one
+/// whose run had moved the WAL aside (the store then refuses to open) is an error.
+#[test]
+fn database_files_report_a_restore_tmp() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let staged = tmp.path().join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(tmp.path().join("ferrite.db"), &staged).unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("fs.database_files"), "warn", "{}", out.stdout);
+    assert!(
+        out.stdout.contains("restore-20260101T000000Z.tmp"),
+        "{}",
+        out.stdout
+    );
+    let wal = tmp.path().join("ferrite.db-wal");
+    let aside = tmp
+        .path()
+        .join("backups")
+        .join("rolled-back-20260101T000000Z.db-wal");
+    std::fs::rename(&wal, &aside).unwrap();
+    let out = offline(tmp.path());
+    std::fs::rename(&aside, &wal).unwrap();
+    assert_eq!(out.status("fs.database_files"), "error", "{}", out.stdout);
+    assert!(out.stdout.contains("refuses to open"), "{}", out.stdout);
+    assert_eq!(out.code, 1);
+}
+
 #[test]
 fn database_files_must_exist_and_be_writable() {
     let tmp = tempfile::tempdir().expect("tempdir");

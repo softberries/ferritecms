@@ -315,8 +315,15 @@ not hold here.
      `migrate`, `init`, …) then refuses instead of creating an empty database, naming the
      file and the `mv` that finishes the restore (`mv ferrite.db.restore-<ts>.tmp
      ferrite.db`) or the one that puts the database that was current back
-     (`backups/rolled-back-<ts>.db`). A leftover copy beside a `ferrite.db` that is in
-     place (a run killed before it moved anything) only warns (M4-4 P70).
+     (`backups/rolled-back-<ts>.db`). A run killed after it moved `ferrite.db-wal` or
+     `-shm` but before `ferrite.db` (or inside that move, when `rolled-back-<ts>.db` is a
+     second name of `ferrite.db`) leaves the database in place without its WAL, and
+     opening it would lose the transactions committed there (a crashed `serve` leaves such
+     a WAL, and `init` leaves its whole schema in one): that refuses too, naming `mv
+     backups/rolled-back-<ts>.db-wal ferrite.db-wal` (and `-shm`, plus `rm
+     backups/rolled-back-<ts>.db` for the second name) and then the copy's deletion. Only
+     a leftover copy beside a `ferrite.db` from which nothing moved (a run killed during
+     the copy) just warns (M4-4 P70, amended by R-c2).
    - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
      SQLite would roll it back into the snapshot.
    - The database must be on the data folder's filesystem (the moves into `backups/` are
@@ -1178,7 +1185,7 @@ container's environment.
 | `fs.data_dir` | The data folder exists, is a folder, is readable and writable by this user (`error` otherwise); a mode with world bits is a `warn` (`ferrite init` creates a new folder 0750; the systemd README and the Docker image use 0750 too). |
 | `fs.config_file` | `ferrite.toml` has no group or other bits (`warn`): it can hold the database URL, S3 secret and SMTP credentials. |
 | `fs.secret_key` | With `auth.secret_key[_file]` the key comes from the configuration (`ok`). Otherwise `secret.key` must exist and hold 64 hex characters (`error`; `serve` would create a new key, and data sealed with the old one could not be read) with no group or other bits (`warn`). |
-| `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`. Postgres: `info`. |
+| `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`; so is what an interrupted `rollback --restore-snapshot` left that makes the store refuse to open (§2 b), and a `ferrite.db.restore-<ts>.tmp` beside an intact database is a `warn` (M4-4). Postgres: `info`. |
 | `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
 | `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
 | `db.lock_state` | `info`: whether `<data>/ferrite.lock` is held, by a running node or by another command that opens the database (`backup`, `migrate`, `user`, …), or that doctor cannot tell (a lock file this user cannot open). Tried without waiting and released at once; a missing lock file is not created. |
@@ -1241,7 +1248,8 @@ binary, a lossy step without `--allow-lossy`, a live Postgres node, Postgres, no
 snapshot or a snapshot at another schema with `--restore-snapshot`, no confirmation, the folder
 locked); a usage error (clap) exits 2. An interrupted `--restore-snapshot` that left only
 `ferrite.db.restore-<ts>.tmp` makes every command that opens the store refuse until it is
-moved into place (§2 b, M4-4 P70).
+moved into place, and so does one that left `ferrite.db` in place after moving its
+`-wal`/`-shm` into `backups/`, until those are moved back (§2 b, M4-4 P70, R-c2).
 After a schema rollback `schema_meta.last_binary_version` names the older binary (§2 b).
 Test seam (`test-seams` builds only): a hidden `--test-current-exe PATH`.
 

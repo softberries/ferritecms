@@ -1536,6 +1536,36 @@ fn restore_force_refuses_a_media_root_inside_the_old_folder() {
     // No blob went into the old folder's media store either.
     assert!(!inside.join("artifacts").exists());
 
+    // The same from a repository snapshot (the other code path).
+    let repo = tmp.path().join("repo");
+    ok_backup(&source, &repo, &[]);
+    let mut c = ferrite();
+    c.arg("restore")
+        .arg(&repo)
+        .arg("--data")
+        .arg(&target)
+        .arg("--force")
+        .env("FERRITE_MEDIA__ROOT", inside.to_str().unwrap());
+    let out = run(c);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        stderr(&out).contains(&inside.display().to_string()),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(std::fs::read(target.join("ferrite.db")).unwrap(), old_db);
+    assert!(!inside.join("artifacts").exists());
+    let names: Vec<String> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .all(|n| !n.contains("pre-restore") && !n.contains("restoring")),
+        "{names:?}"
+    );
+
     // An absent target with a media root inside it: refused, nothing created.
     let absent = tmp.path().join("absent");
     let mut c = ferrite();

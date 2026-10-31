@@ -155,7 +155,11 @@ systemctl start ferrite
 - If the run is killed between moving the database aside and putting the copy in place,
   no `ferrite.db` is left, only `ferrite.db.restore-<ts>.tmp`. The service then refuses to
   start (it does not create an empty site) and names the `mv` that finishes the restore,
-  or the one that puts `backups/rolled-back-<ts>.db` back.
+  or the one that puts `backups/rolled-back-<ts>.db` back. Killed a moment earlier, after
+  `ferrite.db-wal`/`-shm` were moved into `backups/` but before `ferrite.db`, the database
+  is in place without its WAL: the service refuses to start as well (opened that way, the
+  transactions in the WAL would be lost) and names the `mv` commands that put
+  `backups/rolled-back-<ts>.db-wal` and `-shm` back. Run them, delete the `.tmp`, start.
 - **Media uploaded since the upgrade** is referenced only by the moved-aside database. The
   daily media GC deletes those files after `media.gc_grace_days` (default 7). If you may
   want that content back, copy the media folder aside first or raise the grace period.
