@@ -116,6 +116,18 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
+# Password hashing optimised in dev and test builds too (M4-4 P82): unoptimised argon2id
+# takes long enough per hash that a loaded test run spent its rate-limit window on it.
+# blake2 is argon2's own hash (H0 and the final H').
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.test.package.argon2]
+opt-level = 3
+[profile.test.package.blake2]
+opt-level = 3
+
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"

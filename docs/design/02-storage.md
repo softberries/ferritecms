@@ -238,6 +238,21 @@ The `user_meta` table already exists in `0001_init` but has no repository yet.
   uses `exclude`, which always holds at least the item itself.
 - **`ContentRepo::count(&query)`** uses the same WHERE clause as `list` and ignores `limit`,
   `cursor` and `order`.
+- **`ContentRepo::file_bounds(&query, file_len) -> Vec<FileBound { after, lastmod }>`**
+  (M4-4 P76, the sitemap's reads): the rows of `query` that have a `published_at`, in the
+  `PublishedDesc` order of `list`, split into files of `file_len` rows; per file the `list`
+  cursor it starts after (the previous file's last `(published_at, id)`, `None` for the
+  first) and the newest `updated_at` of its rows. One query on both backends: a `ranked`
+  CTE with `ROW_NUMBER()` over `published_at DESC[ NULLS LAST], id DESC` (the
+  `content_items_published_list_idx` order, so no sort for it), a `GROUP BY (rn - 1) /
+  file_len` aggregate for each file's last `rn` and `MAX(updated_at)` (a hash aggregate on
+  Postgres, no second sort), joined to the boundary rows only (every `file_len`-th and the
+  last) for their keys; no row bodies. Same WHERE clause as `list`; `limit` and `cursor` are
+  ignored; another order or a `file_len` of 0 is `Invalid`. Rows without `published_at` are
+  in no file. It still visits every public row of the type (the index entries plus the
+  table row for `updated_at`): about 140 ms for 257 000 rows on Postgres 17 (M4-4 fix round
+  1). A covering index `(type, status, published_at DESC, id DESC) INCLUDE (updated_at)` is
+  the later fix (it needs a migration).
 - **`get_many(ids)`** on content, users and media: at most 200 ids, one query, result in
   the order of `ids`, missing ids skipped, a repeated id returned once at its first
   position, more than 200 is `Invalid`. `MetaRepo::get_many(ids, keys)` takes at most 200
@@ -525,7 +540,11 @@ insert (useful for imports and the outbox).
   and all mutations use the writer. This makes write contention explicit and avoids
   busy-retry loops.
 - Data folder lock: `ferrite.lock` with an OS advisory lock (`fs4`/`fd-lock`) held for
-  the process lifetime — a second `ferrite serve` on the same folder fails fast.
+  the process lifetime — a second `ferrite serve` on the same folder fails fast. The
+  store unlocks it explicitly on `close` (or drop): a holder of the store in this process
+  that is not dropped yet (a task, a service clone; the likelier case) or, for a moment, a
+  copy of the descriptor that a child process inherits while it is spawned, then cannot
+  keep the folder locked after a command is done (M4-4).
 
 **Postgres** (`ferrite-store-postgres`):
 

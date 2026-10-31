@@ -197,7 +197,7 @@ export function TermSheet({
         side="right"
         data-slot="term-sheet"
         onCloseAutoFocus={returnToRowMenu(origin)}
-        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md"
+        className="w-full gap-0 overflow-y-auto p-0 [--sheet-title-center:33px] data-[side=right]:w-full data-[side=right]:sm:max-w-md"
       >
         <SheetHeader className="gap-1 border-b p-5 pr-12">
           <SheetTitle className="truncate text-lg" title={editing?.name}>

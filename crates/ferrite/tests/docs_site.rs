@@ -15,6 +15,9 @@ use std::time::Duration;
 
 /// Paths the link check leaves out: theme assets, media files and the admin SPA.
 const SKIPPED_PREFIXES: [&str; 3] = ["/_theme/", "/_media/", "/admin/"];
+/// The permalink of the front page `import markdown --front-page` makes of
+/// `site/content/index.md` (slug `home`); it answers 301 to `/` (M4-4 P67).
+const FRONT_PERMALINK: &str = "/home/";
 
 fn ferrite() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ferrite"));
@@ -521,12 +524,47 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
     let mut checked: HashMap<String, Result<(), String>> = HashMap::new();
     let mut problems = Vec::new();
     let mut with_toc = 0;
+    // M4-4 P67: the sitemap names the static front page `/`, never its own permalink
+    // `/home/` (which answers 301 to `/`).
+    let paths: BTreeSet<String> = urls
+        .iter()
+        .filter_map(|u| resolve(u, "/", &origin))
+        .collect();
+    assert!(
+        paths.contains("/"),
+        "the sitemap does not list `/`: {paths:?}"
+    );
+    assert!(
+        !paths.contains(FRONT_PERMALINK),
+        "the sitemap lists {FRONT_PERMALINK}: {paths:?}"
+    );
+    let moved = get(port, FRONT_PERMALINK);
+    assert_eq!(
+        (moved.status, moved.location.as_deref()),
+        (301, Some("/")),
+        "{FRONT_PERMALINK}"
+    );
     for url in &urls {
         let path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
         let page = get(port, &path);
         if page.status != 200 {
             problems.push(format!("{path}: answers {}", page.status));
             continue;
+        }
+        // The sidebar (the page tree) links the front page as `/`, never its permalink.
+        let tree_links: Vec<String> = tags(&page.body)
+            .iter()
+            .filter(|t| t.name == "a" && t.attr("class") == Some("tree__link"))
+            .filter_map(|t| t.attr("href"))
+            .filter_map(|href| resolve(href, &path, &origin))
+            .collect();
+        if !tree_links.iter().any(|l| l == "/") {
+            problems.push(format!("{path}: the sidebar does not link `/`"));
+        }
+        if tree_links.iter().any(|l| l == FRONT_PERMALINK) {
+            problems.push(format!(
+                "{path}: the sidebar links the front page as {FRONT_PERMALINK}"
+            ));
         }
         let scan = scan(&page.body);
         if scan.h1 != 1 {

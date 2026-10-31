@@ -35,7 +35,8 @@
 //!    handlers), the periodic scheduler (prune jobs hourly,
 //!    `content.publish_due` every 30 s, `artifacts.gc` daily, `site.backup` daily or weekly
 //!    when `[backup]` is on), the heartbeat (`nodes.meta` carries the
-//!    theme, plugin and permalink state; the reloader beats after every reload) and the
+//!    theme, plugin and permalink state; the first beat is awaited before serving, and
+//!    the reloader beats after every reload) and the
 //!    `node_metrics` writer (one row per whole minute from the registry's deltas, P35);
 //! 10. serve the public site and the API under `/api/v1` (`build_site`; the API's
 //!     services and the site key are set up in step 7, so a missing or bad key stops
@@ -675,7 +676,8 @@ async fn boot(
         opts.periodics.unwrap_or(periodics),
         opts.scheduler_tick.unwrap_or(tick),
     );
-    let scheduler = Scheduler::new(store.clone(), periodics, tick);
+    let scheduler =
+        Scheduler::new(store.clone(), periodics, tick).context("cannot set up the scheduler")?;
 
     let listener = TcpListener::bind(config.server.listen)
         .await
@@ -769,8 +771,9 @@ async fn boot(
             }
         })
     });
-    // The row was registered without the node's state; publish it now.
-    registry.beat_now();
+    // The row was registered without the node's state; publish it before serving, so
+    // the row is complete (job kinds, theme, plugins) when `start` returns.
+    registry.beat_once(status.meta_fn().as_ref()).await;
 
     let stop_accepting = CancellationToken::new();
     let plain = axum::serve(

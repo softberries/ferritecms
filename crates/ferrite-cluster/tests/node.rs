@@ -341,6 +341,34 @@ async fn heartbeat_updates_and_reregisters(db: Arc<TestDb>) {
     reg.leave().await.unwrap();
 }
 
+/// M4-4: `beat_once` has written the meta when it returns (a started node's row is
+/// complete from its first request), merged like a heartbeat; a deleted row comes back.
+async fn beat_once_publishes_before_returning(db: Arc<TestDb>) {
+    let store = db.shared_store();
+    let me = identity(ClusterMode::Cluster);
+    let id = me.id;
+    let reg = Registry::join(store.clone(), me).await.unwrap();
+    let joined = row(store.as_ref(), id).await.expect("registered");
+    assert!(joined.meta.get("job_kinds").is_none());
+
+    let meta = || json!({"job_kinds": ["jobs.prune"], "mode": "spoofed"});
+    reg.beat_once(&meta).await;
+    let beat = row(store.as_ref(), id).await.expect("still registered");
+    assert_eq!(beat.meta["job_kinds"], json!(["jobs.prune"]));
+    assert_eq!(
+        beat.meta["mode"],
+        json!("cluster"),
+        "the registry's own key wins"
+    );
+    assert!(beat.heartbeat_at >= joined.heartbeat_at);
+
+    store.read().nodes().deregister(id).await.unwrap();
+    reg.beat_once(&meta).await;
+    let back = row(store.as_ref(), id).await.expect("registered again");
+    assert_eq!(back.meta["job_kinds"], json!(["jobs.prune"]));
+    reg.leave().await.unwrap();
+}
+
 async fn leave_removes_row(db: Arc<TestDb>) {
     let store = db.shared_store();
     let me = identity(ClusterMode::Solo);
@@ -435,5 +463,6 @@ backend_tests_spawning!(
     solo_join_waits_for_stale_node,
     cluster_join_allows_other_live_nodes,
     heartbeat_updates_and_reregisters,
+    beat_once_publishes_before_returning,
     leave_removes_row,
 );

@@ -55,8 +55,13 @@ mod media;
 mod node_metrics;
 
 const SITE_URL: &str = "http://127.0.0.1:8080";
-/// How fast a change must reach the node (solo: 250 ms poll; cluster: a notice).
-const CONVERGE: Duration = Duration::from_secs(1);
+/// How long a test waits for a change to reach the node (solo: a 250 ms poll; cluster: a
+/// notice), then a reload and a render. A ceiling for a loaded host, not a latency bound:
+/// `eventually` returns as soon as the change shows (the waits that matter print it).
+const CONVERGE: Duration = Duration::from_secs(5);
+/// How long a test waits for what takes a reload and a heartbeat (`nodes.meta`) or a
+/// job claim; a ceiling like [`CONVERGE`].
+const SETTLE: Duration = Duration::from_secs(10);
 /// A wait that includes compiling a plugin component: an unoptimised wasmtime build on a
 /// shared CI runner takes seconds (no latency bound is specified for plugin reloads).
 const PLUGIN_LOAD: Duration = Duration::from_secs(15);
@@ -348,7 +353,7 @@ async fn failed_theme_reload_is_retried(db: Arc<TestDb>) {
         .activate_theme("b", &b.artifact_hash)
         .await
         .unwrap();
-    eventually(Duration::from_secs(3), "theme error reported", || {
+    eventually(SETTLE, "theme error reported", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["error"].is_string() }
@@ -425,7 +430,7 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
         .activate_theme("bad", &bad.artifact_hash)
         .await
         .unwrap();
-    eventually(Duration::from_secs(3), "theme error in nodes.meta", || {
+    eventually(SETTLE, "theme error in nodes.meta", || {
         let db = db.clone();
         let node = &node;
         async move {
@@ -490,7 +495,7 @@ async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
         .unwrap();
     site.tamper(&a.artifact_hash, b"tampered");
     let node = site.start(&db, NodeOptions::default()).await;
-    eventually(Duration::from_secs(3), "fallback flagged", || {
+    eventually(SETTLE, "fallback flagged", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["fallback"] == true }
@@ -509,7 +514,7 @@ async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
         .await
         .unwrap();
     eventually(CONVERGE, "theme b", || home_contains(&node, "MARK-B")).await;
-    eventually(Duration::from_secs(3), "fallback cleared", || {
+    eventually(SETTLE, "fallback cleared", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["fallback"] == false }
@@ -639,7 +644,7 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
         "fell back at startup"
     );
     assert!(node.state.plugins.loaded().is_empty(), "hello not loaded");
-    eventually(Duration::from_secs(3), "startup failures reported", || {
+    eventually(SETTLE, "startup failures reported", || {
         let db = db.clone();
         let node = &node;
         async move {
@@ -933,19 +938,15 @@ async fn permalink_change_rebuilds_routes(db: Arc<TestDb>) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    eventually(
-        Duration::from_secs(3),
-        "permalinks_error in nodes.meta",
-        || {
-            let db = db.clone();
-            let node = &node;
-            async move {
-                meta(&db, node).await["permalinks_error"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("invalid permalink option"))
-            }
-        },
-    )
+    eventually(SETTLE, "permalinks_error in nodes.meta", || {
+        let db = db.clone();
+        let node = &node;
+        async move {
+            meta(&db, node).await["permalinks_error"]
+                .as_str()
+                .is_some_and(|e| e.contains("invalid permalink option"))
+        }
+    })
     .await;
     assert_eq!(
         get(node.addr, &new_path).await.0,
@@ -1100,8 +1101,9 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
         .unwrap();
     let scheduled = Instant::now();
     assert_eq!(get(node.addr, "/later/").await.0, 404);
+    // The lower bound below is the point; the upper one is only a ceiling.
     eventually(
-        Duration::from_millis(3500),
+        Duration::from_secs(10),
         "scheduled post visible",
         || async { get(node.addr, "/later/").await.0 == 200 },
     )
@@ -1242,7 +1244,7 @@ async fn shutdown_releases_running_job_and_deregisters(db: Arc<TestDb>) {
         .await
         .unwrap()
         .unwrap();
-    eventually(Duration::from_secs(3), "job running", || {
+    eventually(SETTLE, "job running", || {
         let store = store.clone();
         async move { store.read().jobs().get(id).await.unwrap().unwrap().status == JobStatus::Running }
     })

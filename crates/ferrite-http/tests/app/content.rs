@@ -124,6 +124,193 @@ async fn static_front_page(app: App) -> App {
     app
 }
 
+/// M4-4 P67: the front page's own permalink answers a cacheable 301 to `/` (keeping
+/// `?cpage=N` only), for visitors and logged-in users alike; `/`, the front page's
+/// children, a page of the same slug elsewhere and the preview stay 200, and changing
+/// `reading.front_page` gives the old front page its path back after one poll.
+async fn the_front_pages_permalink_redirects_to_root(app: App) -> App {
+    let home = app.page("Welcome Home", "home", None).await;
+    let child = app.page("Child", "x", Some(home.id)).await;
+    let about = app.page("About", "about", None).await;
+    app.page("Another Home", "home", Some(about.id)).await;
+    let mut poller = app.poller().await;
+
+    // Without a static front page `/home/` is an ordinary page.
+    let r = app.get("/home/").await;
+    assert_eq!((r.status, r.tpl()), (StatusCode::OK, "page"), "{r:?}");
+
+    ferrite_core::OptionService::new(app.site.store.clone())
+        .set(
+            &app.admin,
+            FRONT_PAGE_OPTION,
+            &json!(home.id.to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+    poller.poll_once().await.unwrap();
+
+    let moved = |r: &crate::harness::Resp, to: &str| {
+        assert_eq!(r.status, StatusCode::MOVED_PERMANENTLY, "{r:?}");
+        assert_eq!(r.header("location"), Some(to), "{r:?}");
+    };
+    let r = app.get("/home/").await;
+    moved(&r, "/");
+    // Browsers keep it an hour at most: the option can send the permalink elsewhere.
+    assert_eq!(
+        r.header("cache-control"),
+        Some("public, max-age=3600"),
+        "{r:?}"
+    );
+    // Cached like a page: the second request is a hit, still the redirect.
+    let key = ferrite_cache::CacheKey::anon("example.com", "/home/", "");
+    let cached = app.state.cache.get(&key).await.expect("the 301 is cached");
+    assert_eq!(cached.status, 301);
+    let r = app.get("/home/").await;
+    moved(&r, "/");
+    assert_eq!(
+        r.header("cache-control"),
+        Some("public, max-age=3600"),
+        "{r:?}"
+    );
+    moved(&app.get("/home/?cpage=2").await, "/?cpage=2");
+    // Only `cpage` is part of the page: other parameters are dropped.
+    moved(&app.get("/home/?utm_source=x&cpage=3").await, "/?cpage=3");
+    moved(&app.get("/home/?utm_source=x").await, "/");
+    // Logged in, the same answer.
+    let cookie = app.session(&app.ada_user).await;
+    let r = app.get_with_cookie("/home/", &cookie).await;
+    moved(&r, "/");
+    assert_eq!(
+        r.header("cache-control"),
+        Some("private, no-store"),
+        "{r:?}"
+    );
+
+    // `/` itself is the page, never a redirect, with any comment page.
+    for path in ["/", "/?cpage=2"] {
+        let r = app.get(path).await;
+        assert_eq!(
+            (r.status, r.tpl()),
+            (StatusCode::OK, "page"),
+            "{path}: {r:?}"
+        );
+        assert!(r.body.contains("<h1>Welcome Home</h1>"), "{path}");
+    }
+    let r = app.get_with_cookie("/", &cookie).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    // A child keeps its path; a page of the same slug under another parent is not the
+    // front page.
+    let r = app.get("/home/x/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(r.body.contains("<h1>Child</h1>"));
+    let r = app.get("/about/home/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(r.body.contains("<h1>Another Home</h1>"));
+    // The preview renders the item itself.
+    let r = app
+        .get_with_cookie(&format!("/_preview/{}", home.id), &cookie)
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(r.body.contains("<h1>Welcome Home</h1>"), "{}", r.body);
+
+    // Another front page: after one poll `/home/` is a page again and the child's
+    // permalink redirects.
+    ferrite_core::OptionService::new(app.site.store.clone())
+        .set(
+            &app.admin,
+            FRONT_PAGE_OPTION,
+            &json!(child.id.to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+    poller.poll_once().await.unwrap();
+    let r = app.get("/home/").await;
+    assert_eq!((r.status, r.tpl()), (StatusCode::OK, "page"), "{r:?}");
+    moved(&app.get("/home/x/").await, "/");
+    let r = app.get("/").await;
+    assert!(r.body.contains("<h1>Child</h1>"), "{}", r.body);
+    app
+}
+
+/// Sets `reading.front_page` to `id` through the option service (emits the event).
+async fn set_front_page(app: &App, id: ferrite_domain::ContentId) {
+    ferrite_core::OptionService::new(app.site.store.clone())
+        .set(&app.admin, FRONT_PAGE_OPTION, &json!(id.to_string()), false)
+        .await
+        .unwrap();
+}
+
+/// M4-4 P67: menus link the static front page as `/`, not its redirecting permalink,
+/// and follow a change of `reading.front_page` after one poll; the `business` theme's
+/// menu then marks that entry current on `/`.
+async fn menus_link_the_front_page_as_root(app: App) -> App {
+    let home = app.page("Welcome Home", "home", None).await;
+    let about = app.page("About", "about", None).await;
+    crate::freshness::menu(&app, &[home.id, about.id]).await;
+    let mut poller = app.poller().await;
+    let link = |url: &str, label: &str| format!("<a class=\"menu\" href=\"{url}\">{label}</a>");
+
+    let r = app.get("/about/").await;
+    assert!(
+        r.body.contains(&link("&#x2f;home&#x2f;", "Welcome Home")),
+        "{}",
+        r.body
+    );
+
+    set_front_page(&app, home.id).await;
+    poller.poll_once().await.unwrap();
+    let r = app.get("/about/").await;
+    assert!(
+        r.body.contains(&link("&#x2f;", "Welcome Home")),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body.contains(&link("&#x2f;about&#x2f;", "About")),
+        "{}",
+        r.body
+    );
+    assert!(!r.body.contains("&#x2f;home&#x2f;"), "{}", r.body);
+
+    // Another front page: the menu follows after one poll (the cached page depends on
+    // `option:reading.front_page`).
+    set_front_page(&app, about.id).await;
+    poller.poll_once().await.unwrap();
+    let r = app.get("/home/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(
+        r.body.contains(&link("&#x2f;home&#x2f;", "Welcome Home")),
+        "{}",
+        r.body
+    );
+    assert!(r.body.contains(&link("&#x2f;", "About")), "{}", r.body);
+
+    // `business` marks the menu entry of the page shown current: Home at `/`.
+    set_front_page(&app, home.id).await;
+    let app = app
+        .with_theme(Arc::new(
+            ferrite_theme::Theme::load(&ferrite_theme::ThemeSource::Embedded("business"))
+                .expect("business theme"),
+        ))
+        .await;
+    let r = app.get("/").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    assert!(
+        r.body
+            .contains("<a href=\"&#x2f;\" aria-current=\"page\">Welcome Home</a>"),
+        "{}",
+        r.body
+    );
+    assert!(
+        r.body.contains("<a href=\"&#x2f;about&#x2f;\">About</a>"),
+        "{}",
+        r.body
+    );
+    app
+}
+
 async fn plugin_head_meta_is_served(app: App) -> App {
     app.post("Hello World", "hello-world", &[]).await;
     app.site.install("hello").await;
@@ -484,6 +671,8 @@ app_tests!(
     tampered_plugin_does_not_break_the_page,
     serves_every_content_route,
     static_front_page,
+    the_front_pages_permalink_redirects_to_root,
+    menus_link_the_front_page_as_root,
     plugin_head_meta_is_served,
     term_redirect_served,
     new_term_reclaims_renamed_path,

@@ -19,6 +19,7 @@ pub mod content;
 pub mod counting;
 pub mod event;
 pub mod export;
+pub mod failing_options;
 pub mod fixtures;
 pub mod harness;
 pub mod idempotency;
@@ -42,8 +43,10 @@ pub mod taxonomy;
 pub mod tx;
 pub mod user;
 pub mod user_filters;
+pub mod window;
 
 pub use counting::CountingStore;
+pub use failing_options::FailingOptionsStore;
 pub use harness::{
     LiveTable, PgFixture, TestDb, migration_dirs, migration_files, pg_store, sqlite_store,
 };

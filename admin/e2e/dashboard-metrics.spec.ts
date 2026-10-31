@@ -196,8 +196,36 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await page.goto("/admin/");
   const traffic = section.getByRole("region", { name: "Traffic" });
   await expect(traffic.getByTestId("errors-chart")).toBeVisible();
+  // Reach network idle before a request is held: `expectAccessible`'s settle waits for it,
+  // which never comes while the series below is held, unless this document reached it once
+  // already. In chromium-sqlite `snap` waits for it; in the other projects it is a no-op.
+  await page.waitForLoadState("networkidle");
   await snap(page, "dashboard-metrics-day");
+
+  // A slow range switch: the day's figures stay up at full colour (R-c3; dimmed to 60 %
+  // their muted text fell below 4.5:1), the cards are busy and the stale line shows.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const hold = async (route: Route) => {
+    await held;
+    await route.fallback().catch(() => undefined);
+  };
+  await page.route("**/api/v1/system/metrics/series?*", hold);
   await section.getByRole("radio", { name: "7 days" }).click();
+  // The pointer to the top-left corner: the snaps below resize the viewport, and a pointer left
+  // where the radio was can come to rest on a Recent drafts row, whose hover preloads the
+  // editor (`defaultPreload: "intent"`). That card lists every author's drafts, so the
+  // preload of one another test deleted meanwhile answers 404.
+  await page.mouse.move(0, 0);
+  await expect(traffic).toHaveAttribute("aria-busy", "true");
+  await expect(traffic.locator("[data-slot=stale-bar]")).toBeAttached();
+  await expect(traffic.getByTestId("errors-chart")).toBeVisible();
+  await snap(page, "dashboard-metrics-stale");
+  await expectAccessible(page);
+  release();
+  await page.unroute("**/api/v1/system/metrics/series?*", hold);
   await expect(
     traffic.getByText(
       "Page views, and all requests including assets, the API and the admin, per hour, the last 7 days",

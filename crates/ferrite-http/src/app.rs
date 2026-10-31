@@ -42,8 +42,10 @@
 //!    cache variant; both answer `Cache-Control: private, no-store`, and plugins see
 //!    `is_logged_in = true`.
 //! 6. The render pipeline (06 §5): the candidates' items through `SiteReader`
-//!    (published-only; a hit counts only if its URL equals the request path), plugin
-//!    filters `content.body`/`content.excerpt` on every item, `render.footer` once
+//!    (published-only; a hit counts only if its URL equals the request path; a hit that
+//!    is the static front page is a cached 301 to `/`, keeping `?cpage=N`, M4-4 P67),
+//!    plugin filters `content.body`/`content.excerpt` on the page's item and its
+//!    listing's items, `render.footer` once
 //!    (template helper `footer()`), the head (core SEO + `render.head`), the template hierarchy, and `Renderer::render` on a blocking
 //!    thread with a store-backed `HelperBridge` (`Handle::block_on`). The page's
 //!    dependency keys are the reads', the plugin trace's, the renderer's,

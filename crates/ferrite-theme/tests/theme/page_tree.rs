@@ -30,6 +30,7 @@ fn tree(nodes: Vec<TreeNode>) -> ContentTree {
         kind: "page".into(),
         nodes,
         truncated: false,
+        media: Default::default(),
     }
 }
 

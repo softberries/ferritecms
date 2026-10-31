@@ -15,8 +15,13 @@ use crate::front::{FrontMatter, split_front_matter};
 pub const FORMAT: &str = "md1";
 /// The largest Markdown file an import reads (1 MiB).
 pub const MAX_FILE_BYTES: u64 = 1 << 20;
-/// The most Markdown files, and the most folders, one import walks.
+/// The most Markdown files, and the most folders holding pages, one import takes.
 pub const MAX_FILES: usize = 5000;
+/// The most bytes of Markdown one import reads in all (256 MiB): the sources stay in
+/// memory for the whole run (P78).
+pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
+/// The most folders one scan visits, with pages or without (P78).
+pub const MAX_VISITED_FOLDERS: usize = 50_000;
 /// The deepest folder a scan walks (the folder itself at depth 1): core's parent chain
 /// limit, so a file in the deepest folder still has a valid parent chain.
 pub const MAX_DEPTH: usize = 64;
@@ -416,8 +421,37 @@ fn percent_decode(s: &str) -> Option<String> {
 /// deeper than [`MAX_DEPTH`] are skipped and reported. A folder's page is its `index.md`
 /// (else `README.md`; both matched ignoring case), or a synthesized page when it has
 /// neither but holds pages; a folder without pages gets none. Fails when `dir` is not a
-/// readable folder, or holds more than [`MAX_FILES`] Markdown files or folders.
+/// readable folder, or holds more than [`MAX_FILES`] Markdown files or folders with
+/// pages, more than [`MAX_VISITED_FOLDERS`] folders in all, or Markdown files of more
+/// than [`MAX_TOTAL_BYTES`] in all (P78).
 pub fn scan(dir: &Path) -> Result<Scan, MdError> {
+    scan_with(dir, Limits::DEFAULT)
+}
+
+/// The scan's limits; tests use small ones.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// Markdown files.
+    files: usize,
+    /// Folders holding pages.
+    folders: usize,
+    /// Folders seen, with pages or without.
+    visited: usize,
+    /// Bytes of Markdown read in all.
+    total_bytes: u64,
+}
+
+impl Limits {
+    const DEFAULT: Limits = Limits {
+        files: MAX_FILES,
+        folders: MAX_FILES,
+        visited: MAX_VISITED_FOLDERS,
+        total_bytes: MAX_TOTAL_BYTES,
+    };
+}
+
+/// [`scan`] with `limits`.
+fn scan_with(dir: &Path, limits: Limits) -> Result<Scan, MdError> {
     let io = |source| MdError::Io {
         path: dir.to_path_buf(),
         source,
@@ -429,8 +463,11 @@ pub fn scan(dir: &Path) -> Result<Scan, MdError> {
         });
     }
     let mut w = Walker {
+        limits,
         files: 0,
         folders: 0,
+        visited: 0,
+        bytes: 0,
         scan: Scan::default(),
     };
     let entries = std::fs::read_dir(&root).map_err(io)?;
@@ -445,8 +482,14 @@ enum Entry {
 }
 
 struct Walker {
+    limits: Limits,
     files: usize,
+    /// Folders holding pages.
     folders: usize,
+    /// Folders seen.
+    visited: usize,
+    /// Bytes of Markdown read.
+    bytes: u64,
     scan: Scan,
 }
 
@@ -581,6 +624,16 @@ impl Walker {
                 });
             }
         }
+        // A folder holding pages (its own, or one further down) counts; an asset tree
+        // does not (P78).
+        if !root && self.scan.docs.len() > start {
+            self.folders += 1;
+            if self.folders > self.limits.folders {
+                return Err(MdError::TooManyFiles {
+                    limit: self.limits.folders,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -686,15 +739,21 @@ impl Walker {
                     });
                 }
             } else if meta.is_dir() {
-                self.folders += 1;
-                if self.folders > MAX_FILES {
-                    return Err(MdError::TooManyFiles { limit: MAX_FILES });
+                // Every folder counts here; only those holding pages count toward
+                // the folder limit (`folder`, P78).
+                self.visited += 1;
+                if self.visited > self.limits.visited {
+                    return Err(MdError::TooManyFolders {
+                        limit: self.limits.visited,
+                    });
                 }
                 out.push(Entry::Folder(name.to_owned()));
             } else if meta.is_file() && is_md {
                 self.files += 1;
-                if self.files > MAX_FILES {
-                    return Err(MdError::TooManyFiles { limit: MAX_FILES });
+                if self.files > self.limits.files {
+                    return Err(MdError::TooManyFiles {
+                        limit: self.limits.files,
+                    });
                 }
                 out.push(Entry::Md(name.to_owned()));
             } else if is_md {
@@ -731,6 +790,14 @@ impl Walker {
                 },
                 &mut self.scan,
             ));
+        }
+        // Every file read within the per-file limit counts, kept or skipped later: the
+        // kept ones stay in memory for the whole run (P78).
+        self.bytes = self.bytes.saturating_add(bytes.len() as u64);
+        if self.bytes > self.limits.total_bytes {
+            return Err(MdError::TooMuchText {
+                limit: self.limits.total_bytes,
+            });
         }
         let hash = file_hash(&bytes);
         let Ok(text) = String::from_utf8(bytes) else {
@@ -832,5 +899,94 @@ mod tests {
         );
         assert_eq!(title_from_name("żółw"), "Żółw");
         assert_eq!(title_from_name("01-"), "01");
+    }
+
+    fn limits() -> Limits {
+        Limits::DEFAULT
+    }
+
+    fn write(dir: &Path, rel: &str, body: &[u8]) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    /// P78: the files read add up; past the total cap the scan aborts, and the error
+    /// names the cap.
+    #[test]
+    fn sources_over_the_total_cap_abort_naming_it() {
+        assert_eq!(MAX_TOTAL_BYTES, 256 << 20);
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.md", b"123456");
+        write(dir.path(), "b.md", b"1234");
+        let at = |total_bytes| Limits {
+            total_bytes,
+            ..limits()
+        };
+        // Exactly at the cap: read.
+        assert_eq!(scan_with(dir.path(), at(10)).unwrap().docs.len(), 2);
+        write(dir.path(), "c.md", b"x");
+        let err = scan_with(dir.path(), at(10)).unwrap_err();
+        assert!(matches!(err, MdError::TooMuchText { limit: 10 }), "{err:?}");
+        let message = err.to_string();
+        assert!(message.contains("10 bytes"), "{message}");
+        // The real cap is named in MiB too.
+        let message = MdError::TooMuchText {
+            limit: MAX_TOTAL_BYTES,
+        }
+        .to_string();
+        assert!(message.contains("256 MiB"), "{message}");
+    }
+
+    /// P78: only folders that hold a page count toward the folder limit; asset trees
+    /// (no Markdown below them) do not.
+    #[test]
+    fn folders_without_pages_do_not_count() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..=MAX_FILES {
+            std::fs::create_dir_all(dir.path().join(format!("assets/{i}"))).unwrap();
+        }
+        write(dir.path(), "index.md", b"# Home");
+        let scanned = scan(dir.path()).unwrap();
+        assert_eq!(scanned.docs.len(), 1);
+        // Folders with pages (an index, a file, or a page further down) count.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a/index.md", b"");
+        write(dir.path(), "b/x.md", b"");
+        std::fs::create_dir_all(dir.path().join("empty")).unwrap();
+        let at = |folders| Limits {
+            folders,
+            ..limits()
+        };
+        assert_eq!(scan_with(dir.path(), at(2)).unwrap().docs.len(), 3);
+        write(dir.path(), "c/d/e.md", b"");
+        let err = scan_with(dir.path(), at(3)).unwrap_err();
+        assert!(matches!(err, MdError::TooManyFiles { limit: 3 }), "{err:?}");
+    }
+
+    /// P78: a folder tree with more folders than the visited cap aborts, pages or not,
+    /// with a message naming the cap and what to do.
+    #[test]
+    fn visited_folder_cap_aborts() {
+        assert_eq!(MAX_VISITED_FOLDERS, 50_000);
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..3 {
+            std::fs::create_dir_all(dir.path().join(format!("n/{i}"))).unwrap();
+        }
+        write(dir.path(), "index.md", b"");
+        let at = |visited| Limits {
+            visited,
+            ..limits()
+        };
+        // `n` and its three: four folders.
+        assert!(scan_with(dir.path(), at(4)).is_ok());
+        let err = scan_with(dir.path(), at(3)).unwrap_err();
+        assert!(
+            matches!(err, MdError::TooManyFolders { limit: 3 }),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("more than 3 folders"), "{message}");
+        assert!(message.contains("point the import at"), "{message}");
     }
 }

@@ -133,19 +133,30 @@ impl Keys {
     }
 }
 
-/// A fake `ferrite` binary: prints `ferrite <version>` for `--version`, and a marker line
-/// (exit 2, "pending") for `migrate status --data DIR`.
+/// A fake `ferrite` binary: prints `ferrite <version>` for `--version`, a marker line
+/// (exit 2, "pending") for `migrate status --data DIR`, and `ok` for `config check --data
+/// DIR`.
 fn script(version: &str) -> Vec<u8> {
     script_with(version, 2)
 }
 
 /// [`script`] whose `migrate status` exits with `migrate_exit`.
 fn script_with(version: &str, migrate_exit: u8) -> Vec<u8> {
+    script_full(version, migrate_exit, 0)
+}
+
+/// [`script_with`] whose `config check` exits with `config_exit` (a problem line on stderr
+/// when it is not 0).
+fn script_full(version: &str, migrate_exit: u8, config_exit: u8) -> Vec<u8> {
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = \"--version\" ]; then echo \"ferrite {version}\"; exit 0; fi\n\
          if [ \"$1\" = \"migrate\" ] && [ \"$2\" = \"status\" ]; then\n\
            echo \"FAKE MIGRATE STATUS {version} $4\"; exit {migrate_exit}\n\
+         fi\n\
+         if [ \"$1\" = \"config\" ] && [ \"$2\" = \"check\" ]; then\n\
+           if [ {config_exit} -eq 0 ]; then echo \"ok: FAKE CONFIG $4\"; exit 0; fi\n\
+           echo \"FAKE CONFIG PROBLEM unknown key server.tls\" >&2; exit {config_exit}\n\
          fi\n\
          exit 1\n"
     )
@@ -323,6 +334,65 @@ fn self_update_installs_and_keeps_prev() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     assert_eq!(std::fs::read(&install.exe).unwrap(), script(newer));
     assert_eq!(std::fs::read(install.prev()).unwrap(), script(NEW));
+    assert_eq!(install.entries(), vec!["ferrite", "ferrite.prev"]);
+}
+
+/// The asset `package.sh` makes (M4-4 P83: ustar, sorted members with a folder entry, owner
+/// 0, mtime 0, `gzip -n`) is what the reader unpacks: the folder entry is skipped and the
+/// binary installed with mode 0755.
+#[test]
+fn self_update_installs_an_archive_made_by_package_sh() {
+    let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let work = tempfile::tempdir().unwrap();
+    let binary = work.path().join("fake-ferrite");
+    std::fs::write(&binary, script(NEW)).unwrap();
+    let out_dir = work.path().join("dist");
+    let packed = std::process::Command::new("bash")
+        .current_dir(&root)
+        .arg(".github/scripts/package.sh")
+        .arg(NEW)
+        .arg(ferrite::binary_target())
+        .arg(&binary)
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    assert!(
+        packed.status.success(),
+        "package.sh failed:\n{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let name = asset_name(NEW);
+    let archive = std::fs::read(out_dir.join(&name)).unwrap();
+
+    // The archive really has the new layout: a folder entry first, then the files.
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive.as_slice()));
+    let kinds: Vec<_> = tar
+        .entries()
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.path().unwrap().to_string_lossy().into_owned(),
+                e.header().entry_type(),
+            )
+        })
+        .collect();
+    let dir = format!("ferrite-{NEW}-{}", ferrite::binary_target());
+    assert_eq!(kinds[0], (format!("{dir}/"), tar::EntryType::Directory));
+    assert!(kinds.iter().any(|(p, _)| p == &format!("{dir}/ferrite")));
+
+    server.publish(NEW, &signed(&keys, (name, archive)));
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.arg("--yes");
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(std::fs::read(&install.exe).unwrap(), script(NEW));
+    let mode = std::fs::metadata(&install.exe)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755);
     assert_eq!(install.entries(), vec!["ferrite", "ferrite.prev"]);
 }
 
@@ -608,7 +678,56 @@ fn self_update_shows_migrate_status_with_data() {
         "{}",
         text(&out)
     );
+    // P71: the config check ran first, for the same folder.
+    let config = stdout
+        .find(&format!("ok: FAKE CONFIG {}", data.path().display()))
+        .unwrap_or_else(|| panic!("{}", text(&out)));
+    assert!(config < stdout.find("FAKE MIGRATE STATUS").unwrap());
     assert_eq!(std::fs::read(&install.exe).unwrap(), script(NEW));
+}
+
+/// P71: with --data the new binary's `config check` runs first; a configuration it
+/// refuses (keys it does not know, an environment it cannot read) refuses the update with
+/// its output, and `--skip-config-check` goes on regardless.
+#[test]
+fn self_update_refuses_when_the_new_binary_rejects_the_config() {
+    let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
+    let asset = (asset_name(NEW), tarball(NEW, &script_full(NEW, 2, 1)));
+    server.publish(NEW, &signed(&keys, asset));
+    let data = tempfile::tempdir().unwrap();
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.arg("--yes").arg("--data").arg(data.path());
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        all.contains("FAKE CONFIG PROBLEM unknown key server.tls"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        all.contains("service") && all.contains("--skip-config-check"),
+        "{}",
+        text(&out)
+    );
+    assert!(!all.contains("FAKE MIGRATE STATUS"), "{}", text(&out));
+    install.assert_untouched(&out);
+
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.args(["--yes", "--skip-config-check", "--data"])
+        .arg(data.path());
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("FAKE MIGRATE STATUS"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(std::fs::read(&install.exe).unwrap(), script_full(NEW, 2, 1));
 }
 
 #[test]

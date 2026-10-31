@@ -19,7 +19,13 @@ MediaStore is configured. Only an active admin may import (`Capability::Import`,
 once when the run starts). The CLI exits 0 when done, 2 when done with refused redirects
 or missing or refused media, 3 when another import is running, 1 on any error; a run that
 failed after it started still writes its partial report (M3-2 P29). `--uploads` takes the
-uploads folder or a `.zip` of it, read in place (`ZipSource`, P24).
+uploads folder or a `.zip` of it, read in place (`ZipSource`, P24). Zip entries are
+matched by their path below the first `uploads/` segment in Unicode NFC; entries that
+match the same path (an NFC and an NFD spelling, or `uploads/2024/a.png` beside
+`2024/a.png`; an encrypted or unsupported entry counts too) are ambiguous: none of them
+is read, and an attachment naming that path is
+missing media, its note saying why (M4-4 P79). A zip that is cut short or otherwise not
+a zip is refused (`Archive`): the CLI exits 1, and the job fails for good, not retried.
 
 **Through the API (as built, M3-2; 07 §1).** The POST streams `wxr` (at most 512 MiB) and
 the optional `uploads` zip (at most 4 GiB) into the media store as `import` artifacts and
@@ -62,7 +68,18 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
 - Idempotent: `import_map(source, kind, wp_id → ferrite_id, hash, version)` in the site
   database (migration `0009_import`, both backends; kinds `user`, `term`, `media`,
   `content`, `comment`, `menu`, `option`, `redirect`) lets a re-run update instead of
-  duplicate. `source` is the normalised `<wp:base_blog_url>`. The hash covers what is
+  duplicate. `source` is the normalised `<wp:base_blog_url>`, which must be an `http(s)`
+  URL with a host, so a WXR never shares the map rows of a `markdown:<name>` source
+  (M4-4 P77). Any other non-empty value (an empty one is reported missing) fails the run before it starts (no run row, no report;
+  CLI exit 1, a permanent job failure) with `ImportError::Source`: "wp:base_blog_url
+  "<value>" is not an http(s) URL; set it to the old site's http:// or https:// address"
+  (the value cut to 200 characters). WordPress always exports an `http(s)` address, so
+  only a hand-made file hits this. A site that an earlier version imported from such a
+  file cannot re-run it as it is: once the file names the old `http(s)` address it is a
+  new source, so the earlier run's map rows are not used and posts, pages, media,
+  comments and menus come over again as new items (users and terms are matched as on any
+  import). The operator deletes what the earlier run made, or imports into a fresh site,
+  or keeps the earlier import and does not re-run it. The hash covers what is
   written (the converted item, the resolved menu, the option value). A re-run leaves an
   unchanged hash alone, updates an item still at the version the import left, and keeps
   (and reports) one edited here since (P4). Terms and comments are matched, not updated
@@ -74,8 +91,12 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
   write (P5); the step (`parse`, `pass1`…`pass4`, `fixup`, `report`) is written the same
   fenced way as each step begins, between batches (P28). A run is stale after 120 s
   without a heartbeat; the CLI takes one over only with `--takeover`, a job when the run
-  has no job, is its own, or its job is not `running` (R69), and an admin's POST abandons
-  it (R65). The `import` lock is best-effort.
+  has no job, is its own, or its job is not live: `running` with a lease that has not
+  expired (R69; M4-4 P80, so a job whose node died no longer blocks until the reaper
+  reclaims it), and an admin's POST abandons it (R65). The `import` lock is best-effort.
+  The job's log lines (`import.wordpress started`, `… done`, and the runner's `job
+  attempt failed`) carry the runner's `job` span: kind, id, attempt and the node that ran
+  it.
 - Transactions in batches of at most 500 items; each batch emits one `invalidate` event
   (`[all]` past 1 000 keys). Imported items get a revision and their search entry, no
   plugin actions (`post.saved`, `post.published`), and scheduled ones their
@@ -173,7 +194,9 @@ attempt did (P29). Contents:
   import scheduled that has since been published by its schedule counts as edited
   here too, because publishing bumps its version; M3-1 final review A2),
 - unknown blocks and shortcodes with counts and links to affected items,
-- missing media files,
+- missing media files (one that was found but could not be read, such as an ambiguous
+  uploads-zip path (§1, M4-4 P79) or an entry that inflates past its declared size, also
+  gets a note saying why),
 - meta keys kept but unmapped (top 50 by frequency), and ACF fields with no mapping,
 - users requiring password reset,
 - redirects made and refused, slugs core changed, `future` items already past,
@@ -205,7 +228,8 @@ pipeline above, but it shares the run and map rules:
 
 - **Run.** An import run of source `markdown:<NAME>` (`--source`, default the folder's
   name), started with `ImportService::start` under the same lock and fence as a WordPress
-  run, so exit 3 means another import is running (any source). It records no steps and has
+  run, so exit 3 means another import is running (any source). A WordPress run cannot take
+  this source (its source is always an `http(s)` URL, M4-4 P77). It records no steps and has
   no work file or report file: the report is printed.
 - **Map key.** `import_map.wp_id` is `map_id(s)`: the first 8 bytes of SHA-256 of a string
   `s` as a big-endian `i64`, masked to be non-negative. Kind `content` for a page: `s` is
@@ -293,3 +317,12 @@ pipeline above, but it shares the run and map rules:
   earlier run left it.
 - **Markdown.** GFM table column alignment (`|:--|--:|`) is dropped without a note: the
   editor's table cells have no alignment.
+- **Limits** (`crates/ferrite-import-md/src/scan.rs`; P62, M4-4 P78). The scan runs before
+  the run starts, so a limit that aborts writes nothing (exit 1, the message naming the
+  limit): more than 5000 Markdown files; more than 5000 folders that hold a page (an
+  index, a file, or a page further down; asset trees and `node_modules` do not count);
+  more than 50 000 folders found in all, with pages or without, those too deep to walk
+  included ("point the import at the folder of Markdown files"); more than 256 MiB of Markdown read in all (every file read
+  within the per-file limit counts: the kept sources stay in memory for the whole run). A
+  file over 1 MiB (`too-large`) and a folder deeper than 64 (`too-deep`) are skipped and
+  reported (exit 2).

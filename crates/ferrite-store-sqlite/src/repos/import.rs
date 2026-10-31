@@ -137,12 +137,14 @@ impl ImportRepo for SqliteRepos {
             "UPDATE import_runs SET state = 'abandoned', finished_at = ? \
              WHERE id = ? AND state = 'running' AND heartbeat_at < ? \
              AND (job_id IS NULL OR job_id = ? OR NOT EXISTS \
-             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running'))"
+             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running' \
+             AND (jobs.locked_until IS NULL OR jobs.locked_until >= ?)))"
         )
         .bind(now.as_micros())
         .bind(id.as_uuid())
         .bind(stale_before.as_micros())
         .bind(job.as_uuid())
+        .bind(now.as_micros())
         .execute(e))?;
         Ok(done.rows_affected() == 1)
     }

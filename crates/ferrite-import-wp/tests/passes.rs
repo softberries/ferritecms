@@ -700,6 +700,60 @@ pub async fn zip_source_entry_bomb_is_missing_not_fatal(db: &TestDb) {
     );
 }
 
+/// P79: a second entry with the same path below `uploads/` makes that path ambiguous:
+/// neither entry is read, the attachment is missing media with a note naming the
+/// reason, and the other three import.
+pub async fn zip_source_colliding_names_are_missing(db: &TestDb) {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("uploads.zip");
+    zip_dir(
+        &corpus("site-a-uploads"),
+        "wp-content/uploads/",
+        &archive,
+        None,
+    );
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&archive)
+        .unwrap();
+    let mut zip = zip::ZipWriter::new_append(file).unwrap();
+    zip.start_file(
+        "2026/10/square-two.png",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(b"another file").unwrap();
+    zip.finish().unwrap();
+    let site = site(db, Arc::new(ZipSource::open(&archive).unwrap())).await;
+    let report = run_until(&site, &corpus("site-a.xml"), "pass2").await;
+    assert_eq!(
+        counts(&report, "media"),
+        Counts {
+            created: 3,
+            skipped: 1,
+            ..Counts::default()
+        }
+    );
+    assert_eq!(
+        report.missing_media,
+        [MissingMedia {
+            wp_id: 6,
+            path: "2026/10/square-two.png".into(),
+            url: "http://localhost:8099/wp-content/uploads/2026/10/square-two.png".into(),
+        }]
+    );
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.contains("2026/10/square-two.png") && n.contains("more than one entry")),
+        "{:?}",
+        report.notes
+    );
+}
+
 /// A dry run of passes 1 and 2 writes nothing and still gets through both (later
 /// batches do not depend on rolled-back rows).
 pub async fn pass1_and_pass2_dry_run(db: &TestDb) {
@@ -1649,6 +1703,7 @@ backend_tests!(
     pass2_missing_file_is_reported,
     zip_source_resolves_uploads_paths,
     zip_source_entry_bomb_is_missing_not_fatal,
+    zip_source_colliding_names_are_missing,
     pass3_site_a,
     pass3_site_b,
     pass3_fixup_queue_survives_a_crash,

@@ -227,9 +227,10 @@ impl AuthService {
         }
     }
 
-    /// The site title now: the `site.title` option, else the configured one.
-    pub(super) async fn site_title(&self) -> Result<String, CoreError> {
-        crate::settings::site_title(self.store.as_ref(), &self.site_title).await
+    /// The site title now: the `site.title` option, else (also when it cannot be read)
+    /// the configured one.
+    pub(super) async fn site_title(&self) -> String {
+        crate::settings::site_title_or_configured(self.store.as_ref(), &self.site_title).await
     }
 
     /// The keyed hash of a full client address, as stored on sessions.
@@ -868,7 +869,7 @@ impl AuthService {
         }
         // The issuer is the site title now (P51): `:` removed, `FerriteCMS` when empty
         // (F11).
-        let issuer = totp::issuer_name(&self.site_title().await?);
+        let issuer = totp::issuer_name(&self.site_title().await);
         let secret = Zeroizing::new(random_bytes::<{ totp::SECRET_LEN }>()?);
         let otp = totp::build(secret.as_slice(), &issuer, &user.login)?;
         let otpauth_url = otp.to_url().map_err(|e| {

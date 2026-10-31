@@ -58,6 +58,11 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: cargo build --manifest-path plugins/Cargo.toml --release --target wasm32-wasip2
       - run: cargo clippy --manifest-path plugins/Cargo.toml --target wasm32-wasip2 -- -D warnings
+      # The plugins' own unit tests run on the host (M4-4 P84; `plugins/.cargo/config.toml`
+      # picks wasm32-wasip2 only inside `plugins/`): the shipped examples' (analytics,
+      # contact-form), and every member must compile for the host to get there.
+      - name: plugin unit tests (host)
+        run: cargo test --manifest-path plugins/Cargo.toml --workspace --locked
       - run: cargo test --workspace --no-fail-fast
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
@@ -252,7 +257,7 @@ jobs:
           systemd-analyze verify packaging/systemd/ferrite.service
           systemd-analyze security --offline=true packaging/systemd/ferrite.service || true
       - name: shell scripts (release, docs site build)
-        run: shellcheck .github/scripts/*.sh site/build.sh
+        run: shellcheck -x .github/scripts/*.sh site/build.sh
       # The release packs the example plugins at the workspace version (M4-3a P47), and
       # package-plugins.sh refuses a manifest with another one: a version bump has to move
       # the three manifests with the workspace version (09 §7). Caught here, not at the tag.
@@ -291,6 +296,18 @@ jobs:
             test -f "$RUNNER_TEMP/unpacked/$p/$p.wasm"
             test "$(find "$RUNNER_TEMP/unpacked/$p" -name '*.wasm' | wc -l)" -eq 1
           done
+      # The release archives are reproducible (M4-4 P83, repro-tar.sh): the same files give
+      # the same bytes. test-repro.sh packs both assets twice from fake inputs (other stage
+      # paths, mtimes and umask) and reads the members back; the real plugins asset is
+      # packed once more here and compared with the first.
+      - name: release archives are reproducible
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          .github/scripts/test-repro.sh
+          sleep 2
+          .github/scripts/package-plugins.sh "$version" "$RUNNER_TEMP/plugins-again" >/dev/null
+          cmp "$RUNNER_TEMP/plugins/ferrite-plugins-$version.tar.gz" "$RUNNER_TEMP/plugins-again/ferrite-plugins-$version.tar.gz"
+          sha256sum "$RUNNER_TEMP"/plugins*/ferrite-plugins-"$version".tar.gz
 
   # Backward compatibility (M4-2 P38; 02 §8, S5): the previous `v*` tag's binary must run
   # against a database migrated by this commit's binary, on SQLite and Postgres. Without

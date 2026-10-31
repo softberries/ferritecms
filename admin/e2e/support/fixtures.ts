@@ -35,6 +35,7 @@ import {
   type Scheme,
   type SnapOptions,
 } from "./snap";
+import { mediaFileName, ownMedia } from "./own-media";
 import { account, type Role } from "./users";
 import { cancelledInConsole, cancelledInPageError, type CancelledLoad } from "./webkit-cancelled";
 
@@ -60,23 +61,27 @@ export const TOAST_IN_TRANSITION =
  * handles (no results, the list read again) but the browser logs. Accepted in every test,
  * except a plugin's metrics in `plugins.spec.ts`, whose tests read the metrics of their own
  * plugins (`goneElsewhere`). A stored media file (`/_media/<sha256>/<name>`) is accepted only
- * in `media.spec.ts` and `editor-media.spec.ts`: the library and the media picker list every
- * item on the site, so a thumbnail of an image another test purged answers 404; elsewhere a
- * page shows only its own images, and a 404 there is a real failure.
+ * in `media.spec.ts` and `editor-media.spec.ts`, and only when it is not one this test
+ * uploaded (`own-media.ts`): the library and the media picker list every item on the site,
+ * so a thumbnail of an image another test purged answers 404; a 404 of the test's own file
+ * (or a variant of it) is a real failure. Elsewhere a page shows only its own images, and
+ * every 404 there is a real failure.
  */
 const GONE_ELSEWHERE = [
   /\/api\/v1\/content\/(?!(?:post|page|media|refs)(?:[/?]|$))[a-z][a-z0-9_-]*(?:\/counts)?(?:\?|$)/,
   /\/api\/v1\/taxonomies\/(?!(?:category|post_tag)\/)[a-z][a-z0-9_-]*\/terms(?:\?|$)/,
 ];
 const PLUGIN_METRICS = /\/api\/v1\/plugins\/[a-z0-9][a-z0-9_-]*\/metrics(?:\?|$)/;
-const MEDIA_FILE = /\/_media\/[0-9a-f]{64}\/[^/?#]+$/;
 
 /** The `GONE_ELSEWHERE` patterns for the spec file `file`. */
 const goneElsewhere = (file: string): RegExp[] => [
   ...GONE_ELSEWHERE,
   ...(/(?:^|[/\\])plugins\.spec\.ts$/.test(file) ? [] : [PLUGIN_METRICS]),
-  ...(/(?:^|[/\\])(?:editor-)?media\.spec\.ts$/.test(file) ? [MEDIA_FILE] : []),
 ];
+
+/** Whether the spec file `file` accepts a 404 of another test's stored media file. */
+const othersMediaMayGo = (file: string): boolean =>
+  /(?:^|[/\\])(?:editor-)?media\.spec\.ts$/.test(file);
 
 /**
  * What an engine reports when a navigation cancels a load still in flight, which Chromium
@@ -88,9 +93,11 @@ const goneElsewhere = (file: string): RegExp[] => [
  *   and a lazy module whose request was cancelled as "TypeError: Importing a module
  *   script failed." (both recognised by `webkit-cancelled.ts`). Each is accepted only when
  *   that page shows the cancellation within `CANCEL_WINDOW_MS`: for a fetch (of this
- *   site), its URL failed as cancelled or the page's main frame navigated (WebKit can
- *   cancel a fetch before Playwright sees its request: no `request` or `requestfailed`
- *   event, only the error just before the navigation commits); for an import, any
+ *   site), its URL failed as cancelled or the page's main frame sent a navigation request
+ *   (a `goto`, a reload, a link to another document; WebKit can cancel a fetch before
+ *   Playwright sees its request: no `request` or `requestfailed` event, only the error just
+ *   before the navigation commits). A same-document navigation (the SPA router's
+ *   `pushState`) sends no request, cancels nothing and excuses nothing. For an import, any
  *   script request failed as cancelled.
  */
 const CANCELLED_LOAD: Partial<Record<string, (text: string) => boolean>> = {
@@ -168,9 +175,12 @@ export const test = base.extend<Fixtures & Options>({
       const cancelled = CANCELLED_LOAD[browserName];
       const isCancelledLoad = (text: string) => cancelled?.(text) ?? false;
       const gone = goneElsewhere(testInfo.file);
+      const othersMedia = othersMediaMayGo(testInfo.file);
+      ownMedia.clear();
       const problems: string[] = [];
       // WebKit: errors that a cancelled request explains (`url` null: any script), the
-      // requests each page saw cancelled, and when each page's main frame navigated.
+      // requests each page saw cancelled, and when each page's main frame sent a
+      // navigation request.
       const pending: { page: Page; url: string | null; at: number; report: string }[] = [];
       const cancelledRequests = new Map<Page, { url: string; script: boolean; at: number }[]>();
       const navigations = new Map<Page, number[]>();
@@ -202,11 +212,23 @@ export const test = base.extend<Fixtures & Options>({
             const seen = { url: r.url(), script: r.resourceType() === "script", at: Date.now() };
             cancelledRequests.set(page, [...(cancelledRequests.get(page) ?? []), seen]);
           });
-          page.on("framenavigated", (frame) => {
-            if (frame !== page.mainFrame()) return;
+          // Document loads only: `framenavigated` also fires for the router's same-document
+          // navigations, which would excuse a real failure within the window.
+          page.on("request", (r) => {
+            if (!r.isNavigationRequest() || r.frame() !== page.mainFrame()) return;
             navigations.set(page, [...(navigations.get(page) ?? []), Date.now()]);
           });
         }
+        page.on("response", (r) => {
+          if (r.request().method() !== "POST" || r.status() !== 201) return;
+          if (new URL(r.url()).pathname !== "/api/v1/media") return;
+          r.json().then(
+            (m: { url?: unknown }) => {
+              if (typeof m.url === "string") ownMedia.note(m.url);
+            },
+            () => {},
+          );
+        });
         page.on("console", (msg) => {
           if (msg.type() !== "error") return;
           const text = msg.text();
@@ -223,7 +245,8 @@ export const test = base.extend<Fixtures & Options>({
           if (
             text.startsWith("Failed to load resource") &&
             text.includes("status of 404") &&
-            gone.some((re) => re.test(at.url))
+            (gone.some((re) => re.test(at.url)) ||
+              (othersMedia && mediaFileName(at.url) !== null && !ownMedia.isOwn(at.url)))
           ) {
             return;
           }

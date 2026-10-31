@@ -256,6 +256,17 @@ pub async fn site_title(store: &dyn Store, configured: &str) -> Result<String, C
     Ok(title_or(stored.as_ref().map(|e| &e.value), configured))
 }
 
+/// [`site_title`], or `configured` when the option read fails (logged at warn): what
+/// names the site in a mail (password reset, the test mail, plugin mail) or the TOTP
+/// issuer costs the stored title on a store hiccup, never the mail or the request
+/// (M4-4 P77).
+pub async fn site_title_or_configured(store: &dyn Store, configured: &str) -> String {
+    site_title(store, configured).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "site title unreadable; using the configured one");
+        configured.to_owned()
+    })
+}
+
 /// `stored` when it is a string with more than whitespace, else `configured`.
 fn title_or(stored: Option<&Value>, configured: &str) -> String {
     stored

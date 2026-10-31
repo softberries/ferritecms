@@ -27,7 +27,7 @@
 //! `InvalidField { field: "fields", .. }` whose message names the path, such as
 //! `fields.chapters[2].title: required`. The items are not looked up here (one may be
 //! deleted later anyway): content writes check the type of each item a relation with
-//! `types` names ([`relation_refs`]), and a missing item is accepted.
+//! `types` names ([`relation_refs`]); a missing or unreadable item is accepted (P77).
 
 use ferrite_domain::{ContentId, MEDIA_KIND};
 use serde::{Deserialize, Serialize};

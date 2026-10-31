@@ -361,8 +361,14 @@ impl State {
 
     /// Checks the payload version and spawns the handler, or settles the job at once.
     async fn start(&mut self, job: Job, claimed_at: Instant) {
-        let span =
-            tracing::info_span!("job", kind = %job.kind, id = %job.id, attempt = job.attempts);
+        // The node too: the job row clears `locked_by` once the job is over.
+        let span = tracing::info_span!(
+            "job",
+            kind = %job.kind,
+            id = %job.id,
+            attempt = job.attempts,
+            node = %self.runner.config.node,
+        );
         let Some(lease) = job.lease() else {
             tracing::warn!(parent: &span, "claimed job has no lease; skipped");
             return;

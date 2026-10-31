@@ -167,8 +167,8 @@ pub fn is_break_like(c: char) -> bool {
     c.is_control() || c == '\u{2028}' || c == '\u{2029}'
 }
 
-/// 3 to 254 characters, exactly one `@` with something on each side, and no whitespace or
-/// control character.
+/// 3 to 254 characters, exactly one `@` with something on each side, and no whitespace,
+/// control or format (Cf, [`is_format`]) character.
 fn valid_email(s: &str) -> bool {
     let len = s.chars().count();
     let Some((local, domain)) = s.split_once('@') else {
@@ -178,7 +178,9 @@ fn valid_email(s: &str) -> bool {
         && !local.is_empty()
         && !domain.is_empty()
         && !domain.contains('@')
-        && !s.chars().any(|c| c.is_whitespace() || is_break_like(c))
+        && !s
+            .chars()
+            .any(|c| c.is_whitespace() || is_break_like(c) || is_format(c))
 }
 
 /// `ret` when it is a path on this site: it starts with `/`, not `//`, and holds only
@@ -270,6 +272,23 @@ mod tests {
         }
         for bad in ["ab", "@b.test", "a@", "a@b@c", "a b@c", "a\u{85}@b"] {
             assert!(!valid_email(bad), "{bad}");
+        }
+    }
+
+    /// A format (Cf) character hides in an address and can reorder how it shows (an
+    /// RTL override in the inbox or a reply's `To:`): refused, ZWNJ/ZWJ too.
+    #[test]
+    fn valid_email_refuses_format_characters() {
+        for bad in [
+            "a\u{200B}@b.test",
+            "a\u{202E}@b.test",
+            "a@b\u{AD}.test",
+            "a\u{200C}@b.test",
+            "a\u{200D}@b.test",
+            "\u{FEFF}a@b.test",
+            "a@b.test\u{2066}",
+        ] {
+            assert!(!valid_email(bad), "{bad:?}");
         }
     }
 

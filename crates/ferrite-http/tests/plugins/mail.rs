@@ -13,6 +13,7 @@ use ferrite_http::{
     PluginReloader, PluginRequest, RenderTrace, StoreHostServices, mail::SmtpMailer,
 };
 use ferrite_plugin_host::{ActionEvent, HostConfig, PluginHost};
+use ferrite_store_tests::FailingOptionsStore;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
@@ -24,6 +25,7 @@ profile_tests!(
     notifier_cuts_long_titles,
     site_title_prefix_is_bounded,
     site_title_prefix_follows_the_option,
+    site_title_prefix_falls_back_when_the_read_fails,
     mail_flood_is_capped,
     mail_header_injection_is_refused,
     mail_refused_on_render_path,
@@ -63,7 +65,13 @@ pub(crate) fn mail_services(
 /// [`mail_host`] with `title` as the configured site title.
 async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
     let (services, mailer) = mail_services(site, title);
-    let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
+    // A 5 s render deadline: no test here is about deadlines, and the render-path case
+    // asserts what the plugin returned (`with_generous_deadlines`).
+    let config = HostConfig {
+        render_deadline: Duration::from_secs(5),
+        ..HostConfig::default()
+    };
+    let host = Arc::new(PluginHost::new(config, services).unwrap());
     site.install(name).await;
     let report = PluginReloader::new(site.store.clone(), site.media.clone(), host.clone())
         .reload()
@@ -218,6 +226,39 @@ async fn site_title_prefix_follows_the_option(site: Site) -> Site {
         .unwrap();
     let sent = m.mailer.wait_for(2, WAIT).await;
     assert_eq!(sent[1].subject, format!("[{MAIL_SITE_TITLE}] Two"));
+    site
+}
+
+/// P77: a failed `site.title` read costs the stored title, not the mail: the prefix is
+/// the configured title.
+async fn site_title_prefix_falls_back_when_the_read_fails(site: Site) -> Site {
+    site.user("root", Role::Admin).await;
+    site.store
+        .read()
+        .options()
+        .set("site.title", &serde_json::json!("Night Owl"), true)
+        .await
+        .unwrap();
+    let failing: Arc<dyn ferrite_store::Store> =
+        Arc::new(FailingOptionsStore::new(site.store.clone(), "site.title"));
+    let mailer = Arc::new(MemoryMailer::new());
+    let services = Arc::new(
+        StoreHostServices::new(failing, site.reader.clone(), SITE_URL)
+            .with_site_title(MAIL_SITE_TITLE.to_owned())
+            .with_mailer(Arc::new(MailQueue::new(mailer.clone()))),
+    );
+    let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
+    site.install("mail-flood").await;
+    PluginReloader::new(site.store.clone(), site.media.clone(), host.clone())
+        .reload()
+        .await
+        .unwrap();
+    host.dispatch_action("mail-flood", "post.published", event("One"))
+        .await
+        .unwrap();
+    let sent = mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].subject, format!("[{MAIL_SITE_TITLE}] One"));
     site
 }
 

@@ -65,12 +65,7 @@ export function RowActions({ type, item, onOpen, onAction }: RowActionsProps) {
       {hasMenu ? (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="pointer-coarse:size-control"
-              aria-label={t("row.menu", { title })}
-            >
+            <Button variant="ghost" size="icon-sm" aria-label={t("row.menu", { title })}>
               <MoreHorizontalIcon />
             </Button>
           </DropdownMenuTrigger>

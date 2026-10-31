@@ -114,10 +114,13 @@ function localDay(t: number): number {
  * The 7-day chart's day ticks: each bucket whose local date differs from the previous
  * bucket's, i.e. the bucket that holds a local midnight. Buckets start on whole UTC hours,
  * so in a zone with a half-hour offset (India, +5:30) no bucket starts at midnight: the
- * tick is the 00:30 bucket, labelled with its (new) day.
+ * tick is the 00:30 bucket, labelled with its (new) day. The first bucket has no previous
+ * one: it is a tick when it starts exactly at a local midnight (then it holds it).
  */
 export function dayTicks(rows: readonly MetricPoint[]): number[] {
   const ticks: number[] = [];
+  const first = rows[0];
+  if (first && localDay(first.t) === first.t) ticks.push(first.t);
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1];
     const row = rows[i];

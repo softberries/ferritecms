@@ -305,6 +305,181 @@ fn status_on_missing_database_creates_nothing() {
     assert_eq!(std::fs::read_dir(&data).expect("readdir").count(), 0);
 }
 
+/// P70: a `rollback --restore-snapshot` killed between moving `ferrite.db` aside and
+/// renaming the staged copy into place leaves only `ferrite.db.restore-<ts>.tmp`. Opening
+/// the store then refuses (naming the file and the `mv` that finishes the restore) instead
+/// of creating an empty database that `serve` would migrate and serve.
+#[test]
+fn serve_refuses_when_only_a_restore_tmp_is_left() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let db = data.join("ferrite.db");
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::rename(&db, &staged).expect("stage");
+    let aside = data.join("backups").join("rolled-back-20260101T000000Z.db");
+    std::fs::write(&aside, b"the database that was current").expect("aside");
+
+    let mut serve = ferrite();
+    serve
+        .env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
+        .args(["serve", "--data"])
+        .arg(&data)
+        .timeout(std::time::Duration::from_secs(60));
+    let out = serve.assert().code(1).get_output().clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(
+        err.contains(&format!("mv {} {}", staged.display(), db.display())),
+        "{err}"
+    );
+    assert!(err.contains(&aside.display().to_string()), "{err}");
+    assert!(!db.exists(), "no empty database may be created");
+    // The other commands that may create the database refuse too.
+    ferrite()
+        .args(["migrate", "up", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1);
+    assert!(!db.exists());
+    assert!(staged.is_file());
+}
+
+/// P70: a staged copy left beside a database that is still in place (a run killed before
+/// it moved anything) only warns.
+#[test]
+fn a_leftover_restore_tmp_beside_the_db_only_warns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("WARN"), "{err}");
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(staged.is_file(), "the leftover is not deleted");
+}
+
+/// M4-4 R-c2 (amends P70): a run killed after it moved `ferrite.db-wal` (and `-shm`) into
+/// `backups/` but before it moved `ferrite.db` leaves the database in place without its
+/// WAL. Opening it would lose the transactions committed there, so it refuses and names the
+/// `mv` that puts each file back; likewise when the kill came inside the database's own
+/// move (`rolled-back-<ts>.db` is a second name of `ferrite.db`).
+#[test]
+fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let db = data.join("ferrite.db");
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(&db, &staged).expect("copy");
+    let backups = data.join("backups");
+    let wal = backups.join("rolled-back-20260101T000000Z.db-wal");
+    let shm = backups.join("rolled-back-20260101T000000Z.db-shm");
+    // `init` leaves its schema in the WAL (the database file alone is an empty page), the
+    // very state a killed run loses: move both side files as `replace_db` does.
+    let (db_wal, db_shm) = (data.join("ferrite.db-wal"), data.join("ferrite.db-shm"));
+    assert!(db_wal.is_file() && db_shm.is_file(), "init left a WAL");
+    std::fs::rename(&db_wal, &wal).expect("move wal");
+    std::fs::rename(&db_shm, &shm).expect("move shm");
+    let refused = |extra: &[&str]| {
+        let out = ferrite()
+            .args(["migrate", "status", "--data"])
+            .arg(&data)
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        for want in [
+            format!("mv {} {}-wal", wal.display(), db.display()),
+            format!("mv {} {}-shm", shm.display(), db.display()),
+            staged.display().to_string(),
+        ] {
+            assert!(err.contains(&want), "{want}: {err}");
+        }
+        for want in extra {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+        // Nothing was opened: no WAL was created beside the database.
+        assert!(!db_wal.exists(), "{err}");
+    };
+    refused(&[]);
+
+    // Fix round 3: while another process holds the folder lock (a rollback still moving
+    // its files), the files are in flight, not leftovers: "in use", and no advice.
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(data.join("ferrite.lock"))
+        .expect("lock file");
+    lock.try_lock().expect("lock");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .output()
+        .expect("run");
+    drop(lock);
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("in use") && !err.contains("mv "), "{err}");
+
+    // Killed inside the database's own move: the link exists, the source was not unlinked.
+    let aside = backups.join("rolled-back-20260101T000000Z.db");
+    std::fs::hard_link(&db, &aside).expect("link");
+    let rm = format!("rm {}", aside.display());
+    refused(&[&rm]);
+
+    // The steps the message gives: the site opens again with everything its WAL held.
+    std::fs::rename(&wal, &db_wal).expect("mv wal back");
+    std::fs::rename(&shm, &db_shm).expect("mv shm back");
+    std::fs::remove_file(&aside).expect("rm aside");
+    std::fs::remove_file(&staged).expect("rm tmp");
+    let out = stdout_code(
+        {
+            let mut c = ferrite();
+            c.args(["migrate", "status", "--data"]).arg(&data);
+            c
+        },
+        0,
+    );
+    assert!(out.contains("database version: 12"), "{out}");
+}
+
+/// M4-4 fix round 2 (Minor A): killed inside the `-wal` move (the link made, the source not
+/// yet unlinked), nothing is missing beside the database, so the open only warns, and the
+/// warning names the `rm` of the second name too.
+#[cfg(unix)]
+#[test]
+fn a_restore_tmp_with_a_linked_wal_warns_with_the_rm() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let link = data
+        .join("backups")
+        .join("rolled-back-20260101T000000Z.db-wal");
+    std::fs::hard_link(data.join("ferrite.db-wal"), &link).expect("link");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(err.contains(&format!("rm {}", link.display())), "{err}");
+}
+
 #[test]
 fn init_refuses_existing_database_untouched() {
     let tmp = tempfile::tempdir().expect("tempdir");

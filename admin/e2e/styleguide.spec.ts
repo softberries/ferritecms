@@ -128,6 +128,50 @@ test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
     await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
     const button = page.getByRole("button", { name: "Save", exact: true });
     expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBe(44);
+    // The small icon sizes too (`icon-sm` 28 px, `icon-xs` 24 px on a fine pointer).
+    await page.goto("/admin/_styleguide?section=controls");
+    for (const name of ["More actions", "Dismiss"]) {
+      const icon = page.getByRole("button", { name, exact: true });
+      const box = await icon.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { width: r.width, height: r.height };
+      });
+      expect(box, name).toEqual({ width: 44, height: 44 });
+    }
+    // A field's own icon button (`InputGroupButton` icon-xs, 24 px on a fine pointer):
+    // 44 px wide, the field's inner height, and a pseudo-element over the border rows,
+    // so a finger hits 44 × 44 inside the field (the content list's clear button).
+    await page.goto("/admin/content/post");
+    await page.getByRole("searchbox").fill("zz");
+    const clear = page.getByRole("button", { name: "Clear search" });
+    await expect(clear).toBeVisible();
+    const probe = await clear.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const field = el.closest("[data-slot=input-group]")!.getBoundingClientRect();
+      // The hit area: the button's width, the field's full height.
+      const [left, right, top, bottom] = [r.left, r.right, field.top, field.bottom];
+      const hits = [
+        [left + 1, top + 0.5],
+        [right - 1, top + 0.5],
+        [left + 1, bottom - 0.5],
+        [right - 1, bottom - 0.5],
+      ].map(([x, y]) => {
+        const hit = document.elementFromPoint(x!, y!);
+        return hit === el || el.contains(hit);
+      });
+      return {
+        hits,
+        width: Math.round(right - left),
+        height: Math.round(bottom - top),
+        insideField: right <= field.right && left >= field.left,
+      };
+    });
+    expect(probe).toEqual({
+      hits: [true, true, true, true],
+      width: 44,
+      height: 44,
+      insideField: true,
+    });
   } finally {
     await ctx.close();
   }

@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LAYOUT_SPRING, MOTION } from "@/design/tokens";
+import { StaleBar } from "./stale-bar";
 import {
   dataTableFeatures,
   type DataTableColumn,
@@ -42,6 +43,12 @@ export interface DataTableProps<T extends RowData> {
   /** Cells sit at the row's middle (default) or top (tall rows of text). */
   align?: "middle" | "top";
   loading: boolean;
+  /**
+   * The rows are the previous answer while the next loads (a new filter or page): they
+   * stay at full colour, the table is `aria-busy` and a `StaleBar` runs along the frame's
+   * top (M4-4 R-c3).
+   */
+  stale?: boolean;
   /** Shown in place of the rows when `data` is empty (usually an `EmptyState`). */
   empty: ReactNode;
   /** Actions shown at the end of a row on hover or focus. */
@@ -75,6 +82,7 @@ export function DataTable<T extends RowData>({
   openOnClick = true,
   align = "middle",
   loading,
+  stale = false,
   empty,
   rowActions,
   columnClassName,
@@ -213,9 +221,10 @@ export function DataTable<T extends RowData>({
         className,
       )}
     >
+      {stale ? <StaleBar position="sticky" /> : null}
       <table
         aria-label={label}
-        aria-busy={loading || undefined}
+        aria-busy={loading || stale || undefined}
         className="w-full caption-bottom border-separate border-spacing-0 text-base"
       >
         {/* No header over an empty state: a lone "select all" and column names over

@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import type { MediaDto } from "@/api/media";
 import type { RowSelectionState } from "@/components/kit/data-table-features";
 import { MediaThumb } from "@/components/kit/media-thumb";
+import { StaleBar } from "@/components/kit/stale-bar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LAYOUT_SPRING, MOTION } from "@/design/tokens";
 import { dimensions, displayTitle, typeLabel } from "./format";
@@ -33,6 +34,11 @@ export interface MediaGridProps {
   /** The grid's accessible name. */
   label: string;
   loading: boolean;
+  /**
+   * The tiles are the previous answer while the next loads: they keep full colour, the
+   * grid is `aria-busy` and a `StaleBar` holds below the top bar (M4-4 R-c3).
+   */
+  stale?: boolean;
   empty: ReactNode;
   footer?: ReactNode;
   selection: { state: RowSelectionState; onChange: (next: RowSelectionState) => void };
@@ -46,6 +52,7 @@ export function MediaGrid({
   items,
   label,
   loading,
+  stale = false,
   empty,
   footer,
   selection,
@@ -139,7 +146,12 @@ export function MediaGrid({
   if (items.length === 0) return <div className={className}>{empty}</div>;
 
   return (
-    <div data-slot="media-grid" className={cn("flex flex-col gap-4", className)}>
+    <div
+      data-slot="media-grid"
+      aria-busy={stale || undefined}
+      className={cn("flex flex-col gap-4", className)}
+    >
+      {stale ? <StaleBar position="sticky" className="top-(--sticky-top) -mb-4" /> : null}
       <p id={hintId} className="sr-only">
         {t("grid.hint")}
       </p>

@@ -83,8 +83,24 @@ is done too (`m4-3b-exit.md`), so M4-3 is done (`m4-3-exit.md`): heading ids and
 import markdown` (crate `ferrite-import-md`), code blocks as `<pre tabindex="0">`, the docs
 site in `site/` (Markdown, `build.sh`, `VERIFIED.md`, the `docs_site` test) and axe checks
 on the three starter themes (Playwright project `public-themes-chromium`); no migration.
-Hosting the docs site is the user's decision. Next is M4-4 (the follow-up lists, including
-"Deferred from M4-3b"). Work top-down in
+Hosting the docs site is the user's decision. M4-4 (the follow-up lists) is done too
+(`m4-4-exit.md`), so M4 is done (`m4-exit.md`): restore exits 2 when its final check fails
+and refuses a media root inside the folder it replaces, restored `site.backup` rows are
+settled, the SQLite open refuses an interrupted `--restore-snapshot`'s leftovers (P70,
+R-c2), `self-update --data` runs the new binary's `config check`, `rollback --schema` on
+Postgres refuses live nodes, `--restore-snapshot` checks the snapshot's schema, `media gc`
+exits 2 for a refused store or a failed delete, `artifacts.gc` runs at 03:00 UTC; the front
+page's permalink answers 301 to `/` (the sitemap, the tree and menus name it `/`), `srcset`
+keeps one shape, tree card images skip the bridge budget; `ContentRepo::file_bounds` for the
+sitemaps; blank `q` is no filter, unreadable relations and parents count as missing, mail
+falls back to the configured title, WordPress sources must be http(s), `build_s3` keeps the
+environment's client options; the Markdown import's byte and folder caps, NFC-colliding zip
+entries reported missing, an expired lease no longer keeps an import run live; the admin's
+44 px touch icons, the popup edge, stale states at full contrast (P81, R-c3), SEO counting by
+code points; the test flakes fixed (SQLite `close()` now releases `ferrite.lock`);
+reproducible release archives (`repro-tar.sh`); no migration. Next: the develop→main pull
+request (the user decides) and the release gate, both under "Before v0.1.0" in the
+roadmap; the other open follow-ups are under "Later". Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
 `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`).
 
@@ -121,12 +137,12 @@ marker), `ferrite-plugin-host` (grants, permission report;
 prune jobs incl. `node_metrics.prune`) -> `ferrite-store` (traits; `catalogue`, `export`
 reader and `import_writer` for the portable copies; `NodeMetricsRepo`, `node_metrics` skipped
 by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
-`ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
+`ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite, `CountingStore`, `window::in_one_window`, `FailingOptionsStore`);
 `ferrite-domain` (types; `metrics`: counts, series buckets, page p95), `ferrite-config`,
 `ferrite-sdk` (guest SDK; M4-3a: `form`, `html::escape`, `options`, `settings`, `time`,
 `mail`, `viewers::allow`, `route::html`, `Head` additions; helpers used by module path).
 Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/{ci,release}.yml` and
-`.github/scripts/` (package, package-plugins, sums, verify-sig, newest, compat). Starter
+`.github/scripts/` (package, package-plugins, repro-tar, test-repro, sums, verify-sig, newest, compat). Starter
 themes (embedded): `themes/blog`, `themes/docs` (page-tree sidebar, TOC, pager) and
 `themes/business` (hero, feature cards, contact form). Plugins: `plugins/examples/` (own
 workspace, built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
@@ -219,9 +235,11 @@ holds `secret.key`), `ferrite import-site ARCHIVE|- --data DIR [--with-media]` (
 [--to-schema S]` (`postgres://…` or `sqlite:<path>`; 0, 3, 1; copies no media), `ferrite
 backup --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]`
 (SQLite only; 0, 2 artifacts missing, 3 newer repository, 1), `ferrite restore SOURCE --data
-DIR [--snapshot NAME] [--force]` (0, 3, 1), `ferrite media sync --to STORE (--from STORE |
+DIR [--snapshot NAME] [--force]` (0, 2 restored but the check afterwards failed, 3, 1),
+`ferrite media sync --to STORE (--from STORE |
 --data DIR)` (`local:PATH` or `s3://bucket[/prefix]`, `AWS_*` env; 0, 2 some failed, 1),
-`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 3 lock held, 1),
+`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 2 store refused or a
+delete failed, 3 lock held, 1),
 `ferrite media regenerate --data DIR [--all] [--item ID]` (0, 2 some failed, 1). A running
 SQLite site is backed up by `[backup] schedule = "daily"|"weekly"`, `to` (a folder outside
 the data folder, or `s3://`), `keep`, `with_media` (the `site.backup` job; on Postgres it
@@ -231,7 +249,7 @@ each database has an install id (`schema_meta.install_id`; `restore`, `import-si
 copy` give the copy its own), and the GC deletes only from a store whose
 `ferrite-owner.json` names it (`media gc --claim` after a restore in place).
 Update and roll back (09 §1–§2, runbook `docs/operations/solo-upgrade.md`): `ferrite
-self-update [--version X] [--check] [--yes] [--data DIR]` (0 updated or up to date, 2 newer
+self-update [--version X] [--check] [--yes] [--data DIR [--skip-config-check]]` (0 updated or up to date, 2 newer
 release with `--check`, 1 error; clap usage errors are 2 too; a repository build has no
 release key and refuses), `ferrite rollback [--data DIR] [--schema] [--allow-lossy]
 [--restore-snapshot] [--yes]` (0, 3 the kept binary cannot open the schema, 1; `--schema`

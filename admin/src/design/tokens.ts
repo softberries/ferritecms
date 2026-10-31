@@ -19,6 +19,7 @@ export const TOKENS = {
     "accent",
     "accent-foreground",
     "border",
+    "popover-edge",
     "input",
     "ring",
     "overlay",

@@ -34,7 +34,10 @@ ferrite self-update --data ./mysite
    running binary, then the download against `SHA256SUMS`. Any mismatch stops here with
    nothing changed.
 3. The new binary must report the release's version. With `--data` it also runs its
-   `migrate status` on the site; exit 3 (it cannot run this schema) stops the update.
+   `config check` on the site: a setting the new release refuses stops the update (fix
+   it first; `--skip-config-check` goes on when only the service's environment has what
+   the check lacks). Then its `migrate status`; exit 3 (it cannot run this schema) stops
+   the update.
 4. After you confirm (`--yes` skips the question and is required without a terminal),
    the running binary is copied to `ferrite.prev` next to it and the new one takes its
    place.
@@ -94,7 +97,8 @@ ferrite rollback --schema --data ./mysite
 ```
 
 It runs the down migrations to `schema_from`. A step that would lose data needs
-`--allow-lossy`.
+`--allow-lossy`. On Postgres it refuses while a node is still running (a heartbeat in the
+last 30 seconds), and names it.
 
 On SQLite you can instead put the pre-upgrade snapshot back:
 
@@ -104,8 +108,11 @@ ferrite rollback --schema --restore-snapshot --data ./mysite
 
 **Everything written since the upgrade is lost.** It asks first (`--yes` without a
 terminal), and moves the current database to `<data>/backups/rolled-back-<time>.db`
-rather than deleting it. `--restore-snapshot` works on SQLite only; on Postgres use the
-provider's point-in-time recovery, then roll the binary back.
+rather than deleting it. The snapshot must be at the schema the upgrade started from;
+another one is refused. If the run is interrupted before the copy is in place, `serve`
+refuses to start and names the `mv` that finishes it. `--restore-snapshot` works on
+SQLite only; on Postgres use the provider's point-in-time recovery, then roll the binary
+back.
 
 `rollback` exits 0 when done, 3 when the previous binary cannot open the schema, and 1 on
 any other error. It goes back one step only; for anything older, restore a backup.

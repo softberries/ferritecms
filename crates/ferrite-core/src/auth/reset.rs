@@ -100,7 +100,7 @@ impl AuthService {
         else {
             return Ok(());
         };
-        let site_title = self.site_title().await?;
+        let site_title = self.site_title().await;
         let mail = match self.reset_mail(&user, reset_base, &site_title) {
             Ok(mail) => mail,
             Err(e) => {

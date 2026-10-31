@@ -32,7 +32,7 @@ use ferrite_store::{
     TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
-    TestDb, auth::align_to_window, backend_tests_spawning, fixtures::fixture_user,
+    TestDb, backend_tests_spawning, fixtures::fixture_user, window::in_one_window,
 };
 use serde_json::json;
 use tokio::time::Instant;
@@ -921,6 +921,44 @@ pub async fn runner_shutdown_releases_in_flight(db: Arc<TestDb>) {
     );
 }
 
+/// A periodic whose offset is not below its period is refused when the scheduler is built
+/// (in release builds too), not shifted into a later period under this period's key.
+pub async fn scheduler_refuses_an_offset_past_its_period(db: Arc<TestDb>) {
+    let periodic = |offset| Periodic {
+        kind: "test.tick",
+        every: Duration::from_secs(60),
+        payload: json!({"v": 1}),
+        max_attempts: 3,
+        offset,
+    };
+    let tick = Duration::from_secs(10);
+    for offset in [Duration::from_secs(60), Duration::from_secs(3600)] {
+        let err = Scheduler::new(db.shared_store(), vec![periodic(offset)], tick)
+            .err()
+            .expect("refused");
+        assert!(
+            matches!(
+                &err,
+                ClusterError::PeriodicOffset {
+                    kind: "test.tick",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+    // The last second of the period is fine, and one bad periodic among good ones is
+    // still refused.
+    Scheduler::new(
+        db.shared_store(),
+        vec![periodic(Duration::from_secs(59))],
+        tick,
+    )
+    .unwrap();
+    let mixed = vec![periodic(Duration::ZERO), periodic(Duration::from_secs(61))];
+    assert!(Scheduler::new(db.shared_store(), mixed, tick).is_err());
+}
+
 pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
     let first = db.shared_store();
     let second = other_node_store(&db).await;
@@ -930,12 +968,17 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
         payload: json!({"v": 1}),
         // Not the default (5): the inserted jobs must carry the periodic's own value.
         max_attempts: 3,
+        offset: Duration::ZERO,
     };
     let stop = CancellationToken::new();
     let start_now = first.read().nodes().db_now().await.unwrap();
     let tick = Duration::from_millis(100);
-    let a = Scheduler::new(first.clone(), vec![periodic.clone()], tick).spawn(stop.clone());
-    let b = Scheduler::new(second, vec![periodic], tick).spawn(stop.clone());
+    let a = Scheduler::new(first.clone(), vec![periodic.clone()], tick)
+        .unwrap()
+        .spawn(stop.clone());
+    let b = Scheduler::new(second, vec![periodic], tick)
+        .unwrap()
+        .spawn(stop.clone());
     tokio::time::sleep(Duration::from_millis(3200)).await;
     stop.cancel();
     a.await.unwrap();
@@ -1104,6 +1147,7 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
 
     let stop = CancellationToken::new();
     let scheduler = Scheduler::new(store.clone(), builtin::periodics(), Duration::from_secs(10))
+        .unwrap()
         .spawn(stop.clone());
     let runner = JobRunner::new(
         store.clone(),
@@ -1270,12 +1314,6 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
 
     let limits = repos.rate_limits();
     let minute = Duration::from_secs(60);
-    // Both fresh hits must share one window (F10): at least 30 s of it left.
-    align_to_window(store.as_ref(), minute, Duration::from_secs(30)).await;
-    limits.hit("login:ip:old", minute).await.unwrap();
-    limits.hit("login:ip:fresh", minute).await.unwrap();
-    backdate_bucket(&db, "login:ip:old", 2).await;
-
     let handler = builtin::handlers(store.clone(), builtin::MIN_FAILURE_RETENTION)
         .into_iter()
         .find(|h| h.kind() == "sessions.prune")
@@ -1291,38 +1329,56 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
         NewJob::new("sessions.prune", json!({"v": 1})),
     )
     .await;
-    handler.run(&get(store.as_ref(), id).await).await.unwrap();
 
-    let ids: Vec<String> = sessions
-        .list_for_user(user.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|s| s.id_hash)
-        .collect();
-    assert_eq!(ids, ["fresh"]);
-    let mut hashes: Vec<String> = tokens
-        .list_for_user(user.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|t| t.token_hash)
-        .collect();
-    hashes.sort();
-    assert_eq!(hashes, ["ahead", "forever"]);
-    assert_eq!(
-        limits.hit("login:ip:fresh", minute).await.unwrap().count,
-        2,
-        "the current window survived"
-    );
-    // The old row is gone: nothing older than the cut remains to prune.
-    assert_eq!(
-        limits
-            .prune(ago(builtin::RATE_LIMIT_RETENTION), 10)
-            .await
-            .unwrap(),
-        0
-    );
+    // Both fresh hits and the last one must share one window (F10): at least 30 s of it
+    // left, and a run again in the next window when it rolled over (the prune is
+    // idempotent; the hits start over in the new window).
+    let (db, store, limits, handler, sessions, tokens, user) =
+        (&db, &store, &limits, &handler, &sessions, &tokens, &user);
+    in_one_window(
+        store.as_ref(),
+        minute,
+        Duration::from_secs(30),
+        |_| async move {
+            limits.hit("login:ip:old", minute).await.unwrap();
+            limits.hit("login:ip:fresh", minute).await.unwrap();
+            backdate_bucket(db, "login:ip:old", 2).await;
+
+            handler.run(&get(store.as_ref(), id).await).await.unwrap();
+
+            let ids: Vec<String> = sessions
+                .list_for_user(user.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.id_hash)
+                .collect();
+            assert_eq!(ids, ["fresh"]);
+            let mut hashes: Vec<String> = tokens
+                .list_for_user(user.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|t| t.token_hash)
+                .collect();
+            hashes.sort();
+            assert_eq!(hashes, ["ahead", "forever"]);
+            assert_eq!(
+                limits.hit("login:ip:fresh", minute).await.unwrap().count,
+                2,
+                "the current window survived"
+            );
+            // The old row is gone: nothing older than the cut remains to prune.
+            assert_eq!(
+                limits
+                    .prune(ago(builtin::RATE_LIMIT_RETENTION), 10)
+                    .await
+                    .unwrap(),
+                0
+            );
+        },
+    )
+    .await;
 
     // A second run finds nothing more.
     handler.run(&get(store.as_ref(), id).await).await.unwrap();
@@ -1437,6 +1493,7 @@ backend_tests_spawning!(
     runner_releases_unknown_payload_version,
     runner_shutdown_releases_in_flight,
     scheduler_inserts_one_job_per_period,
+    scheduler_refuses_an_offset_past_its_period,
     builtin_prune_jobs_delete_by_age,
     sessions_prune_job_deletes_expired_and_idle,
     prune_removes_old_keys,
@@ -1502,4 +1559,73 @@ async fn duplicate_handler_kinds_are_refused() {
         ),
         Err(ClusterError::Store(_))
     ));
+}
+
+/// Records the fields of every `job` span (a scoped subscriber; no output).
+#[derive(Clone, Default)]
+struct JobSpans {
+    spans: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+    next: Arc<std::sync::atomic::AtomicU64>,
+}
+
+struct Fields<'a>(&'a mut BTreeMap<String, String>);
+
+impl tracing::field::Visit for Fields<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().to_owned(), format!("{value:?}"));
+    }
+}
+
+impl tracing::Subscriber for JobSpans {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        if span.metadata().name() == "job" {
+            let mut fields = BTreeMap::new();
+            span.record(&mut Fields(&mut fields));
+            self.spans.lock().unwrap().push(fields);
+        }
+        tracing::span::Id::from_u64(self.next.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {}
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// M4-4 T5.4b: the span every job runs in names the node that claimed it, so a log line
+/// of a job (an `import.wordpress` one included) says where it ran after the job row
+/// cleared `locked_by`. A current-thread runtime, so the scoped subscriber sees the
+/// runner's tasks; both backends.
+#[tokio::test]
+async fn job_span_names_the_node() {
+    let dbs = [Some(TestDb::sqlite().await), TestDb::postgres().await];
+    for db in dbs.into_iter().flatten() {
+        let spans = JobSpans::default();
+        let scoped = tracing::subscriber::set_default(spans.clone());
+        let store = db.shared_store();
+        let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
+        let (handler, _log) = TestHandler::new(KIND, |_| async { Ok(()) }).build();
+        let node = NodeId::new();
+        let (stop, handle) = start(store.clone(), RunnerConfig::new(node, 1), vec![handler]);
+        wait_status(store.as_ref(), id, JobStatus::Done, Duration::from_secs(5)).await;
+        stop_runner(stop, handle).await;
+        drop(scoped);
+        let seen = spans.spans.lock().unwrap().clone();
+        let span = seen
+            .iter()
+            .find(|f| f.get("id") == Some(&id.to_string()))
+            .unwrap_or_else(|| panic!("no job span for {id}: {seen:?}"));
+        assert_eq!(span.get("node"), Some(&node.to_string()), "{span:?}");
+        assert_eq!(span.get("kind").map(String::as_str), Some(KIND));
+        db.teardown().await;
+    }
 }

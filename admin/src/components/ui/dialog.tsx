@@ -61,7 +61,13 @@ function DialogContent({
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
-            <Button variant="ghost" className="absolute top-2 right-2" size="icon-sm">
+            {/* On touch screens the button is 44 px: 1 px from the top centres it on the
+                title's line (the content's 16 px padding plus half the 14 px line). */}
+            <Button
+              variant="ghost"
+              className="absolute top-2 right-2 pointer-coarse:top-px"
+              size="icon-sm"
+            >
               <XIcon />
               <span className="sr-only">{t("ui.close")}</span>
             </Button>
@@ -74,7 +80,12 @@ function DialogContent({
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div data-slot="dialog-header" className={cn("flex flex-col gap-2", className)} {...props} />
+    // On touch screens the close button is 44 px (top-2 right-2): the title keeps clear.
+    <div
+      data-slot="dialog-header"
+      className={cn("flex flex-col gap-2 pointer-coarse:pr-10", className)}
+      {...props}
+    />
   );
 }
 

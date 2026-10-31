@@ -1,7 +1,11 @@
 // SEO (07 §3 Editor; P28, M3-2 P33): the title and description search results and link
 // previews use, the canonical URL and the robots directives. Soft counters at 60 and 160
 // characters say where results often cut the text off; the hard limits are the server's
-// (200, 500 and 2048). A search result preview follows the text (with the canonical
+// (200, 500 and 2048), counted as it counts them: code points of the text trimmed of
+// Unicode White_Space (`trimSeo`, which keeps a BOM), so an over-long paste is cut at a
+// code-point boundary instead of by a native `maxLength` (UTF-16 units). Each counter
+// has a polite live region that speaks only when a limit is crossed, not per keystroke.
+// A search result preview follows the text (with the canonical
 // address once it is a full one, and a note while `noindex` is on); then the canonical
 // URL (the item's own address as its placeholder) and the five directives as a labelled
 // group of switches. "Reset to defaults" clears all four (the site then uses the item's
@@ -11,7 +15,7 @@
 // drawer says so.
 
 import { EyeOffIcon, RotateCcwIcon } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import type { SchemaRobotsDto } from "@/api/schema";
@@ -28,6 +32,10 @@ import {
   MAX_CANONICAL,
   type SeoDraft,
   canonicalAccepted,
+  limitSeoEdit,
+  refuseSeoOverflow,
+  seoLength,
+  trimSeo,
 } from "../editor-state";
 import { sortedRobots } from "../conflict";
 import { SearchPreview } from "./search-preview";
@@ -47,7 +55,22 @@ const SEO_LIMITS = {
   description: { max: 500, soft: 160 },
 } as const;
 
-const chars = (s: string) => [...s].length;
+/**
+ * A ref for a field limited to `max` (as the server counts): typed text past the limit
+ * is refused before it lands (`beforeinput`), so the caret stays put, as with a native
+ * `maxLength`.
+ */
+function useSeoLimit(max: number) {
+  return useCallback(
+    (el: HTMLInputElement | HTMLTextAreaElement | null) => {
+      if (!el) return;
+      const refuse = refuseSeoOverflow(max);
+      el.addEventListener("beforeinput", refuse);
+      return () => el.removeEventListener("beforeinput", refuse);
+    },
+    [max],
+  );
+}
 
 /**
  * A server message about `path` as a sentence: core starts it with the path
@@ -80,11 +103,11 @@ export function SeoSection({
   };
   const permalink = doc.item?.permalink ?? null;
   const ownUrl = siteUrl && permalink ? new URL(permalink, siteUrl).toString() : null;
-  const canonical = seo.canonical.trim();
+  const canonical = trimSeo(seo.canonical);
   // Search engines show the canonical address; a half-typed one is not shown.
   const url = canonical !== "" && canonicalAccepted(canonical) ? canonical : ownUrl;
-  const previewTitle = seo.title.trim() || doc.title.trim() || t("title.untitled");
-  const previewDescription = seo.description.trim() || doc.meta.excerpt.trim();
+  const previewTitle = trimSeo(seo.title) || doc.title.trim() || t("title.untitled");
+  const previewDescription = trimSeo(seo.description) || doc.meta.excerpt.trim();
   const empty =
     seo.title === "" && seo.description === "" && seo.canonical === "" && seo.robots.length === 0;
   return (
@@ -171,6 +194,7 @@ function CanonicalField({
 }) {
   const { t } = useTranslation("editor");
   const [left, setLeft] = useState(false);
+  const limitRef = useSeoLimit(MAX_CANONICAL);
   const error =
     serverError ?? (left && !canonicalAccepted(value) ? t("seo.canonicalInvalid") : undefined);
   return (
@@ -192,11 +216,14 @@ function CanonicalField({
           value={value}
           disabled={disabled}
           placeholder={placeholder}
-          maxLength={MAX_CANONICAL}
           // A long address scrolls inside the field: the whole one on hover.
           title={value || undefined}
           onBlur={() => setLeft(true)}
-          onChange={(e) => onChange(e.target.value)}
+          ref={limitRef}
+          onChange={(e) => {
+            const next = limitSeoEdit(value, e.target.value, MAX_CANONICAL);
+            if (next !== value) onChange(next);
+          }}
         />
       )}
     </FormField>
@@ -281,25 +308,47 @@ function SeoInput({
   const hintId = useId();
   const errorId = useId();
   const { max, soft } = SEO_LIMITS[kind];
-  const n = chars(value);
+  const limitRef = useSeoLimit(max);
+  // As the server counts: code points of the trimmed text.
+  const n = seoLength(value);
   const over = n > soft;
   const nf = new Intl.NumberFormat(uiLocale());
+  // The live region speaks when the count crosses a limit (into or out of "over the soft
+  // limit", or onto the hard one), never per keystroke. It is mounted, empty, from the
+  // first render, so its first words are a change a screen reader announces.
+  const level = n >= max ? "max" : over ? "over" : "within";
+  const [lastLevel, setLastLevel] = useState(level);
+  const [said, setSaid] = useState("");
+  if (level !== lastLevel) {
+    setLastLevel(level);
+    setSaid(
+      level === "max"
+        ? t("seo.liveMax", { n: nf.format(max) })
+        : level === "over"
+          ? t("seo.liveOver", { n: nf.format(soft) })
+          : t("seo.liveWithin", { n: nf.format(soft) }),
+    );
+  }
   const common = {
     id,
     value,
     disabled,
     placeholder,
-    maxLength: max,
     "aria-describedby": error ? `${hintId} ${errorId}` : hintId,
     ...(error ? { "aria-invalid": true } : {}),
-    onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+    onChange: (e: { target: { value: string } }) => {
+      const next = limitSeoEdit(value, e.target.value, max);
+      if (next !== value) onChange(next);
+    },
   };
   let control: ReactNode;
-  if (kind === "title") control = <Input {...common} data-slot="seo-title" className="text-sm" />;
-  else {
+  if (kind === "title") {
+    control = <Input {...common} ref={limitRef} data-slot="seo-title" className="text-sm" />;
+  } else {
     control = (
       <Textarea
         {...common}
+        ref={limitRef}
         data-slot="seo-description"
         rows={3}
         className="min-h-20 resize-y text-sm"
@@ -322,6 +371,9 @@ function SeoInput({
           {t("seo.count", { n: nf.format(n), soft: nf.format(soft) })}
         </span>
       </p>
+      <span data-slot={`seo-${kind}-live`} role="status" aria-live="polite" className="sr-only">
+        {said}
+      </span>
       {error ? (
         <p id={errorId} className="text-sm text-destructive">
           {error}

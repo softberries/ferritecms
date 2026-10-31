@@ -51,8 +51,10 @@ async fn head(site: &Site, item: Option<&PageItem>, req: &PluginRequest) -> (Str
 
 /// `site` with a host whose render deadline is 5 s, for tests that are not about
 /// deadlines but assert a call's success (or its trace): a slow first store read under
-/// a loaded full test run must not turn into a deadline failure (final review I3).
-/// Call it before installing or loading plugins.
+/// a loaded full test run must not turn into a deadline failure (final review I3; M4-4:
+/// every test here that renders through the host and asserts what a plugin returned).
+/// The deadline tests (hostile plugins, the render budget, kv volatility) keep the
+/// default 200 ms. Call it before installing or loading plugins.
 fn with_generous_deadlines(mut site: Site) -> Site {
     let config = ferrite_plugin_host::HostConfig {
         render_deadline: std::time::Duration::from_secs(5),
@@ -73,6 +75,7 @@ fn meta_tag(name: &str, content: &str) -> String {
 }
 
 async fn hello_head_from_rows_and_artifact(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let id = site
         .post(
@@ -281,6 +284,7 @@ fn meta_value<'a>(html: &'a str, name: &str) -> Option<&'a str> {
 }
 
 async fn content_read_never_returns_drafts(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let visible = site
         .post(
@@ -352,6 +356,7 @@ async fn content_read_never_returns_drafts(site: Site) -> Site {
 }
 
 async fn preview_shows_only_the_previewed_item(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     site.post(
         &author,
@@ -492,6 +497,7 @@ async fn kv_use_is_volatile(site: Site) -> Site {
 }
 
 async fn sanitised_content_filters(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     // Core's markup a sanitising filter must keep: heading ids (P54) and code blocks
     // (R-b17).

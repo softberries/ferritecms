@@ -21,6 +21,7 @@ import {
   StrikethroughIcon,
   Trash2Icon,
   UsersIcon,
+  XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -199,6 +200,9 @@ export function ControlsSection() {
           </Button>
           <Button size="icon-sm" variant="ghost" aria-label={t("controls.sizes.more")}>
             <MoreHorizontalIcon />
+          </Button>
+          <Button size="icon-xs" variant="ghost" aria-label={t("controls.sizes.dismiss")}>
+            <XIcon />
           </Button>
           <Tooltip>
             <TooltipTrigger asChild>

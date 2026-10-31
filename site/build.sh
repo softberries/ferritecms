@@ -52,26 +52,43 @@ fi
 echo "==> activate the docs theme"
 "${ferrite[@]}" theme activate --data "$out" docs
 
-# The address to listen on: the URL's port on loopback, for a localhost URL.
+# The address to listen on, for a loopback URL: the URL's port on 127.0.0.1 (`localhost`,
+# `127.0.0.1`; nothing to say for the default 127.0.0.1:8080) or on [::1] (always: the
+# default listens on IPv4 only). Other hosts get no hint.
 listen=""
 hostport="${url#*://}"
 hostport="${hostport%%/*}"
-host="${hostport%%:*}"
-port=""
-if [ "$host" != "$hostport" ]; then
-  port="${hostport##*:}"
+case "$hostport" in
+  "[::1]"*)
+    host="[::1]"
+    port="${hostport#"[::1]"}"
+    port="${port#:}"
+    ;;
+  *)
+    host="${hostport%%:*}"
+    port=""
+    if [ "$host" != "$hostport" ]; then
+      port="${hostport##*:}"
+    fi
+    ;;
+esac
+if [ -z "$port" ]; then
+  case "$url" in
+    https://*) port=443 ;;
+    *) port=80 ;;
+  esac
 fi
-if [ "$host" = "localhost" ] || [ "$host" = "127.0.0.1" ]; then
-  if [ -z "$port" ]; then
-    case "$url" in
-      https://*) port=443 ;;
-      *) port=80 ;;
-    esac
-  fi
-  if [ "$port" != "8080" ]; then
-    listen="FERRITE_SERVER__LISTEN=127.0.0.1:$port "
-  fi
-fi
+case "$host" in
+  localhost | 127.0.0.1)
+    if [ "$port" != "8080" ]; then
+      listen="FERRITE_SERVER__LISTEN=127.0.0.1:$port "
+    fi
+    ;;
+  "[::1]")
+    # Quoted: a shell may read the brackets as a glob.
+    listen="FERRITE_SERVER__LISTEN='[::1]:$port' "
+    ;;
+esac
 
 echo
 echo "Built. Serve it with:"

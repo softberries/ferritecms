@@ -135,6 +135,8 @@ struct FakeBridge {
     news: Vec<PageItem>,
     images: BTreeMap<ContentId, MediaPublic>,
     queries: Mutex<Vec<(String, u32)>>,
+    /// `image` calls that reached the bridge.
+    image_calls: Mutex<u32>,
 }
 
 impl HelperBridge for FakeBridge {
@@ -160,6 +162,7 @@ impl HelperBridge for FakeBridge {
         (self.menus.get(name).cloned(), DepKeys::default())
     }
     fn image(&self, id: ContentId, size: &str) -> Option<ImageRef> {
+        *self.image_calls.lock().unwrap() += 1;
         self.images.get(&id).map(|m| ImageRef::from_media(m, size))
     }
     fn tree(&self, kind: &str) -> Bridged<Option<ContentTree>> {
@@ -408,6 +411,7 @@ fn front_fixture(t: &Theme, settings: serde_json::Value) -> (RenderContext, Arc<
             kind: "page".into(),
             nodes,
             truncated: false,
+            media: Default::default(),
         }),
         news,
         images,
@@ -491,6 +495,61 @@ fn front_page_has_hero_cta_cards_and_news() {
     let cta = tag_with(&html, "hero__cta\"");
     assert!(cta.contains("href=\"&#x2f;contact&#x2f;\""), "{cta}");
     assert!(html.contains("Get in touch</a>"), "{html}");
+}
+
+/// M4-4: a front page with more child cards than the bridge budget
+/// (`MAX_BRIDGE_CALLS`) shows every card's image: the tree carries the media it
+/// checked, so `image()` on a node's `featured` costs no bridge call.
+#[test]
+fn cards_render_images_past_the_bridge_budget() {
+    let t = business();
+    let (mut c, _) = front_fixture(&t, json!({}));
+    let home = c.item.as_mut().unwrap();
+    let home_id = home.item.id;
+    let mut nodes = vec![tree_node(home_id, "Home", None, 0, None)];
+    let mut images = BTreeMap::new();
+    let n = usize::try_from(ferrite_theme::MAX_BRIDGE_CALLS).unwrap();
+    for i in 0..n {
+        let title = format!("Card{i:02}");
+        let m = media(&title.to_lowercase());
+        let order = i32::try_from(i).unwrap();
+        nodes.push(tree_node(
+            ContentId::new(),
+            &title,
+            Some(home_id),
+            order,
+            Some(m.id),
+        ));
+        images.insert(m.id, m);
+    }
+    // The bridge could answer every image too; it must not be asked.
+    let tree = ContentTree {
+        kind: "page".into(),
+        nodes,
+        truncated: false,
+        media: images.iter().map(|(id, m)| (*id, m.clone())).collect(),
+    };
+    let b = Arc::new(FakeBridge {
+        menus: menus(),
+        tree: Some(tree),
+        images,
+        ..FakeBridge::default()
+    });
+    let html = render(&t, "front-page.html", c, b.clone());
+    for i in 0..n {
+        let img = tag_with(&html, &format!("card{i:02}-card.png"));
+        assert!(img.contains("width=\"640\" height=\"400\""), "{img}");
+    }
+    assert_eq!(
+        html.matches("class=\"feature__media\"").count(),
+        n,
+        "{html}"
+    );
+    assert_eq!(
+        *b.image_calls.lock().unwrap(),
+        0,
+        "no bridge call for a card"
+    );
 }
 
 #[test]

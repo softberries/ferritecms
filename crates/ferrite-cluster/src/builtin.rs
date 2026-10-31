@@ -297,6 +297,7 @@ pub fn periodics() -> Vec<Periodic> {
         every: PRUNE_EVERY,
         payload: json!({"v": 1}),
         max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
+        offset: Duration::ZERO,
     })
     .collect()
 }
@@ -306,6 +307,14 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    /// M4-4 P75: every built-in periodic's offset is below its period.
+    #[test]
+    fn builtin_offsets_fit_their_periods() {
+        for p in periodics() {
+            assert!(p.offset_fits(), "{p:?}");
+        }
+    }
 
     #[test]
     fn failure_retention_is_at_least_a_day() {

@@ -88,19 +88,32 @@ async function activate(siteKey: string, theme: PublicTheme): Promise<void> {
         { message: `the node loads ${theme}`, timeout: NODE_LOADS_MS },
       )
       .toBe(true);
-    const css = readFileSync(resolve(REPO, "themes", theme, "assets", "style.css"), "utf8");
+    const file = `themes/${theme}/assets/style.css`;
+    const css = readFileSync(resolve(REPO, file), "utf8");
+    // The poll's value says what the page served, so a timeout shows it.
     await expect
       .poll(
         async () => {
           const html = await (await anon.get("/")).text();
           const href = /<link rel="stylesheet" href="([^"]+)"/.exec(html)?.[1];
-          if (!href) return false;
+          if (!href) return "the front page links no stylesheet";
           const res = await anon.get(href.replaceAll("&#x2f;", "/"));
-          return res.ok() && (await res.text()) === css;
+          if (!res.ok()) return `its stylesheet answered ${res.status()}`;
+          const served = await res.text();
+          return served === css
+            ? "matches"
+            : `its stylesheet (${served.length} chars) differs from ${file} (${css.length})`;
         },
-        { message: `the front page is drawn by ${theme}`, timeout: PAGE_DRAWN_MS },
+        {
+          message:
+            `the front page is drawn by ${theme}: its stylesheet must equal ${file}. A ` +
+            `stylesheet that differs means the ferrite binary embeds an older copy of the ` +
+            `theme (built before the last edit): rebuild it (cargo build --release -p ferrite, ` +
+            `or the binary FERRITE_BIN names)`,
+          timeout: PAGE_DRAWN_MS,
+        },
       )
-      .toBe(true);
+      .toBe("matches");
   } finally {
     await anon.dispose();
     await api.dispose();

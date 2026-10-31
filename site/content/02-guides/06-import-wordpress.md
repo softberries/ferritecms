@@ -87,3 +87,11 @@ Running the import again with the same site's export updates what changed in Wor
 since the last run, and **keeps** every item that was edited here since the import wrote
 it (the report counts those as "kept"). Terms are matched, not updated. This lets you
 import, check the result, and import once more just before you switch over.
+
+The import knows a site by the export's `<wp:base_blog_url>`, which must be an
+`http://` or `https://` address (WordPress always writes one). A file with anything else
+there is refused before anything is written, with exit 1 and the message "is not an
+http(s) URL". If you edit that value, the import treats the file as a different site: a
+site you imported from such a file before would get its posts, pages, media, comments
+and menus a second time. Delete what the first import made, or import into a fresh site,
+or keep the first import and do not run it again.

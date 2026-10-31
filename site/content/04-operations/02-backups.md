@@ -64,8 +64,8 @@ with_media = true
 ```
 
 `serve` then runs a `site.backup` job once per period, on one node. A daily backup is due
-at 00:00 UTC and a weekly one on Thursdays at 00:00 UTC; the first `serve` in a period
-runs it at once. On SQLite each run is a repository snapshot, as above; on Postgres it
+at 00:00 UTC and a weekly one on Thursdays at 00:00 UTC (the daily media clean-up runs at
+03:00 UTC); the first `serve` in a period runs it at once. On SQLite each run is a repository snapshot, as above; on Postgres it
 writes an export archive into `<to>/exports/`. Failed runs show in the admin under
 **System**, Jobs. `config check` and `serve` apply the repository rules above to `to`
 (outside the data and media folders; a local folder absent, empty or already a
@@ -83,10 +83,14 @@ The data folder must be absent or empty. With `--force` an existing folder is mo
 aside to `<data>.pre-restore-<time>` first (never deleted). The media files go to the
 store the restored `ferrite.toml` names. The database is not migrated: `restore` prints
 the migration status, and `serve` migrates at start (`database.auto_migrate`). A failed
-restore leaves the folder as it was.
+restore leaves the folder as it was. A restored `ferrite.toml` whose media folder is an
+absolute path inside a folder `--force` would move aside (or inside an absent one) is
+refused: restore into an empty folder instead.
 
-Exit codes: 0 done; 3 the backup's schema is newer than this binary (nothing written);
-1 any other error.
+Exit codes: 0 done; 2 restored, but the check of the restored folder afterwards failed
+(the site is in place: the message says what failed, look at it before serving); 3 the
+backup's schema is newer than this binary (nothing written); 1 any other error (nothing
+put in place).
 
 ## A portable copy: export and import-site
 
@@ -124,8 +128,10 @@ The target must be fresh, and a SQLite target's folder must exist. Media is not 
   to another store (`local:<path>` or `s3://…`); it opens no database, so it works while
   the site runs. It never deletes.
 - `ferrite media gc --data ./mysite` deletes files nothing refers to any more, once they
-  have been unused for `media.gc_grace_days` (7). `serve` runs the same clean-up daily.
-  `--dry-run` only counts.
+  have been unused for `media.gc_grace_days` (7). `serve` runs the same clean-up daily, at
+  03:00 UTC. `--dry-run` only counts. It exits 2 when it deleted less than asked: the
+  media store belongs to another site (below) or a delete failed; the very first run on a
+  store only writes `ferrite-owner.json` and exits 0.
 - `ferrite media regenerate --data ./mysite` makes missing image sizes (after a theme
   adds sizes); `--all` makes every size again.
 

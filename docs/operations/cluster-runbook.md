@@ -134,8 +134,9 @@ binary). Either:
 
 ### c) What not to use on a cluster
 
-- `ferrite rollback --schema`: it works from one node's `upgrade.json`, and on Postgres it
-  does not detect live nodes. Use `migrate down --to N` as above.
+- `ferrite rollback --schema`: it works from one node's `upgrade.json`. On Postgres it
+  refuses while any node's heartbeat is fresher than 30 s (it names them), but `migrate
+  down` has no such check. Use `migrate down --to N` as above, with every node stopped.
 - `ferrite rollback --restore-snapshot`: SQLite only.
 - `ferrite self-update`: deploy images instead.
 

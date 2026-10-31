@@ -21,9 +21,23 @@ pub enum MdError {
     /// The folder to import is not a folder.
     #[error("{} is not a folder", path.display())]
     NotADirectory { path: PathBuf },
-    /// The folder holds more Markdown files or folders than an import takes (P62).
-    #[error("the folder holds more than {limit} Markdown files or folders")]
+    /// The folder holds more Markdown files, or more folders holding pages, than an
+    /// import takes (P62, P78).
+    #[error("the folder holds more than {limit} Markdown files or folders with pages")]
     TooManyFiles { limit: usize },
+    /// The folder holds more folders, with pages or without, than a scan visits (P78).
+    #[error(
+        "the folder holds more than {limit} folders; point the import at the folder of \
+         Markdown files, not one with asset trees such as node_modules"
+    )]
+    TooManyFolders { limit: usize },
+    /// The folder's Markdown files hold more bytes in all than an import reads (P78).
+    #[error(
+        "the folder's Markdown files hold more than {limit} bytes ({} MiB) in all; import \
+         a smaller folder",
+        limit >> 20
+    )]
+    TooMuchText { limit: u64 },
     /// Reading the folder or one of its entries failed.
     #[error("{}: {source}", path.display())]
     Io {

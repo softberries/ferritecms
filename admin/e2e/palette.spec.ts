@@ -265,25 +265,43 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await page.keyboard.type("sandbox");
   await expect(palette(page).locator("[data-slot=palette-searching]")).toBeVisible();
   await expect(palette(page).getByRole("status")).toHaveText("Searching content…");
+  // A slow search: the field's icon is a spinner and the list is busy (P81).
+  await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeVisible();
+  await expect(palette(page).getByRole("listbox")).toHaveAttribute("aria-busy", "true");
   await snap(page, "palette-searching");
   await expectAccessible(page);
   release();
   await page.unroute(SEARCH, hold);
 
-  // Results: the last round's answer, not the previous query's rows, which stay up dimmed
-  // while a slow round runs (seen in Firefox under load: axe measured them at 60 %).
+  // Results: the last round's answer.
   await expect(option(page, new RegExp(SEEDED))).toBeVisible();
   await expect(palette(page).locator("[data-slot=palette-searching]")).toBeHidden();
   await expect(palette(page).getByRole("status")).toHaveText(/\d+ content results?/);
-  await expect
-    .poll(() =>
-      palette(page)
-        .getByRole("group", { name: "Content" })
-        .evaluate((el) => getComputedStyle(el).opacity),
-    )
-    .toBe("1");
+  await expect(palette(page).getByRole("listbox")).not.toHaveAttribute("aria-busy");
+  await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeHidden();
   await snap(page, "palette-results");
   await expectAccessible(page);
+
+  // A slow next round: the previous query's rows stay up at full colour (they were dimmed
+  // to 60 % once, which axe measured below 4.5:1); the spinner and `aria-busy` say it.
+  let releaseNext = () => {};
+  const heldNext = new Promise<void>((resolve) => {
+    releaseNext = resolve;
+  });
+  const holdNext = async (route: Route) => {
+    await heldNext;
+    await route.continue().catch(() => undefined);
+  };
+  await page.route(SEARCH, holdNext);
+  await page.keyboard.press("Backspace");
+  await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeVisible();
+  await expect(palette(page).getByRole("listbox")).toHaveAttribute("aria-busy", "true");
+  await expect(option(page, new RegExp(SEEDED))).toBeVisible();
+  await snap(page, "palette-stale");
+  await expectAccessible(page);
+  releaseNext();
+  await page.unroute(SEARCH, holdNext);
+  await expect(palette(page).getByRole("listbox")).not.toHaveAttribute("aria-busy");
 
   // A query nothing matches.
   await input(page).fill("qqzzxv");

@@ -279,9 +279,7 @@ function ContentList() {
           loading={list.isPending}
           animateRows
           columnClassName={COLUMN_CLASSES}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={
             <ListEmpty
               type={type}

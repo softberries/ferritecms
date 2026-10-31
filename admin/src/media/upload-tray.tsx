@@ -98,7 +98,6 @@ export function UploadTray({ queue, entries, raised = false, onOpen }: UploadTra
             <Button
               variant="ghost"
               size="icon-sm"
-              className="pointer-coarse:size-11"
               aria-expanded={!collapsed}
               aria-controls="upload-tray-list"
               aria-label={collapsed ? t("tray.expand") : t("tray.collapse")}
@@ -115,7 +114,6 @@ export function UploadTray({ queue, entries, raised = false, onOpen }: UploadTra
               <Button
                 variant="ghost"
                 size="icon-sm"
-                className="pointer-coarse:size-11"
                 aria-label={t("tray.close")}
                 onClick={() => {
                   for (const e of entries) if (e.state === "failed") queue.cancel(e.id);
@@ -224,7 +222,6 @@ export function UploadRow({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="pointer-coarse:size-11"
             aria-label={t("tray.cancel", { name })}
             onClick={() => queue.cancel(entry.id)}
           >
@@ -247,7 +244,6 @@ export function UploadRow({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="pointer-coarse:size-11"
               aria-label={t("tray.dismiss", { name })}
               onClick={() => queue.cancel(entry.id)}
             >

@@ -28,6 +28,9 @@
   --accent: var(--muted);
   --accent-foreground: var(--foreground);
   --border: oklch(0.91 0.005 260);
+  /* The 1 px edge of menus, selects, popovers and hover cards (decoration). Light popups
+     also cast `--shadow-2`; dark ones cast none, so there it is stronger than `border`. */
+  --popover-edge: var(--border);
   --input: oklch(0.64 0.01 260);
   /* Scrim behind dialogs, sheets and alert dialogs (decoration; no contrast pair). */
   --overlay: oklch(0.21 0.012 260 / 0.24);
@@ -127,6 +130,7 @@ html[data-density="compact"] {
   --muted: oklch(0.22 0.01 260);
   --muted-foreground: oklch(0.71 0.015 260);
   --border: oklch(0.29 0.01 260);
+  --popover-edge: oklch(0.36 0.01 260);
   --input: oklch(0.52 0.012 260);
   --overlay: oklch(0.1 0.005 260 / 0.6);
 
@@ -141,10 +145,12 @@ html[data-density="compact"] {
 
   --chart-5: oklch(0.72 0.14 300);
 
-  /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows. */
-  --shadow-1: none;
-  --shadow-2: none;
-  --shadow-3: none;
+  /* Elevation in dark mode comes from a 1 px border and a lighter card, not shadows.
+     Transparent rather than `none`: Tailwind lists `--tw-shadow` after the ring in one
+     `box-shadow`, and a `none` item makes the whole declaration invalid (no ring). */
+  --shadow-1: 0 0 0 0 oklch(0 0 0 / 0);
+  --shadow-2: 0 0 0 0 oklch(0 0 0 / 0);
+  --shadow-3: 0 0 0 0 oklch(0 0 0 / 0);
 }
 
 /*
