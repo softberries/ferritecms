@@ -133,7 +133,7 @@ theme never takes the site down; the failure is logged and kept in `LoadedTheme:
 must run the same theme (C5). `reload_theme` is the hot-swap counterpart (P18): no change
 when the active row names the artifact already running, an error (the caller keeps the
 current theme) when the new artifact fails, never a fallback to `blog` at runtime.
-Theme names are `[a-z0-9_-]{1,64}`.
+Theme names are `[a-z0-9-]{1,64}` (no `_`: `manifest.rs` `is_name(…, false)`).
 
 **Install, activation and the fallback flag (as built, M2a-2a P8, P12).** Uploads (`POST
 /themes`, a raw bundle) and `ferrite theme install --dir` go through
