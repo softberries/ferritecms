@@ -28,7 +28,10 @@ use ferrite_domain::{
     Timestamp, UserId, UserStatus,
 };
 use ferrite_store::Store;
-use ferrite_store_tests::{TestDb, backend_tests};
+use ferrite_store_tests::{
+    TestDb, backend_tests,
+    window::{align_to_window, in_one_window},
+};
 use serde_json::json;
 
 struct Site {
@@ -203,17 +206,6 @@ fn forbidden<T: std::fmt::Debug>(r: Result<T, CoreError>, what: &str) {
     match r {
         Err(CoreError::Forbidden(w)) => assert_eq!(w, what),
         other => panic!("expected Forbidden({what}), got {other:?}"),
-    }
-}
-
-/// Waits for the next window of `window` (database clock) unless `need` is left (F10).
-async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {
-    let w = i64::try_from(window.as_micros()).unwrap();
-    let now = store.read().nodes().db_now().await.unwrap().as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
     }
 }
 
@@ -705,50 +697,57 @@ async fn honeypot_discards(db: &TestDb) {
 async fn comment_limits(db: &TestDb) {
     let s = site(db).await;
     let post = s.published("post", "limits").await;
-    let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 9));
+    let (s, post) = (&s, &post);
     let submit = |ip: IpAddr| s.comments.submit(input(post.id), Commenter::Anonymous, ip);
+    let submit = &submit;
+    let hour = Duration::from_secs(3600);
 
-    align_to_window(
+    align_to_window(s.store.as_ref(), hour, Duration::from_secs(40)).await;
+    // Every minute hit in one window. A run again starts in the next minute from new
+    // addresses (their hour buckets keep the first run's hits); `stored` counts this
+    // run's comments.
+    in_one_window(
         s.store.as_ref(),
         Duration::from_secs(60),
         Duration::from_secs(20),
+        |n| async move {
+            let at = |last: u8| IpAddr::V4(Ipv4Addr::new(198, 51, 100, last + 20 * n as u8));
+            let ip = at(9);
+            let before = s.count().await;
+            for _ in 0..3 {
+                submit(ip).await.unwrap();
+            }
+            match submit(ip).await {
+                Err(CoreError::RateLimited { retry_after_secs }) => {
+                    assert!((1..=60).contains(&retry_after_secs));
+                }
+                other => panic!("4th in a minute: {other:?}"),
+            }
+            // A refused submit (and a honeypot one) still counts; another address passes.
+            let mut bot = input(post.id);
+            bot.honeypot = "x".into();
+            assert!(matches!(
+                s.comments.submit(bot, Commenter::Anonymous, ip).await,
+                Err(CoreError::RateLimited { .. })
+            ));
+            submit(at(10)).await.unwrap();
+
+            // 20 an hour: an address with 20 hits this hour is refused its 21st.
+            let busy = at(11);
+            for _ in 0..20 {
+                s.auth
+                    .hit_limit(COMMENT_HOUR_SCOPE, Some(busy), 20, hour)
+                    .await
+                    .unwrap();
+            }
+            assert!(matches!(
+                submit(busy).await,
+                Err(CoreError::RateLimited { .. })
+            ));
+            assert_eq!(s.count().await - before, 4, "stored");
+        },
     )
     .await;
-    for _ in 0..3 {
-        submit(ip).await.unwrap();
-    }
-    match submit(ip).await {
-        Err(CoreError::RateLimited { retry_after_secs }) => {
-            assert!((1..=60).contains(&retry_after_secs));
-        }
-        other => panic!("4th in a minute: {other:?}"),
-    }
-    // A refused submit (and a honeypot one) still counts; another address passes.
-    let mut bot = input(post.id);
-    bot.honeypot = "x".into();
-    assert!(matches!(
-        s.comments.submit(bot, Commenter::Anonymous, ip).await,
-        Err(CoreError::RateLimited { .. })
-    ));
-    submit(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10)))
-        .await
-        .unwrap();
-
-    // 20 an hour: an address with 20 hits this hour is refused its 21st.
-    let busy = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 11));
-    let hour = Duration::from_secs(3600);
-    align_to_window(s.store.as_ref(), hour, Duration::from_secs(20)).await;
-    for _ in 0..20 {
-        s.auth
-            .hit_limit(COMMENT_HOUR_SCOPE, Some(busy), 20, hour)
-            .await
-            .unwrap();
-    }
-    assert!(matches!(
-        submit(busy).await,
-        Err(CoreError::RateLimited { .. })
-    ));
-    assert_eq!(s.count().await, 4);
 }
 
 async fn delete_only_spam_or_trash(db: &TestDb) {
@@ -938,44 +937,52 @@ async fn moderator_replies_are_not_rate_limited(db: &TestDb) {
     let post = s.published("post", "moderator-limits").await;
     let first = s.accepted(input(post.id)).await;
     s.approve(first.id).await;
-    let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20));
     let editor = actor(s.store.as_ref(), Role::Editor).await;
-    align_to_window(
+    let (s, post, first) = (&s, &post, &first);
+    // A run again starts in the next minute, from a new address (the hour bucket keeps
+    // the first run's hits).
+    in_one_window(
         s.store.as_ref(),
         Duration::from_secs(60),
         Duration::from_secs(20),
+        |n| async move {
+            let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20 + 20 * n as u8));
+            for _ in 0..5 {
+                let mut reply = input(post.id);
+                reply.parent = Some(first.id);
+                let got = s
+                    .comments
+                    .submit(reply, Commenter::User(editor), ip)
+                    .await
+                    .unwrap();
+                assert!(
+                    matches!(got, Submitted::Accepted(c) if c.status == CommentStatus::Approved)
+                );
+            }
+            // A token of a moderator's role with `comments:write` too.
+            let token = editor.with_scopes(
+                ferrite_core::Scopes::from_strs(&["comments:write".to_owned()]).unwrap(),
+            );
+            s.comments
+                .submit(input(post.id), Commenter::User(token), ip)
+                .await
+                .unwrap();
+            // The address still has its whole allowance for everyone else.
+            for _ in 0..3 {
+                s.comments
+                    .submit(input(post.id), Commenter::Anonymous, ip)
+                    .await
+                    .unwrap();
+            }
+            assert!(matches!(
+                s.comments
+                    .submit(input(post.id), Commenter::Anonymous, ip)
+                    .await,
+                Err(CoreError::RateLimited { .. })
+            ));
+        },
     )
     .await;
-    for _ in 0..5 {
-        let mut reply = input(post.id);
-        reply.parent = Some(first.id);
-        let got = s
-            .comments
-            .submit(reply, Commenter::User(editor), ip)
-            .await
-            .unwrap();
-        assert!(matches!(got, Submitted::Accepted(c) if c.status == CommentStatus::Approved));
-    }
-    // A token of a moderator's role with `comments:write` too.
-    let token = editor
-        .with_scopes(ferrite_core::Scopes::from_strs(&["comments:write".to_owned()]).unwrap());
-    s.comments
-        .submit(input(post.id), Commenter::User(token), ip)
-        .await
-        .unwrap();
-    // The address still has its whole allowance for everyone else.
-    for _ in 0..3 {
-        s.comments
-            .submit(input(post.id), Commenter::Anonymous, ip)
-            .await
-            .unwrap();
-    }
-    assert!(matches!(
-        s.comments
-            .submit(input(post.id), Commenter::Anonymous, ip)
-            .await,
-        Err(CoreError::RateLimited { .. })
-    ));
 }
 
 /// Task 14 B: guests and signed-in commenters without `moderate_comments` keep the limits.
@@ -983,34 +990,37 @@ async fn guest_still_rate_limited(db: &TestDb) {
     let s = site(db).await;
     let post = s.published("post", "guest-limits").await;
     let author = actor(s.store.as_ref(), Role::Author).await;
-    align_to_window(
+    let (s, post) = (&s, &post);
+    // A run again starts in the next minute, from new addresses (the hour buckets keep
+    // the first run's hits).
+    in_one_window(
         s.store.as_ref(),
         Duration::from_secs(60),
         Duration::from_secs(20),
+        |n| async move {
+            let at = |last: u8| IpAddr::V4(Ipv4Addr::new(198, 51, 100, last + 20 * n as u8));
+            for (ip, who) in [(at(21), None), (at(22), Some(author))] {
+                let commenter = || match &who {
+                    Some(a) => Commenter::User(*a),
+                    None => Commenter::Anonymous,
+                };
+                for _ in 0..3 {
+                    s.comments
+                        .submit(input(post.id), commenter(), ip)
+                        .await
+                        .unwrap();
+                }
+                assert!(
+                    matches!(
+                        s.comments.submit(input(post.id), commenter(), ip).await,
+                        Err(CoreError::RateLimited { .. })
+                    ),
+                    "{who:?}"
+                );
+            }
+        },
     )
     .await;
-    for (ip, who) in [
-        (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 21)), None),
-        (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 22)), Some(author)),
-    ] {
-        let commenter = || match &who {
-            Some(a) => Commenter::User(*a),
-            None => Commenter::Anonymous,
-        };
-        for _ in 0..3 {
-            s.comments
-                .submit(input(post.id), commenter(), ip)
-                .await
-                .unwrap();
-        }
-        assert!(
-            matches!(
-                s.comments.submit(input(post.id), commenter(), ip).await,
-                Err(CoreError::RateLimited { .. })
-            ),
-            "{who:?}"
-        );
-    }
 }
 
 /// The queue shows a non-public item's title only to a reader of content: a

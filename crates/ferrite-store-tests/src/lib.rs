@@ -43,6 +43,7 @@ pub mod taxonomy;
 pub mod tx;
 pub mod user;
 pub mod user_filters;
+pub mod window;
 
 pub use counting::CountingStore;
 pub use failing_options::FailingOptionsStore;

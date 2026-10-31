@@ -26,6 +26,7 @@ use ferrite_core::{
 };
 use ferrite_domain::{Comment, CommentId, CommentQuery, CommentStatus, ContentId};
 use ferrite_http::build_app;
+use ferrite_store_tests::window::in_one_window;
 use ferrite_theme::{Theme, ThemeSource};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -206,25 +207,6 @@ fn assert_error_page(r: &Resp, status: u16, message: &str, back: &str) {
     assert_no_store(r);
     assert!(r.body.contains(message), "{}", r.body);
     assert!(r.body.contains(&format!("href=\"{back}\"")), "{}", r.body);
-}
-
-/// Waits until the current rate-limit window has at least `need` left.
-async fn align_to_window(app: &App, need: Duration) {
-    let w = 60_000_000_i64;
-    let now = app
-        .site
-        .store
-        .read()
-        .nodes()
-        .db_now()
-        .await
-        .unwrap()
-        .as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
-    }
 }
 
 /// A guest's first comment is held (`known`, R2): 303 to `#comment-pending`; once
@@ -463,31 +445,40 @@ async fn form_errors_are_html_pages(app: App) -> App {
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{r:?}");
     assert_no_store(&r);
 
-    // Flood from one address: 3 a minute, then 429 with Retry-After.
-    align_to_window(&app, Duration::from_secs(20)).await;
-    let ip = peer();
-    for i in 0..3 {
-        let r = app
-            .send(form_from(
-                pairs(&guest(post.id, &format!("flood {i}"))),
-                Some(SITE_URL),
-                None,
-                Some(ip),
-            ))
-            .await;
-        assert_eq!(r.status, StatusCode::SEE_OTHER, "{i}: {r:?}");
-    }
-    let r = app
-        .send(form_from(
-            pairs(&guest(post.id, "flood 3")),
-            Some(SITE_URL),
-            None,
-            Some(ip),
-        ))
-        .await;
-    assert_error_page(&r, 429, "too quickly", "/hello/");
-    let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
-    assert!((1..=60).contains(&retry), "{retry}");
+    // Flood from one address: 3 a minute, then 429 with Retry-After. A run again (the
+    // minute rolled over) comes from a new address.
+    let (a, post) = (&app, &post);
+    in_one_window(
+        app.site.store.as_ref(),
+        Duration::from_secs(60),
+        Duration::from_secs(20),
+        |_| async move {
+            let ip = peer();
+            for i in 0..3 {
+                let r = a
+                    .send(form_from(
+                        pairs(&guest(post.id, &format!("flood {i}"))),
+                        Some(SITE_URL),
+                        None,
+                        Some(ip),
+                    ))
+                    .await;
+                assert_eq!(r.status, StatusCode::SEE_OTHER, "{i}: {r:?}");
+            }
+            let r = a
+                .send(form_from(
+                    pairs(&guest(post.id, "flood 3")),
+                    Some(SITE_URL),
+                    None,
+                    Some(ip),
+                ))
+                .await;
+            assert_error_page(&r, 429, "too quickly", "/hello/");
+            let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
+            assert!((1..=60).contains(&retry), "{retry}");
+        },
+    )
+    .await;
     app
 }
 

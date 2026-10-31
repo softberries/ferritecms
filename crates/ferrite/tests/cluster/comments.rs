@@ -5,28 +5,11 @@
 use std::time::Duration;
 
 use ferrite::NodeOptions;
+use ferrite_store_tests::window::in_one_window;
 
 use crate::harness::{Cluster, SITE_URL, Spec, admin, content, published_post, send};
 
 const WINDOW: Duration = Duration::from_secs(60);
-
-/// Sleeps into the next window when fewer than `need` are left of this one (F10, F27).
-async fn align_to_window(c: &Cluster, need: Duration) {
-    let w = i64::try_from(WINDOW.as_micros()).unwrap();
-    let now = c
-        .store(0)
-        .read()
-        .nodes()
-        .db_now()
-        .await
-        .unwrap()
-        .as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
-    }
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn comment_limits_hold_across_nodes() {
@@ -60,43 +43,52 @@ async fn comment_limits_hold_across_nodes() {
             .await
         }
     };
-    align_to_window(&c, Duration::from_secs(30)).await;
-    for i in 0..3 {
-        let (status, head, body) = submit(i % 2, "198.51.100.1").await;
-        assert_eq!(
-            status,
-            202,
-            "submit {} on node {}: {head}\n{body}",
-            i + 1,
-            i % 2
-        );
-    }
-    // The fourth, on the other node, is refused: the count is shared.
-    let (status, head, body) = submit(1, "198.51.100.1").await;
-    assert_eq!(status, 429, "{head}\n{body}");
-    assert!(head.contains("retry-after: "), "{head}");
-    assert!(body.contains("/api/v1/problems/rate-limited"), "{body}");
-    // A second client address still passes, on both nodes.
-    for node in 0..2 {
-        let (status, head, _) = submit(node, "198.51.100.2").await;
-        assert_eq!(status, 202, "second client on node {node}: {head}");
-    }
-    // Five stored, all pending (a guest's first comments are held).
-    let pending = store
-        .read()
-        .comments()
-        .list(&ferrite_domain::CommentQuery {
+    // Every submit in one window (F10, F27); a run again starts in the next one.
+    let store = &store;
+    let list = || async move {
+        let query = ferrite_domain::CommentQuery {
             limit: 50,
             ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(pending.items.len(), 5);
-    assert!(
-        pending
-            .items
-            .iter()
-            .all(|c| c.status == ferrite_domain::CommentStatus::Pending)
-    );
+        };
+        store.read().comments().list(&query).await.unwrap().items
+    };
+    in_one_window(
+        store.as_ref(),
+        WINDOW,
+        Duration::from_secs(30),
+        |_| async move {
+            // A run again counts its own comments.
+            let before = list().await.len();
+            for i in 0..3 {
+                let (status, head, body) = submit(i % 2, "198.51.100.1").await;
+                assert_eq!(
+                    status,
+                    202,
+                    "submit {} on node {}: {head}\n{body}",
+                    i + 1,
+                    i % 2
+                );
+            }
+            // The fourth, on the other node, is refused: the count is shared.
+            let (status, head, body) = submit(1, "198.51.100.1").await;
+            assert_eq!(status, 429, "{head}\n{body}");
+            assert!(head.contains("retry-after: "), "{head}");
+            assert!(body.contains("/api/v1/problems/rate-limited"), "{body}");
+            // A second client address still passes, on both nodes.
+            for node in 0..2 {
+                let (status, head, _) = submit(node, "198.51.100.2").await;
+                assert_eq!(status, 202, "second client on node {node}: {head}");
+            }
+            // Five stored, all pending (a guest's first comments are held).
+            let pending = list().await;
+            assert_eq!(pending.len() - before, 5);
+            assert!(
+                pending
+                    .iter()
+                    .all(|c| c.status == ferrite_domain::CommentStatus::Pending)
+            );
+        },
+    )
+    .await;
     c.finish().await;
 }

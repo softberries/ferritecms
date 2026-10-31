@@ -32,7 +32,7 @@ use ferrite_store::{
     TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
-    TestDb, auth::align_to_window, backend_tests_spawning, fixtures::fixture_user,
+    TestDb, backend_tests_spawning, fixtures::fixture_user, window::in_one_window,
 };
 use serde_json::json;
 use tokio::time::Instant;
@@ -1271,12 +1271,6 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
 
     let limits = repos.rate_limits();
     let minute = Duration::from_secs(60);
-    // Both fresh hits must share one window (F10): at least 30 s of it left.
-    align_to_window(store.as_ref(), minute, Duration::from_secs(30)).await;
-    limits.hit("login:ip:old", minute).await.unwrap();
-    limits.hit("login:ip:fresh", minute).await.unwrap();
-    backdate_bucket(&db, "login:ip:old", 2).await;
-
     let handler = builtin::handlers(store.clone(), builtin::MIN_FAILURE_RETENTION)
         .into_iter()
         .find(|h| h.kind() == "sessions.prune")
@@ -1292,38 +1286,56 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
         NewJob::new("sessions.prune", json!({"v": 1})),
     )
     .await;
-    handler.run(&get(store.as_ref(), id).await).await.unwrap();
 
-    let ids: Vec<String> = sessions
-        .list_for_user(user.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|s| s.id_hash)
-        .collect();
-    assert_eq!(ids, ["fresh"]);
-    let mut hashes: Vec<String> = tokens
-        .list_for_user(user.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|t| t.token_hash)
-        .collect();
-    hashes.sort();
-    assert_eq!(hashes, ["ahead", "forever"]);
-    assert_eq!(
-        limits.hit("login:ip:fresh", minute).await.unwrap().count,
-        2,
-        "the current window survived"
-    );
-    // The old row is gone: nothing older than the cut remains to prune.
-    assert_eq!(
-        limits
-            .prune(ago(builtin::RATE_LIMIT_RETENTION), 10)
-            .await
-            .unwrap(),
-        0
-    );
+    // Both fresh hits and the last one must share one window (F10): at least 30 s of it
+    // left, and a run again in the next window when it rolled over (the prune is
+    // idempotent; the hits start over in the new window).
+    let (db, store, limits, handler, sessions, tokens, user) =
+        (&db, &store, &limits, &handler, &sessions, &tokens, &user);
+    in_one_window(
+        store.as_ref(),
+        minute,
+        Duration::from_secs(30),
+        |_| async move {
+            limits.hit("login:ip:old", minute).await.unwrap();
+            limits.hit("login:ip:fresh", minute).await.unwrap();
+            backdate_bucket(db, "login:ip:old", 2).await;
+
+            handler.run(&get(store.as_ref(), id).await).await.unwrap();
+
+            let ids: Vec<String> = sessions
+                .list_for_user(user.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| s.id_hash)
+                .collect();
+            assert_eq!(ids, ["fresh"]);
+            let mut hashes: Vec<String> = tokens
+                .list_for_user(user.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|t| t.token_hash)
+                .collect();
+            hashes.sort();
+            assert_eq!(hashes, ["ahead", "forever"]);
+            assert_eq!(
+                limits.hit("login:ip:fresh", minute).await.unwrap().count,
+                2,
+                "the current window survived"
+            );
+            // The old row is gone: nothing older than the cut remains to prune.
+            assert_eq!(
+                limits
+                    .prune(ago(builtin::RATE_LIMIT_RETENTION), 10)
+                    .await
+                    .unwrap(),
+                0
+            );
+        },
+    )
+    .await;
 
     // A second run finds nothing more.
     handler.run(&get(store.as_ref(), id).await).await.unwrap();
