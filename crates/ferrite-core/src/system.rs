@@ -247,7 +247,7 @@ impl SystemService {
                 "your account has no usable e-mail address",
             ));
         }
-        let title = settings::site_title(store, configured_title).await?;
+        let title = settings::site_title_or_configured(store, configured_title).await;
         let mail = test_mail(&user.email, &title, site_url, &user.login, Timestamp::now());
         // Checked here so a refusal by the queue below can only mean it is full or
         // stopping: a mail failing its own checks is a bug (the address and title were

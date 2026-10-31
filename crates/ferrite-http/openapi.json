@@ -8650,7 +8650,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Only users whose login, display name or e-mail holds this text, ignoring case\n(`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field\n`q`).",
+            "description": "Only users whose login, display name or e-mail holds this text, ignoring case\n(`%` and `_` match only themselves). Trimmed; blank is no search; at most 100\ncharacters (`422`, field `q`).",
             "required": false,
             "schema": {
               "type": "string"
@@ -8737,7 +8737,7 @@
             }
           },
           "422": {
-            "description": "`validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`)",
+            "description": "`validation`: `q` longer than 100 characters (`errors[0].field` = `q`)",
             "content": {
               "application/problem+json": {
                 "schema": {

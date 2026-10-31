@@ -735,12 +735,20 @@ fn read_channel(path: &Path) -> Result<Channel, ImportError> {
 }
 
 /// The run source (P3): the `<wp:base_blog_url>` with a lower-case scheme and host and
-/// no trailing slash.
+/// no trailing slash. Only an `http(s)` URL with a host is a WordPress source (M4-4
+/// P77): another scheme (`markdown:<name>` is the Markdown importer's source, `file:`,
+/// `ftp:`) is refused, so a WXR never runs under another importer's map rows.
 fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
     let url = url::Url::parse(base_blog_url.trim()).map_err(|_| ImportError::Missing {
         what: "a valid wp:base_blog_url",
         offset: 0,
     })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(ImportError::Missing {
+            what: "an http(s) wp:base_blog_url",
+            offset: 0,
+        });
+    }
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
@@ -904,6 +912,28 @@ mod tests {
             "https://example.test"
         );
         assert!(normalise_source("").is_err());
+    }
+
+    /// P77: a source is an `http(s)` URL with a host, so a WXR cannot run under the
+    /// Markdown importer's `markdown:<name>` source (or any other scheme) and touch its
+    /// map rows.
+    #[test]
+    fn markdown_scheme_source_is_refused() {
+        for bad in [
+            "markdown:docs",
+            "MARKDOWN:docs",
+            "ftp://example.test/",
+            "file:///var/www",
+            "mailto:a@example.test",
+            "data:text/plain,x",
+        ] {
+            match normalise_source(bad) {
+                Err(ImportError::Missing { what, .. }) => {
+                    assert_eq!(what, "an http(s) wp:base_blog_url", "{bad}");
+                }
+                other => panic!("{bad}: expected Missing, got {other:?}"),
+            }
+        }
     }
 
     /// Only an unfinished run's folder of the same file with a finished parse is found;

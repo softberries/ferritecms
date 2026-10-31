@@ -171,8 +171,8 @@ pub struct UserPatchInput {
 #[into_params(parameter_in = Query)]
 pub struct UserListParams {
     /// Only users whose login, display name or e-mail holds this text, ignoring case
-    /// (`%` and `_` match only themselves). Trimmed; 1 to 100 characters (`422`, field
-    /// `q`).
+    /// (`%` and `_` match only themselves). Trimmed; blank is no search; at most 100
+    /// characters (`422`, field `q`).
     pub q: Option<String>,
     /// Only users with this role.
     pub role: Option<RoleDto>,

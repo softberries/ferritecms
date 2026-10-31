@@ -289,7 +289,7 @@ impl ImportBatch<'_> {
             .ok_or(CoreError::NotFound)?
             .kind;
         let types = repos.types().list().await?;
-        check_item(repos, &types, &kind, &fields, None).await?;
+        check_item(repos, &self.handle.actor, &types, &kind, &fields, None).await?;
         self.fix_up(id, wp_id, |item| {
             item.body = body;
             item.fields = fields;
@@ -371,6 +371,7 @@ impl ImportBatch<'_> {
         let types = repos.types().list().await?;
         check_item(
             repos,
+            &self.handle.actor,
             &types,
             &c.kind,
             &c.fields,
@@ -433,7 +434,15 @@ impl ImportBatch<'_> {
             .parent
             .filter(|_| c.parent != current.parent_id)
             .map(|p| (p, Some(id)));
-        check_item(repos, &types, &c.kind, &c.fields, new_parent).await?;
+        check_item(
+            repos,
+            &self.handle.actor,
+            &types,
+            &c.kind,
+            &c.fields,
+            new_parent,
+        )
+        .await?;
         let old_term_rows = repos.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
         let root = if own == Some(base.as_str()) {

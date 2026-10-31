@@ -62,7 +62,9 @@ WXR (quick-xml, streaming) ─► parse: records into the IR (temp SQLite)
 - Idempotent: `import_map(source, kind, wp_id → ferrite_id, hash, version)` in the site
   database (migration `0009_import`, both backends; kinds `user`, `term`, `media`,
   `content`, `comment`, `menu`, `option`, `redirect`) lets a re-run update instead of
-  duplicate. `source` is the normalised `<wp:base_blog_url>`. The hash covers what is
+  duplicate. `source` is the normalised `<wp:base_blog_url>`, which must be an `http(s)`
+  URL with a host (else the run fails before it starts, a permanent job failure; M4-4
+  P77), so a WXR never shares the map rows of a `markdown:<name>` source. The hash covers what is
   written (the converted item, the resolved menu, the option value). A re-run leaves an
   unchanged hash alone, updates an item still at the version the import left, and keeps
   (and reports) one edited here since (P4). Terms and comments are matched, not updated
@@ -205,7 +207,8 @@ pipeline above, but it shares the run and map rules:
 
 - **Run.** An import run of source `markdown:<NAME>` (`--source`, default the folder's
   name), started with `ImportService::start` under the same lock and fence as a WordPress
-  run, so exit 3 means another import is running (any source). It records no steps and has
+  run, so exit 3 means another import is running (any source). A WordPress run cannot take
+  this source (its source is always an `http(s)` URL, M4-4 P77). It records no steps and has
   no work file or report file: the report is printed.
 - **Map key.** `import_map.wp_id` is `map_id(s)`: the first 8 bytes of SHA-256 of a string
   `s` as a big-endian `i64`, masked to be non-negative. Kind `content` for a page: `s` is
