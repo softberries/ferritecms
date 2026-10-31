@@ -883,7 +883,8 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   built once (`pnpm -C admin build`, job `admin`), checks that `--version` prints
   `ferrite <version>`, and packs `ferrite-<version>-<target>.tar.gz`
   (`.github/scripts/package.sh`: a folder `ferrite-<version>-<target>/` with `ferrite`
-  0755, `README.md` and any `LICENSE*`; the archive is reproducible, see below). The crypto is ring only (P28: no cmake or clang);
+  0755, `README.md` and any `LICENSE*`; the archive is reproducible, see below). The
+  crypto is ring only (P28: no cmake or clang);
   the musl builds compile the bundled C code (SQLite, zstd) with `musl-gcc` and need the
   host's CA certificates at run time (`packaging/systemd/README.md`). The release profile
   is `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"` (P27); the
@@ -920,7 +921,7 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     `.github/scripts/repro-tar.sh`, so the same files give the same bytes whatever the
     runner, the stage folder, the umask or the copy times: modes normalised (folders and
     `ferrite` 0755, other files 0644), every mtime 1970-01-01 00:00 UTC, an explicit
-    `LC_ALL=C`-sorted member list without `./` (`--no-recursion`), `ustar` (no pax headers),
+    `LC_ALL=C`-sorted, NUL-separated member list without `./` (`--no-recursion`, `--null -T`), `ustar` (no pax headers),
     owner and group 0 without names, and `gzip -n -9` (never `tar -z`, whose bsdtar variant
     writes a gzip timestamp). The two tars take different owner flags, so the script
     branches on `tar --version` (GNU tar `--owner=0 --group=0 --numeric-owner`, bsdtar
@@ -930,7 +931,9 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     archive is claimed reproducible: `cargo build --release --locked` is not checked for
     bit-identical binaries, and the admin SPA is embedded from a separate build. `ferrite
     self-update` reads regular files by path and skips the folder entries, so it is
-    unaffected (`self_update_installs_an_archive_made_by_package_sh`).
+    unaffected (`self_update_installs_an_archive_made_by_package_sh`). Each `build` job of
+    `release.yml` runs `test-repro.sh` before packing, so every runner's tar (GNU 1.34 and
+    1.35, bsdtar) proves the property on its first run.
   - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the seven assets
     (`.github/scripts/sums.sh` refuses any other count), signed with minisign
     (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and

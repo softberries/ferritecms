@@ -9,12 +9,13 @@
 #
 # Run from the repository root, on Linux (GNU tar) and macOS (bsdtar). SCRIPT_DIR (default
 # .github/scripts) names the folder of the scripts under test. The CI `packaging` job runs
-# it; it needs bash, tar, gzip, python3 and a README.md.
+# it; it needs bash, tar, gzip, awk, python3 (any 3.x) and a README.md.
 set -euo pipefail
 
 script_dir=${SCRIPT_DIR:-.github/scripts}
 # package-plugins.sh refuses a manifest of another version, so this is the workspace's.
-version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+# (awk, not tomllib: the macOS runners' python3 can be older than 3.11.)
+version=$(awk -F'"' '/^\[workspace\.package\]/ { in_pkg = 1; next } in_pkg && /^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
 target=x86_64-unknown-linux-gnu
 
 work=$(mktemp -d)
@@ -49,6 +50,19 @@ touch -t 200001010000.00 "$work/src/ferrite" "$work/wasm"/*.wasm
 sleep 2
 (umask 077 && pack_both "$work/two")
 
+# Names with a space, a quote and a newline are members of their own, not split or dropped
+# (repro_pack's list is NUL-separated).
+mkdir -p "$work/odd-stage/odd dir"
+printf 'a\n' >"$work/odd-stage/odd dir/with space.txt"
+printf 'b\n' >"$work/odd-stage/odd dir/it's \"quoted\".txt"
+printf 'c\n' >"$work/odd-stage/odd dir/new
+line.txt"
+if [ -f "$script_dir/repro-tar.sh" ]; then
+  # shellcheck source=/dev/null
+  source "$script_dir/repro-tar.sh"
+  repro_pack "$work/odd-stage" "$work/odd.tar.gz" "odd dir"
+fi
+
 status=0
 for asset in "ferrite-$version-$target" "ferrite-plugins-$version"; do
   a=$(sha "$work/one/$asset.tar.gz")
@@ -61,11 +75,18 @@ for asset in "ferrite-$version-$target" "ferrite-plugins-$version"; do
   fi
 done
 
-if ! python3 -I - "$work/one" "$version" "$target" <<'EOF'
+if ! python3 -I - "$work/one" "$version" "$target" "$work/odd.tar.gz" <<'EOF'
 import gzip, sys, tarfile
 
-out, version, target = sys.argv[1:4]
+out, version, target, odd = sys.argv[1:5]
 bad = []
+with tarfile.open(odd) as tar:
+    names = tar.getnames()
+want = ["odd dir", "odd dir/it's \"quoted\".txt", "odd dir/new\nline.txt", "odd dir/with space.txt"]
+if names != want:
+    bad.append(f"odd names: {names}, want {want}")
+else:
+    print("ok    names with a space, a quote and a newline are members")
 for asset in (f"ferrite-{version}-{target}", f"ferrite-plugins-{version}"):
     path = f"{out}/{asset}.tar.gz"
     raw = open(path, "rb").read()

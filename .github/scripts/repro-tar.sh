@@ -16,25 +16,28 @@
 #     bsdtar variant writes one).
 # The same input gives the same output on the same kind of tar; GNU tar and bsdtar do not
 # promise byte-identical output to each other, and each asset is built by one runner type.
-repro_pack() {
-  local stage=$1 out_file=$2
+repro_pack() (
+  stage=$1 out_file=$2
   shift 2
 
   find "$stage" -type d -exec chmod 0755 {} +
   TZ=UTC find "$stage" -exec touch -h -t 197001010000.00 {} +
 
-  local list owner
+  # A subshell function: the trap below does not leak into the caller.
   list=$(mktemp)
-  # `find` runs inside the stage so the names are relative, with no leading `./`.
-  (cd "$stage" && find "$@" -print | LC_ALL=C sort) >"$list"
+  trap 'rm -f "$list"' EXIT
+  # NUL-separated, so a name with a space, a newline or a quote is one member. `find` runs
+  # inside the stage so the names are relative, with no leading `./`.
+  (cd "$stage" && find "$@" -print0 | LC_ALL=C sort -z) >"$list"
 
-  if tar --version | grep -q bsdtar; then
+  # Captured first: `tar --version | grep -q` under pipefail can fail on SIGPIPE.
+  version=$(tar --version)
+  if [[ $version == *bsdtar* ]]; then
     owner=(--uid 0 --gid 0 --uname '' --gname '' --numeric-owner)
   else
     owner=(--owner=0 --group=0 --numeric-owner)
   fi
   # COPYFILE_DISABLE keeps macOS tar from adding `._*` AppleDouble entries.
   COPYFILE_DISABLE=1 tar -C "$stage" --no-recursion --format=ustar "${owner[@]}" \
-    -cf - -T "$list" | gzip -n -9 >"$out_file"
-  rm "$list"
-}
+    -cf - --null -T "$list" | gzip -n -9 >"$out_file"
+)
