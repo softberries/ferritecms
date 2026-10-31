@@ -3,6 +3,11 @@
 //! waits for enough of it ([`align_to_window`]). A loaded host can still be slower than
 //! that margin: [`in_one_window`] runs the scenario again in a fresh window when it failed
 //! after the window rolled over, and re-raises a failure inside one window as it is.
+//!
+//! A run again is reported only through `eprintln!`, which libtest hides for a test that
+//! passes. So how often it happens is not visible, and a bug that only shows at a window
+//! boundary (the code under test wrong exactly at a rollover) could pass unnoticed: its
+//! failure is retried in the next window and the retry passes.
 
 use std::{future::Future, panic::AssertUnwindSafe, time::Duration};
 

@@ -210,7 +210,7 @@ test("users_reset_email_reaches_the_sink", async ({ as, browser, site, guard }) 
     baseURL: site.url,
     viewport: VIEWPORTS.desktop,
     colorScheme: "light",
-    extraHTTPHeaders: { "X-Forwarded-For": forwardedFor(SPEC, 2) },
+    extraHTTPHeaders: { "X-Forwarded-For": forwardedFor(SPEC, 5) },
   });
   contexts.push(ctx);
   await guard.watch(ctx);

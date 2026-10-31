@@ -513,11 +513,14 @@ async fn password_change_keeps_only_this_session(api: Api) -> Api {
 /// R11: the current-password check of a self password change counts on the login's
 /// per-login bucket (5/min).
 async fn password_check_is_rate_limited(api: Api) -> Api {
-    let ann = api.user("ann", Role::Author, false).await;
-    let (a, ann) = (&api, &ann);
-    api.in_one_window(Duration::from_secs(40), |_| async move {
+    let a = &api;
+    // A run again starts in the next window with a new account: a rolled-over run may
+    // have changed `ann`'s password.
+    api.in_one_window(Duration::from_secs(40), |n| async move {
+        let login = format!("ann{n}");
+        let ann = &a.user(&login, Role::Author, false).await;
         // The login counts once on the bucket.
-        let mut c = a.logged_in("ann").await;
+        let mut c = a.logged_in(&login).await;
         // Refusals before the password check take no slot: a new password breaking the
         // policy, and a token without `users:write`.
         for _ in 0..6 {

@@ -108,9 +108,10 @@ impl SqliteStore {
 
 /// The exclusive OS lock on `<dir>/ferrite.lock` a store holds. It is released
 /// explicitly (`unlock`, not only by closing the descriptor), on [`SqliteStore`]'s `close`
-/// or on drop: a copy of the descriptor that a child process briefly inherits while it is
-/// spawned, or a holder of the store not yet dropped, then cannot keep the folder locked
-/// after the store is done with it (M4-4).
+/// or on drop: a holder of the store in this process that is not dropped yet (a task, a
+/// service clone; the likelier case) or, for a moment, a copy of the descriptor that a
+/// child process inherits while it is spawned, then cannot keep the folder locked after
+/// the store is done with it (M4-4).
 pub(crate) struct FolderLock(Mutex<Option<File>>);
 
 impl FolderLock {
