@@ -146,7 +146,6 @@ export function FailurePanel({ report, onDismiss }: { report: Report; onDismiss:
       <Button
         variant="ghost"
         size="icon-sm"
-        className="pointer-coarse:size-control"
         aria-label={t("report.dismiss")}
         onClick={onDismiss}
       >

@@ -81,7 +81,8 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-header"
-      className={cn("flex flex-col gap-0.5 p-4", className)}
+      // On touch screens the close button is 44 px (top-3 right-3): the title keeps clear.
+      className={cn("flex flex-col gap-0.5 p-4 pointer-coarse:pr-15", className)}
       {...props}
     />
   );

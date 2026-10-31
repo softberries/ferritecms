@@ -68,7 +68,6 @@ export function RowActions({ type, item, onOpen, onAction }: RowActionsProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className="pointer-coarse:size-control"
               aria-label={t("row.menu", { title })}
             >
               <MoreHorizontalIcon />

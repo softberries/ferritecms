@@ -390,11 +390,7 @@ function RowActions({ redirect, env }: { redirect: RedirectDto; env: RowEnv }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          className={
-            destructive
-              ? "text-destructive hover:text-destructive pointer-coarse:size-control"
-              : "pointer-coarse:size-control"
-          }
+          className={destructive ? "text-destructive hover:text-destructive" : undefined}
           aria-label={name}
           onClick={onClick}
         >

@@ -458,7 +458,7 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
             <Button
               variant="ghost"
               size="icon-xs"
-              className="rounded-full pointer-coarse:size-control"
+              className="rounded-full"
               aria-label={t("filter.clear")}
               title={t("filter.clear")}
               onClick={() => setSearch({ item: undefined })}

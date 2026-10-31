@@ -310,7 +310,6 @@ function CopyUrl({ url }: { url: string }) {
       <Button
         variant="ghost"
         size="icon-sm"
-        className="pointer-coarse:size-11"
         aria-label={t("detail.copyUrl")}
         onClick={() => {
           navigator.clipboard.writeText(absolute).then(

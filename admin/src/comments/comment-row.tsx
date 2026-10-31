@@ -145,7 +145,7 @@ export function CommentRow({
           <Button
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground pointer-coarse:size-control"
+            className="text-muted-foreground"
             aria-label={t("filter.only", { title })}
             title={t("filter.only", { title })}
             onClick={onFilterItem}

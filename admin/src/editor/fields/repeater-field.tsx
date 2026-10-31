@@ -115,7 +115,7 @@ export function RepeaterField({
                         disabled={disabled}
                         aria-label={t("fields.removeRow", { row: rowLabel(row) })}
                         onClick={() => remove(row.index)}
-                        className="text-muted-foreground hover:text-destructive pointer-coarse:size-11"
+                        className="text-muted-foreground hover:text-destructive"
                       >
                         <Trash2Icon />
                       </Button>

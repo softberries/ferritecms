@@ -138,6 +138,28 @@ test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
       });
       expect(box, name).toEqual({ width: 44, height: 44 });
     }
+    // A field's own icon button (`InputGroupButton` icon-xs, 24 px drawn) widens what a
+    // finger hits to 44 × 44 with a pseudo-element: the content list's clear button.
+    await page.goto("/admin/content/post");
+    await page.getByRole("searchbox").fill("zz");
+    const clear = page.getByRole("button", { name: "Clear search" });
+    await expect(clear).toBeVisible();
+    const hits = await clear.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      // 21 px from the centre: inside a 44 px square, outside the 24 px button.
+      return [
+        [cx - 21, cy - 21],
+        [cx + 21, cy - 21],
+        [cx - 21, cy + 21],
+        [cx + 21, cy + 21],
+      ].map(([x, y]) => {
+        const hit = document.elementFromPoint(x!, y!);
+        return hit === el || el.contains(hit);
+      });
+    });
+    expect(hits).toEqual([true, true, true, true]);
   } finally {
     await ctx.close();
   }

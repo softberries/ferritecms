@@ -5,9 +5,24 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { Button } from "./button";
+import { DialogHeader } from "./dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton } from "./input-group";
+import { SheetHeader } from "./sheet";
 
 describe("touch_targets", () => {
+  test("dialog_and_sheet_titles_keep_clear_of_the_44px_close_button", () => {
+    // Dialog: the close button sits at right 8..52 px, the header's text at 16 + 40.
+    // Sheet: right 12..56 px, the header's text at 60.
+    render(
+      <>
+        <DialogHeader data-testid="dialog-header" />
+        <SheetHeader data-testid="sheet-header" />
+      </>,
+    );
+    expect(screen.getByTestId("dialog-header")).toHaveClass("pointer-coarse:pr-10");
+    expect(screen.getByTestId("sheet-header")).toHaveClass("pointer-coarse:pr-15");
+  });
+
   test.each(["icon-xs", "icon-sm"] as const)("button_%s_is_44px_under_a_coarse_pointer", (size) => {
     render(
       <Button size={size} aria-label="Close">

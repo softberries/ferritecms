@@ -74,7 +74,12 @@ function DialogContent({
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div data-slot="dialog-header" className={cn("flex flex-col gap-2", className)} {...props} />
+    // On touch screens the close button is 44 px (top-2 right-2): the title keeps clear.
+    <div
+      data-slot="dialog-header"
+      className={cn("flex flex-col gap-2 pointer-coarse:pr-10", className)}
+      {...props}
+    />
   );
 }
 

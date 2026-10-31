@@ -175,7 +175,6 @@ export function UsersScreen({ search, setSearch, me }: UsersScreenProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className="pointer-coarse:size-control"
               aria-label={t("users.openOn", { name: u.display_name })}
               title={t("users.open")}
               onClick={() => open(u)}
