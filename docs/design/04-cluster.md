@@ -80,7 +80,9 @@ heartbeat comparison uses the database clock.
 Since M2a-2b each node also reports `nodes.meta.job_kinds`: the job kinds its runner
 handles, sorted (`crates/ferrite/src/node.rs`, set from the handler list in `serve`). `GET
 /system/jobs` derives each job's `handled` flag from the live nodes' lists (P19), so a kind
-no live node knows stays visible as queued (M1.5 P5).
+no live node knows stays visible as queued (M1.5 P5). A node joins the registry with an
+empty meta and writes its first heartbeat (job kinds, theme, plugins) before it starts
+serving (`Registry::beat_once`, M4-4), so its row is complete from its first request.
 
 Error texts a node reports in `nodes.meta` (`theme.error`, `plugins.<name>.error`,
 `plugins_error`, `permalinks_error`) are scrubbed before the heartbeat writes them
