@@ -1504,3 +1504,72 @@ async fn duplicate_handler_kinds_are_refused() {
         Err(ClusterError::Store(_))
     ));
 }
+
+/// Records the fields of every `job` span (a scoped subscriber; no output).
+#[derive(Clone, Default)]
+struct JobSpans {
+    spans: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+    next: Arc<std::sync::atomic::AtomicU64>,
+}
+
+struct Fields<'a>(&'a mut BTreeMap<String, String>);
+
+impl tracing::field::Visit for Fields<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().to_owned(), format!("{value:?}"));
+    }
+}
+
+impl tracing::Subscriber for JobSpans {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        if span.metadata().name() == "job" {
+            let mut fields = BTreeMap::new();
+            span.record(&mut Fields(&mut fields));
+            self.spans.lock().unwrap().push(fields);
+        }
+        tracing::span::Id::from_u64(self.next.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {}
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// M4-4 T5.4b: the span every job runs in names the node that claimed it, so a log line
+/// of a job (an `import.wordpress` one included) says where it ran after the job row
+/// cleared `locked_by`. A current-thread runtime, so the scoped subscriber sees the
+/// runner's tasks; both backends.
+#[tokio::test]
+async fn job_span_names_the_node() {
+    let dbs = [Some(TestDb::sqlite().await), TestDb::postgres().await];
+    for db in dbs.into_iter().flatten() {
+        let spans = JobSpans::default();
+        let scoped = tracing::subscriber::set_default(spans.clone());
+        let store = db.shared_store();
+        let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
+        let (handler, _log) = TestHandler::new(KIND, |_| async { Ok(()) }).build();
+        let node = NodeId::new();
+        let (stop, handle) = start(store.clone(), RunnerConfig::new(node, 1), vec![handler]);
+        wait_status(store.as_ref(), id, JobStatus::Done, Duration::from_secs(5)).await;
+        stop_runner(stop, handle).await;
+        drop(scoped);
+        let seen = spans.spans.lock().unwrap().clone();
+        let span = seen
+            .iter()
+            .find(|f| f.get("id") == Some(&id.to_string()))
+            .unwrap_or_else(|| panic!("no job span for {id}: {seen:?}"));
+        assert_eq!(span.get("node"), Some(&node.to_string()), "{span:?}");
+        assert_eq!(span.get("kind").map(String::as_str), Some(KIND));
+        db.teardown().await;
+    }
+}

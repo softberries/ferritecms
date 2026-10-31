@@ -3,8 +3,11 @@
 //! The central directory is read once, at [`ZipSource::open`]; each entry is matched by
 //! its path below the first `uploads/` segment, or else by its full path. Both an entry's
 //! name and the path looked up are compared in Unicode NFC, so an archive made on macOS
-//! (NFD names) matches the paths WordPress stored. An entry is read on a blocking thread,
-//! streamed out in chunks, and never extracted to disk.
+//! (NFD names) matches the paths WordPress stored. Entries whose names match the same
+//! path that way (or after the part above `uploads/` is dropped) are ambiguous, an
+//! encrypted or unsupported one among them included: none of them is read, and an
+//! attachment naming that path is missing, its note naming the reason (P79). An entry is read on a blocking thread, streamed out in chunks, and never
+//! extracted to disk.
 //!
 //! Limits: before the central directory is parsed, the archive's end records (zip64 ones
 //! too) are read, and an archive declaring more than [`MAX_ENTRIES`] entries or a central
@@ -16,7 +19,7 @@
 //! declared size ends its stream with an error, so the file is missing and the run goes
 //! on.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +68,8 @@ pub struct ZipSource {
     archive: Arc<ZipArchive<std::fs::File>>,
     /// Entries by their path below `uploads/` (or their full path).
     entries: Arc<HashMap<String, Entry>>,
+    /// Keys more than one entry has (P79): none of those entries is read.
+    ambiguous: Arc<HashSet<String>>,
 }
 
 /// The archive limits; tests use small ones.
@@ -124,6 +129,9 @@ impl ZipSource {
             e => refused(e.to_string()),
         })?;
         let mut entries = HashMap::new();
+        let mut ambiguous = HashSet::new();
+        // Every key an entry had so far, readable or not.
+        let mut seen = HashSet::new();
         let mut declared: u64 = 0;
         for index in 0..archive.len() {
             let data = archive
@@ -146,6 +154,17 @@ impl ZipSource {
                 );
                 continue;
             };
+            // Names collide whether or not the entries could be read (P79): a second
+            // entry with a key seen before makes it ambiguous, and none is read.
+            if ambiguous.contains(&key) {
+                continue;
+            }
+            if !seen.insert(key.clone()) {
+                tracing::warn!(entry = %key, "uploads archive entries share a name after Unicode normalisation; none of them is read");
+                entries.remove(&key);
+                ambiguous.insert(key);
+                continue;
+            }
             let readable = !data.encrypted()
                 && matches!(
                     data.compression(),
@@ -155,15 +174,19 @@ impl ZipSource {
                 tracing::warn!(entry = %key, "an encrypted or unsupported uploads archive entry is left out");
                 continue;
             }
-            entries.entry(key).or_insert(Entry {
-                index,
-                size: data.size(),
-            });
+            entries.insert(
+                key,
+                Entry {
+                    index,
+                    size: data.size(),
+                },
+            );
         }
         Ok(ZipSource {
             path: path.to_owned(),
             archive: Arc::new(archive),
             entries: Arc::new(entries),
+            ambiguous: Arc::new(ambiguous),
         })
     }
 }
@@ -262,15 +285,30 @@ fn lookup_key(rel_path: &str) -> Option<String> {
 impl MediaSource for ZipSource {
     /// The entry for `rel_path`; one that declares more than `max` is refused
     /// ([`MediaError::TooLarge`]), and its stream fails once it yields more than it
-    /// declared or more than `max`.
+    /// declared or more than `max`. A path more than one entry has gets a stream that
+    /// fails at once with the reason (P79), so the import reports the file missing.
     async fn open(
         &self,
         rel_path: &str,
         _url: &str,
         max: u64,
     ) -> Result<Option<ByteStream>, ImportError> {
-        let Some(entry) = lookup_key(rel_path).and_then(|key| self.entries.get(&key).copied())
-        else {
+        let Some(key) = lookup_key(rel_path) else {
+            return Ok(None);
+        };
+        if self.ambiguous.contains(&key) {
+            let why = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the uploads archive has more than one entry named {key} (after Unicode \
+                     normalisation, below uploads/); none of them is read"
+                ),
+            );
+            return Ok(Some(Box::pin(futures::stream::once(
+                async move { Err(why) },
+            ))));
+        }
+        let Some(entry) = self.entries.get(&key).copied() else {
             return Ok(None);
         };
         if entry.size > max {
@@ -629,5 +667,100 @@ mod tests {
             b"plain"
         );
         assert_eq!(read(&src, "other.txt", 10).await.unwrap(), None);
+    }
+
+    /// P79: entries whose names are the same after NFC (or after the part above
+    /// `uploads/` is dropped) are ambiguous: none of them is read, and an attachment
+    /// naming one gets a stream that fails with the reason, so the import reports it
+    /// missing and notes why. Other entries still read.
+    #[tokio::test]
+    async fn nfc_colliding_entries_are_reported_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("u.zip");
+        write_zip(
+            &archive,
+            &[
+                ("uploads/na\u{ef}ve.png", b"nfc"),
+                ("uploads/nai\u{308}ve.png", b"nfd"),
+                ("wp-content/uploads/2024/a.png", b"one"),
+                ("2024/a.png", b"two"),
+                ("site/uploads/2024/a.png", b"three"),
+                ("uploads/ok.png", b"ok"),
+            ],
+        );
+        let src = ZipSource::open(&archive).unwrap();
+        for name in ["na\u{ef}ve.png", "nai\u{308}ve.png", "2024/a.png"] {
+            let err = read(&src, name, 10).await.unwrap_err();
+            assert!(err.contains("more than one entry"), "{name}: {err}");
+            assert!(err.contains("none of them is read"), "{name}: {err}");
+        }
+        assert_eq!(read(&src, "ok.png", 10).await.unwrap().unwrap(), b"ok");
+        assert_eq!(src.entries.len(), 1, "{:?}", src.entries);
+
+        // An entry that could not be read itself (here packed with bzip2) still
+        // collides: the readable one beside it is not read either.
+        let archive = dir.path().join("mixed.zip");
+        write_zip(
+            &archive,
+            &[
+                ("uploads/m\u{e9}.png", b"readable"),
+                ("uploads/me\u{301}.png", b"unsupported"),
+            ],
+        );
+        patch(
+            &archive,
+            "uploads/me\u{301}.png",
+            10,
+            8,
+            &12u16.to_le_bytes(),
+        );
+        let src = ZipSource::open(&archive).unwrap();
+        let err = read(&src, "m\u{e9}.png", 100).await.unwrap_err();
+        assert!(err.contains("more than one entry"), "{err}");
+        assert!(src.entries.is_empty(), "{:?}", src.entries);
+    }
+
+    /// A zip cut short anywhere, or with a stretch cut out of its middle, is refused as
+    /// an archive (`Archive`, which the job does not retry) or opens and misses what it
+    /// lost; it is never a read error of the file (`File`, retried). Regression for the
+    /// M3 follow-up "a truncated zip is retried, not refused".
+    #[test]
+    fn a_truncated_zip_is_refused_not_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.zip");
+        let files: Vec<(String, Vec<u8>)> = (0..5)
+            .map(|i| (format!("uploads/2024/{i}.txt"), vec![b'a' + i; 40]))
+            .collect();
+        let named: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        write_zip(&good, &named);
+        let bytes = std::fs::read(&good).unwrap();
+        let cut = dir.path().join("cut.zip");
+        // Every prefix: the end record is gone (or partial).
+        for len in 0..bytes.len() {
+            std::fs::write(&cut, &bytes[..len]).unwrap();
+            let err = ZipSource::open(&cut).unwrap_err();
+            assert!(
+                matches!(err, ImportError::Archive { .. }),
+                "cut at {len}: {err:?}"
+            );
+        }
+        // A stretch cut out before the end record: offsets point at the wrong bytes.
+        let tail = bytes.len() - EOCD_LEN;
+        for start in (0..tail).step_by(7) {
+            for gap in [1, 13, 64] {
+                let end = (start + gap).min(tail);
+                let spliced = [&bytes[..start], &bytes[end..]].concat();
+                std::fs::write(&cut, &spliced).unwrap();
+                if let Err(err) = ZipSource::open(&cut) {
+                    assert!(
+                        matches!(err, ImportError::Archive { .. }),
+                        "cut {start}..{end}: {err:?}"
+                    );
+                }
+            }
+        }
     }
 }
