@@ -566,7 +566,7 @@ its lock for a database that has none). It is never exported (`schema_meta` expo
 
 - no marker: the pass writes one for this install (a conditional create) and **deletes
   nothing** in that pass; deletes start with the next pass that reads it. If two installs
-  both find none (two sites already sharing a store when they upgrade, both due at 00:00
+  both find none (two sites already sharing a store when they upgrade, both due at 03:00
   UTC) on a store that does not honour the conditional create (`conditional_put =
   "disabled"`, or a provider that ignores `If-None-Match`), both write and neither deletes;
   the next passes read the one marker that stands, and only that install deletes;
@@ -576,7 +576,10 @@ its lock for a database that has none). It is never exported (`schema_meta` expo
 
 When they are skipped the line gets `; deletes skipped: <reason>` (`GcReport::
 deletes_skipped`) and the job still succeeds (retrying cannot change the owner); steps 1 and
-4 run: marks are kept up to date and `tmp/` is cleaned. A dry run writes nothing: no marker,
+4 run: marks are kept up to date and `tmp/` is cleaned. `ferrite media gc` exits 2 when the
+skip is a refusal (another install's marker, an unreadable one, a claim that did not hold:
+`GcReport::owner_refused`) or a delete failed (`failed`), and 0 for the first pass that only
+wrote the marker (M4-4 P74), so a cron wrapper that checks the exit code notices. A dry run writes nothing: no marker,
 and no install id for a database without one (it uses a made-up id for that pass, so it
 reports the deletes as skipped).
 
@@ -613,8 +616,10 @@ grace period on the new site.
 its snapshot and keeps it until the blobs are written, waiting up to 5 minutes for a running
 pass; past that the CLI fails (exit 1) and the job is `Busy` (retried soon, the attempt
 refunded). So no pass deletes a blob that the backup's snapshot lists while it is copied,
-and the daily backup and GC (both due at 00:00 UTC) no longer produce routine `missing`
-entries.
+and the daily backup and GC no longer produce routine `missing` entries. They are also due at
+different times: the `artifacts.gc` periodic has a 3 h offset (03:00 UTC, keyed by the day as
+before), a daily `site.backup` none (00:00 UTC), so they meet only when a backup runs for more
+than three hours or a node starts late in the day (M4-4 P75).
 
 The grace period is `[media] gc_grace_days` (default 7 days, 1..=365, 01 §4); it covers
 in-flight uploads (every writer stores the blob before its row), rollbacks to an old plugin

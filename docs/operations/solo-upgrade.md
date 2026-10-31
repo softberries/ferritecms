@@ -44,7 +44,15 @@ What happens (09 §1):
 2. `SHA256SUMS` and its minisign signature are checked against the key built into the
    running binary, then the asset's sha256. Any mismatch stops here with nothing changed.
 3. The new binary must report the release's version. With `--data` it also runs its
-   `migrate status` for the site and shows it: "needs migrate up" is normal; exit 3 (the
+   `config check` for the site: a key or value the new release refuses stops the update
+   with that output (fix `ferrite.toml` first). The check sees this shell's environment,
+   not the unit's `Environment=`/`EnvironmentFile=`: when the site's settings come from
+   there, run self-update with them (`env $(systemctl show ferrite --property=Environment
+   --value) ferrite self-update --data …`, with the same limits as for `doctor` in
+   `packaging/systemd/README.md`), or pass `--skip-config-check` when only the service
+   has what the check lacks.
+   Then it runs its `migrate status` for the site and shows it: "needs migrate up" is
+   normal; exit 3 (the
    new binary cannot run this schema) stops here. With the service running on SQLite the
    status cannot be read (the folder lock): you get a warning and the update goes on.
 4. It asks `Replace … ? [y/N]` (`--yes` skips this; it is required without a terminal),
@@ -123,8 +131,9 @@ systemctl start ferrite
 - Afterwards `upgrade.json` is renamed to `upgrade-rolled-back-<ts>.json`, the binaries
   are swapped (when run as `ferrite`), and `schema_meta.last_binary_version` names the
   older binary, so a later re-upgrade records a move that can itself be rolled back.
-- On SQLite the folder lock refuses while the service runs. **On Postgres nothing
-  detects a running site: stop the service first.**
+- On SQLite the folder lock refuses while the service runs. On Postgres it refuses while
+  the node registry shows a heartbeat fresher than 30 s: stop the service first (after a
+  crash, wait 30 s).
 
 ### c) The schema too: the pre-upgrade snapshot (SQLite)
 
@@ -138,7 +147,15 @@ systemctl start ferrite
   site. The tool shows `at` and the snapshot's time first and asks you to type `yes`.
 - The current database (and its `-wal`/`-shm`) is moved, never deleted, to
   `/var/lib/ferrite/backups/rolled-back-<ts>.db`; the snapshot is copied into place with
-  the replaced database's owner, group and mode.
+  the replaced database's owner, group and mode. Run as a non-root owner who is not in the
+  database's group, the copy keeps that owner's group and a warning gives the `chgrp` to
+  run as root.
+- The snapshot must be at the schema `upgrade.json` names as `schema_from`; another one is
+  refused before anything moves.
+- If the run is killed between moving the database aside and putting the copy in place,
+  no `ferrite.db` is left, only `ferrite.db.restore-<ts>.tmp`. The service then refuses to
+  start (it does not create an empty site) and names the `mv` that finishes the restore,
+  or the one that puts `backups/rolled-back-<ts>.db` back.
 - **Media uploaded since the upgrade** is referenced only by the moved-aside database. The
   daily media GC deletes those files after `media.gc_grace_days` (default 7). If you may
   want that content back, copy the media folder aside first or raise the grace period.
