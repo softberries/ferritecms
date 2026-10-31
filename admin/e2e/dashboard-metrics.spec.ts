@@ -196,6 +196,10 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await page.goto("/admin/");
   const traffic = section.getByRole("region", { name: "Traffic" });
   await expect(traffic.getByTestId("errors-chart")).toBeVisible();
+  // Reach network idle before a request is held: `expectAccessible`'s settle waits for it,
+  // which never comes while the series below is held, unless this document reached it once
+  // already. In chromium-sqlite `snap` waits for it; in the other projects it is a no-op.
+  await page.waitForLoadState("networkidle");
   await snap(page, "dashboard-metrics-day");
 
   // A slow range switch: the day's figures stay up at full colour (R-c3; dimmed to 60 %

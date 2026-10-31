@@ -281,20 +281,24 @@ test("trash_from_editor_with_undo", async ({ as, site, siteKey }) => {
 test("unreadable_parent_settles", async ({ as, site, siteKey, guard, snap, expectAccessible }) => {
   // A state the server allows: children (one published, one the author's own draft)
   // under someone else's draft parent, which the author may not read (404). On its own
-  // type, removed afterwards, so no other spec's list meets it.
+  // type, removed afterwards, so no other spec's list meets it. The author cannot pick an
+  // unreadable parent (M4-4 P77, `check_parent`), so the parent is published while the
+  // author's child is made and unpublished afterwards (a kept parent is not re-checked).
   const admin = await ContentApi.as(siteKey, site.url, "admin");
   const author = await ContentApi.as(siteKey, site.url, "author");
   const type = uid("t").slice(0, 32);
   const label = `Docs ${type.slice(-6)}`;
   await admin.createType(type, label, true);
   try {
-    const parent = await admin.create(type, `Hidden parent ${uid("").slice(-6)}`);
+    const shown = await admin.createIn(type, `Hidden parent ${uid("").slice(-6)}`, "published");
     const published = await admin.createIn(type, `Public child ${uid("").slice(-6)}`, "published", {
-      parent_id: parent.id,
+      parent_id: shown.id,
     });
     const mine = await author.create(type, `My child ${uid("").slice(-6)}`, {
-      parent_id: parent.id,
+      parent_id: shown.id,
     });
+    const parent = await admin.transition(shown, "unpublish");
+    expect(parent.status).toBe("draft");
     // The browser logs its own line for exactly this lookup; nothing else may fail.
     const lookup = new RegExp(`/api/v1/content/${type}/${parent.id}$`);
     guard.allowFailedResource(lookup);

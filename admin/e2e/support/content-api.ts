@@ -248,10 +248,10 @@ export class ContentApi {
     );
   }
 
-  /** A transition (`publish`, `submit`, `restore`, `schedule` with `at`). */
+  /** A transition (`publish`, `unpublish`, `submit`, `restore`, `schedule` with `at`). */
   async transition(
     item: Item,
-    action: "publish" | "submit" | "restore" | "schedule",
+    action: "publish" | "unpublish" | "submit" | "restore" | "schedule",
     at?: string,
   ): Promise<Item> {
     return this.ok(
