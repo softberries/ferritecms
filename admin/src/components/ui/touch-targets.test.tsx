@@ -33,11 +33,12 @@ describe("touch_targets", () => {
   });
 
   // Inside a field (itself 44 px tall on touch screens) the button keeps its look; a
-  // pseudo-element widens what a finger hits to 44 px: 24 + 2 × 10 and 32 + 2 × 6.
+  // pseudo-element widens what a finger hits to 44 px, staying inside the field on the
+  // right (3 px): 24 + 2 × 10 tall and 24 + 17 + 3 wide; 32 + 2 × 6 and 32 + 9 + 3.
   test.each([
-    ["icon-xs", "pointer-coarse:after:-inset-2.5"],
-    ["icon-sm", "pointer-coarse:after:-inset-1.5"],
-  ] as const)("input_group_button_%s_hits_44px_under_a_coarse_pointer", (size, inset) => {
+    ["icon-xs", ["-inset-y-2.5", "-right-0.75", "-left-4.25"]],
+    ["icon-sm", ["-inset-y-1.5", "-right-0.75", "-left-2.25"]],
+  ] as const)("input_group_button_%s_hits_44px_under_a_coarse_pointer", (size, insets) => {
     render(
       <InputGroup>
         <InputGroupAddon align="inline-end">
@@ -50,7 +51,7 @@ describe("touch_targets", () => {
     expect(screen.getByRole("button", { name: "Clear" })).toHaveClass(
       "relative",
       "pointer-coarse:after:absolute",
-      inset,
+      ...insets.map((inset) => `pointer-coarse:after:${inset}`),
     );
   });
 });

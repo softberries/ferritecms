@@ -139,27 +139,33 @@ test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
       expect(box, name).toEqual({ width: 44, height: 44 });
     }
     // A field's own icon button (`InputGroupButton` icon-xs, 24 px drawn) widens what a
-    // finger hits to 44 × 44 with a pseudo-element: the content list's clear button.
+    // finger hits to 44 × 44 with a pseudo-element, inside the field: the content list's
+    // clear button. The area runs from 3 px right of the button 44 px leftwards, and
+    // 10 px above and below it.
     await page.goto("/admin/content/post");
     await page.getByRole("searchbox").fill("zz");
     const clear = page.getByRole("button", { name: "Clear search" });
     await expect(clear).toBeVisible();
-    const hits = await clear.evaluate((el) => {
+    const probe = await clear.evaluate((el) => {
       const r = el.getBoundingClientRect();
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      // 21 px from the centre: inside a 44 px square, outside the 24 px button.
-      return [
-        [cx - 21, cy - 21],
-        [cx + 21, cy - 21],
-        [cx - 21, cy + 21],
-        [cx + 21, cy + 21],
+      const field = el.closest("[data-slot=input-group]")!.getBoundingClientRect();
+      const right = r.right + 3;
+      const left = right - 44;
+      const top = r.top - 10;
+      const bottom = r.bottom + 10;
+      // 1 px inside each corner of the 44 × 44 area.
+      const hits = [
+        [left + 1, top + 1],
+        [right - 1, top + 1],
+        [left + 1, bottom - 1],
+        [right - 1, bottom - 1],
       ].map(([x, y]) => {
         const hit = document.elementFromPoint(x!, y!);
         return hit === el || el.contains(hit);
       });
+      return { hits, insideField: right <= field.right && top >= field.top - 0.5 };
     });
-    expect(hits).toEqual([true, true, true, true]);
+    expect(probe).toEqual({ hits: [true, true, true, true], insideField: true });
   } finally {
     await ctx.close();
   }

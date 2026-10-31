@@ -1,5 +1,5 @@
 // The palette's stale hits (P81): while a slow search runs, the previous query's rows stay
-// at full colour (a dimmed row fell below 4.5:1); the hits are `aria-busy` and the header's
+// at full colour (a dimmed row fell below 4.5:1); the list is `aria-busy` and the header's
 // search icon turns into a spinner instead.
 
 import { screen, within } from "@testing-library/react";
@@ -77,8 +77,7 @@ test("stale_rows_keep_full_contrast", async () => {
   await user.type(input, "har");
   const list = screen.getByRole("listbox");
   await within(list).findByRole("option", { name: /Harbour notes/ });
-  const content = list.querySelector<HTMLElement>("[data-slot=palette-content]")!;
-  expect(content).not.toHaveAttribute("aria-busy");
+  expect(list).not.toHaveAttribute("aria-busy");
 
   await user.type(input, "b");
   // The wait became noticeable (250 ms): the spinner and `aria-busy` say so.
@@ -91,9 +90,7 @@ test("stale_rows_keep_full_contrast", async () => {
     { timeout: 2_000 },
   );
   expect(spinner).toHaveClass("animate-spin");
-  expect(content).toHaveAttribute("aria-busy", "true");
-  // Only the hits are busy: Go to, Create and Preferences are read as usual.
-  expect(list).not.toHaveAttribute("aria-busy");
+  expect(list).toHaveAttribute("aria-busy", "true");
   // The previous query's row is still there, still selectable, at full colour.
   const stale = within(list).getByRole("option", { name: /Harbour notes/ });
   for (let el: HTMLElement | null = stale; el && el !== list; el = el.parentElement) {
@@ -102,6 +99,6 @@ test("stale_rows_keep_full_contrast", async () => {
   expect(stale).not.toHaveAttribute("aria-disabled", "true");
 
   release();
-  await vi.waitFor(() => expect(content).not.toHaveAttribute("aria-busy"));
+  await vi.waitFor(() => expect(list).not.toHaveAttribute("aria-busy"));
   expect(document.querySelector("[data-slot=palette-spinner]")).toBeNull();
 });

@@ -742,10 +742,10 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
   the previous hits up at full colour (P81: dimmed to 60 %, muted text fell to about
   2:1 in light mode, and no opacity below about 0.96 keeps 4.5:1). Either way the
   field's search icon turns into a spinner (`data-slot="palette-spinner"`, standing
-  still under reduced motion; its shape still differs) and the hits' wrapper
-  (`data-slot="palette-content"`, a generic `div` inside the listbox) is
-  `aria-busy="true"`, not the whole listbox, so Go to, Create and Preferences are read as
-  usual; the rows stay selectable. The footer's `role="status"` says
+  still under reduced motion; its shape still differs) and the listbox is
+  `aria-busy="true"`; the rows stay selectable. Narrowing `aria-busy` to the hits needs
+  a wrapper `div` inside the listbox, which fails axe `aria-required-children` (tried in
+  M4-4 fix round 1); the footer's `role="status"` says
   "Searching content…" or "N content results" (it is visually hidden on phones, still
   read).
 - Empty: a centred icon, "No results for “…”" and a hint, drawn over the list, not
