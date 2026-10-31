@@ -1564,7 +1564,8 @@ it on the data folder (or with the database URL) controls the site. Every subcom
 the config, opens the database and runs the same migration check as `serve`; with SQLite it
 takes the data-folder lock, so it fails while `serve` runs (stop the server first; Postgres
 has no folder lock). The same rules as the API apply (login format, unique login and
-e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message, e.g.
+e-mail, password policy of at least 12 characters and at most 1024 bytes); any error exits
+1 with the message, e.g.
 `Error: invalid login: …`, `Error: invalid login: login taken`, `Error: user not found:
 "bob"`.
 
