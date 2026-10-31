@@ -23,7 +23,11 @@ pub enum OpenMode {
 pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<dyn Store>> {
     match config.database_kind() {
         DbKind::Sqlite { path } => {
-            crate::update::rollback::check_restore_tmps(&path, &config.data_dir.join("backups"))?;
+            crate::update::rollback::check_restore_tmps(
+                &path,
+                &config.data_dir,
+                &config.data_dir.join("backups"),
+            )?;
             if mode == OpenMode::MustExist && !path.is_file() {
                 bail!(
                     "database not found at {}; run `ferrite init` first",

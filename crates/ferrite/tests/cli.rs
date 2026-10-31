@@ -413,6 +413,24 @@ fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
     };
     refused(&[]);
 
+    // Fix round 3: while another process holds the folder lock (a rollback still moving
+    // its files), the files are in flight, not leftovers: "in use", and no advice.
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(data.join("ferrite.lock"))
+        .expect("lock file");
+    lock.try_lock().expect("lock");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .output()
+        .expect("run");
+    drop(lock);
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("in use") && !err.contains("mv "), "{err}");
+
     // Killed inside the database's own move: the link exists, the source was not unlinked.
     let aside = backups.join("rolled-back-20260101T000000Z.db");
     std::fs::hard_link(&db, &aside).expect("link");

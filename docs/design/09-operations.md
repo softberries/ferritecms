@@ -307,8 +307,13 @@ not hold here.
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
      sits beside another database file). Then it renames the copy into place. Each move is
      a hard link plus an unlink, so an existing file is never replaced. A failed move puts
-     the moved files back; when that fails too, the error names where the database is.
-     Nothing is deleted; the snapshot itself stays. The folders are synced afterwards.
+     the moved files back, the last moved first; when one of those fails too, it stops there
+     (no `-wal` goes back beside a database that stayed in `backups/`), the error names
+     where the database is, and the staged copy `ferrite.db.restore-<ts>.tmp` is kept, so
+     the store's open refuses with the moves that recover the files (below). Nothing is
+     deleted; the snapshot itself stays. The folders are synced afterwards. The leftover
+     checks below (the open's and a new run's) look under the data folder's lock, so a run
+     still moving its files reads as "in use", never as leftovers.
    - **An interrupted run** (killed between moving `ferrite.db` aside and renaming the
      copy into place) leaves no `ferrite.db` and the copy
      `ferrite.db.restore-<ts>.tmp`. Every command that opens the SQLite store (`serve`,
