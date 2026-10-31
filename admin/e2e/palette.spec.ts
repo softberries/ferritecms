@@ -267,7 +267,10 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await expect(palette(page).getByRole("status")).toHaveText("Searching content…");
   // A slow search: the field's icon is a spinner and the list is busy (P81).
   await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeVisible();
-  await expect(palette(page).getByRole("listbox")).toHaveAttribute("aria-busy", "true");
+  await expect(palette(page).locator("[data-slot=palette-content]")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
   await snap(page, "palette-searching");
   await expectAccessible(page);
   release();
@@ -277,7 +280,9 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await expect(option(page, new RegExp(SEEDED))).toBeVisible();
   await expect(palette(page).locator("[data-slot=palette-searching]")).toBeHidden();
   await expect(palette(page).getByRole("status")).toHaveText(/\d+ content results?/);
-  await expect(palette(page).getByRole("listbox")).not.toHaveAttribute("aria-busy");
+  await expect(palette(page).locator("[data-slot=palette-content]")).not.toHaveAttribute(
+    "aria-busy",
+  );
   await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeHidden();
   await snap(page, "palette-results");
   await expectAccessible(page);
@@ -295,13 +300,18 @@ test("screens", async ({ as, snap, expectAccessible }) => {
   await page.route(SEARCH, holdNext);
   await page.keyboard.press("Backspace");
   await expect(palette(page).locator("[data-slot=palette-spinner]")).toBeVisible();
-  await expect(palette(page).getByRole("listbox")).toHaveAttribute("aria-busy", "true");
+  await expect(palette(page).locator("[data-slot=palette-content]")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
   await expect(option(page, new RegExp(SEEDED))).toBeVisible();
   await snap(page, "palette-stale");
   await expectAccessible(page);
   releaseNext();
   await page.unroute(SEARCH, holdNext);
-  await expect(palette(page).getByRole("listbox")).not.toHaveAttribute("aria-busy");
+  await expect(palette(page).locator("[data-slot=palette-content]")).not.toHaveAttribute(
+    "aria-busy",
+  );
 
   // A query nothing matches.
   await input(page).fill("qqzzxv");

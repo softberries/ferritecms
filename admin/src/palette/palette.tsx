@@ -250,7 +250,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-muted-foreground hover:text-foreground pointer-coarse:size-11"
+            className="text-muted-foreground hover:text-foreground"
             aria-label={t("clear")}
             onClick={() => setQ("")}
           >
@@ -270,9 +270,6 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
       <div className="relative flex min-h-0 flex-1 flex-col sm:flex-none">
         <CommandList
           data-slot="palette-list"
-          // While a slow search runs, the rows (the previous query's hits, or none yet)
-          // are about to change.
-          aria-busy={slow || undefined}
           className="max-h-none min-h-0 flex-1 scroll-py-2 overscroll-contain p-2 sm:h-[min(26rem,calc(76svh-7rem))] sm:flex-none"
         >
           {query === "" && recentRows.length > 0 ? (
@@ -440,28 +437,32 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           {/* Last: groups stay in render order (cmdk 1.1.1 sorts the rows inside a group;
               its group sort looks groups up by id in `data-value`, which holds the
               heading, so it never moves one), and the hits are the open-ended part. */}
-          {hits.length > 0 ? (
-            // Stale hits (the previous query's) are not dimmed: at 60 % muted text fell
-            // below 4.5:1. The list's `aria-busy` and the spinner say a search runs (P81).
-            <CommandGroup heading={t("group.content")}>
-              {hits.map((hit) => (
-                <HitRow
-                  key={`${hit.type}:${hit.id}`}
-                  value={`${CONTENT_VALUE}${hit.type}:${hit.id}`}
-                  hit={hit}
-                  slug={hit.slug}
-                  query={query}
-                  snippet={bodySnippet(hit, query)}
-                  typeItem={typeItem(hit.type)}
-                  // One type only: the icon and the heading say it; a chip per row is noise.
-                  showType={new Set(hits.map((h) => h.type)).size > 1}
-                  onSelect={() => openHit(hit)}
-                />
-              ))}
-            </CommandGroup>
-          ) : slow ? (
-            <SearchingRows />
-          ) : null}
+          {/* Stale hits (the previous query's) are not dimmed: at 60 % muted text fell
+              below 4.5:1. The spinner and `aria-busy` on the hits only (not the whole
+              listbox, so Go to, Create and Preferences are read as usual) say a search
+              runs (P81). */}
+          <div data-slot="palette-content" aria-busy={slow || undefined}>
+            {hits.length > 0 ? (
+              <CommandGroup heading={t("group.content")}>
+                {hits.map((hit) => (
+                  <HitRow
+                    key={`${hit.type}:${hit.id}`}
+                    value={`${CONTENT_VALUE}${hit.type}:${hit.id}`}
+                    hit={hit}
+                    slug={hit.slug}
+                    query={query}
+                    snippet={bodySnippet(hit, query)}
+                    typeItem={typeItem(hit.type)}
+                    // One type only: the icon and the heading say it; a chip per row is noise.
+                    showType={new Set(hits.map((h) => h.type)).size > 1}
+                    onSelect={() => openHit(hit)}
+                  />
+                ))}
+              </CommandGroup>
+            ) : slow ? (
+              <SearchingRows />
+            ) : null}
+          </div>
         </CommandList>
         {pending ? null : <EmptyState q={query} failed={search.isError} />}
       </div>
