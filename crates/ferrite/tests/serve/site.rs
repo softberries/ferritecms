@@ -112,7 +112,10 @@ fn serve_seeded_site(p: Profile) {
     }
     let post = server.get(&format!("/{NEWEST_SLUG}/")).text();
     assert!(post.contains(NEWEST_TITLE), "{post}");
-    assert!(post.contains("<pre><code"), "code block rendered: {post}");
+    assert!(
+        post.contains("<pre tabindex=\"0\"><code"),
+        "code block rendered: {post}"
+    );
     let team = server.get("/about/team/").text();
     assert!(team.contains("Team"), "{team}");
 
@@ -179,6 +182,89 @@ fn serve_seeded_site(p: Profile) {
             .expect("count")
     });
     assert_eq!(posts, 12 * 2 + 1, "two batches plus the draft");
+}
+
+/// Counts of what `seed demo` writes: users, terms, menus, options and content items.
+async fn seeded_rows(p: &Profile) -> (bool, usize, usize, bool, u64) {
+    let store = p.store().await;
+    let read = store.read();
+    let admin = read.users().get_by_login("admin").await.expect("users");
+    let mut terms = read.terms().list("category").await.expect("terms").len();
+    terms += read.terms().list("tag").await.expect("terms").len();
+    let menus = read.menus().list().await.expect("menus").len();
+    let title = read.options().get("site.title").await.expect("options");
+    let content = read
+        .content()
+        .count(&ferrite_domain::ContentQuery::default())
+        .await
+        .expect("count");
+    (admin.is_some(), terms, menus, title.is_some(), content)
+}
+
+/// A seed that fails after the posts (test seam) leaves no row, and a plain run then
+/// succeeds (M4-1 P20).
+fn failed_seed_leaves_no_rows(p: Profile) {
+    p.init();
+    let before = rt().block_on(seeded_rows(&p));
+    assert_eq!(before, (false, 0, 0, false, 0));
+
+    let failed = seed(&p, &["--fail-after-posts"]);
+    assert!(!failed.status.success(), "seed must fail: {failed:?}");
+    let err = String::from_utf8_lossy(&failed.stderr);
+    assert!(err.contains("fails after the posts"), "{err}");
+    let after = rt().block_on(seeded_rows(&p));
+    assert_eq!(after, before, "a failed seed wrote rows");
+
+    let ok = seed(&p, &[]);
+    assert!(ok.status.success(), "seed after a failed run: {ok:?}");
+    let seeded = rt().block_on(seeded_rows(&p));
+    assert_eq!(
+        seeded,
+        (true, 4, 2, true, 12 + 3 + 1),
+        "posts, pages, image"
+    );
+}
+
+#[test]
+fn seed_failure_leaves_no_rows() {
+    failed_seed_leaves_no_rows(Profile::solo());
+}
+
+#[test]
+fn seed_failure_leaves_no_rows_cluster() {
+    let Some(p) = Profile::cluster() else { return };
+    failed_seed_leaves_no_rows(p);
+}
+
+/// `--force` still adds a whole new batch next to the first one.
+#[test]
+fn seed_force_still_adds_batch() {
+    let p = Profile::solo();
+    p.init();
+    assert!(seed(&p, &[]).status.success());
+    let forced = seed(&p, &["--force"]);
+    assert!(forced.status.success(), "seed --force: {forced:?}");
+    let (admin, terms, menus, title, content) = rt().block_on(seeded_rows(&p));
+    assert!(admin && title);
+    assert_eq!(
+        (terms, menus),
+        (4, 2),
+        "user and terms reused, menus replaced"
+    );
+    assert_eq!(content, 2 * (12 + 3 + 1), "two batches");
+    let pages = rt().block_on(async {
+        let store = p.store().await;
+        store
+            .read()
+            .content()
+            .count(&ferrite_domain::ContentQuery {
+                kind: Some("page".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("count")
+    });
+    assert_eq!(pages, 6, "pages of both batches");
 }
 
 #[test]

@@ -7,13 +7,14 @@ use std::{
 };
 
 use ferrite_store::{
-    Directives, MigrationStatus, PendingMigration, SCHEMA_META_MIN_BINARY, StoreError,
-    next_min_binary, parse_directives, plan_down,
+    Directives, MigrateReport, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID,
+    SCHEMA_META_MIN_BINARY, StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
+use sqlx::SqliteConnection;
 use sqlx::migrate::{MigrateError, Migrator};
 
-use crate::{SqliteStore, exec::map_db_err};
+use crate::{KeepSnapshot, SqliteStore, exec::map_db_err};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -52,6 +53,11 @@ fn embedded_versions() -> Vec<i64> {
         .collect()
 }
 
+/// The newest schema version this binary's SQLite migrations reach.
+pub fn latest_schema_version() -> i64 {
+    embedded_versions().into_iter().max().unwrap_or(0)
+}
+
 fn mig_err(e: MigrateError) -> StoreError {
     StoreError::Migration(e.to_string())
 }
@@ -66,37 +72,85 @@ struct Applied {
     checksum: Vec<u8>,
 }
 
+/// Whether the table `name` exists, on `conn` (any connection, read-only included).
+pub async fn table_exists(conn: &mut SqliteConnection, name: &str) -> Result<bool, StoreError> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
+    )
+    .bind(name)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(map_db_err)
+}
+
+/// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
+async fn applied_on(conn: &mut SqliteConnection) -> Result<Vec<Applied>, StoreError> {
+    if !table_exists(conn, "_sqlx_migrations").await? {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(i64, Vec<u8>, bool)> =
+        sqlx::query_as("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(map_db_err)?;
+    if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
+        return Err(StoreError::Migration(format!(
+            "migration {v} failed partway (dirty); repair the database manually"
+        )));
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(version, checksum, _)| Applied { version, checksum })
+        .collect())
+}
+
+/// `schema_meta.min_binary_version`, if the table and key exist.
+async fn min_binary_on(conn: &mut SqliteConnection) -> Result<Option<Version>, StoreError> {
+    if !table_exists(conn, "schema_meta").await? {
+        return Ok(None);
+    }
+    let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+        .bind(SCHEMA_META_MIN_BINARY)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(map_db_err)?;
+    raw.map(|s| {
+        Version::parse(&s).map_err(|e| {
+            StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
+        })
+    })
+    .transpose()
+}
+
+/// The migration status of the database behind `conn`, reads only: what
+/// [`ferrite_store::Store::migration_status`] reports for a [`SqliteStore`], which calls this
+/// on a reader connection. `ferrite doctor` calls it on its own read-only connection, which
+/// needs no data-folder lock. A migration recorded as failed (dirty) or an unparsable
+/// `schema_meta.min_binary_version` is a [`StoreError::Migration`].
+pub async fn status_from(
+    conn: &mut SqliteConnection,
+    binary: &Version,
+) -> Result<MigrationStatus, StoreError> {
+    let applied: Vec<i64> = applied_on(conn).await?.iter().map(|a| a.version).collect();
+    let min_binary = min_binary_on(conn).await?;
+    Ok(MigrationStatus::compute(
+        &applied,
+        &embedded_status()?,
+        binary,
+        min_binary,
+    ))
+}
+
 impl SqliteStore {
     async fn table_exists(&self, name: &str) -> Result<bool, StoreError> {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?)",
-        )
-        .bind(name)
-        .fetch_one(&self.reader)
-        .await
-        .map_err(map_db_err)
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        table_exists(&mut conn, name).await
     }
 
     /// Applied migrations, oldest first; errors if one is recorded as failed (dirty).
     async fn applied(&self) -> Result<Vec<Applied>, StoreError> {
-        if !self.table_exists("_sqlx_migrations").await? {
-            return Ok(Vec::new());
-        }
-        let rows: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
-            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
-        )
-        .fetch_all(&self.reader)
-        .await
-        .map_err(map_db_err)?;
-        if let Some((v, _, _)) = rows.iter().find(|(_, _, ok)| !ok) {
-            return Err(StoreError::Migration(format!(
-                "migration {v} failed partway (dirty); repair the database manually"
-            )));
-        }
-        Ok(rows
-            .into_iter()
-            .map(|(version, checksum, _)| Applied { version, checksum })
-            .collect())
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        applied_on(&mut conn).await
     }
 
     async fn applied_versions(&self) -> Result<Vec<i64>, StoreError> {
@@ -105,42 +159,25 @@ impl SqliteStore {
 
     /// `schema_meta.min_binary_version`, if the table and key exist.
     async fn stored_min_binary(&self) -> Result<Option<Version>, StoreError> {
-        if !self.table_exists("schema_meta").await? {
-            return Ok(None);
-        }
-        let raw: Option<String> = sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
-            .bind(SCHEMA_META_MIN_BINARY)
-            .fetch_optional(&self.reader)
-            .await
-            .map_err(map_db_err)?;
-        raw.map(|s| {
-            Version::parse(&s).map_err(|e| {
-                StoreError::Migration(format!("invalid {SCHEMA_META_MIN_BINARY} `{s}`: {e}"))
-            })
-        })
-        .transpose()
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        min_binary_on(&mut conn).await
     }
 
     pub(crate) async fn status(&self, binary: &Version) -> Result<MigrationStatus, StoreError> {
-        let applied = self.applied_versions().await?;
-        let min_binary = self.stored_min_binary().await?;
-        Ok(MigrationStatus::compute(
-            &applied,
-            &embedded_status()?,
-            binary,
-            min_binary,
-        ))
+        let mut conn = self.reader.acquire().await.map_err(map_db_err)?;
+        status_from(&mut conn, binary).await
     }
 
-    pub(crate) async fn up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    pub(crate) async fn up(&self, to: Option<i64>) -> Result<MigrateReport, StoreError> {
         let applied = self.applied_versions().await?;
         let pending: Vec<i64> = embedded_versions()
             .into_iter()
             .filter(|v| !applied.contains(v) && to.is_none_or(|t| *v <= t))
             .collect();
+        let mut snapshot = None;
         if let Some(&target) = pending.iter().max() {
             let from = applied.iter().copied().max().unwrap_or(0);
-            self.pre_migration_snapshot(from, target).await?;
+            snapshot = Some(self.pre_migration_snapshot(from, target).await?);
             match to {
                 Some(t) => MIGRATOR.run_to(t, &self.writer).await,
                 None => MIGRATOR.run(&self.writer).await,
@@ -149,7 +186,10 @@ impl SqliteStore {
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
         self.sync_schema_meta(&[]).await?;
-        Ok(pending)
+        Ok(MigrateReport {
+            applied: pending,
+            snapshot,
+        })
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -182,15 +222,17 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Writes `site_id` and `created_by_version` when absent and updates
+    /// Writes `site_id`, `install_id` (R16) and `created_by_version` when absent and updates
     /// `min_binary_version` per [`next_min_binary`]; `reverted` = versions just undone.
     async fn sync_schema_meta(&self, reverted: &[i64]) -> Result<(), StoreError> {
         if !self.table_exists("schema_meta").await? {
             return Ok(());
         }
         let site_id = uuid::Uuid::now_v7().to_string();
+        let install_id = uuid::Uuid::now_v7().to_string();
         for (key, value) in [
             ("site_id", site_id.as_str()),
+            (SCHEMA_META_INSTALL_ID, install_id.as_str()),
             ("created_by_version", env!("CARGO_PKG_VERSION")),
         ] {
             sqlx::query(
@@ -240,8 +282,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// `backups/pre-<from>-to-<to>-<UTC yyyymmddThhmmssZ>.db`, keeping the newest five.
-    async fn pre_migration_snapshot(&self, from: i64, to: i64) -> Result<(), StoreError> {
+    /// `backups/pre-<from>-to-<to>-<UTC yyyymmddThhmmssZ>.db`, keeping the newest five
+    /// plus [`SqliteOptions::keep_snapshot`](crate::SqliteOptions::keep_snapshot); returns
+    /// the new snapshot's path.
+    async fn pre_migration_snapshot(&self, from: i64, to: i64) -> Result<PathBuf, StoreError> {
         let dir = &self.backups_dir;
         std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
         let stem = format!(
@@ -257,11 +301,24 @@ impl SqliteStore {
         }
         self.vacuum_into(&dest).await?;
         tracing::info!(path = %dest.display(), "wrote pre-migration snapshot");
-        prune_snapshots(dir)
+        prune_snapshots(dir, self.keep_snapshot.as_ref())?;
+        Ok(dest)
     }
 }
 
-fn prune_snapshots(dir: &Path) -> Result<(), StoreError> {
+/// Deletes all but the newest [`KEEP_SNAPSHOTS`] `pre-*.db` in `dir`, except what `keep`
+/// spares (M4-2 P30): a kept snapshot counts among the five when it is one of the newest
+/// and survives as a sixth when it is older; `KeepAll` deletes nothing.
+fn prune_snapshots(dir: &Path, keep: Option<&KeepSnapshot>) -> Result<(), StoreError> {
+    let keep = match keep {
+        Some(KeepSnapshot::KeepAll) => return Ok(()),
+        // Compared canonically: `keep` is built from the data folder, `dir` may be spelled
+        // another way (a relative `--data`, a symlink).
+        Some(KeepSnapshot::Keep(k)) => {
+            Some(std::fs::canonicalize(k).unwrap_or_else(|_| k.to_owned()))
+        }
+        None => None,
+    };
     let mut snaps: Vec<(SystemTime, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| io_err(dir, e))? {
         let entry = entry.map_err(|e| io_err(dir, e))?;
@@ -279,6 +336,11 @@ fn prune_snapshots(dir: &Path) -> Result<(), StoreError> {
     }
     snaps.sort_by(|a, b| b.cmp(a));
     for (_, old) in snaps.into_iter().skip(KEEP_SNAPSHOTS) {
+        if let Some(keep) = &keep
+            && std::fs::canonicalize(&old).is_ok_and(|p| p == *keep)
+        {
+            continue;
+        }
         std::fs::remove_file(&old).map_err(|e| io_err(&old, e))?;
     }
     Ok(())
@@ -297,6 +359,82 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// A migrated database plus `statements`, then a plain connection to it.
+    async fn migrated_with(
+        dir: &std::path::Path,
+        statements: &[&str],
+    ) -> (SqliteStore, sqlx::SqliteConnection) {
+        use sqlx::Connection;
+        let path = dir.join("ferrite.db");
+        let store = SqliteStore::open(SqliteOptions::new(&path)).await.unwrap();
+        store.migrate_up(None).await.unwrap();
+        for sql in statements {
+            sqlx::query(sqlx::AssertSqlSafe(*sql))
+                .execute(&store.writer)
+                .await
+                .unwrap();
+        }
+        let conn = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .read_only(true),
+        )
+        .await
+        .unwrap();
+        (store, conn)
+    }
+
+    #[tokio::test]
+    async fn status_from_matches_the_store_and_needs_no_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(dir.path(), &[]).await;
+        let binary = semver::Version::new(0, 1, 0);
+        assert_eq!(
+            super::status_from(&mut conn, &binary).await.unwrap(),
+            store.migration_status(&binary).await.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn status_from_refuses_a_dirty_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(
+            dir.path(),
+            &["UPDATE _sqlx_migrations SET success = 0 WHERE version = 2"],
+        )
+        .await;
+        let binary = semver::Version::new(0, 1, 0);
+        for err in [
+            super::status_from(&mut conn, &binary).await.unwrap_err(),
+            store.migration_status(&binary).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, ferrite_store::StoreError::Migration(m) if m.contains("migration 2 failed partway")),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_from_refuses_an_invalid_min_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, mut conn) = migrated_with(
+            dir.path(),
+            &["INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('min_binary_version', 'nope')"],
+        )
+        .await;
+        let binary = semver::Version::new(0, 1, 0);
+        for err in [
+            super::status_from(&mut conn, &binary).await.unwrap_err(),
+            store.migration_status(&binary).await.unwrap_err(),
+        ] {
+            assert!(
+                matches!(&err, ferrite_store::StoreError::Migration(m) if m.contains("invalid min_binary_version `nope`")),
+                "{err:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -341,7 +479,7 @@ mod tests {
         let names = snapshots(&backups);
         assert_eq!(names.len(), 2, "{names:?}");
         assert!(
-            names.iter().all(|n| n.starts_with("pre-0-to-10-")),
+            names.iter().all(|n| n.starts_with("pre-0-to-12-")),
             "{names:?}"
         );
 
@@ -370,5 +508,46 @@ mod tests {
         }
         // Six snapshots written, five kept.
         assert_eq!(snapshots(&backups).len(), 5);
+    }
+
+    #[tokio::test]
+    async fn prune_never_deletes_keep_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let kept = backups.join("pre-0-to-1-20200101T000000Z.db");
+        let f = std::fs::File::create(&kept).unwrap();
+        f.set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+        let mut opts = SqliteOptions::new(dir.path().join("ferrite.db"));
+        // Spelled through `..` on purpose: compared canonically.
+        opts.keep_snapshot = Some(crate::KeepSnapshot::Keep(
+            backups
+                .join("..")
+                .join("backups")
+                .join(kept.file_name().unwrap()),
+        ));
+        let store = SqliteStore::open(opts).await.unwrap();
+        for _ in 0..6 {
+            let report = store.migrate_up(None).await.unwrap();
+            assert!(report.snapshot.unwrap().starts_with(&backups));
+            store.migrate_down(0, true).await.unwrap();
+        }
+        let names = snapshots(&backups);
+        assert_eq!(names.len(), 6, "{names:?}");
+        assert!(kept.exists());
+    }
+
+    #[tokio::test]
+    async fn keep_all_prunes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        let mut opts = SqliteOptions::new(dir.path().join("ferrite.db"));
+        opts.keep_snapshot = Some(crate::KeepSnapshot::KeepAll);
+        let store = SqliteStore::open(opts).await.unwrap();
+        for _ in 0..7 {
+            store.migrate_up(None).await.unwrap();
+            store.migrate_down(0, true).await.unwrap();
+        }
+        assert_eq!(snapshots(&backups).len(), 7);
     }
 }

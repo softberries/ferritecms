@@ -16,6 +16,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportMedia {
     pub wp_id: i64,
+    /// The meta key `wp_id` is stored under, as [`ImportContent::id_meta`].
+    pub id_meta: &'static str,
     /// SHA-256 of the attachment's IR record (P3, P4).
     pub hash: String,
     /// The staged original, checked as an upload is
@@ -54,6 +56,7 @@ impl ImportBatch<'_> {
         let checked = check_upload(&m.upload)?;
         let item = ImportContent {
             wp_id: m.wp_id,
+            id_meta: m.id_meta,
             hash: m.hash,
             kind: MEDIA_KIND.into(),
             title: checked.title.clone(),

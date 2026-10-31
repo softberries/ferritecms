@@ -134,15 +134,106 @@ export interface SeoDraft {
 export const MAX_CANONICAL = 2048;
 
 /**
+ * `text` trimmed the way the server trims SEO values (Rust `str::trim`: Unicode
+ * White_Space). Unlike JS `trim()` it keeps U+FEFF (a BOM is not White_Space).
+ */
+export function trimSeo(text: string): string {
+  // A scan from each end, not `\p{White_Space}+$`: that regex retries from every
+  // position of a long inner whitespace run, quadratic in its length.
+  // (No White_Space code point is astral, so code units are safe to test.)
+  const ws = /\p{White_Space}/u;
+  let start = 0;
+  let end = text.length;
+  while (start < end && ws.test(text.charAt(start))) start++;
+  while (end > start && ws.test(text.charAt(end - 1))) end--;
+  return text.slice(start, end);
+}
+
+/**
+ * `text` cut so the server's limit holds: at most `max` characters (code points, as the
+ * server counts) once trimmed. Edge whitespace is kept (the server trims it away); an
+ * over-long paste is cut at a code-point boundary.
+ */
+export function clampSeo(text: string, max: number): string {
+  if (seoLength(text) <= max) return text;
+  const lead = [...(/^\p{White_Space}*/u.exec(text)?.[0] ?? "")].length;
+  return [...text].slice(0, lead + max).join("");
+}
+
+/** The length the server checks: code points of the trimmed text. */
+export function seoLength(text: string): number {
+  return [...trimSeo(text)].length;
+}
+
+/**
+ * The value an edit from `prev` to `next` leaves under the limit `max`, as a native
+ * `maxLength` would: an edit that fits is kept; one made while `prev` is already at the
+ * limit is refused (`prev`, so typing inside full text does not push its end off); one
+ * that jumps past it (a paste) is cut by {@link clampSeo}.
+ */
+export function limitSeoEdit(prev: string, next: string, max: number): string {
+  if (seoLength(next) <= max) return next;
+  if (seoLength(prev) >= max) return prev;
+  return clampSeo(next, max);
+}
+
+/** The text an `insert*` input event puts in (a line break as `"\n"`). */
+function insertedText(e: InputEvent): string {
+  if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") return "\n";
+  return e.data ?? e.dataTransfer?.getData("text/plain") ?? "";
+}
+
+/**
+ * A `beforeinput` listener that keeps the field within `max` (as {@link seoLength}
+ * counts) before anything lands, so the caret never jumps, as a native `maxLength`:
+ * any insert (typing, Enter, a replacement, a paste, a drop) that would pass the limit
+ * is refused; a paste or drop is cut to what fits (at a code-point boundary) and put in
+ * at the caret. Composition (IME) cannot be cancelled; {@link limitSeoEdit} still holds
+ * the limit then.
+ */
+export function refuseSeoOverflow(max: number): (e: Event) => void {
+  return (e) => {
+    const input = e as InputEvent;
+    if (!input.inputType.startsWith("insert") || input.inputType === "insertCompositionText") {
+      return;
+    }
+    const el = e.target as HTMLInputElement | HTMLTextAreaElement;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const before = el.value.slice(0, start);
+    const rest = el.value.slice(end);
+    const text = insertedText(input);
+    if (seoLength(before + text + rest) <= max) return;
+    e.preventDefault();
+    if (input.inputType !== "insertFromPaste" && input.inputType !== "insertFromDrop") return;
+    // The longest start of the pasted text (in code points, so never half a surrogate
+    // pair) that still fits. The trimmed length never shrinks as the start grows, so
+    // bisection finds it in O(log n) length checks, not one per pasted character.
+    const chars = [...text];
+    const fits = (n: number) => seoLength(before + chars.slice(0, n).join("") + rest) <= max;
+    let fit = 0;
+    for (let hi = chars.length - 1; fit < hi;) {
+      const mid = Math.ceil((fit + hi) / 2);
+      if (fits(mid)) fit = mid;
+      else hi = mid - 1;
+    }
+    if (fit <= 0) return;
+    el.setRangeText(chars.slice(0, fit).join(""), start, end, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+}
+
+/**
  * Whether the server takes `text` as `seo.canonical` (core `check_canonical`): blank (it
  * deletes the value), or, trimmed, an absolute `http(s)` URL with a host, without
- * whitespace or control characters, at most {@link MAX_CANONICAL} characters.
+ * whitespace (Unicode White_Space) or control characters (Cc), at most
+ * {@link MAX_CANONICAL} characters.
  */
 export function canonicalAccepted(text: string): boolean {
-  const s = text.trim();
+  const s = trimSeo(text);
   if (s === "") return true;
-  // eslint-disable-next-line no-control-regex
-  if ([...s].length > MAX_CANONICAL || /[\s\u0000-\u001f\u007f-\u009f]/u.test(s)) return false;
+  const bad = /[\p{White_Space}\p{Cc}]/u;
+  if ([...s].length > MAX_CANONICAL || bad.test(s)) return false;
   try {
     const url = new URL(s);
     return (url.protocol === "http:" || url.protocol === "https:") && url.hostname !== "";
@@ -194,8 +285,8 @@ export function metaOf(item: ContentDto | null): MetaDraft {
       };
 }
 
-/** A typed SEO value as the API takes it: blank is `null` (delete). */
-const seoValue = (s: string): string | null => (s.trim() === "" ? null : s);
+/** A typed SEO value as the API takes it: blank (as the server trims) is `null` (delete). */
+const seoValue = (s: string): string | null => (trimSeo(s) === "" ? null : s);
 
 /** The directives as the API takes them: none is `null` (delete). */
 const robotsValue = (robots: readonly SchemaRobotsDto[]): SchemaRobotsDto[] | null =>

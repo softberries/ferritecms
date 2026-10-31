@@ -1,24 +1,36 @@
 //! The `ferrite` binary's logic, split from `main.rs` so tests can call it directly.
 
+mod archive;
+pub mod backup;
 mod cli;
 mod config_cmd;
+pub mod doctor;
+mod export_cmd;
 mod ext_cmd;
 pub mod extensions;
+pub mod gc;
 mod healthcheck;
 mod import_cmd;
 mod init;
 pub mod jobs;
 pub mod keys;
+mod media_cmd;
+mod media_url;
 mod migrate;
 mod node;
+mod node_metrics;
 mod open;
 pub mod reload;
 mod seed;
 pub mod serve;
 mod site;
+mod site_copy;
 #[cfg(test)]
 #[path = "../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;
+pub mod tls;
+pub mod update;
+pub mod upgrade;
 mod user_cmd;
 
 pub use cli::{Cli, Command, MigrateCommand, run};
@@ -31,6 +43,12 @@ pub use site::{LoadedTheme, ThemeOrigin, load_theme, reload_theme};
 /// The version of this binary, parsed from `Cargo.toml`.
 pub fn binary_version() -> anyhow::Result<semver::Version> {
     Ok(semver::Version::parse(env!("CARGO_PKG_VERSION"))?)
+}
+
+/// The target triple this binary was built for (`FERRITE_TARGET` in M4-2 P27), embedded
+/// by `build.rs`; `self-update` picks its release asset by it.
+pub fn binary_target() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/target-triple"))
 }
 
 /// The process environment as UTF-8 pairs. Non-UTF-8 variables are ignored, except a

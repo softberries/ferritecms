@@ -525,7 +525,7 @@ impl ThemeDto {
             description: text("description"),
             author: text("author"),
             license: text("license"),
-            homepage: text("homepage"),
+            homepage: web_url(text("homepage").as_deref()),
             has_settings,
             menus,
             images,

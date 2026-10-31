@@ -4,11 +4,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod analytics;
 mod common;
+mod contact_form;
 mod egress;
 mod install;
 mod mail;
 mod reload;
+mod seo;
 mod settings;
 
 use common::{HOUR, SITE_URL, Site};
@@ -48,8 +51,10 @@ async fn head(site: &Site, item: Option<&PageItem>, req: &PluginRequest) -> (Str
 
 /// `site` with a host whose render deadline is 5 s, for tests that are not about
 /// deadlines but assert a call's success (or its trace): a slow first store read under
-/// a loaded full test run must not turn into a deadline failure (final review I3).
-/// Call it before installing or loading plugins.
+/// a loaded full test run must not turn into a deadline failure (final review I3; M4-4:
+/// every test here that renders through the host and asserts what a plugin returned).
+/// The deadline tests (hostile plugins, the render budget, kv volatility) keep the
+/// default 200 ms. Call it before installing or loading plugins.
 fn with_generous_deadlines(mut site: Site) -> Site {
     let config = ferrite_plugin_host::HostConfig {
         render_deadline: std::time::Duration::from_secs(5),
@@ -70,6 +75,7 @@ fn meta_tag(name: &str, content: &str) -> String {
 }
 
 async fn hello_head_from_rows_and_artifact(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let id = site
         .post(
@@ -202,6 +208,7 @@ async fn loader_rejects_tampered_missing_and_ungranted(site: Site) -> Site {
             bytes: 10,
             mime: "application/wasm".into(),
             created_at: ferrite_domain::Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();
@@ -277,6 +284,7 @@ fn meta_value<'a>(html: &'a str, name: &str) -> Option<&'a str> {
 }
 
 async fn content_read_never_returns_drafts(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     let visible = site
         .post(
@@ -348,6 +356,7 @@ async fn content_read_never_returns_drafts(site: Site) -> Site {
 }
 
 async fn preview_shows_only_the_previewed_item(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
     site.post(
         &author,
@@ -488,20 +497,41 @@ async fn kv_use_is_volatile(site: Site) -> Site {
 }
 
 async fn sanitised_content_filters(site: Site) -> Site {
+    let site = with_generous_deadlines(site);
     let author = site.user("ada", Role::Author).await;
+    // Core's markup a sanitising filter must keep: heading ids (P54) and code blocks
+    // (R-b17).
+    let body = json!({"type": "doc", "content": [
+        {"type": "heading", "attrs": {"level": 2},
+         "content": [{"type": "text", "text": "Install the binary"}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "Body of hello"}]},
+        {"type": "heading", "attrs": {"level": 3},
+         "content": [{"type": "text", "text": "Content"}]},
+        {"type": "codeBlock", "attrs": {"language": "rust"},
+         "content": [{"type": "text", "text": "fn main() {}"}]}
+    ]});
     let id = site
-        .post(
+        .post_with_body(
             &author,
             "hello",
             "Hello",
             ContentStatus::Published,
             Some(-HOUR),
+            body,
         )
         .await;
     site.install("html-inject").await;
     site.load().await;
     let mut item = public_item(&site, id).await;
     let before = item.html.clone();
+    assert!(
+        before.contains("<h2 id=\"install-the-binary\">")
+            && before.contains("<h3 id=\"content-1\">")
+            && before.contains("<pre tabindex=\"0\"><code class=\"language-rust\">"),
+        "{before}"
+    );
+    let toc: Vec<&str> = item.toc.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(toc, ["install-the-binary", "content-1"]);
     let mut trace = RenderTrace::default();
     let req = req_for(&item);
     filter_item(&site.host, &mut item, &req, &mut trace).await;
@@ -592,6 +622,57 @@ async fn services_kv_settings_options_meta(site: Site) -> Site {
             .is_err()
     );
     assert!(s.meta_set("not-a-uuid", "seo.title", "1").await.is_err());
+    site
+}
+
+/// Ruling X1: `options.get` answers `site.url` (the configured URL, no trailing slash)
+/// and `site.title` (the option when it is a non-blank string, else the configured
+/// title) as JSON strings; settings stay private.
+async fn site_options_come_from_the_configuration(site: Site) -> Site {
+    let s = ferrite_http::StoreHostServices::new(
+        site.store.clone(),
+        site.reader.clone(),
+        "https://example.com/",
+    )
+    .with_site_title("Configured \"Title\"".to_owned());
+    assert_eq!(
+        s.option_get("site.url").await.as_deref(),
+        Some("\"https://example.com\"")
+    );
+    // No option stored: the configured title, JSON-escaped.
+    assert_eq!(
+        s.option_get("site.title").await.as_deref(),
+        Some("\"Configured \\\"Title\\\"\"")
+    );
+    let options = site.store.read().options();
+    options
+        .set("site.title", &json!("Stored"), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.option_get("site.title").await.as_deref(),
+        Some("\"Stored\"")
+    );
+    // A blank or non-string option falls back to the configured title
+    // (`settings::site_title`; a theme would show a blank string as it is).
+    for unset in [json!("  "), json!(7)] {
+        options.set("site.title", &unset, false).await.unwrap();
+        assert_eq!(
+            s.option_get("site.title").await.as_deref(),
+            Some("\"Configured \\\"Title\\\"\""),
+            "{unset}"
+        );
+    }
+    // Other keys are read as before; `site.url` is never an option row.
+    options
+        .set("site.url", &json!("https://evil.test"), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.option_get("site.url").await.as_deref(),
+        Some("\"https://example.com\"")
+    );
+    assert_eq!(s.option_get("site.description").await, None);
     site
 }
 
@@ -877,6 +958,7 @@ profile_tests!(
     kv_use_is_volatile,
     sanitised_content_filters,
     services_kv_settings_options_meta,
+    site_options_come_from_the_configuration,
     plugin_read_errors_are_volatile,
     seo_read_error_is_volatile,
     meta_writes_reach_visible_items_only,

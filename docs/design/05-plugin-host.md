@@ -64,12 +64,12 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   The rows are recorded by `ExtensionAdmin::install_plugin` (API: `manage_plugins` +
   `extensions:write`, audit row `plugin.install`) or `ExtensionService::install_plugin`
   (CLI, operator path, no audit), under the `extensions` lock, with `plugins.changed`, in
-  one transaction. When the API's record step fails (for example `503 busy`), the handler
-  deletes the uploaded bytes again unless an artifact row names them
-  (`Installer::discard_staged`, under the `extensions` lock); anything else left behind
-  waits for the artifact GC (M4). Residual race (accepted): a concurrent install of the same bytes
-  that uploaded them but has not yet recorded its rows loses its blob, and that plugin
-  fails to load until it is reinstalled; closing it needs a GC grace period (M4).
+  one transaction. When the record step fails (for example `503 busy`), the uploaded bytes
+  stay in the media store with no row; the artifacts GC deletes them once they are older
+  than its grace period (`media.gc_grace_days`, default 7 days; 03 §6, M4-1 P12). Nothing
+  deletes them in the request, which closes the M2a-2a race where a concurrent install of
+  the same bytes, uploaded but not yet recorded, lost its blob; the cost is that refused
+  install bytes stay up to the grace period.
 - **Permission report and approval (P3, P6).** `Manifest::permission_report` lists every
   capability as a plain-language line (`key`, `text`, `detail`, `risk`: `low`, `medium` or
   `high`; the API also sends `high_risk` = `risk == "high"`): high risk are `content.read`,
@@ -165,7 +165,7 @@ homepage    = "https://example.dev/seo-pro"
 content.read       = ["post", "page"]       # content types readable; ["*"] = all public types
 content.meta.read  = ["seo.*"]
 content.meta.write = ["seo.*"]              # meta key globs; "plugin.<name>.*" always allowed
-options.read       = ["site.title", "site.url"]
+options.read       = ["site.title", "site.url"]   # site.url, site.title: configured values (§7a)
 kv                 = true
 http               = ["api.indexnow.org"]   # hostnames, HTTPS only; no wildcards in v1
 render.head        = true                   # may contribute structured head tags
@@ -387,8 +387,15 @@ As built:
   first segment percent-decodes to `_preview` in any case (also the 404 variants),
   plugin routes (`/_p/`) and the API (separate axum routes).
 - **Event:** `{"path", "status", "ts", "referrer_host", "ua_class", "cache"}`. `path` is
-  the raw percent-encoded path without the query, cut to 512 bytes (F36; a decoded
-  path could hold a NUL and make the whole job payload invalid). `referrer_host` is the
+  the percent-encoded path without the query, cut to 512 bytes (F36; a decoded
+  path could hold a NUL and make the whole job payload invalid). Every byte outside the
+  RFC 3986 path set (`pchar` and `/`) is percent-encoded as `%XX` (uppercase) before the
+  cut: the request target may carry a raw `"`, `\`, space, control or non-ASCII byte, and
+  the JSON payload would double a `\` or `"` and make a guest pay for it (M4-3a X5; 1000
+  events of 508 backslashes trapped the `analytics` example at the default fuel). An
+  existing `%XX` (two hex digits, either case) is kept as it is; a `%` that starts no such
+  escape is itself encoded, as `%25`. The cut never splits an escape: a `%` or `%X` it
+  would leave at the end is dropped. `referrer_host` is the
   lowercased ASCII host of a single absolute `Referer` (≤ 253 bytes), else `null`.
   `ua_class`: `bot` if the user agent contains `bot`, `crawl`, `spider` or `slurp`
   (ASCII case-insensitive), else `browser` if it starts with `Mozilla/`, else `other`.
@@ -677,7 +684,11 @@ under real concurrent load in M1.
   `mail` 1 per call; exceeding → the import
   returns an error, the guest decides. In M0, `meta`, `options` and `settings` calls also
   count against the `content` budget (conservative; spec named only content/kv/http). Guest-supplied list
-  limits (`list-posts`, `kv.list-keys`) are clamped to 100.
+  limits (`list-posts`, `kv.list-keys`) are clamped to 100. Across calls a plugin's `kv`
+  holds at most 10 MiB of values and 10 000 keys (`KV_MAX_BYTES`, `KV_MAX_KEYS` in
+  `ferrite-http`; one statement checks the totals with the key's old value replaced, so a
+  write that shrinks a value always fits); past that `kv.set` answers
+  `kv quota exceeded (…)`.
 - **StoreLimits (measured in M0)**: `instances = 3`, `tables = 2`, `memories = 1`,
   `table_elements = 10_000`. A `wasm32-wasip2` component built by Rust instantiates
   several core instances (main module plus WASI adapter shims), so `instances = 1`
@@ -797,7 +808,7 @@ of at most 64 KiB (`MAX_MAIL_BODY_BYTES`). Then `StoreHostServices::notify_admin
 node; a refused second mail in one call uses no hourly slot); the recipients are the
 active admins (at most 50, `MAIL_MAX_ADMINS`; unusable addresses skipped, none left is an
 error), all in `Bcc`, so admins do not see each other's addresses and the plugin never
-learns them. The subject gets the site-title prefix `[<site title>] ` (the `site.title` option at send time, else `ferrite.toml`, M2b-3 P51; 01 §4) and the body
+learns them. The subject gets the site-title prefix `[<site title>] ` (the `site.title` option at send time, else, also when the option cannot be read, `ferrite.toml`, M2b-3 P51; cut and checked by the rules core mails use, `ferrite_core::mail::subject_title`, M4-4 P77; 01 §4) and the body
 the footer `Sent by plugin <name>`. The mail is handed to the node's mail queue and the
 call returns: SMTP never runs inside the plugin call (F28); a full queue (16 in flight) is
 an error to the guest, an SMTP failure is only logged. Example: `plugins/examples/notifier`
@@ -823,7 +834,13 @@ value is passed on and the call counts as a failure (§8).
   protocol-relative); `cite` on `blockquote`/`q`/`del`/`ins` dropped (ammonia does not check
   it as a URL);
   `rel="noopener noreferrer"` on every link, plus `a[target]`
-  and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
+  and `code[class]` restricted to `language-*` classes, and `pre[tabindex]` only as `0`
+  (core's code blocks, M4-3b R-b17), and `id` on `h1`–`h6` only as an id core's heading
+  rule can give (`ferrite_domain::html::heading_id_allowed`: non-empty, lowercase Unicode
+  alphanumerics, `-` and `_`, and not reserved: one of `RESERVED_FRAGMENT_IDS`, or a comment
+  anchor `comment-<uuid>` / `reply-<uuid>[-field]`, `is_reserved_fragment_id`; M4-3b P54), so
+  `post.toc` and deep links survive a sanitising `content.body` filter. An `id` on any other
+  element, or one outside that rule, is dropped. Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives
   only if no non-raw plugin runs after it. Raw HTML is meant to be shown as a high-risk
   permission at install (M2 admin).
@@ -876,6 +893,15 @@ As built (M1c-2), in `crates/ferrite-http/src/plugins/` over the store-backed
   does, and a plugin's own `plugin.<name>.*` keys need no grant.
   `options.get` never returns `plugin.*` keys, whatever the manifest grants (a plugin reads its
   own settings through `settings.get`, option `plugin.<name>.settings.<key>`).
+  Two keys come from the configuration (ruling M4-3a X1), each still needing its `options.read`
+  grant: `site.url` answers the configured site URL without a trailing slash, as a JSON string
+  (it is not stored as an option), and `site.title` answers the stored `site.title` option when
+  it is a string with more than whitespace, else the title configured in `ferrite.toml`
+  (`settings::site_title`, as mail and the TOTP issuer use it; the theme layer takes any stored
+  string as it is, so for a blank stored title the plugin sees the configured one and a theme the
+  blank).
+  `StoreHostServices::with_site_title` supplies the configured title (it also serves the
+  plugin-mail subject prefix); `serve` sets it from `[site] title`.
 - **Preview scoping.** Per-request state travels in a tokio task-local set around each filter
   chain (`run_filter`). During an authenticated preview, `get-post` and `meta.get` on *that one
   item* return it, so plugins render previews faithfully. The preview item can only come from
@@ -1092,6 +1118,41 @@ ferrite_sdk::export_plugin! {
   macro dispatches on the incoming `filter-value` variant and a mismatch yields
   `invalid-input`. Unknown hook names yield `invalid-input`; `handle_request` with no
   matching route returns a 404.
+- Helpers added in M4-3a (M4 P42): guest-side source only, no WIT or host change, and the
+  existing public names stay. Pure logic is unit-tested natively (`cargo test -p
+  ferrite-sdk`). Each helper module is used by its path (`settings::text`,
+  `viewers::allow`, `form::parse_urlencoded`); the crate root re-exports only the WIT types
+  and the core handles (`Ctx`, `Kv`, `Http`, `Head`; final review A-9).
+  - `form::parse_urlencoded(body) -> Result<Vec<(String, String)>, FormError>`: `+` is a
+    space, `%XX` is decoded, empty segments are skipped, and a key with no `=` gets an
+    empty value. A bad escape, invalid UTF-8 or more than 100 pairs is an error.
+  - `html::escape(s)`: escapes `& < > " '`. It scans bytes and copies the runs between them
+    whole (M4-3a Task 4): a character-by-character loop cost more fuel on non-ASCII text.
+  - `Head`: `json_ld(json)` (a `script-tag` with only `json-ld`; the host re-serialises it
+    and escapes `<`, `>`, `&`, and drops invalid JSON), `link_typed(rel, href, kind)`, and
+    the queries `has_meta_name`, `has_meta_property` and `meta_property`, so a filter can
+    check what core already emitted before adding a tag.
+  - `options::get(key) -> Option<String>` (`options.read`): the decoded value when the
+    option is a JSON string; `None` when it is unset, not granted or any other JSON type.
+    `site.url` and `site.title` fall back to the configuration (§7a), so with the grant they
+    are normally `Some`; `None` still happens when the call's content budget is spent or the
+    store read for `site.title` fails.
+    The unescape is minimal (`\" \\ \/ \b \f \n \r \t \uXXXX` with surrogate pairs), so the
+    SDK needs no JSON crate; a plugin that wants a number or object reads the raw text
+    through the bindings. Only JSON whitespace (space, tab, LF, CR) may surround the value.
+  - `settings::{text, bool, number}(key)`: one of the plugin's own settings as a JSON
+    string (decoded, not trimmed), bool or number (`f64`; one too large for it is `None`),
+    by the same exact decoding; `None` when unset or of another type, so the plugin applies
+    its default (final review A-2; the three examples use them).
+  - `time::{unix_now, days_from_civil, civil_from_days}`: the wall clock in Unix seconds
+    and Hinnant's UTC calendar conversions (used by `analytics` and `contact-form`).
+  - `mail::notify_admins(subject, body) -> Result<(), String>` (`mail = "admins"`).
+  - `viewers::allow(setting, user) -> bool`: true when `user` is one of the ids in the
+    `viewers` setting (separated by commas or whitespace, compared exactly); an empty or
+    absent setting or user allows nobody (M4 P46).
+  - `route::html(status, body)`: a `RouteResponse` with `Content-Type`
+    `text/html; charset=utf-8` (`route::text` was removed in the final review: no plugin
+    used it).
 - Build (**settled in M0**, ruling R1): `cargo build --release --target wasm32-wasip2`
   with an explicit `--target` produces a component directly; `cargo component` is not
   needed. (`plugins/.cargo/config.toml` sets the target only for CWD inside `plugins/`.)
@@ -1144,3 +1205,84 @@ Test plugins added in M2a-2a (not hostile, `plugins/examples/`): `router` (route
 M2a-2b adds `fetcher` (`http = ["api.example.test"]`, route `GET /get?u=<url>` answering
 `ok <status> <body>` or `err <message>`; optional `m`, `h`, `b` and `n` parameters set the
 method, headers, a body and several fetches per call).
+M4-3a adds the shipped example `analytics` (`plugins/examples/analytics`, a `request.served`
+subscriber, one route and a viewer list, `README.md`), the first example that stores a lot:
+one JSON blob per UTC day in KV. Three things it showed about the limits. A call's 100 KV
+operations are enough for a batch only if the plugin counts them (it reads and writes each
+touched day once, caps a batch at three days and spends what is left on the prune). "Today"
+comes from the wall clock, which every plugin may read (`wasi:clocks`, §5): taking it from
+the newest event instead lets one event from a fast clock prune the history. And fuel, not
+the 1 MiB a call may write, is what limits a batch: it is counted in guest instructions, and
+reading a day blob and the events costs in proportion to the entries and bytes. A `BTreeMap`
+of paths was many times slower than the default 50 million allows for 90 days, so the plugin
+counts in a `HashMap` (randomly seeded from the linked `wasi:random`); it stores a path cut to
+200 bytes and a host to 100 (core allows 512 and 253), which bounds a blob at about 137 KB; a
+batch decodes and re-encodes at most 150 000 bytes of blobs (the newest touched day always, an
+older one only if it fits, else it is skipped and logged); and the stats page decodes the newest
+day in full plus at most three more within 150 000 bytes, the older days giving their totals
+alone, read from the front of the blob.
+
+A fourth limit is storage (ruling X7, final review A-I1): a plugin may keep 10 MiB of values
+(§6, the host-import budgets), and 366 days of full blobs could need 50 MB, so a full store would fail every batch and
+auto-disable the plugin. The plugin keeps two tiers: the newest `detail_days` (default 30,
+at most 60, never more than `retention_days`) whole under `day:YYYY-MM-DD`, older days
+compacted to their counts under `totals:YYYY-MM-DD`. Worst case, both settings at their
+maximum, with every map full, every key as long as the cut allows and every count 20 digits:
+60 × 137 098 + 366 × 212 = 8 303 472 bytes (7.92 MiB); with the four full blobs that can
+exist for a moment (tomorrow's, and three days a batch counts below the window before the
+next batch compacts them), 64 × 137 098 + 366 × 212 = 8 851 864 bytes (8.44 MiB), under the
+quota; the unit test `the_worst_case_footprint_fits_the_quota` builds the blobs and checks
+the sum stays under 9 MiB. Every batch prunes and compacts before it counts, keeping the
+operations its counting needs (at most eight compactions, each reading only the counts at
+the head of the blob), so a refused write never stops the prune, and a compaction whose
+write is refused over the quota deletes the full blob first and writes again (any other
+refusal leaves the full blob for a later batch): lowering a setting frees space at the next
+batch. The stats page lists the window's keys (one listing per month and tier) and reads only
+those, so a read that fails is reported, not shown as an empty day; a listing that fails comes
+back empty, so its days show as empty (the 0.1 `kv` gap).
+
+Measured with `ANALYTICS_FUEL` (a test override of the plugin's fuel limit), as the range
+between a limit that traps and one that passes, against the default 50 million (final review,
+solo profile, after the events were read in place instead of copied). The most expensive
+batches, 1000 events with 508-byte paths and 253-byte hosts: across midnight onto a full
+older day with the newest day new, 27 to 28 million; over three days with a full oldest day,
+26 to 27; the same with the most maintenance a batch does (30 expired days deleted, eight
+full days compacted, 100 compacted days listed and 19 deleted), 26 to 27; only adding to the
+keys of a full day, 24 to 26; onto one full day, 20 to 22 (about 1.8x headroom at worst;
+before the final review the same cases needed 29 to 30). Across midnight with both days full
+the older one is skipped, 18 to 20. 1000 backslash or quote paths needed 80 to 90 million as
+the raw path reached the payload (the 404s alone) and 16 to 18 million once core
+percent-encodes it (X5). The page over the largest blob (`days=1` and 90 days), 10 to 12
+million; over 90 days of 33 KB blobs, 16 to 18, and of short distinct keys, 14 to 16; with a
+230 KB newest day, 22 to 24; 1000 ordinary events onto two 33 KB days, 12 to 14. No limit
+above the default is requested.
+M4-3a also adds the shipped example `contact-form` (`plugins/examples/contact-form`, P45 and
+P46, `README.md`): a sandboxed form page `GET /`, `POST /submit` (`cross_origin`, because a
+form on a plugin page posts with `Origin: null`; `rate_limit = "10/h"`) that themes post their
+own form to with `plugin_route("contact-form", "/submit")`, and a viewer-guarded `GET /inbox`.
+A valid post is mailed with `notify-admins` (the subject made one line and cut to 200
+characters before the host adds the site title; a mail error is logged, not shown, unless the
+message was not stored either: then the visitor gets a 503) and kept in one KV blob of the
+latest 100 messages within 900 KiB. A body over 96 KiB is refused with 413 before it is
+decoded (the largest valid form is about 68 KB; the host passes up to 1 MiB). Fuel shaped its storage: a JSON
+document of messages that each need escapes (`"` throughout) cost more than 25 million to
+decode and re-encode at 16 messages, so the blob is JSON lines (a version line, then one
+compact message per line, newest first). A submit finds the stored lines by their line breaks,
+eight bytes per step, and writes them back without decoding any; the inbox page decodes only
+the ten it shows. Measured by bisecting the plugin's fuel limit: a submit onto a full blob,
+about 9 million; the dearest inbox page (ten messages of `"`), about 19 million; the test suite
+runs these at half the default. A failed `kv.get` (`None`) is checked with `list-keys` before
+a first blob is written, as in `analytics`.
+
+**The shipped examples, as built (M4-3a P47).** `seo`, `analytics` and `contact-form`
+(`plugins/examples/`, each with a `README.md`) are the plugins a site can use as they are, not
+only test fixtures: `seo` (`content.read = ["post"]`, `options.read` of `site.title` and
+`site.url`, `render.head`), `analytics` (`options.read`, `kv`, one route, `request.served`) and
+`contact-form` (`options.read`, `kv`, three routes, `mail`). A release attaches them as
+`ferrite-plugins-<version>.tar.gz` (09 §7): the folders `seo/`, `analytics/` and `contact-form/`
+at its top level, each holding `ferrite-plugin.toml`, `<name>.wasm` (the crate's
+`contact_form.wasm` is `contact-form.wasm` there) and `README.md`, so each folder is the `--dir`
+of `ferrite plugin check|install` as it is. The plugins are not embedded in the binary: every
+install needs the approval of its permission report (§2), which a bundled plugin would skip.
+The plugin version is the workspace version: `.github/scripts/package-plugins.sh` refuses
+when a manifest says otherwise.

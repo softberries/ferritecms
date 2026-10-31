@@ -72,3 +72,15 @@ test("a_file_after_project_is_a_file", () => {
     "e2e/menus.spec.ts:12",
   ]);
 });
+
+test("public_themes_has_no_twin", () => {
+  // `public-themes-chromium` (the starter themes' axe checks) is one project, without a
+  // `-site-wide` teardown; naming one would fail ("Project(s) not found").
+  expect(
+    playwrightArgs(["--project", "public-themes-chromium", "e2e/public-themes.spec.ts"], sqlite),
+  ).toEqual(["test", "--project=public-themes-chromium", "--no-deps", "e2e/public-themes.spec.ts"]);
+  expect(playwrightArgs(["--project=public-themes-chromium"], sqlite)).toEqual([
+    "test",
+    "--project=public-themes-chromium",
+  ]);
+});

@@ -38,7 +38,7 @@ use ferrite_import_wp::report::Report;
 use ferrite_import_wp::run::{ImportContext, ImportOptions, MediaSource, RunFailed, run};
 use ferrite_import_wp::zip_source::ZipSource;
 use ferrite_media::{MediaError, MediaStore};
-use ferrite_store::Store;
+use ferrite_store::{Store, StoreError};
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 
@@ -62,6 +62,8 @@ pub struct ImportWordpressHandler {
     pub site_url: String,
     /// `media.max_upload`.
     pub max_upload: u64,
+    /// `media.strip_metadata`.
+    pub strip_metadata: bool,
     /// The binary's version, for the `--fetch-media` user agent.
     pub version: String,
     /// Test seam: every attempt fails after this many batches.
@@ -129,6 +131,8 @@ impl ImportWordpressHandler {
         if !self.import.job_may_start(job).await.map_err(core_error)? {
             return Err(JobError::Busy("another import is running".into()));
         }
+        // In the runner's `job` span, which names the job and the node.
+        tracing::info!(user = %payload.user, "import.wordpress started");
         // Fresh copies: an earlier attempt's may be partial.
         match tokio::fs::remove_dir_all(folder).await {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -184,6 +188,7 @@ impl ImportWordpressHandler {
             // A job's start decides the takeover itself (P27 as built).
             takeover: false,
             max_upload: self.max_upload,
+            strip_metadata: self.strip_metadata,
             job_id: Some(job),
             #[cfg(feature = "test-seams")]
             fail_after_batches: self.fail_after_batches,
@@ -192,6 +197,8 @@ impl ImportWordpressHandler {
         match run(ctx, &wxr, opts).await {
             Ok(report) => {
                 self.store_report(&report).await;
+                // A failed attempt is logged by the runner (`job attempt failed`).
+                tracing::info!(run = %report.run_id, "import.wordpress done");
                 Ok(())
             }
             Err(RunFailed { error, report }) => {
@@ -381,12 +388,26 @@ impl ImportWordpressHandler {
                 }
             }
             if let Err(e) = artifacts.delete(&hash).await {
-                tracing::info!(error = %e, %hash, "an import input's row is still referenced; its file stays");
+                input_row_kept(&e, &hash);
                 continue;
             }
             if let Err(e) = self.media.delete(&hash).await {
                 tracing::warn!(error = %e, %hash, "deleting an import input's file failed; it waits for the orphan sweep");
             }
+        }
+    }
+}
+
+/// Logs why the row of import input `hash` was not deleted (its file stays): the
+/// expected foreign-key refusal (a media item, plugin or theme shares the row) at
+/// `info`, any other store error at `warn`.
+fn input_row_kept(e: &StoreError, hash: &ArtifactHash) {
+    match e {
+        StoreError::ForeignKey { .. } => {
+            tracing::info!(error = %e, %hash, "an import input's row is still referenced; its file stays");
+        }
+        _ => {
+            tracing::warn!(error = %e, %hash, "deleting an import input's row failed; its file stays");
         }
     }
 }
@@ -413,6 +434,7 @@ fn import_error(e: ImportError) -> JobError {
         | ImportError::TooLarge { .. }
         | ImportError::Utf8 { .. }
         | ImportError::Missing { .. }
+        | ImportError::Source { .. }
         | ImportError::Archive { .. } => JobError::Permanent(e.to_string()),
         other => JobError::Retry(other.to_string()),
     }
@@ -440,6 +462,9 @@ mod tests {
             path: "u.zip".into(),
             msg: "bad".into()
         })));
+        assert!(permanent(import_error(ImportError::Source {
+            value: "markdown:docs".into()
+        })));
         assert!(permanent(core_error(CoreError::Forbidden(
             "an active admin"
         ))));
@@ -459,5 +484,52 @@ mod tests {
     #[test]
     fn timeout_is_six_hours() {
         assert_eq!(IMPORT_TIMEOUT, Duration::from_secs(21_600));
+    }
+
+    /// The log lines `f` writes, as plain text (a scoped subscriber at `info`).
+    fn logs(f: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Buf(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log buffer").extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buf.0.lock().expect("log buffer").clone();
+        String::from_utf8(bytes).expect("utf-8 logs")
+    }
+
+    /// The foreign-key refusal (a media item shares the input's row) is expected and
+    /// logged at `info`; any other database error deleting the row is a `warn`.
+    #[test]
+    fn an_input_row_delete_failure_is_a_warning() {
+        let hash = ArtifactHash::parse(&"ab".repeat(32)).expect("hash");
+        let fk = logs(|| {
+            input_row_kept(
+                &StoreError::ForeignKey {
+                    constraint: "".into(),
+                },
+                &hash,
+            )
+        });
+        assert!(fk.contains(" INFO "), "{fk}");
+        assert!(fk.contains("still referenced"), "{fk}");
+        let db = logs(|| input_row_kept(&StoreError::Database("disk I/O error".into()), &hash));
+        assert!(db.contains(" WARN "), "{db}");
+        assert!(db.contains("deleting an import input's row failed"), "{db}");
+        assert!(db.contains("disk I/O error"), "{db}");
+        assert!(db.contains(&hash.to_string()), "{db}");
     }
 }

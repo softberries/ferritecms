@@ -129,6 +129,8 @@ pub struct ImportOptions {
     pub takeover: bool,
     /// The largest attachment file accepted (`media.max_upload`, P13).
     pub max_upload: u64,
+    /// Strip EXIF and XMP from imported JPEG, PNG and WebP files (`media.strip_metadata`).
+    pub strip_metadata: bool,
     /// Called as each step that runs begins: `parse`, `pass1`…`pass4`, `fixup`, then
     /// `report` (P28). Steps an earlier run finished are skipped without a call.
     pub on_step: Option<OnStep>,
@@ -162,6 +164,7 @@ impl Default for ImportOptions {
             tag_base: "tag".into(),
             takeover: false,
             max_upload: DEFAULT_MAX_UPLOAD,
+            strip_metadata: false,
             on_step: None,
             job_id: None,
             #[cfg(feature = "test-seams")]
@@ -186,6 +189,7 @@ impl std::fmt::Debug for ImportOptions {
             .field("tag_base", &self.tag_base)
             .field("takeover", &self.takeover)
             .field("max_upload", &self.max_upload)
+            .field("strip_metadata", &self.strip_metadata)
             .field("on_step", &self.on_step.as_ref().map(|_| "Fn"))
             .field("job_id", &self.job_id);
         #[cfg(feature = "test-seams")]
@@ -731,12 +735,24 @@ fn read_channel(path: &Path) -> Result<Channel, ImportError> {
 }
 
 /// The run source (P3): the `<wp:base_blog_url>` with a lower-case scheme and host and
-/// no trailing slash.
+/// no trailing slash. Only an `http(s)` URL with a host is a WordPress source (M4-4
+/// P77): another scheme (`markdown:<name>` is the Markdown importer's source, `file:`,
+/// `ftp:`) is refused, so a WXR never runs under another importer's map rows.
 fn normalise_source(base_blog_url: &str) -> Result<String, ImportError> {
-    let url = url::Url::parse(base_blog_url.trim()).map_err(|_| ImportError::Missing {
-        what: "a valid wp:base_blog_url",
-        offset: 0,
-    })?;
+    let value = base_blog_url.trim();
+    if value.is_empty() {
+        return Err(ImportError::Missing {
+            what: "a valid wp:base_blog_url",
+            offset: 0,
+        });
+    }
+    let refused = || ImportError::Source {
+        value: value.chars().take(200).collect(),
+    };
+    let url = url::Url::parse(value).map_err(|_| refused())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        return Err(refused());
+    }
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
@@ -899,7 +915,45 @@ mod tests {
             normalise_source("https://example.test:443").unwrap(),
             "https://example.test"
         );
-        assert!(normalise_source("").is_err());
+        assert!(matches!(
+            normalise_source(" "),
+            Err(ImportError::Missing { .. })
+        ));
+    }
+
+    /// P77: a source is an `http(s)` URL with a host, so a WXR cannot run under the
+    /// Markdown importer's `markdown:<name>` source (or any other scheme) and touch its
+    /// map rows.
+    #[test]
+    fn markdown_scheme_source_is_refused() {
+        for bad in [
+            "markdown:docs",
+            "MARKDOWN:docs",
+            "ftp://example.test/",
+            "file:///var/www",
+            "mailto:a@example.test",
+            "data:text/plain,x",
+            "not a url",
+            "example.test/blog",
+        ] {
+            match normalise_source(bad) {
+                Err(e @ ImportError::Source { .. }) => {
+                    assert_eq!(
+                        e.to_string(),
+                        format!(
+                            "wp:base_blog_url {bad:?} is not an http(s) URL; set it to the \
+                             old site's http:// or https:// address"
+                        )
+                    );
+                }
+                other => panic!("{bad}: expected Source, got {other:?}"),
+            }
+        }
+        let long = format!("ftp://{}", "a".repeat(300));
+        match normalise_source(&long) {
+            Err(ImportError::Source { value }) => assert_eq!(value.chars().count(), 200),
+            other => panic!("expected Source, got {other:?}"),
+        }
     }
 
     /// Only an unfinished run's folder of the same file with a finished parse is found;

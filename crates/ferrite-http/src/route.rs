@@ -62,7 +62,9 @@
 //! makes a wrong year, month or category a 404 instead of the post under another URL;
 //! for the other candidates it is already true by construction and the check is cheap.
 //! Only candidates whose canonical path equals the request path are listed; when none
-//! does, the result is a redirect to the first candidate's canonical path.
+//! does, the result is a redirect to the first candidate's canonical path. A hit that is
+//! the static front page (`reading.front_page`) answers 301 to `/` instead (M4-4 P67;
+//! the router cannot know it, having no store).
 
 use ferrite_core::FeedSource;
 use ferrite_core::permalink::{PermalinkRules, Segment, Structure, encode_segment, term_path};

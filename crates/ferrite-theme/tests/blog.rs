@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_core::{
     DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    site::ListOrder,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
@@ -28,6 +29,7 @@ fn site(theme: &Theme, overrides: serde_json::Value) -> SiteInfo {
         url: "https://example.com".into(),
         description: "Writing about <rust>".into(),
         locale: "en-GB".into(),
+        timezone: "UTC".into(),
         settings: theme.manifest().settings_values(&stored),
     }
 }
@@ -75,6 +77,7 @@ fn item(kind: &str, slug: &str, title: &str) -> PageItem {
         },
         url: format!("/{slug}/"),
         html: "<p>Body <em>html</em></p>".into(),
+        toc: Vec::new(),
         author: Some(UserPublic {
             id: UserId::new(),
             login: "ana".into(),
@@ -157,7 +160,7 @@ impl HelperBridge for FakeBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (self.related.clone(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, name: &str) -> Bridged<Option<MenuTree>> {
@@ -845,7 +848,7 @@ impl HelperBridge for ThreadBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
@@ -997,4 +1000,25 @@ fn comments_section_form_and_states() {
 
     let html = single(thread(true, vec![one]), "page");
     assert!(!html.contains("class=\"comments"), "{html}");
+}
+
+/// The month heading is built from a synthetic UTC midnight; a site zone west of UTC must
+/// not shift it into the previous month.
+#[test]
+fn date_archive_heading_ignores_site_timezone() {
+    let t = blog();
+    for tz in ["America/New_York", "Pacific/Auckland", "UTC"] {
+        let mut c = ctx(&t, "/2024/03/");
+        c.site.timezone = tz.into();
+        c.listing = Some(listing(vec![item("post", "a", "Post A")], 1, 1));
+        c.archive = Some(ArchiveInfo {
+            year: Some(2024),
+            month: Some(3),
+            ..archive("date")
+        });
+        let html = render(&t, "date.html", c);
+        let start = html.find("<h1 class=\"page-title\">").unwrap() + 23;
+        let end = html[start..].find("</h1>").unwrap() + start;
+        assert_eq!(html[start..end].trim(), "March 2024", "{tz}");
+    }
 }

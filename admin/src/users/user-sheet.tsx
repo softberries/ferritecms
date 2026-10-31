@@ -72,7 +72,7 @@ export function UserSheet({ id, me, onClose, onDeleted }: UserSheetProps) {
       <SheetContent
         side="right"
         data-slot="user-sheet"
-        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
+        className="w-full gap-0 overflow-y-auto p-0 [--sheet-title-center:33px] data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >
         {user.data ? (
           <SheetBody key={user.data.id} user={user.data} me={me} onDeleted={onDeleted} />

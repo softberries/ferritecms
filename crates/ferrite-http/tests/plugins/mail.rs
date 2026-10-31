@@ -13,6 +13,7 @@ use ferrite_http::{
     PluginReloader, PluginRequest, RenderTrace, StoreHostServices, mail::SmtpMailer,
 };
 use ferrite_plugin_host::{ActionEvent, HostConfig, PluginHost};
+use ferrite_store_tests::FailingOptionsStore;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
@@ -24,13 +25,14 @@ profile_tests!(
     notifier_cuts_long_titles,
     site_title_prefix_is_bounded,
     site_title_prefix_follows_the_option,
+    site_title_prefix_falls_back_when_the_read_fails,
     mail_flood_is_capped,
     mail_header_injection_is_refused,
     mail_refused_on_render_path,
     mail_unconfigured_is_an_error_to_the_guest,
 );
 
-const MAIL_SITE_TITLE: &str = "Test Site";
+pub(crate) const MAIL_SITE_TITLE: &str = "Test Site";
 
 /// A plugin host over services with mail (`[mail]` set): what the queue delivered
 /// lands in `mailer`.
@@ -44,14 +46,32 @@ async fn mail_host(site: &Site, name: &str) -> Mail {
     mail_host_titled(site, name, MAIL_SITE_TITLE).await
 }
 
-/// [`mail_host`] with `title` as the configured site title.
-async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
+/// Host services over `site` with mail (`[mail]` set) and `title` as the configured site
+/// title: what the queue delivered lands in the returned mailer. Also used by the
+/// `contact-form` cases.
+pub(crate) fn mail_services(
+    site: &Site,
+    title: &str,
+) -> (Arc<StoreHostServices>, Arc<MemoryMailer>) {
     let mailer = Arc::new(MemoryMailer::new());
     let services = Arc::new(
         StoreHostServices::new(site.store.clone(), site.reader.clone(), SITE_URL)
-            .with_mailer(Arc::new(MailQueue::new(mailer.clone())), title.to_owned()),
+            .with_site_title(title.to_owned())
+            .with_mailer(Arc::new(MailQueue::new(mailer.clone()))),
     );
-    let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
+    (services, mailer)
+}
+
+/// [`mail_host`] with `title` as the configured site title.
+async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
+    let (services, mailer) = mail_services(site, title);
+    // A 5 s render deadline: no test here is about deadlines, and the render-path case
+    // asserts what the plugin returned (`with_generous_deadlines`).
+    let config = HostConfig {
+        render_deadline: Duration::from_secs(5),
+        ..HostConfig::default()
+    };
+    let host = Arc::new(PluginHost::new(config, services).unwrap());
     site.install(name).await;
     let report = PluginReloader::new(site.store.clone(), site.media.clone(), host.clone())
         .reload()
@@ -61,9 +81,9 @@ async fn mail_host_titled(site: &Site, name: &str, title: &str) -> Mail {
     Mail { host, mailer }
 }
 
-const WAIT: Duration = Duration::from_secs(5);
+pub(crate) const WAIT: Duration = Duration::from_secs(5);
 /// How long a "no further mail" check waits after the expected mail arrived.
-const GRACE: Duration = Duration::from_millis(300);
+pub(crate) const GRACE: Duration = Duration::from_millis(300);
 
 fn event(subject: &str) -> ActionEvent {
     ActionEvent {
@@ -209,9 +229,42 @@ async fn site_title_prefix_follows_the_option(site: Site) -> Site {
     site
 }
 
+/// P77: a failed `site.title` read costs the stored title, not the mail: the prefix is
+/// the configured title.
+async fn site_title_prefix_falls_back_when_the_read_fails(site: Site) -> Site {
+    site.user("root", Role::Admin).await;
+    site.store
+        .read()
+        .options()
+        .set("site.title", &serde_json::json!("Night Owl"), true)
+        .await
+        .unwrap();
+    let failing: Arc<dyn ferrite_store::Store> =
+        Arc::new(FailingOptionsStore::new(site.store.clone(), "site.title"));
+    let mailer = Arc::new(MemoryMailer::new());
+    let services = Arc::new(
+        StoreHostServices::new(failing, site.reader.clone(), SITE_URL)
+            .with_site_title(MAIL_SITE_TITLE.to_owned())
+            .with_mailer(Arc::new(MailQueue::new(mailer.clone()))),
+    );
+    let host = Arc::new(PluginHost::new(HostConfig::default(), services).unwrap());
+    site.install("mail-flood").await;
+    PluginReloader::new(site.store.clone(), site.media.clone(), host.clone())
+        .reload()
+        .await
+        .unwrap();
+    host.dispatch_action("mail-flood", "post.published", event("One"))
+        .await
+        .unwrap();
+    let sent = mailer.wait_for(1, WAIT).await;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].subject, format!("[{MAIL_SITE_TITLE}] One"));
+    site
+}
+
 /// The hour window is fixed (clock floored to the hour): start well inside one so the
 /// test's calls share it.
-async fn inside_one_hour_window() {
+pub(crate) async fn inside_one_hour_window() {
     let now = ferrite_domain::Timestamp::now().as_micros();
     let into = now.rem_euclid(HOUR);
     let left = HOUR - into;

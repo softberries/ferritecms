@@ -80,7 +80,9 @@ heartbeat comparison uses the database clock.
 Since M2a-2b each node also reports `nodes.meta.job_kinds`: the job kinds its runner
 handles, sorted (`crates/ferrite/src/node.rs`, set from the handler list in `serve`). `GET
 /system/jobs` derives each job's `handled` flag from the live nodes' lists (P19), so a kind
-no live node knows stays visible as queued (M1.5 P5).
+no live node knows stays visible as queued (M1.5 P5). A node joins the registry with an
+empty meta and writes its first heartbeat (job kinds, theme, plugins) before it starts
+serving (`Registry::beat_once`, M4-4), so its row is complete from its first request.
 
 Error texts a node reports in `nodes.meta` (`theme.error`, `plugins.<name>.error`,
 `plugins_error`, `permalinks_error`) are scrubbed before the heartbeat writes them
@@ -248,13 +250,15 @@ are deleted by `sessions.prune` (§6); an expired row met on a request is delete
 | `content.publish_due` | periodic, every 30 s: publishes every item whose `scheduled_at` has passed (safety net for items scheduled before M1.5 or by an older binary; it replaced the M1c-2 per-node ticker) | built |
 | `events.prune` (24 h), `jobs.prune` (done 7 d, dead 30 d), `nodes.prune` (24 h after the last heartbeat), `plugin_failures.prune` (`max(24 h, 2 × plugins.failure_window)`) | periodic, hourly; delete in 10 000-row batches for at most 240 s per run (R5) | built |
 | `sessions.prune` | periodic, hourly (M2a P23): one reading of the database clock, then sessions past `expires_at` or idle longer than 7 d, API tokens past `expires_at`, rate-limit windows that started more than 1 h ago, and `Idempotency-Key` rows (finished or pending) claimed more than 24 h ago (M2a-2b P10); 10 000-row batches, each table within its own 60 s slice of the 240 s budget so a backlog in one does not starve the others | built (M2a-1; idempotency keys M2a-2b) |
+| `node_metrics.prune` | periodic, hourly (M4-2 P35): deletes `node_metrics` rows whose `minute` is older than 7 days on the database clock (`NODE_METRICS_RETENTION`), in 10 000-row batches within the 240 s budget like the other prunes; the rows are written by each node's `serve` minute writer, not by a job (09 §6) | built (M4-2) |
 | `plugin.action` | action hooks `post.saved` (content create/update/revision restore), `post.published` (every transition to published, the scheduler's included), `user.created` (API and CLI): core enqueues one job per enabled subscribed plugin row (`PluginRepo::action_subscribers`: name + `enabled` + the manifest's `hooks` keys, filtered in SQL) in the write's own `Tx` (no unique key, priority -1 so core jobs are claimed first, default attempts; payload `{"v":1,"plugin","hook","subject","payload"}` with ids only). The handler drops the action (done) when the row is missing or disabled (P29) or the plugin no longer handles the hook (F35), retries when the plugin is not loaded on the claiming node yet, is loaded there without a hook the stored row lists (the reload has not caught up), or is disabled on that host only, and retries a failed call (counted towards auto-disable). Each call holds one registry snapshot (R13). At most `min(cluster.workers − 1, plugins.max_concurrent_calls)` (at least 1) action jobs call plugins at once per node; one over that, or a call that gets no call permit in time, is released as `JobError::Busy` with the attempt refunded and due again in 1–5 s, never counted as a plugin failure (P22, R20(3); 05 §6). Delivery is at least once, so plugin actions must be idempotent (05 §4) | built (M2a-2a P20); batched `request.served` uses the same kind, one job per subscriber per flush (05 §4a, P21) |
 | `plugin.purge` | a plugin delete (API or CLI) enqueues it in the delete's `Tx`: `unique_key = "plugin.purge:<name>:<deleted_at unix micros>"`, due 30 days later, or 2 minutes later with `purge` (the immediate purge's final sweep); payload `{"v":1,"name","deleted_at","settings"}`. Deletes the plugin's KV and `plugin.<name>.settings.*` options and the deletion marker under the `extensions` lock, only if no row of that name exists and the marker still names that deletion (a reinstall keeps the data); a busy lock or store error is retried (05 §2, P9, F13–F16) | built (M2a-2a) |
 | `plugin.purge_sweep` | periodic, daily: enqueues a due `plugin.purge` for every deletion marker past the 30-day retention whose plugin is not installed (one per sweep run, keyed `…:sweep:<run micros>`), so a purge job that went dead is retried and settings keys a later version dropped are deleted too | built (M2a-2a) |
 | `media.variants` | a raster upload (`MediaService::record_upload`) enqueues it in the upload's `Tx`: `unique_key = "media.variants:<item>:<artifact>"`, payload `{"v":1,"item","artifact"}`. One of the node's `media.image_workers` slots is taken without waiting (none free: `JobError::Busy`, attempt refunded, due again in 1–5 s); originals over 64 MiB get no variants; a bad payload or an image that does not decode is `Permanent` (dead at once, the original stays served); store and media errors retry (03 §4, P8, F17) | built (M2a-2b) |
 | `permalink.redirects` | every write of `permalink.post`/`permalink.page` (`OptionService`, the importer's `ImportBatch::options`) enqueues it in the write's `Tx`: payload `{"v":1,"prev","next","version"}` (`"cursor"` on a continuation), `unique_key = "permalink.redirects:<version>"` (`…:<cursor digest>` on a continuation), default timeout and attempts. Redirects every published post and page from its path under `prev` to its path under the stored structures, 500 items per transaction, at most 20 pages per job, then a continuation job from the cursor (06 §3, M3-2 P30, R61, R62, R75); an invalid payload is `Permanent`, a store error retries | built (M3-2) |
-| `import.wordpress` | `POST /import/wordpress` enqueues it in the transaction that records the input artifacts (`ImportService::enqueue`: no `unique_key`, refused with `409` while one is queued or running, `max_attempts` 3); payload `{"v":1,"wxr","uploads","options","user","source_name"}`, `user` set from the caller. Timeout 6 h. The handler checks the user is still an active admin, then that a run could start (else `Busy`, nothing fetched), copies the inputs to the node's `<data>/import/job-<id>/`, runs the import with its own permalink rules, stores the report (a failed run's partial one too), deletes the inputs once the run is `done` or the job fails for good (a `Permanent` error or a `Retry` of the last attempt; the `artifacts` row first and the blob only when that worked, so a media item sharing the bytes keeps its file, R74), and removes leftover `job-*` folders and run work folders of jobs that are over (a CLI run's stays, R78). `Unavailable` → `Busy`; `Changed`, `Forbidden`, invalid input and bad XML or archives → `Permanent`; the rest → `Retry`. Its start takes over a stale run that has no job, is its own, or whose job is not `running` (08 §2, M3-2 P27, R69); a retry on another node parses again | built (M3-2) |
-| `artifacts.gc` | periodic | M4 |
+| `import.wordpress` | `POST /import/wordpress` enqueues it in the transaction that records the input artifacts (`ImportService::enqueue`: no `unique_key`, refused with `409` while one is queued or running, `max_attempts` 3); payload `{"v":1,"wxr","uploads","options","user","source_name"}`, `user` set from the caller. Timeout 6 h. The handler checks the user is still an active admin, then that a run could start (else `Busy`, nothing fetched), copies the inputs to the node's `<data>/import/job-<id>/`, runs the import with its own permalink rules, stores the report (a failed run's partial one too), deletes the inputs once the run is `done` or the job fails for good (a `Permanent` error or a `Retry` of the last attempt; the `artifacts` row first and the blob only when that worked, so a media item sharing the bytes keeps its file, R74), and removes leftover `job-*` folders and run work folders of jobs that are over (a CLI run's stays, R78). `Unavailable` → `Busy`; `Changed`, `Forbidden`, invalid input and bad XML or archives → `Permanent`; the rest → `Retry`. Its start takes over a stale run that has no job, is its own, or whose job is not live (`running` with an unexpired lease, on the database clock on Postgres; 08 §2, M3-2 P27, R69, M4-4 P80); a retry on another node parses again. Its log lines carry the runner's `job` span (kind, id, attempt, node) | built (M3-2) |
+| `artifacts.gc` | periodic, daily (`every` 86 400 s, `offset` 3 h: due at 03:00 UTC, apart from a daily `site.backup` at 00:00, M4-4 P75), payload `{"v":1}`: one pass of the artifacts GC (`gc::run`, 03 §6) with the node's `media.gc_grace_days`: marks unreferenced rows, deletes rows marked longer than the grace period and then their blobs, row-less blobs older than the grace period and `tmp/` objects older than 24 h; protected are the hashes in unfinished job payloads and import report manifests (P10). Timeout 3 600 s (a pass cut short continues the next day). Takes the `artifacts.gc` lock with `try_lock`: held (another pass, `ferrite media gc`, or a backup copying blobs, R17) is `JobError::Busy`; a store or media error retries. The deleting steps run only on a pass that reads the media store's owner marker naming this install (R16, R19; 03 §6). The handler is in `crates/ferrite/src/jobs/gc.rs` because `ferrite-cluster` has no media dependency | built (M4-1) |
+| `site.backup` | periodic, only while `[backup] schedule` is not `off`: daily (86 400 s) or weekly (604 800 s), payload `{"v":1}`, `max_attempts` 3 (`Periodic::max_attempts`; the other periodics keep the default 5). One scheduled backup to `backup.to` (09 §4, M4-1 P15): on SQLite the repository backup (`run_backup`, a snapshot next to the live writers, `keep` snapshots kept), on Postgres an export archive uploaded to `<to>/exports/` (`run_export_backup`, `keep` archives kept). Timeout 21 600 s. Takes the `site.backup` lock with `try_lock`: held is `JobError::Busy`; with media it then waits up to 300 s for the `artifacts.gc` lock (R17), still held is `Busy`; any error retries; a backup lacking blobs missing from the media store succeeds with a warning (R10). The handler is in `crates/ferrite/src/jobs/backup.rs`; `serve` refuses to start when `to` is inside the data or media folder | built (M4-1) |
 
 `revisions.prune` is not a job: core prunes revisions on save (P26).
 
@@ -348,14 +352,16 @@ never takes the writer); otherwise the reaper and the same claim without
 
 Each node ticks every 10 s (first tick at once), reads `db_now`, and for each periodic job
 inserts `unique_key = "<kind>:<floor(db_now / period) × period, unix seconds>"` with
-`run_at` = the period start; `ON CONFLICT DO NOTHING` admits one row per period
+`run_at` = the period start plus the periodic's `offset` (`Periodic::offset`, zero for all but
+`artifacts.gc`, which is due 3 h into its day, M4-4 P75; the key stays the period start, so
+the offset moves only the time); `ON CONFLICT DO NOTHING` admits one row per period
 cluster-wide, so there is no leader election. Periodic rows accumulate until `jobs.prune`.
 A node whose ticks all miss a period (stalled) does not create that period's row.
 
 ## 7. Distributed locks
 
 **As built (P13):** `Store::try_lock(name)` and `ferrite_store::lock(store, name, wait)`
-(retries every 250 ms until `wait`, then `Busy`). Names are `[a-z0-9._-]{1,64}`.
+(waits up to `wait`, then `Busy`; via `Store::lock_wait`, P19). Names are `[a-z0-9._-]{1,64}`.
 
 | Name | Held by | Wait |
 |---|---|---|
@@ -363,13 +369,21 @@ A node whose ticks all miss a period (stalled) does not create that period's row
 | `extensions` | `ExtensionService`: theme/plugin install, activation, enable/disable (artifact row + theme/plugin row + event in one `Tx`) | 30 s |
 | `types` | `ContentTypeService`, the taxonomy writes of `TaxonomyService` (M2a P18) and `OptionService` writes that change a `permalink.*` key (R19): the cross-table name and permalink checks, the insert/update/delete and the events in one `Tx`; a lost lock leaves only the type/taxonomy same-name check unprotected (each table's primary key still holds) | 30 s |
 | `cluster.join` | the final check-and-register pass of `Registry::join` (R7) | 10 s |
-| `import` | the WordPress import: held by a run while it can be taken (best-effort, the run's fence is what counts, 08 §2), around `ImportService::enqueue`'s conflict check and insert (held elsewhere = `409`), and around the API's deletion of an upload's unrecorded blobs (R68) | none for a run (`try_lock`); the enqueue waits at most 2 s (`ENQUEUE_LOCK_WAIT`, R79); the blob deletion at most 5 s, else it leaves them for the M4 orphan sweep |
+| `import` | the WordPress import: held by a run while it can be taken (best-effort, the run's fence is what counts, 08 §2), around `ImportService::enqueue`'s conflict check and insert (held elsewhere = `409`), and around the API's deletion of an upload's unrecorded blobs (R68) | none for a run (`try_lock`); the enqueue waits at most 2 s (`ENQUEUE_LOCK_WAIT`, R79); the blob deletion at most 5 s, else it leaves them to the artifacts GC (03 §6) |
+| `artifacts.gc` | one artifacts GC pass (`gc::run`: the `artifacts.gc` job and `ferrite media gc`, M4-1 P12); also a backup with media while it snapshots and copies blobs (`ferrite backup`, the `site.backup` job, M4-1 R17), so the GC deletes nothing a backup is copying | GC: none (`try_lock`; held = job `Busy`, CLI exit 3); a backup waits up to 300 s (`BACKUP_GC_WAIT`), then the job is `Busy` and the CLI fails (exit 1) |
+| `site.backup` | one scheduled backup run (the `site.backup` job, M4-1 P15); `ferrite backup` does not take it (with SQLite it needs `serve` stopped) | none (`try_lock`; held = `Busy`) |
 
 Postgres: a session-level `PgAdvisoryLock` keyed by `"ferrite:<schema>:<name>"` (advisory
 locks are database-wide, so the key includes the schema) on a dedicated connection per
 held lock (`application_name` `<app>:lock:<name>`, TCP keepalives on), so a crashed holder
-releases it when its connection dies. Each attempt opens a new connection (a held
-connection with `lock_timeout` is M4, R3). sqlx's own migration lock is taken as well.
+releases it when its connection dies. `lock` waits on one connection: `SET lock_timeout`,
+then a blocking `pg_advisory_lock`, so the server wakes the waiter when the holder
+releases (SQLSTATE `55P03` = timed out = `Busy`; `lock_timeout` is reset to 0 on success;
+a cancelled wait drops the connection, which frees a lock granted late; the server
+notices the closed socket only when it next writes to it, so the abandoned backend can
+stay queued until `lock_timeout` fires or the lock is granted, never longer than `wait`).
+`try_lock` opens one connection per attempt. SQLite polls `try_lock` every 250 ms. sqlx's own
+migration lock is taken as well.
 SQLite: an in-process mutex per store (one process owns the data folder).
 
 **A lock is not a fence.** The holder is not told when a Postgres advisory lock is lost:
@@ -394,7 +408,8 @@ every write, as the job leases do, P6) and must not rely on the lock for exclusi
   refused before anything is written: the admin API (`ExtensionAdmin`, which checks
   `manage_themes`/`manage_plugins` with the `extensions` scope and audits, closing R11) and
   the CLI (`ferrite theme|plugin`, `ExtensionService`, the operator path). Orphan artifacts
-  are not collected yet (`artifacts.gc`, M4).
+  (replaced versions, staged bytes of a failed install) are collected by `artifacts.gc`
+  after the grace period (03 §6).
 - **Themes** are deterministic ustar bundles (P17, [06 §1](06-themes-rendering.md#1-theme-package)).
   In cluster mode a node reads only the artifact named by the active `themes` row
   (`data/themes/` is ignored, C5); solo keeps the folder as a development fallback.
@@ -433,7 +448,8 @@ every write, as the job leases do, P6) and must not rely on the lock for exclusi
    **Events** are versioned by kind (P28): an unknown kind invalidates its keys.
 5. `nodes` lists every node's `version` and `schema_version` during the deploy.
 
-Runbook: [09 §3](09-operations.md#3-upgrade--rollback-cluster--postgres).
+Runbook: [09 §3](09-operations.md#3-upgrade--rollback-cluster--postgres) and, step by step,
+[`docs/operations/cluster-runbook.md`](../operations/cluster-runbook.md) (M4-2).
 
 ## 10. What's deliberately out of scope
 

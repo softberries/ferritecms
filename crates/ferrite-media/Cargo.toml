@@ -16,6 +16,12 @@ infer.workspace = true
 object_store.workspace = true
 percent-encoding.workspace = true
 quick-xml.workspace = true
+# Not used directly: turns on TLS (rustls, no provider) in object_store's reqwest, which
+# object_store's own features cannot select without aws-lc-rs (M4-2 P28).
+reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -24,6 +30,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 hyper-util.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true

@@ -47,4 +47,13 @@ pub enum ClusterError {
          node per site, so stop that node first"
     )]
     SoloNodeLive { name: String, age: Duration },
+    /// A [`Periodic`](crate::Periodic) whose offset is not below its period: its `run_at`
+    /// would fall in a later period under this period's key (checked when the scheduler
+    /// is built).
+    #[error("periodic job {kind:?}: offset {offset:?} is not below its period {every:?}")]
+    PeriodicOffset {
+        kind: &'static str,
+        offset: Duration,
+        every: Duration,
+    },
 }

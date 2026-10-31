@@ -58,6 +58,11 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: cargo build --manifest-path plugins/Cargo.toml --release --target wasm32-wasip2
       - run: cargo clippy --manifest-path plugins/Cargo.toml --target wasm32-wasip2 -- -D warnings
+      # The plugins' own unit tests run on the host (M4-4 P84; `plugins/.cargo/config.toml`
+      # picks wasm32-wasip2 only inside `plugins/`): the shipped examples' (analytics,
+      # contact-form), and every member must compile for the host to get there.
+      - name: plugin unit tests (host)
+        run: cargo test --manifest-path plugins/Cargo.toml --workspace --locked
       - run: cargo test --workspace --no-fail-fast
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
@@ -123,7 +128,8 @@ jobs:
   # Postgres, Firefox and WebKit on SQLite, against the binary and plugin `admin` built.
   # Only `chromium-pg` starts the Postgres service (an empty `image` starts none; GitHub's
   # workflow syntax, `services.<id>.image`) and gets FERRITE_TEST_PG_URL (its global setup
-  # fails without it). Design screenshots come from `chromium-sqlite` only.
+  # fails without it). Design screenshots come from `chromium-sqlite` only, and so does the
+  # public themes' axe step (`public-themes-chromium`).
   admin-e2e:
     needs: admin
     runs-on: ubuntu-latest
@@ -181,9 +187,13 @@ jobs:
       # Artifacts do not keep the executable bit.
       - run: chmod +x target/release/ferrite
       - run: pnpm -C admin exec playwright install --with-deps ${{ matrix.engine }}
-      - run: pnpm -C admin e2e --project ${{ matrix.project }}
+      - name: admin e2e
+        id: admin-e2e
+        run: pnpm -C admin e2e --project ${{ matrix.project }}
         env:
           FERRITE_TEST_PG_URL: ${{ matrix.pg_url }}
+      # Uploaded before the public-themes run, which empties `test-results/artifacts/` and
+      # rewrites `test-results/report/`.
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -193,12 +203,179 @@ jobs:
             admin/test-results/artifacts/
             admin/test-results/e2e-logs/
           if-no-files-found: ignore
+      # The public starter themes under axe (M4-3b P64, ruling R-b16): Chromium on SQLite,
+      # one site per theme (`blog` on `seed demo`, `business` on its seed profile, `docs` on
+      # `site/content`), in its own Playwright run; it runs even when the admin specs failed,
+      # but not when a setup step before them failed (the admin step did not run then).
+      - name: public themes (axe)
+        id: public-themes
+        if: >-
+          (success() || failure()) && matrix.project == 'chromium-sqlite' &&
+          (steps.admin-e2e.outcome == 'success' || steps.admin-e2e.outcome == 'failure')
+        run: pnpm -C admin e2e --project public-themes-chromium
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.public-themes.outcome == 'failure'
+        with:
+          name: admin-e2e-public-themes
+          path: |
+            admin/test-results/report/
+            admin/test-results/artifacts/
+            admin/test-results/e2e-logs/public-themes-chromium-*.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: always() && matrix.project == 'chromium-sqlite'
         with:
           name: admin-screens
           path: admin/test-results/screens/
           if-no-files-found: ignore
+
+  # Release and packaging checks (M4-2 P28, P37, P38; M4-3a P47) that need no binary
+  # build (only the three example plugins are built, for their release asset).
+  packaging:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build is ring-only (P28): aws-lc's C code would need cmake and clang on every
+      # release target. aws-lc is absent from the lockfile, so `cargo tree -i aws-lc-sys`
+      # would fail with "did not match"; the lockfile is the check.
+      - name: no aws-lc in Cargo.lock
+        run: |
+          if grep -n '^name = "aws-lc' Cargo.lock; then
+            echo "::error::aws-lc is back in Cargo.lock (P28: ring only); see 'cargo tree -i aws-lc-sys'"
+            exit 1
+          fi
+      # `verify` needs the unit's ExecStart binary to exist; a stand-in is installed.
+      - name: systemd unit
+        run: |
+          sudo install -m 0755 /bin/true /usr/local/bin/ferrite
+          sudo mkdir -p /var/lib/ferrite
+          systemd-analyze --version | head -1
+          systemd-analyze verify packaging/systemd/ferrite.service
+          systemd-analyze security --offline=true packaging/systemd/ferrite.service || true
+      - name: shell scripts (release, docs site build)
+        run: shellcheck -x .github/scripts/*.sh site/build.sh
+      # The release packs the example plugins at the workspace version (M4-3a P47), and
+      # package-plugins.sh refuses a manifest with another one: a version bump has to move
+      # the three manifests with the workspace version (09 §7). Caught here, not at the tag.
+      - name: plugin manifest versions match the workspace version
+        run: |
+          python3 - <<'EOF'
+          import sys, tomllib
+          with open("Cargo.toml", "rb") as f:
+              want = tomllib.load(f)["workspace"]["package"]["version"]
+          bad = False
+          for name in ("seo", "analytics", "contact-form"):
+              path = f"plugins/examples/{name}/ferrite-plugin.toml"
+              with open(path, "rb") as f:
+                  have = tomllib.load(f)["plugin"]["version"]
+              if have != want:
+                  print(f"::error file={path}::plugin version {have} != workspace version {want}")
+                  bad = True
+          sys.exit(1 if bad else 0)
+          EOF
+      # The plugins asset (the wasm is target-independent), packed from a local build the
+      # way release.yml does, then each folder holds what `ferrite plugin check` reads (that
+      # check itself ran by hand in M4-3a Task 5): the manifest and exactly one .wasm.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          targets: wasm32-wasip2
+      - name: plugins asset
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          cargo build --release --locked --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form
+          .github/scripts/package-plugins.sh "$version" "$RUNNER_TEMP/plugins"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -C "$RUNNER_TEMP/unpacked" -xzf "$RUNNER_TEMP/plugins/ferrite-plugins-$version.tar.gz"
+          for p in seo analytics contact-form; do
+            test -f "$RUNNER_TEMP/unpacked/$p/ferrite-plugin.toml"
+            test -f "$RUNNER_TEMP/unpacked/$p/$p.wasm"
+            test "$(find "$RUNNER_TEMP/unpacked/$p" -name '*.wasm' | wc -l)" -eq 1
+          done
+      # The release archives are reproducible (M4-4 P83, repro-tar.sh): the same files give
+      # the same bytes. test-repro.sh packs both assets twice from fake inputs (other stage
+      # paths, mtimes and umask) and reads the members back; the real plugins asset is
+      # packed once more here and compared with the first.
+      - name: release archives are reproducible
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          .github/scripts/test-repro.sh
+          sleep 2
+          .github/scripts/package-plugins.sh "$version" "$RUNNER_TEMP/plugins-again" >/dev/null
+          cmp "$RUNNER_TEMP/plugins/ferrite-plugins-$version.tar.gz" "$RUNNER_TEMP/plugins-again/ferrite-plugins-$version.tar.gz"
+          sha256sum "$RUNNER_TEMP"/plugins*/ferrite-plugins-"$version".tar.gz
+
+  # Backward compatibility (M4-2 P38; 02 §8, S5): the previous `v*` tag's binary must run
+  # against a database migrated by this commit's binary, on SQLite and Postgres. Without
+  # a previous tag it prints a notice and succeeds.
+  compat:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: ferrite
+          POSTGRES_DB: ferrite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The newest `v*` tag reachable from HEAD that is not HEAD itself.
+      - id: prev
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          if [ -n "$tag" ] && [ "$(git rev-list -n 1 "$tag")" = "$(git rev-parse HEAD)" ]; then
+            tag=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          fi
+          if [ -z "$tag" ]; then
+            echo "::notice::no previous v* tag: the backward-compatibility check has nothing to run against"
+          else
+            echo "previous release: $tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - if: steps.prev.outputs.tag != ''
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+      # Debug builds without the admin: the check is about the schema, not the binary's
+      # speed or its embedded admin.
+      - name: Check out the previous release
+        if: steps.prev.outputs.tag != ''
+        env:
+          TAG: ${{ steps.prev.outputs.tag }}
+        run: git worktree add "$RUNNER_TEMP/old" "$TAG"
+      # From its own folder, so the old tag's rust-toolchain.toml and .cargo/ apply.
+      - name: Build the previous release
+        if: steps.prev.outputs.tag != ''
+        working-directory: ${{ runner.temp }}/old
+        run: cargo build --locked -p ferrite --target-dir "$RUNNER_TEMP/old-target"
+      - name: Build this commit
+        if: steps.prev.outputs.tag != ''
+        run: cargo build --locked -p ferrite
+      - name: Old binary against the new schema
+        if: steps.prev.outputs.tag != ''
+        run: >-
+          .github/scripts/compat.sh "$RUNNER_TEMP/old-target/debug/ferrite" target/debug/ferrite
+          "$RUNNER_TEMP/compat" postgres://ferrite@localhost:5432/ferrite_test
 
   # The cluster example (P24): validated and built, not started (`docker compose up`
   # is not run in CI; docs/superpowers/m15-exit.md).

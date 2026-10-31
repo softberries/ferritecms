@@ -1055,6 +1055,153 @@ pub async fn count_matches_list(db: &TestDb) {
     ));
 }
 
+/// `file_bounds`: the files `list` gives in pages of `file_len` (published rows only,
+/// newest first), each as the cursor that starts it and its newest `updated_at`; for
+/// 0, 1, exactly-full and over-full kinds, with `published_at` ties across a boundary.
+pub async fn sitemap_file_bounds(db: &TestDb) {
+    let store = db.store();
+    let author = fixture_user(store).await;
+    // (slug, published_at, updated_at): `t1`..`t3` share a publish time, and with
+    // files of 3 the boundary falls between them.
+    let rows = [
+        ("n1", 9_000, 100),
+        ("n2", 8_000, 900),
+        ("t1", 7_000, 50),
+        ("t2", 7_000, 700),
+        ("t3", 7_000, 60),
+        ("n3", 6_000, 10),
+        ("n4", 5_000, 20),
+    ];
+    for (slug, at, updated) in rows {
+        let mut n = new_post(&author, slug);
+        n.status = ContentStatus::Published;
+        n.published_at = Some(micros(at));
+        n.updated_at = Some(micros(updated));
+        insert(store, &n).await;
+    }
+    // Not counted: a draft without a publish time, and a page.
+    let mut draft = new_post(&author, "draft");
+    draft.updated_at = Some(micros(99_999));
+    insert(store, &draft).await;
+    let mut page = new_post(&author, "page");
+    page.kind = "page".into();
+    page.status = ContentStatus::Published;
+    page.published_at = Some(micros(1_000));
+    insert(store, &page).await;
+
+    let repo = || store.read().content();
+    let posts = ContentQuery {
+        kind: Some("post".into()),
+        statuses: vec![ContentStatus::Published],
+        ..Default::default()
+    };
+    // Rows without `published_at` are in no file (`list` sorts them after the rest):
+    // without the status filter the draft changes nothing.
+    let any_status = ContentQuery {
+        kind: Some("post".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        repo().file_bounds(&any_status, 3).await.unwrap(),
+        repo().file_bounds(&posts, 3).await.unwrap()
+    );
+    // Every file: the rows from its cursor (in one page here: no file exceeds
+    // `MAX_PAGE` rows) are the next page of `list`, and `lastmod` is their newest
+    // `updated_at`.
+    let check = |query: ContentQuery, len: u32, want: Vec<usize>| async move {
+        let bounds = repo().file_bounds(&query, len).await.unwrap();
+        assert_eq!(bounds.len(), want.len(), "{len}: {bounds:?}");
+        let mut listed = ContentQuery {
+            limit: len.min(ferrite_domain::MAX_PAGE),
+            ..query.clone()
+        };
+        for (i, (bound, n)) in bounds.iter().zip(want).enumerate() {
+            assert_eq!(bound.after, listed.cursor, "file {i}: the cursor of `list`");
+            let page = repo().list(&listed).await.unwrap();
+            assert_eq!(page.items.len(), n, "file {i}");
+            let newest = page.items.iter().map(|r| r.updated_at).max().unwrap();
+            assert_eq!(bound.lastmod, newest, "file {i}");
+            listed.cursor = page.next_cursor;
+        }
+        assert!(listed.cursor.is_none(), "no rows after the last file");
+    };
+    // Over-full, with the tie across the first boundary (and a file of one).
+    check(posts.clone(), 3, vec![3, 3, 1]).await;
+    check(posts.clone(), 2, vec![2, 2, 2, 1]).await;
+    // Exactly full: one file, or seven of one row.
+    check(posts.clone(), 7, vec![7]).await;
+    check(posts.clone(), 1, vec![1; 7]).await;
+    check(posts.clone(), 50_000, vec![7]).await;
+    // One row, and none.
+    let page_query = ContentQuery {
+        kind: Some("page".into()),
+        ..Default::default()
+    };
+    check(page_query, 3, vec![1]).await;
+    let none = ContentQuery {
+        kind: Some("nope".into()),
+        ..Default::default()
+    };
+    assert!(repo().file_bounds(&none, 3).await.unwrap().is_empty());
+    // The filters are `list`'s: published before 7 000 leaves n3 and n4.
+    let earlier = ContentQuery {
+        published_before: Some(micros(7_000)),
+        ..posts.clone()
+    };
+    check(earlier, 3, vec![2]).await;
+    // The tie: file 2 starts at the second-newest id among `t1`..`t3`.
+    let bounds = repo().file_bounds(&posts, 3).await.unwrap();
+    let second = repo()
+        .list(&ContentQuery {
+            limit: 1,
+            cursor: bounds[1].after.clone(),
+            ..posts.clone()
+        })
+        .await
+        .unwrap();
+    let mut tied: Vec<_> = repo()
+        .list(&ContentQuery {
+            limit: 50,
+            published_after: Some(micros(7_000)),
+            published_before: Some(micros(7_001)),
+            ..posts.clone()
+        })
+        .await
+        .unwrap()
+        .items;
+    tied.sort_by_key(|r| std::cmp::Reverse(r.id));
+    assert_eq!(second.items[0].id, tied[1].id);
+
+    // `limit` and `cursor` are ignored; a zero length or another order is `Invalid`.
+    let ignored = ContentQuery {
+        limit: 0,
+        cursor: Some("garbage".into()),
+        ..posts.clone()
+    };
+    assert_eq!(repo().file_bounds(&ignored, 3).await.unwrap(), bounds);
+    assert!(matches!(
+        repo().file_bounds(&posts, 0).await,
+        Err(StoreError::Invalid(_))
+    ));
+    let by_title = ContentQuery {
+        order: ContentOrder::TitleAsc,
+        ..posts.clone()
+    };
+    assert!(matches!(
+        repo().file_bounds(&by_title, 3).await,
+        Err(StoreError::Invalid(_))
+    ));
+    // Filters are validated as for `list`.
+    let bad = ContentQuery {
+        kind: Some("a\u{0}".into()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        repo().file_bounds(&bad, 3).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
 pub async fn get_many_order_and_missing(db: &TestDb) {
     let store = db.store();
     let author = fixture_user(store).await;
@@ -1424,6 +1571,7 @@ pub async fn media_kind_filters_list_and_count(db: &TestDb) {
                 bytes: 1,
                 mime: mime.into(),
                 created_at: Timestamp::now(),
+                orphaned_at: None,
             })
             .await
             .unwrap();

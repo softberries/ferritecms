@@ -133,11 +133,14 @@ impl ImportRepo for PgRepos {
         now: Timestamp,
         job: JobId,
     ) -> Result<bool, StoreError> {
+        // The lease is compared with the database clock, as the reaper and the claim do
+        // (P6): `locked_until` was written with `now()`.
         let done = run!(&self.exec, |e| sqlx::query(
             "UPDATE import_runs SET state = 'abandoned', finished_at = $1 \
              WHERE id = $2 AND state = 'running' AND heartbeat_at < $3 \
              AND (job_id IS NULL OR job_id = $4 OR NOT EXISTS \
-             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running'))"
+             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running' \
+             AND (jobs.locked_until IS NULL OR jobs.locked_until >= now())))"
         )
         .bind(dt(now))
         .bind(id.as_uuid())
@@ -300,5 +303,27 @@ impl ImportRepo for PgRepos {
         .bind(row.version)
         .execute(e))
         .map(|_| ())
+    }
+
+    async fn map_list(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        after: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ImportMapRow>, StoreError> {
+        validate_text("import source", source)?;
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {MAP_COLUMNS} FROM import_map \
+             WHERE source = $1 AND kind = $2 AND ($3::BIGINT IS NULL OR wp_id > $3) \
+             ORDER BY wp_id LIMIT $4"
+        )))
+        .bind(source)
+        .bind(kind.as_str())
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(import_map).collect()
     }
 }

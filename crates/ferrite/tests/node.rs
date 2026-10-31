@@ -42,15 +42,26 @@ mod test_support;
 #[path = "node/actions.rs"]
 mod actions;
 
+#[path = "node/analytics.rs"]
+mod analytics;
+
 #[path = "node/served.rs"]
 mod served;
 
 #[path = "node/media.rs"]
 mod media;
 
+#[path = "node/node_metrics.rs"]
+mod node_metrics;
+
 const SITE_URL: &str = "http://127.0.0.1:8080";
-/// How fast a change must reach the node (solo: 250 ms poll; cluster: a notice).
-const CONVERGE: Duration = Duration::from_secs(1);
+/// How long a test waits for a change to reach the node (solo: a 250 ms poll; cluster: a
+/// notice), then a reload and a render. A ceiling for a loaded host, not a latency bound:
+/// `eventually` returns as soon as the change shows (the waits that matter print it).
+const CONVERGE: Duration = Duration::from_secs(5);
+/// How long a test waits for what takes a reload and a heartbeat (`nodes.meta`) or a
+/// job claim; a ceiling like [`CONVERGE`].
+const SETTLE: Duration = Duration::from_secs(10);
 /// A wait that includes compiling a plugin component: an unoptimised wasmtime build on a
 /// shared CI runner takes seconds (no latency bound is specified for plugin reloads).
 const PLUGIN_LOAD: Duration = Duration::from_secs(15);
@@ -342,7 +353,7 @@ async fn failed_theme_reload_is_retried(db: Arc<TestDb>) {
         .activate_theme("b", &b.artifact_hash)
         .await
         .unwrap();
-    eventually(Duration::from_secs(3), "theme error reported", || {
+    eventually(SETTLE, "theme error reported", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["error"].is_string() }
@@ -419,7 +430,7 @@ async fn bad_theme_activation_keeps_previous_theme(db: Arc<TestDb>) {
         .activate_theme("bad", &bad.artifact_hash)
         .await
         .unwrap();
-    eventually(Duration::from_secs(3), "theme error in nodes.meta", || {
+    eventually(SETTLE, "theme error in nodes.meta", || {
         let db = db.clone();
         let node = &node;
         async move {
@@ -462,7 +473,12 @@ async fn job_kinds_are_in_meta(db: Arc<TestDb>) {
     sorted.sort_unstable();
     sorted.dedup();
     assert_eq!(kinds, sorted, "{m}");
-    for kind in ["jobs.prune", "media.variants", "content.publish_scheduled"] {
+    for kind in [
+        "jobs.prune",
+        "media.variants",
+        "content.publish_scheduled",
+        "artifacts.gc",
+    ] {
         assert!(kinds.contains(&kind), "{kind}: {m}");
     }
     node.shutdown().await.unwrap();
@@ -479,7 +495,7 @@ async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
         .unwrap();
     site.tamper(&a.artifact_hash, b"tampered");
     let node = site.start(&db, NodeOptions::default()).await;
-    eventually(Duration::from_secs(3), "fallback flagged", || {
+    eventually(SETTLE, "fallback flagged", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["fallback"] == true }
@@ -498,7 +514,7 @@ async fn fallback_is_flagged_in_meta(db: Arc<TestDb>) {
         .await
         .unwrap();
     eventually(CONVERGE, "theme b", || home_contains(&node, "MARK-B")).await;
-    eventually(Duration::from_secs(3), "fallback cleared", || {
+    eventually(SETTLE, "fallback cleared", || {
         let db = db.clone();
         let node = &node;
         async move { meta(&db, node).await["theme"]["fallback"] == false }
@@ -549,6 +565,7 @@ async fn bad_plugin_update_keeps_previous_version(db: Arc<TestDb>) {
         bytes: stored.bytes as i64,
         mime: PLUGIN_MIME.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let update = ferrite_domain::InstalledPlugin {
         artifact_hash: stored.hash.clone(),
@@ -627,7 +644,7 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
         "fell back at startup"
     );
     assert!(node.state.plugins.loaded().is_empty(), "hello not loaded");
-    eventually(Duration::from_secs(3), "startup failures reported", || {
+    eventually(SETTLE, "startup failures reported", || {
         let db = db.clone();
         let node = &node;
         async move {
@@ -921,19 +938,15 @@ async fn permalink_change_rebuilds_routes(db: Arc<TestDb>) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    eventually(
-        Duration::from_secs(3),
-        "permalinks_error in nodes.meta",
-        || {
-            let db = db.clone();
-            let node = &node;
-            async move {
-                meta(&db, node).await["permalinks_error"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("invalid permalink option"))
-            }
-        },
-    )
+    eventually(SETTLE, "permalinks_error in nodes.meta", || {
+        let db = db.clone();
+        let node = &node;
+        async move {
+            meta(&db, node).await["permalinks_error"]
+                .as_str()
+                .is_some_and(|e| e.contains("invalid permalink option"))
+        }
+    })
     .await;
     assert_eq!(
         get(node.addr, &new_path).await.0,
@@ -1088,8 +1101,9 @@ async fn scheduled_post_publishes_via_job(db: Arc<TestDb>) {
         .unwrap();
     let scheduled = Instant::now();
     assert_eq!(get(node.addr, "/later/").await.0, 404);
+    // The lower bound below is the point; the upper one is only a ceiling.
     eventually(
-        Duration::from_millis(3500),
+        Duration::from_secs(10),
         "scheduled post visible",
         || async { get(node.addr, "/later/").await.0 == 200 },
     )
@@ -1125,6 +1139,7 @@ async fn purge_job_runs_through_the_runner(db: Arc<TestDb>) {
         bytes: 1,
         mime: PLUGIN_MIME.into(),
         created_at: Timestamp::now(),
+        orphaned_at: None,
     };
     let now = Timestamp::now();
     extensions
@@ -1229,7 +1244,7 @@ async fn shutdown_releases_running_job_and_deregisters(db: Arc<TestDb>) {
         .await
         .unwrap()
         .unwrap();
-    eventually(Duration::from_secs(3), "job running", || {
+    eventually(SETTLE, "job running", || {
         let store = store.clone();
         async move { store.read().jobs().get(id).await.unwrap().unwrap().status == JobStatus::Running }
     })
@@ -1279,4 +1294,126 @@ backend_tests_spawning!(
     scheduled_post_publishes_via_job,
     purge_job_runs_through_the_runner,
     shutdown_releases_running_job_and_deregisters,
+    metrics_listener_off_by_default,
+    metrics_not_on_public_listener,
 );
+
+/// Finishes at once (`ok`) or fails for good: what the job counters count.
+struct Quick {
+    kind: &'static str,
+    ok: bool,
+}
+
+#[async_trait]
+impl JobHandler for Quick {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        if self.ok {
+            Ok(())
+        } else {
+            Err(JobError::Permanent("test failure".into()))
+        }
+    }
+}
+
+/// M4-2 P34: without `server.metrics_listen` no metrics listener is bound, and the
+/// public site has no `/metrics`.
+async fn metrics_listener_off_by_default(db: Arc<TestDb>) {
+    let site = Site::new(&db);
+    assert_eq!(site.config.server.metrics_listen, None);
+    let node = site.start(&db, NodeOptions::default()).await;
+    assert_eq!(node.metrics_addr, None);
+    // A plain page path there: the canonical redirect, then the 404 page.
+    let (status, body) = get(node.addr, "/metrics").await;
+    assert_eq!(status, 301, "{body}");
+    let (status, body) = get(node.addr, "/metrics/").await;
+    assert_eq!(status, 404, "{body}");
+    assert!(!body.contains("ferrite_build_info"), "{body}");
+    node.shutdown().await.unwrap();
+}
+
+/// M4-2 P34: `/metrics` is served on `server.metrics_listen` only (GET `/metrics`,
+/// nothing else there), never on the public listener; it counts the node's requests
+/// and finished jobs.
+async fn metrics_not_on_public_listener(db: Arc<TestDb>) {
+    let mut site = Site::new(&db);
+    site.config.server.metrics_listen = Some("127.0.0.1:0".parse().unwrap());
+    let node = site
+        .start(
+            &db,
+            NodeOptions {
+                extra_handlers: vec![
+                    Arc::new(Quick {
+                        kind: "test.quick",
+                        ok: true,
+                    }),
+                    Arc::new(Quick {
+                        kind: "test.broken",
+                        ok: false,
+                    }),
+                ],
+                ..NodeOptions::default()
+            },
+        )
+        .await;
+    let metrics_addr = node.metrics_addr.expect("metrics listener bound");
+    assert_ne!(metrics_addr, node.addr);
+
+    let (status, body) = get(node.addr, "/").await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = get(node.addr, "/metrics").await;
+    assert_eq!(status, 301, "public listener: {body}");
+    let (status, body) = get(node.addr, "/metrics/").await;
+    assert_eq!(status, 404, "public listener: {body}");
+    assert!(!body.contains("ferrite_build_info"), "{body}");
+
+    let (status, body) = get(metrics_addr, "/metrics").await;
+    assert_eq!(status, 200, "{body}");
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        body.contains(&format!(
+            "ferrite_build_info{{version=\"{version}\",target=\"{}\"}} 1\n",
+            ferrite::binary_target()
+        )),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"2xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"3xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains("ferrite_http_requests_total{class=\"page\",status=\"4xx\"} 1\n"),
+        "{body}"
+    );
+    assert!(body.contains("ferrite_nodes 1\n"), "{body}");
+    // Only GET /metrics answers there.
+    let (status, _) = get(metrics_addr, "/").await;
+    assert_eq!(status, 404);
+    let (status, _) = get(metrics_addr, "/api/v1/system/status").await;
+    assert_eq!(status, 404);
+
+    // Finished jobs are counted for the per-minute rows (Task 8).
+    let store = db.shared_store();
+    for kind in ["test.quick", "test.broken"] {
+        store
+            .read()
+            .jobs()
+            .enqueue(&NewJob::new(kind, json!({"v": 1})))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    eventually(Duration::from_secs(10), "jobs counted", || {
+        let snap = node.metrics.snapshot();
+        async move { snap.jobs_done >= 1 && snap.jobs_failed >= 1 }
+    })
+    .await;
+    node.shutdown().await.unwrap();
+}

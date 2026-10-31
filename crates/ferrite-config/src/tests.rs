@@ -381,6 +381,7 @@ fn render_default_toml_roundtrips() {
     assert_eq!(c2.cluster, c3.cluster);
     assert_eq!(c2.auth, c3.auth);
     assert_eq!(c2.uploads, c3.uploads);
+    assert_eq!(c2.backup, c3.backup);
     assert!(matches!(c2.media, MediaSection::Local { .. }));
 }
 
@@ -489,6 +490,8 @@ fn render_default_toml_s3_roundtrips() {
     ] {
         let media = InitMedia::parse_s3_url(url).unwrap();
         let rendered = render_default_toml("https://example.com", "t", None, None, &media);
+        // R18: no concrete copy_if_not_exists value is suggested (none is verified for S3).
+        assert!(!rendered.contains("copy-source"), "{rendered}");
         std::fs::write(dir.path().join("ferrite.toml"), rendered).unwrap();
         let c = load(dir.path(), env(&[])).unwrap();
         let MediaSection::S3 {
@@ -923,6 +926,8 @@ fn media_upload_rules() {
     assert_eq!(c.uploads.max_upload, 256 << 20);
     assert_eq!(c.uploads.image_workers, 1);
     assert_eq!(c.uploads.idle_timeout_secs, 30);
+    assert!(!c.uploads.strip_metadata);
+    assert_eq!(c.uploads.gc_grace_days, 7);
     assert_eq!(DEFAULT_MAX_UPLOAD, 256 << 20);
     assert_eq!(MAX_UPLOAD_CEILING, 1 << 30);
 
@@ -946,6 +951,16 @@ fn media_upload_rules() {
     assert_eq!(r.unwrap().uploads.max_upload, 1);
     let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__MAX_UPLOAD", "8MB")]);
     assert_eq!(r.unwrap().uploads.max_upload, 8 << 20);
+    let (_d, r) = run(Some(&format!("{MIN}[media]\nstrip_metadata = true\n")), &[]);
+    assert!(r.unwrap().uploads.strip_metadata);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__STRIP_METADATA", "true")]);
+    assert!(r.unwrap().uploads.strip_metadata);
+    for (toml, days) in [("gc_grace_days = 1\n", 1), ("gc_grace_days = 365\n", 365)] {
+        let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);
+        assert_eq!(r.unwrap().uploads.gc_grace_days, days, "{toml}");
+    }
+    let (_d, r) = run(Some(MIN), &[("FERRITE_MEDIA__GC_GRACE_DAYS", "30")]);
+    assert_eq!(r.unwrap().uploads.gc_grace_days, 30);
 
     let problem = |toml: &str| {
         let (_d, r) = run(Some(&format!("{MIN}[media]\n{toml}")), &[]);
@@ -965,6 +980,16 @@ fn media_upload_rules() {
     );
     let (path, _) = problem("upload_idle_timeout = 0\n");
     assert_eq!(path, "media.upload_idle_timeout");
+    for bad in ["gc_grace_days = 0\n", "gc_grace_days = 366\n"] {
+        assert_eq!(
+            problem(bad),
+            (
+                "media.gc_grace_days".into(),
+                "must be between 1 and 365".into()
+            ),
+            "{bad}"
+        );
+    }
     for bad in ["image_workers = 0\n", "image_workers = 17\n"] {
         assert_eq!(
             problem(bad),
@@ -1074,4 +1099,539 @@ fn ttl_rules() {
         problem("[plugins]\nvolatile_ttl = \"2h\"\n").0,
         "plugins.volatile_ttl"
     );
+}
+
+fn s3_toml(extra: &str) -> String {
+    format!("{MIN}[media]\nbackend = \"s3\"\n[media.s3]\nbucket = \"b\"\nregion = \"r\"\n{extra}")
+}
+
+fn s3_copy_mode(r: Result<Config, ConfigError>) -> Option<String> {
+    let MediaSection::S3 {
+        copy_if_not_exists, ..
+    } = r.unwrap().media
+    else {
+        panic!("expected s3")
+    };
+    copy_if_not_exists
+}
+
+#[test]
+fn parse_s3_copy_if_not_exists_values() {
+    for ok in [
+        "header:x-example-if-none-match:*",
+        "header-with-status:cf-if-none-match:*:412",
+        "multipart",
+    ] {
+        let (_d, r) = run(
+            Some(&s3_toml(&format!("copy_if_not_exists = \"{ok}\"\n"))),
+            &[],
+        );
+        assert_eq!(s3_copy_mode(r).as_deref(), Some(ok));
+    }
+    let (_d, r) = run(Some(&s3_toml("")), &[]);
+    assert_eq!(s3_copy_mode(r), None);
+    for bad in [
+        "nonsense",
+        "header:only-name",
+        "header-with-status:a:b:zzz",
+        "",
+    ] {
+        let (_d, r) = run(
+            Some(&s3_toml(&format!("copy_if_not_exists = \"{bad}\"\n"))),
+            &[],
+        );
+        let e = r.unwrap_err();
+        assert_eq!(paths(&e), ["media.s3.copy_if_not_exists"], "{bad:?}");
+    }
+    let (_d, r) = run(
+        Some(&s3_toml("")),
+        &[("FERRITE_MEDIA__S3__COPY_IF_NOT_EXISTS", "bogus")],
+    );
+    assert_eq!(
+        paths(&r.unwrap_err()),
+        ["env:FERRITE_MEDIA__S3__COPY_IF_NOT_EXISTS"]
+    );
+}
+
+#[test]
+fn conditional_put_disabled_parses() {
+    for (value, want) in [
+        (None, None),
+        (Some("etag"), Some(ferrite_media::ConditionalPut::Etag)),
+        (
+            Some("disabled"),
+            Some(ferrite_media::ConditionalPut::Disabled),
+        ),
+    ] {
+        let extra = value.map_or(String::new(), |v| format!("conditional_put = \"{v}\"\n"));
+        let (_d, r) = run(Some(&s3_toml(&extra)), &[]);
+        let MediaSection::S3 {
+            conditional_put, ..
+        } = r.unwrap().media
+        else {
+            panic!("expected s3")
+        };
+        assert_eq!(conditional_put, want, "{value:?}");
+    }
+    let (_d, r) = run(Some(&s3_toml("conditional_put = \"always\"\n")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["media.s3.conditional_put"]);
+}
+
+#[test]
+fn backup_config_parses_and_validates() {
+    // Default: off, nothing else needed.
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(
+        r.unwrap().backup,
+        BackupConfig {
+            schedule: BackupSchedule::Off,
+            to: None,
+            keep: 7,
+            with_media: true,
+        }
+    );
+    assert_eq!(BackupSchedule::Off.every_secs(), None);
+    assert_eq!(BackupSchedule::Daily.every_secs(), Some(86_400));
+    assert_eq!(BackupSchedule::Weekly.every_secs(), Some(604_800));
+
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[backup]\nschedule = \"weekly\"\nto = \"/srv/backups\"\nkeep = 1000\nwith_media = false\n"
+        )),
+        &[],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Weekly);
+    assert_eq!(c.backup.schedule.as_str(), "weekly");
+    assert_eq!(c.backup.to.as_deref(), Some("/srv/backups"));
+    assert_eq!(c.backup.keep, 1000);
+    assert!(!c.backup.with_media);
+    // Relative to the data folder (and outside it), s3://, and the environment.
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[backup]\nschedule = \"daily\"\nto = \"../backups\"\nkeep = 1\n"
+        )),
+        &[],
+    );
+    let c = r.unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Daily);
+    assert_eq!(c.backup.to.as_deref(), Some("../backups"));
+    assert_eq!(c.backup.keep, 1);
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_BACKUP__SCHEDULE", "daily"),
+            ("FERRITE_BACKUP__TO", "s3://bucket/site-a"),
+        ],
+    );
+    assert_eq!(r.unwrap().backup.to.as_deref(), Some("s3://bucket/site-a"));
+    // A `to` with the schedule off is kept (and checked the same way).
+    let (_d, r) = run(Some(&format!("{MIN}[backup]\nto = \"/srv/b\"\n")), &[]);
+    assert_eq!(r.unwrap().backup.schedule, BackupSchedule::Off);
+
+    let problem = |toml: &str| {
+        let (_d, r) = run(Some(&format!("{MIN}[backup]\n{toml}")), &[]);
+        let e = r.unwrap_err();
+        assert_eq!(e.problems.len(), 1, "{toml}: {e:?}");
+        (e.problems[0].path.clone(), e.problems[0].message.clone())
+    };
+    assert_eq!(
+        problem("schedule = \"daily\"\n"),
+        (
+            "backup.to".into(),
+            "required unless backup.schedule is \"off\"".into()
+        )
+    );
+    assert_eq!(problem("schedule = \"hourly\"\n").0, "backup.schedule");
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nkeep = 0\n"),
+        ("backup.keep".into(), "must be between 1 and 1000".into())
+    );
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nkeep = 1001\n").0,
+        "backup.keep"
+    );
+    assert_eq!(
+        problem("schedule = \"daily\"\nto = \"/b\"\nevery = 3\n"),
+        ("backup.every".into(), "unknown key".into())
+    );
+    assert_eq!(problem("with_media = \"yes\"\n").0, "backup.with_media");
+    for bad in [
+        "\"\"",
+        "\"-\"",
+        "\"/srv/site.tar.zst\"",
+        "\"gs://bucket\"",
+        "\"s3://\"",
+        "\"inside\"",
+        "\"./x/../y\"",
+        "\".\"",
+    ] {
+        assert_eq!(
+            problem(&format!("schedule = \"daily\"\nto = {bad}\n")).0,
+            "backup.to",
+            "{bad}"
+        );
+    }
+    let (_d, r) = run(Some(&format!("backup = 3\n{MIN}")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["backup"]);
+}
+
+#[test]
+fn backup_template_is_commented_and_parses_uncommented() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("site");
+    std::fs::create_dir(&data).unwrap();
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    let at = rendered
+        .find("# [backup]\n")
+        .expect("template has [backup]");
+    // Uncomment the section's header and keys (not its prose lines).
+    let mut uncommented = rendered[..at].to_owned();
+    for line in rendered[at..].lines() {
+        let l = line.strip_prefix("# ").unwrap_or(line);
+        if l.starts_with('[') || l.contains(" = ") {
+            uncommented.push_str(l);
+        } else {
+            uncommented.push_str(line);
+        }
+        uncommented.push('\n');
+    }
+    std::fs::write(data.join("ferrite.toml"), &uncommented).unwrap();
+    let c = load(&data, env(&[])).unwrap();
+    assert_eq!(c.backup.schedule, BackupSchedule::Daily);
+    assert_eq!(c.backup.to.as_deref(), Some("../backups"));
+    assert_eq!(c.backup.keep, 7);
+    assert!(c.backup.with_media);
+}
+
+#[test]
+fn metrics_listen_is_off_by_default_and_parsed() {
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().server.metrics_listen, None);
+
+    let (_d, r) = run(
+        Some(&format!(
+            "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n"
+        )),
+        &[],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+
+    let (_d, r) = run(
+        Some(MIN),
+        &[("FERRITE_SERVER__METRICS_LISTEN", "0.0.0.0:9100")],
+    );
+    assert_eq!(
+        r.unwrap().server.metrics_listen,
+        Some("0.0.0.0:9100".parse().unwrap())
+    );
+
+    // Not an address, or the public listener's own address: refused.
+    for bad in [
+        "metrics_listen = \"nope\"\n",
+        "metrics_listen = 9464\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        // The same port where either side is every interface.
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"127.0.0.1:8080\"\nmetrics_listen = \"0.0.0.0:8080\"\n",
+        "listen = \"[::]:8080\"\nmetrics_listen = \"10.0.0.5:8080\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{bad}")), &[]);
+        assert_eq!(paths(&r.unwrap_err()), ["server.metrics_listen"], "{bad}");
+    }
+    // Not a clash: port 0 on both (tests: two different free ports), the same port on
+    // two specific addresses, a different port beside a wildcard.
+    for ok in [
+        "listen = \"127.0.0.1:0\"\nmetrics_listen = \"127.0.0.1:0\"\n",
+        "listen = \"0.0.0.0:0\"\nmetrics_listen = \"0.0.0.0:0\"\n",
+        "listen = \"10.0.0.5:8080\"\nmetrics_listen = \"127.0.0.1:8080\"\n",
+        "listen = \"0.0.0.0:8080\"\nmetrics_listen = \"127.0.0.1:9464\"\n",
+    ] {
+        let (_d, r) = run(Some(&format!("{MIN}[server]\n{ok}")), &[]);
+        assert!(r.is_ok(), "{ok}: {r:?}");
+    }
+}
+
+#[test]
+fn metrics_listen_template_is_commented() {
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    assert!(
+        rendered.contains("# metrics_listen = \"127.0.0.1:9464\"\n"),
+        "{rendered}"
+    );
+    let uncommented = rendered.replace(
+        "# metrics_listen = \"127.0.0.1:9464\"\n",
+        "metrics_listen = \"127.0.0.1:9464\"\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ferrite.toml"), uncommented).unwrap();
+    let c = load(dir.path(), env(&[])).unwrap();
+    assert_eq!(
+        c.server.metrics_listen,
+        Some("127.0.0.1:9464".parse().unwrap())
+    );
+}
+
+#[test]
+fn invalid_timezone_is_config_error() {
+    for bad in ["Mars/Base", "Europe/Warsw", "not a zone", "+02:00"] {
+        let src = format!("{MIN}timezone = \"{bad}\"\n");
+        let (_dir, r) = run(Some(&src), &[]);
+        let e = r.unwrap_err();
+        assert!(paths(&e).contains(&"site.timezone"), "{bad}: {e:?}");
+    }
+    let (_dir, r) = run(Some(&format!("{MIN}timezone = \"Europe/Warsaw\"\n")), &[]);
+    assert_eq!(r.unwrap().site.timezone, "Europe/Warsaw");
+}
+
+/// `[server.tls]` (M4-2 P33): parsed with its defaults, `acme` needs an https
+/// `site.url` and a `mailto:` contact, and cluster mode refuses it.
+#[test]
+fn tls_config_parses_and_validates() {
+    // Off by default.
+    let (_d, r) = run(Some(MIN), &[]);
+    assert_eq!(r.unwrap().server.tls, TlsConfig::Off);
+
+    // `acme` with only the contact: the defaults.
+    let acme =
+        format!("{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:ops@example.com\"\n");
+    let (_d, r) = run(Some(&acme), &[]);
+    let TlsConfig::Acme(a) = r.unwrap().server.tls else {
+        panic!("not acme");
+    };
+    assert_eq!(a.domains, vec!["example.com".to_owned()]);
+    assert_eq!(a.contact, "mailto:ops@example.com");
+    assert_eq!(a.directory, AcmeDirectory::Production);
+    assert_eq!(a.listen, "0.0.0.0:443".parse().unwrap());
+    assert_eq!(a.redirect_http, None);
+
+    // Every key, from the file and from the environment.
+    let full = "[site]\nurl = \"https://www.example.com\"\n[server.tls]\nmode = \"acme\"\n\
+                domains = [\"www.example.com\", \"example.com\"]\n\
+                contact = \"mailto:ops@example.com\"\ndirectory = \"staging\"\n\
+                listen = \"0.0.0.0:8443\"\nredirect_http = \"0.0.0.0:80\"\n";
+    let (_d, r) = run(Some(full), &[]);
+    let TlsConfig::Acme(a) = r.unwrap().server.tls else {
+        panic!("not acme");
+    };
+    assert_eq!(a.domains, vec!["www.example.com", "example.com"]);
+    assert_eq!(a.directory, AcmeDirectory::Staging);
+    assert_eq!(a.listen, "0.0.0.0:8443".parse().unwrap());
+    assert_eq!(a.redirect_http, Some("0.0.0.0:80".parse().unwrap()));
+    let (_d, r) = run(
+        Some(MIN),
+        &[
+            ("FERRITE_SERVER__TLS__MODE", "acme"),
+            ("FERRITE_SERVER__TLS__CONTACT", "mailto:ops@example.com"),
+            (
+                "FERRITE_SERVER__TLS__DOMAINS",
+                "example.com, www.example.com",
+            ),
+            (
+                "FERRITE_SERVER__TLS__DIRECTORY",
+                "https://pebble.test:14000/dir",
+            ),
+        ],
+    );
+    let TlsConfig::Acme(a) = r.unwrap().server.tls else {
+        panic!("not acme");
+    };
+    assert_eq!(a.domains, vec!["example.com", "www.example.com"]);
+    assert_eq!(
+        a.directory,
+        AcmeDirectory::Url("https://pebble.test:14000/dir".parse().unwrap())
+    );
+    assert_eq!(a.directory.url(), "https://pebble.test:14000/dir");
+    assert_eq!(
+        AcmeDirectory::Production.url(),
+        "https://acme-v02.api.letsencrypt.org/directory"
+    );
+    assert_eq!(
+        AcmeDirectory::Staging.url(),
+        "https://acme-staging-v02.api.letsencrypt.org/directory"
+    );
+
+    // `off` with other keys set loads (they are checked for shape only), with a warning
+    // per key that has no effect.
+    let off = format!("{MIN}[server.tls]\nmode = \"off\"\nlisten = \"0.0.0.0:443\"\n");
+    let c = run(Some(&off), &[]).1.unwrap();
+    assert_eq!(c.server.tls, TlsConfig::Off);
+    let warned: Vec<&str> = c.warnings.iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(warned, ["server.tls.listen"]);
+    assert!(
+        c.warnings[0].message.contains("mode is \"off\""),
+        "{:?}",
+        c.warnings
+    );
+    let all = format!(
+        "{MIN}[server.tls]\ncontact = \"mailto:ops@example.com\"\ndomains = [\"example.com\"]\n\
+         directory = \"staging\"\nlisten = \"0.0.0.0:443\"\nredirect_http = \"0.0.0.0:80\"\n"
+    );
+    let c = run(Some(&all), &[]).1.unwrap();
+    let warned: Vec<&str> = c.warnings.iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(
+        warned,
+        [
+            "server.tls.domains",
+            "server.tls.contact",
+            "server.tls.directory",
+            "server.tls.listen",
+            "server.tls.redirect_http"
+        ]
+    );
+    assert!(run(Some(MIN), &[]).1.unwrap().warnings.is_empty());
+
+    let problems = |src: &str| -> Vec<(String, String)> {
+        let (_d, r) = run(Some(src), &[("FERRITE_AUTH__SECRET_KEY", KEY)]);
+        r.unwrap_err()
+            .problems
+            .into_iter()
+            .map(|p| (p.path, p.message))
+            .collect()
+    };
+    let has = |ps: &[(String, String)], path: &str, msg: &str| {
+        assert!(
+            ps.iter().any(|(p, m)| p == path && m.contains(msg)),
+            "{path} / {msg}: {ps:?}"
+        );
+    };
+    // The contact is required, as a mailto: URI.
+    let ps = problems(&format!("{MIN}[server.tls]\nmode = \"acme\"\n"));
+    has(&ps, "server.tls.contact", "required");
+    for bad in [
+        "ops@example.com",
+        "mailto:",
+        "https://example.com",
+        "mailto:nobody",
+    ] {
+        let ps = problems(&format!(
+            "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"{bad}\"\n"
+        ));
+        has(&ps, "server.tls.contact", "mailto:");
+    }
+    // An http:// site.url.
+    let ps = problems(
+        "[site]\nurl = \"http://example.com\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\n",
+    );
+    has(&ps, "server.tls.mode", "https://");
+    // A site whose host is an IP address has no default domain to certify.
+    let ps = problems(
+        "[site]\nurl = \"https://127.0.0.1\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\n",
+    );
+    has(&ps, "server.tls.domains", "DNS name");
+    // Explicit domains do not help: the certificate would never cover site.url.
+    let ps = problems(
+        "[site]\nurl = \"https://203.0.113.5\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\ndomains = [\"example.com\"]\n",
+    );
+    has(&ps, "server.tls.domains", "DNS name");
+    // The site's host must be among the domains.
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         domains = [\"other.example.com\"]\n"
+    ));
+    has(&ps, "server.tls.domains", "example.com");
+    // Bad shapes.
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"https\"\ndirectory = \"http://acme.test/dir\"\n\
+         listen = \"x\"\nredirect_http = \"80\"\ndomains = [\"\", \"bad domain\"]\nextra = 1\n"
+    ));
+    has(&ps, "server.tls.mode", "\"off\" or \"acme\"");
+    has(&ps, "server.tls.directory", "https://");
+    has(&ps, "server.tls.listen", "socket address");
+    has(&ps, "server.tls.redirect_http", "socket address");
+    has(&ps, "server.tls.domains[0]", "DNS name");
+    has(&ps, "server.tls.domains[1]", "DNS name");
+    has(&ps, "server.tls.extra", "unknown key");
+    // The listeners must differ.
+    let ps = problems(&format!(
+        "{MIN}[server]\nlisten = \"0.0.0.0:443\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nredirect_http = \"0.0.0.0:443\"\n"
+    ));
+    has(&ps, "server.tls.listen", "server.listen");
+    has(&ps, "server.tls.redirect_http", "server.tls.listen");
+    // An unspecified address clashes with a specific one on the same port, both ways.
+    let ps = problems(&format!(
+        "{MIN}[server]\nlisten = \"127.0.0.1:443\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nredirect_http = \"127.0.0.1:0\"\n"
+    ));
+    has(&ps, "server.tls.listen", "server.listen");
+    assert!(
+        !ps.iter().any(|(p, _)| p == "server.tls.redirect_http"),
+        "{ps:?}"
+    );
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         listen = \"127.0.0.1:8443\"\nredirect_http = \"0.0.0.0:8443\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.tls.listen");
+    let ps = problems(&format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         redirect_http = \"0.0.0.0:8080\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.listen");
+    // Neither may take server.metrics_listen's socket.
+    let ps = problems(&format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"0.0.0.0:9464\"\n"
+    ));
+    has(&ps, "server.tls.listen", "server.metrics_listen");
+    let ps = problems(&format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nredirect_http = \"127.0.0.1:9464\"\n"
+    ));
+    has(&ps, "server.tls.redirect_http", "server.metrics_listen");
+    // Distinct sockets are fine (port 0 never clashes).
+    let ok = format!(
+        "{MIN}[server]\nmetrics_listen = \"127.0.0.1:9464\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"0.0.0.0:443\"\nredirect_http = \"0.0.0.0:80\"\n"
+    );
+    assert!(run(Some(&ok), &[]).1.is_ok());
+    let zero = format!(
+        "{MIN}[server]\nlisten = \"127.0.0.1:0\"\n[server.tls]\nmode = \"acme\"\n\
+         contact = \"mailto:a@example.com\"\nlisten = \"127.0.0.1:0\"\nredirect_http = \"127.0.0.1:0\"\n"
+    );
+    assert!(run(Some(&zero), &[]).1.is_ok());
+
+    // Cluster mode (explicit, or auto resolving to it) refuses acme.
+    let cluster = format!(
+        "{MIN}[server.tls]\nmode = \"acme\"\ncontact = \"mailto:a@example.com\"\n\
+         [database]\nurl = \"postgres://h/d\"\n[media]\nlocal_shared = true\n"
+    );
+    let ps = problems(&format!("{cluster}[cluster]\nmode = \"cluster\"\n"));
+    has(&ps, "server.tls.mode", "solo");
+    let ps = problems(&cluster);
+    has(&ps, "server.tls.mode", "solo");
+    // The same Postgres site in solo mode is fine.
+    let (_d, r) = run(
+        Some(&format!("{cluster}[cluster]\nmode = \"solo\"\n")),
+        &[("FERRITE_AUTH__SECRET_KEY", KEY)],
+    );
+    assert!(matches!(r.unwrap().server.tls, TlsConfig::Acme(_)));
+
+    // The `ferrite init` template's section, uncommented, is a valid acme config.
+    let rendered = render_default_toml("https://example.com", "", None, None, &InitMedia::Local);
+    let start = rendered.find("# [server.tls]").unwrap();
+    let end = start + rendered[start..].find("\n\n").unwrap();
+    let mut src = rendered[..start].to_owned();
+    for line in rendered[start..end].lines() {
+        let l = line.strip_prefix("# ").unwrap_or(line);
+        if l.starts_with('[') || l.contains(" = ") {
+            src.push_str(l);
+        } else {
+            src.push_str(line);
+        }
+        src.push('\n');
+    }
+    src.push_str(&rendered[end..]);
+    let (_d, r) = run(Some(&src), &[]);
+    let TlsConfig::Acme(a) = r.unwrap().server.tls else {
+        panic!("template section is not acme");
+    };
+    assert_eq!(a.redirect_http, Some("0.0.0.0:80".parse().unwrap()));
 }

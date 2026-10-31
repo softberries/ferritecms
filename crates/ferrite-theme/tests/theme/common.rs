@@ -9,6 +9,7 @@ use std::{
 use ferrite_core::{
     DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
     comments::CommentThread,
+    site::{ContentTree, ListOrder},
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
@@ -56,6 +57,7 @@ pub fn site() -> SiteInfo {
         url: "https://example.com".into(),
         description: "desc".into(),
         locale: "en".into(),
+        timezone: "UTC".into(),
         settings: Default::default(),
     }
 }
@@ -85,6 +87,7 @@ pub fn item(kind: &str, title: &str) -> PageItem {
         },
         url: "/hello/".into(),
         html: "<p>Body <em>html</em></p>".into(),
+        toc: Vec::new(),
         author: Some(UserPublic {
             id: UserId::new(),
             login: "ana".into(),
@@ -122,13 +125,16 @@ pub fn listing(items: Vec<PageItem>, page: u32, total: u64) -> Listing {
     }
 }
 
+/// The arguments of one `query()` bridge call: type, term, limit, order.
+pub type QueryCall = (String, Option<String>, u32, ListOrder);
+
 /// A bridge that counts calls and returns canned data.
 #[derive(Default)]
 pub struct FakeBridge {
     pub calls: AtomicU32,
     pub related: Vec<PageItem>,
     pub menu: Option<MenuTree>,
-    pub queries: Mutex<Vec<(String, Option<String>, u32)>>,
+    pub queries: Mutex<Vec<QueryCall>>,
     pub related_args: Mutex<Vec<(ContentId, u32)>>,
     pub image: Option<ImageRef>,
     /// Keys reported with every related/query/menu result.
@@ -136,6 +142,9 @@ pub struct FakeBridge {
     /// What `comments()` returns, and the ids it was asked for.
     pub comments: Option<CommentThread>,
     pub comment_args: Mutex<Vec<(ContentId, u32)>>,
+    /// What `tree()` returns, and the kinds it was asked for.
+    pub tree: Option<ContentTree>,
+    pub tree_args: Mutex<Vec<String>>,
 }
 
 impl HelperBridge for FakeBridge {
@@ -144,12 +153,18 @@ impl HelperBridge for FakeBridge {
         self.related_args.lock().unwrap().push((item, n));
         (self.related.clone(), self.deps.clone())
     }
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>> {
+    fn query(
+        &self,
+        kind: &str,
+        term: Option<&str>,
+        limit: u32,
+        order: ListOrder,
+    ) -> Bridged<Vec<PageItem>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.queries
             .lock()
             .unwrap()
-            .push((kind.into(), term.map(Into::into), limit));
+            .push((kind.into(), term.map(Into::into), limit, order));
         (vec![item(kind, "Queried")], self.deps.clone())
     }
     fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
@@ -164,6 +179,14 @@ impl HelperBridge for FakeBridge {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.comment_args.lock().unwrap().push((item, page));
         (self.comments.clone(), self.deps.clone())
+    }
+    fn tree(&self, kind: &str) -> Bridged<Option<ContentTree>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.tree_args.lock().unwrap().push(kind.into());
+        (
+            self.tree.clone().filter(|t| t.kind == kind),
+            self.deps.clone(),
+        )
     }
 }
 

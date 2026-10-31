@@ -1,9 +1,8 @@
 //! Custom filters (06 §4): `date`, `excerpt`, `slugify`, `json`.
 
-use std::fmt::Write as _;
-
-use chrono::{DateTime, format::StrftimeItems};
-use minijinja::{Error, ErrorKind, Value};
+use jiff::{Timestamp, tz::TimeZone};
+use minijinja::value::Kwargs;
+use minijinja::{Error, ErrorKind, State, Value};
 
 /// Default `date` format.
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -12,11 +11,28 @@ const MAX_FORMAT_LEN: usize = 200;
 /// Default word count of `excerpt` (WordPress's).
 const DEFAULT_EXCERPT_WORDS: usize = 55;
 
-/// `{{ post.date | date("%e %B %Y") }}`: an RFC 3339 timestamp formatted with chrono
-/// strftime, in UTC. `none`/undefined give `""`. An invalid format or timestamp is a
-/// template error, never a panic: formatting goes through the fallible `write!` path,
-/// and an unknown `%` sequence makes it fail.
-pub(crate) fn date(value: &Value, fmt: Option<&str>) -> Result<String, Error> {
+/// `{{ post.date | date("%e %B %Y") }}`, `{{ post.date | date("%H:%M", tz="Asia/Tokyo") }}`:
+/// an RFC 3339 timestamp formatted with jiff's strftime in `tz` (an IANA name), else in
+/// `site.timezone` (UTC when that is unset). `none`/undefined give `""`. An invalid
+/// format, timestamp or zone is a template error, never a panic. The IANA database is
+/// bundled, so no zone files are needed on the host.
+pub(crate) fn date(
+    state: &State,
+    value: &Value,
+    fmt: Option<&str>,
+    kwargs: Kwargs,
+) -> Result<String, Error> {
+    let tz_arg: Option<&str> = kwargs.get("tz")?;
+    kwargs.assert_all_used()?;
+    let site_tz = state
+        .lookup("site")
+        .and_then(|s| s.get_attr("timezone").ok())
+        .and_then(|v| v.as_str().map(str::to_owned));
+    format_date(value, fmt, tz_arg.or(site_tz.as_deref()))
+}
+
+/// [`date`] without the render state: `tz` is an IANA name (`None` or empty: UTC).
+fn format_date(value: &Value, fmt: Option<&str>, tz: Option<&str>) -> Result<String, Error> {
     if value.is_none() || value.is_undefined() {
         return Ok(String::new());
     }
@@ -27,13 +43,15 @@ pub(crate) fn date(value: &Value, fmt: Option<&str>) -> Result<String, Error> {
     let raw = value
         .as_str()
         .ok_or_else(|| invalid("date: expected an RFC 3339 timestamp string"))?;
-    let dt = DateTime::parse_from_rfc3339(raw)
-        .map_err(|_| invalid("date: expected an RFC 3339 timestamp string"))?
-        .to_utc();
-    let mut out = String::new();
-    write!(out, "{}", dt.format_with_items(StrftimeItems::new(fmt)))
-        .map_err(|_| invalid("date: invalid format string"))?;
-    Ok(out)
+    let ts: Timestamp = raw
+        .parse()
+        .map_err(|_| invalid("date: expected an RFC 3339 timestamp string"))?;
+    let tz = match tz.filter(|n| !n.is_empty()) {
+        None => TimeZone::UTC,
+        Some(n) => TimeZone::get(n).map_err(|_| invalid("date: unknown time zone"))?,
+    };
+    jiff::fmt::strtime::format(fmt, &ts.to_zoned(tz))
+        .map_err(|_| invalid("date: invalid format string"))
 }
 
 /// `{{ post.body | excerpt(30) }}`: tags stripped, entities decoded, whitespace
@@ -108,21 +126,24 @@ mod tests {
     #[test]
     fn date_formats_and_rejects() {
         let v = Value::from("2024-03-05T10:20:30+00:00");
-        assert_eq!(date(&v, None).unwrap(), "2024-03-05");
+        assert_eq!(format_date(&v, None, None).unwrap(), "2024-03-05");
         assert_eq!(
-            date(&v, Some("%e %B %Y, %H:%M")).unwrap(),
+            format_date(&v, Some("%e %B %Y, %H:%M"), None).unwrap(),
             " 5 March 2024, 10:20"
         );
         // Offsets are converted to UTC.
         let v2 = Value::from("2024-03-05T01:00:00+02:00");
-        assert_eq!(date(&v2, Some("%Y-%m-%d %H")).unwrap(), "2024-03-04 23");
-        for bad in ["%Q", "%", "%Y %!", "%.3"] {
-            assert!(date(&v, Some(bad)).is_err(), "{bad}");
+        assert_eq!(
+            format_date(&v2, Some("%Y-%m-%d %H"), None).unwrap(),
+            "2024-03-04 23"
+        );
+        for bad in ["%", "%Y %!", "%.3", "%-", "%:", "%J", "%i"] {
+            assert!(format_date(&v, Some(bad), None).is_err(), "{bad}");
         }
-        assert!(date(&Value::from("yesterday"), None).is_err());
-        assert!(date(&Value::from(5), None).is_err());
-        assert_eq!(date(&Value::from(()), None).unwrap(), "");
-        assert_eq!(date(&Value::UNDEFINED, None).unwrap(), "");
+        assert!(format_date(&Value::from("yesterday"), None, None).is_err());
+        assert!(format_date(&Value::from(5), None, None).is_err());
+        assert_eq!(format_date(&Value::from(()), None, None).unwrap(), "");
+        assert_eq!(format_date(&Value::UNDEFINED, None, None).unwrap(), "");
     }
 
     #[test]

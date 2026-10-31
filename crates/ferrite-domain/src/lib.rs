@@ -10,6 +10,7 @@ mod ids;
 mod import;
 mod job;
 mod menu;
+mod metrics;
 mod node;
 mod page;
 mod plugin;
@@ -41,6 +42,10 @@ pub use ids::{
 pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
+pub use metrics::{
+    MINUTE_MICROS, MetricCounts, NODE_METRICS_RETENTION, PAGE_LATENCY_BOUNDS_MS,
+    PAGE_LATENCY_SLOTS, SeriesBucket, SeriesStep, page_p95_ms,
+};
 pub use node::{NewNode, Node};
 pub use page::{Cursor, Page};
 pub use plugin::{

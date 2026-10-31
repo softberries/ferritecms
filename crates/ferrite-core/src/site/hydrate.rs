@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     CoreError, MAX_PARENT_DEPTH,
-    blocks::{self, InlineImage, RenderCtx, Responsive},
+    blocks::{self, InlineImage, RenderCtx, Responsive, TocEntry},
     content::EXCERPT_CHARS,
     events::{post_key, term_key, user_key},
     media::RASTER_MIMES,
@@ -157,9 +157,11 @@ impl Hydrator<'_> {
             let item = input.item;
             let featured = refs.featured.and_then(|id| media.get(&id));
             let fields = public_fields(&item.fields, &refd, featured.is_some());
+            let (html, toc) = self.render(&item.body, media);
             out.push(PageItem {
                 url,
-                html: self.render(&item.body, media),
+                html,
+                toc,
                 author: authors.get(&item.author_id).cloned(),
                 terms: item_terms.into_iter().map(term_public).collect(),
                 featured: featured.map(|m| self.media_public(m)),
@@ -211,18 +213,18 @@ impl Hydrator<'_> {
         Ok(out)
     }
 
-    fn render(&self, body: &Value, media: &HashMap<ContentId, Media>) -> String {
+    fn render(&self, body: &Value, media: &HashMap<ContentId, Media>) -> (String, Vec<TocEntry>) {
         let image = |id: &str| {
             let id: ContentId = id.parse().ok()?;
             media.get(&id).map(|m| self.inline_image(m))
         };
-        blocks::render_html(body, &RenderCtx { media: &image })
+        blocks::render_html_toc(body, &RenderCtx { media: &image })
     }
 
     /// An inline image of public media `m` (06 §4, the R28 follow-up), as the theme's
     /// `image()` helper renders one: for a raster image whose dimensions are recorded,
     /// `srcset` lists the original and every variant of the same shape (a crop to
-    /// another aspect ratio would show a different picture; [`same_shape`]), `src` is
+    /// another aspect ratio would show a different picture), `src` is
     /// the widest of them no wider than the display slot (the theme's largest size, or
     /// the original's width when that is smaller or the theme has no sizes; the original
     /// when none fits), and `sizes` says the image is at most that wide. Anything else (SVG, other types, an image the
@@ -235,11 +237,7 @@ impl Hydrator<'_> {
         if !RASTER_MIMES.contains(&m.mime.as_str()) || width <= 0 || height <= 0 {
             return InlineImage::plain(public.url);
         }
-        let mut shaped = public.clone();
-        shaped
-            .variants
-            .retain(|v| same_shape((width, height), v.width.zip(v.height)));
-        let candidates = shaped.srcset_candidates(None);
+        let candidates = public.srcset_candidates(Some((width, height)), None);
         // The display slot: the theme's largest size, but never wider than the image.
         let largest = self
             .image_width
@@ -432,18 +430,6 @@ pub(super) fn term_public(t: Term) -> TermPublic {
     }
 }
 
-/// Whether a variant of `size` has the aspect ratio of an original of `original`, up to
-/// the rounding of a resize (`|w·oh − h·ow| ≤ max(ow, oh)`); a variant whose size is
-/// unknown does not.
-fn same_shape(original: (i32, i32), size: Option<(i32, i32)>) -> bool {
-    let Some((w, h)) = size else {
-        return false;
-    };
-    let (ow, oh) = (i64::from(original.0), i64::from(original.1));
-    let (w, h) = (i64::from(w), i64::from(h));
-    w > 0 && h > 0 && (w * oh - h * ow).abs() <= ow.max(oh)
-}
-
 fn dimension(v: Option<&Value>) -> Option<i32> {
     v?.as_i64().and_then(|n| i32::try_from(n).ok())
 }
@@ -452,22 +438,4 @@ fn dimension(v: Option<&Value>) -> Option<i32> {
 pub(super) fn unique<T: Copy + Eq + std::hash::Hash>(it: impl IntoIterator<Item = T>) -> Vec<T> {
     let mut seen = HashSet::new();
     it.into_iter().filter(|v| seen.insert(*v)).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::same_shape;
-
-    #[test]
-    fn same_shape_allows_rounding_only() {
-        // A 4:3 original: resizes (rounded either way) match, crops do not.
-        assert!(same_shape((2000, 1500), Some((768, 576))));
-        assert!(same_shape((2000, 1500), Some((1001, 751))));
-        assert!(same_shape((1999, 1333), Some((768, 512))));
-        assert!(!same_shape((2000, 1500), Some((1280, 640))));
-        assert!(!same_shape((2000, 1500), Some((150, 150))));
-        assert!(!same_shape((2000, 1500), Some((640, 360))));
-        assert!(!same_shape((2000, 1500), None));
-        assert!(!same_shape((2000, 1500), Some((0, 0))));
-    }
 }

@@ -1,11 +1,14 @@
 // Site health (`manage_system`): the page-cache hit ratio of the answering node, jobs by
 // status, and plugin failures per hour over 24 hours. Cache numbers are node-local
-// (`GET /system/metrics/summary`, M2a-2b P20), so that block says "This node only";
+// (`GET /system/metrics/summary`, M2a-2b P20: the answering node's counters since it
+// started), so that block says "This node, since <its start>" (M4 R6; the cluster-wide
+// ratio over a range is the Site traffic group's Performance card);
 // failure buckets are every node's (`GET /plugins/{name}/metrics`, pre-flight F34), so
 // the failures chart says "All nodes". Each block loads and fails on its own; numbers
 // are always text beside the marks.
 
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { format } from "date-fns";
 import { CircleCheckIcon } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -57,7 +60,16 @@ export function SiteHealth({ plugins, className }: { plugins: boolean; className
       className={className}
     >
       <div className="grid gap-6 sm:grid-cols-2">
-        <Block title={t("health.cache.title")} scope={t("health.thisNode")}>
+        <Block
+          title={t("health.cache.title")}
+          scope={
+            summary.data
+              ? t("health.thisNodeSince", {
+                  time: format(new Date(summary.data.node.started_at), "PPp"),
+                })
+              : t("health.thisNode")
+          }
+        >
           {summary.isError ? (
             <BlockError error={summary.error} retry={() => void summary.refetch()} />
           ) : summary.data ? (

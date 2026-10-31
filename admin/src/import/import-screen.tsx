@@ -9,7 +9,7 @@
 
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IMPORT_WORDPRESS_KIND, type ImportJobDto, importRunsQuery } from "@/api/import";
 import { qk } from "@/api/keys";
@@ -24,6 +24,8 @@ import { StartCard } from "./start-card";
 
 /** The query roots a finished import leaves alone (`qk.import`, `qk.me`, `qk.meta`). */
 const KEPT_AFTER_IMPORT: ReadonlySet<string> = new Set([qk.import.runs[0], qk.me[0], qk.meta[0]]);
+/** How long the run's live region is in the page before it may speak. */
+const LIVE_SETTLE_MS = 100;
 
 export interface ImportScreenProps {
   /** The job the URL names (`?job=`). */
@@ -48,6 +50,24 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
   }, [job, opened, setJob]);
   // Where focus goes when the start card and the panel swap.
   const [focus, setFocus] = useState<"panel" | "start" | null>(null);
+  // What the run panel last said (its live region is this screen's). A text that comes
+  // before the region has been in the page for `LIVE_SETTLE_MS` (a reload or link to
+  // `?job=` with the job already cached) waits that long, so it is still a change.
+  const [said, setSaid] = useState("");
+  const settled = useRef(false);
+  const pending = useRef<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      settled.current = true;
+      if (pending.current !== null) setSaid(pending.current);
+      pending.current = null;
+    }, LIVE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const announce = useCallback((text: string) => {
+    if (settled.current) setSaid(text);
+    else pending.current = text;
+  }, []);
   const refreshRuns = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: qk.import.runs });
   }, [queryClient]);
@@ -78,6 +98,12 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
 
   return (
     <div data-slot="import-screen" className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      {/* The run panel's live region lives here, mounted with the screen, so the first
+          phase is a change even when the panel mounts already knowing it (a start puts
+          its job in the cache). */}
+      <span data-slot="import-run-live" className="sr-only" aria-live="polite" aria-atomic="true">
+        {said}
+      </span>
       {header}
       {followed ? (
         <RunPanel
@@ -85,9 +111,11 @@ export function ImportScreen({ job, setJob }: ImportScreenProps) {
           jobId={followed}
           focusHeading={focus === "panel"}
           onSettled={onSettled}
+          announce={announce}
           onDismiss={() => {
             setOpened(undefined);
             setFocus("start");
+            setSaid("");
             refreshRuns();
             setJob(undefined);
           }}

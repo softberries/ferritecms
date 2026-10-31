@@ -16,8 +16,9 @@
 //! The plugin calls run later in the job runner (bounded, failures counted towards
 //! auto-disable, row re-checked first: 04 §6), never inside a request.
 //!
-//! **Privacy.** An event holds the raw (percent-encoded) path without the query, cut to
-//! [`MAX_SERVED_PATH`] bytes (F36), the status, the time, the lowercased host of a
+//! **Privacy.** An event holds the percent-encoded path without the query (every byte
+//! outside the RFC 3986 path set is encoded, X5), cut to [`MAX_SERVED_PATH`] bytes
+//! without splitting an escape (F36), the status, the time, the lowercased host of a
 //! single `Referer` header, a coarse [`UaClass`] and the [`CacheOutcome`]: never the
 //! query string, an IP or its hash, a cookie, a header value, the full user agent or a
 //! user id.
@@ -81,7 +82,8 @@ pub enum CacheOutcome {
 /// One public page response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServedEvent {
-    /// Raw percent-encoded path, no query, at most [`MAX_SERVED_PATH`] bytes.
+    /// Percent-encoded path (every byte outside the RFC 3986 path set), no query, at most [`MAX_SERVED_PATH`]
+    /// bytes.
     pub path: String,
     pub status: u16,
     pub ts: Timestamp,
@@ -141,13 +143,68 @@ pub fn ua_class(ua: &str) -> UaClass {
     }
 }
 
-/// `path` cut to [`MAX_SERVED_PATH`] bytes (on a character boundary).
+/// `path` as the event carries it (ruling M4-3a X5): percent-encoded outside the RFC 3986
+/// path set, then cut to [`MAX_SERVED_PATH`] bytes without splitting a `%XX`.
+///
+/// The request target may hold raw `"`, `\`, spaces, control and non-ASCII bytes, and the
+/// event is documented as a *percent-encoded* path. Left raw, a `\` or `"` is doubled by
+/// the JSON payload and costs a plugin many times the instructions to read back (1000
+/// events of 508 backslashes trapped the `analytics` example at the default fuel limit).
+/// An existing `%XX` is kept as it is (not encoded again); a `%` that does not start one
+/// becomes `%25`. The result is ASCII, so the cut cannot land inside a character.
 fn served_path(path: &str) -> String {
-    let mut end = path.len().min(MAX_SERVED_PATH);
-    while !path.is_char_boundary(end) {
-        end -= 1;
+    let bytes = path.as_bytes();
+    let mut out = String::with_capacity(path.len().min(MAX_SERVED_PATH + 3));
+    for (i, &b) in bytes.iter().enumerate() {
+        if out.len() >= MAX_SERVED_PATH {
+            break;
+        }
+        let escape = b == b'%'
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(i + 2).is_some_and(u8::is_ascii_hexdigit);
+        if escape || (b != b'%' && is_path_byte(b)) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
     }
-    path[..end].to_owned()
+    if out.len() > MAX_SERVED_PATH {
+        out.truncate(MAX_SERVED_PATH);
+    }
+    // A cut inside an escape leaves `%` or `%X` at the end: drop it whole.
+    if let Some(i) = out.rfind('%')
+        && i + 3 > out.len()
+    {
+        out.truncate(i);
+    }
+    out
+}
+
+/// A byte that may stand in a URI path as it is: RFC 3986 `pchar` and `/` (a `%` only when
+/// it starts an escape, which `served_path` checks).
+fn is_path_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b'%'
+                | b'/'
+                | b':'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+        )
 }
 
 /// The lowercased ASCII host of the request's only `Referer` header (an absolute URL);
@@ -404,7 +461,56 @@ mod tests {
     fn long_paths_are_cut() {
         let long = format!("/{}", "a".repeat(600));
         assert_eq!(served_path(&long).len(), MAX_SERVED_PATH);
+        // A character that would straddle the cut is dropped whole, not left as `%C`.
         let multi = format!("/{}é", "a".repeat(510));
         assert_eq!(served_path(&multi), format!("/{}", "a".repeat(510)));
+        let multi = format!("/{}é", "a".repeat(508));
+        assert_eq!(served_path(&multi), format!("/{}%C3", "a".repeat(508)));
+        let at_cut = format!("/{}\\", "a".repeat(510));
+        assert_eq!(served_path(&at_cut), format!("/{}", "a".repeat(510)));
+        // An escape already in the path is kept, and never split by the cut.
+        for n in 505..=511 {
+            let p = format!("/{}%C3%A9", "a".repeat(n));
+            let got = served_path(&p);
+            assert!(got.len() <= MAX_SERVED_PATH, "{n}");
+            assert!(p.starts_with(&got), "{n}: {got}");
+            assert!(
+                got.rfind('%').is_none_or(|i| got.len() >= i + 3),
+                "{n}: {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_outside_the_path_set_are_percent_encoded() {
+        assert_eq!(served_path("/a b/\\"), "/a%20b/%5C");
+        assert_eq!(
+            served_path("/\"quote\"<>[]{}|^`#"),
+            "/%22quote%22%3C%3E%5B%5D%7B%7D%7C%5E%60%23"
+        );
+        assert_eq!(
+            served_path("/caf\u{e9}/\u{1F600}"),
+            "/caf%C3%A9/%F0%9F%98%80"
+        );
+        assert_eq!(served_path("/\0/\n/\u{7f}"), "/%00/%0A/%7F");
+        // The path set stays as it is, and so does an escape.
+        let ok = "/Az09-._~/:@!$&'()*+,;=/%C3%A9/%00";
+        assert_eq!(served_path(ok), ok);
+        assert_eq!(served_path("/"), "/");
+        // A `%` that starts no escape is itself encoded, never dropped.
+        assert_eq!(served_path("/50%"), "/50%25");
+        assert_eq!(served_path("/a%zz/%4"), "/a%25zz/%254");
+    }
+
+    #[test]
+    fn nothing_in_a_path_needs_a_json_escape() {
+        // 508 backslashes or quotes, the shape that made a batch of 1000 trap a plugin.
+        for ch in ['\\', '"'] {
+            let got = served_path(&format!("/{}", ch.to_string().repeat(507)));
+            assert!(!got.contains(ch), "{got}");
+            assert!(got.len() <= MAX_SERVED_PATH);
+            let json = serde_json::to_string(&got).unwrap();
+            assert_eq!(json.len(), got.len() + 2, "no JSON escapes: {json}");
+        }
     }
 }

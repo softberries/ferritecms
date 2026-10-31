@@ -60,45 +60,107 @@ run, the `/import` API with the inputs as `import` artifacts and the report stor
 artifacts, the admin Import screen (`g i`), uploads read from a zip in place, the SEO
 canonical and robots fields, `permalink.redirects` for permalink-structure changes, the
 `UNION ALL` job claim on Postgres; migration `0010_import_jobs`), so M3 is done
-(`m3-exit.md`, which lists what was not verified). Next is M4 (ops and release). Work
-top-down in `docs/ROADMAP.md`; per-milestone rulings are in
-`docs/superpowers/rulings/` (M2a-2a: `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3:
-`m3.md`).
+(`m3-exit.md`, which lists what was not verified). M4-1 (data safety) is done too
+(`m4-1-exit.md`): `export` / `import-site` / `db copy` over a table catalogue, `backup` /
+`restore` and the scheduled `[backup]` (`site.backup` job), `media sync|gc|regenerate` and the
+daily `artifacts.gc` job, the S3 `copy_if_not_exists` / `conditional_put` options,
+`media.strip_metadata` and `media.gc_grace_days`, the Postgres `lock_wait`, an atomic
+`seed demo`, the cluster example on RustFS; migration `0011_artifact_gc`. M4-2 (release) is
+done too (`m4-2-exit.md`): signed `self-update` and `rollback` (`--schema`,
+`--restore-snapshot`) with `upgrade.json`, built-in ACME TLS for solo sites, the metrics
+registry with `/metrics` on `server.metrics_listen`, per-minute `node_metrics` rows, the
+series API and the dashboard's Site traffic, `site.timezone` in the `date` filter (jiff),
+a ring-only build, the release workflow (six targets, minisign, GHCR), the systemd unit,
+the `compat` CI job and the runbooks in `docs/operations/`; migration `0012_node_metrics`.
+Nothing is released: the first tag waits for the release gate in the exit. M4-3a is done
+too (`m4-3a-exit.md`): the example plugins `seo`, `analytics` and `contact-form` (SDK
+helpers, the host answering `options.get("site.url"|"site.title")`, percent-encoded
+`request.served` paths, analytics' two storage tiers under the KV quota, X7) shipped as the
+release asset `ferrite-plugins-<version>.tar.gz`, and `ferrite doctor`; no migration. M4-3b
+is done too (`m4-3b-exit.md`), so M4-3 is done (`m4-3-exit.md`): heading ids and `post.toc`,
+`SiteReader::tree` and the `page_tree()` helper (breadcrumbs, previous/next), `query(order=
+"menu")`, the `docs` and `business` starter themes, `seed demo --profile business`, `ferrite
+import markdown` (crate `ferrite-import-md`), code blocks as `<pre tabindex="0">`, the docs
+site in `site/` (Markdown, `build.sh`, `VERIFIED.md`, the `docs_site` test) and axe checks
+on the three starter themes (Playwright project `public-themes-chromium`); no migration.
+Hosting the docs site is the user's decision. M4-4 (the follow-up lists) is done too
+(`m4-4-exit.md`), so M4 is done (`m4-exit.md`): restore exits 2 when its final check fails
+and refuses a media root inside the folder it replaces, restored `site.backup` rows are
+settled, the SQLite open refuses an interrupted `--restore-snapshot`'s leftovers (P70,
+R-c2), `self-update --data` runs the new binary's `config check`, `rollback --schema` on
+Postgres refuses live nodes, `--restore-snapshot` checks the snapshot's schema, `media gc`
+exits 2 for a refused store or a failed delete, `artifacts.gc` runs at 03:00 UTC; the front
+page's permalink answers 301 to `/` (the sitemap, the tree and menus name it `/`), `srcset`
+keeps one shape, tree card images skip the bridge budget; `ContentRepo::file_bounds` for the
+sitemaps; blank `q` is no filter, unreadable relations and parents count as missing, mail
+falls back to the configured title, WordPress sources must be http(s), `build_s3` keeps the
+environment's client options; the Markdown import's byte and folder caps, NFC-colliding zip
+entries reported missing, an expired lease no longer keeps an import run live; the admin's
+44 px touch icons, the popup edge, stale states at full contrast (P81, R-c3), SEO counting by
+code points; the test flakes fixed (SQLite `close()` now releases `ferrite.lock`);
+reproducible release archives (`repro-tar.sh`); no migration. Next: the develop→main pull
+request (the user decides) and the release gate, both under "Before v0.1.0" in the
+roadmap; the other open follow-ups are under "Later". Work top-down in
+`docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`).
 
-Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers)
--> `ferrite-http` (public site, router, head, previews and logged-in requests, plugin
-wiring, plugin reloader, shared failure counters, plugin routes, `request.served` buffer,
-SMTP mailer, the extension install pipeline `extensions::Installer`, `import_fetch` (the
-importer's SSRF-checked `--fetch-media` source), `import_blobs` (import reports over the
-media store); the REST API in
-`src/api/` with its OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress
-importer: WXR parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`,
-`ferrite-media`),
+Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
+M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
+copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
+`jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
+`rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
+(the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
+`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
+previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
+plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
+`extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
+source), `import_blobs` (import reports over the media store), `metrics` (the registry,
+`/metrics` text), `tls` (HSTS, the redirect app); the REST API in `src/api/` with its
+OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress importer: WXR
+parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
+`ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
+blocks through `ferrite-import-wp`'s HTML converter, `run` over `ImportService`; ->
+`ferrite-core`, `ferrite-import-wp`, `ferrite-media`, `ferrite-domain`),
 `ferrite-cache` (page cache + outbox invalidation
 loop with LISTEN wake-ups), `ferrite-theme` (themes, bundles, hierarchy, MiniJinja
-renderer), `ferrite-core` (services, permalinks, `SiteReader`, `ExtensionService` +
+renderer; M4-3b: `page_tree`), `ferrite-core` (services, permalinks, `SiteReader` (M4-3b:
+`site/tree`, `ListOrder`), blocks (M4-3b: heading ids, `TocEntry`), `ExtensionService` +
 `ExtensionAdmin`, `ext_settings`, `mail` (`Mailer`, `MailQueue`), action jobs;
 `AuthService` (incl. password reset), `UserService`, content types, settings allowlist,
 roles + token scopes, `import` (`ImportService`/`ImportBatch`: the import's write path; the
-import jobs, run reads and report artifacts)), `ferrite-media`, `ferrite-plugin-host` (grants, permission report;
+import jobs, run reads and report artifacts), `seed` (`DemoBatch`: `seed demo` in one
+transaction)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
+marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
-`jobs/import.rs`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
-prune jobs) -> `ferrite-store` (traits); `ferrite-core` -> `ferrite-store` (traits) <-
-`ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite);
-`ferrite-domain` (types), `ferrite-config`, `ferrite-sdk` (guest SDK). Starter theme:
-`themes/blog` (embedded). Test plugins: `plugins/examples/` (own workspace, built for
-`wasm32-wasip2`). Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
+`jobs/import.rs`), `ferrite-import-md` (`import_cmd`) and `ferrite-cluster` (node registry, job runner, periodic scheduler, built-in
+prune jobs incl. `node_metrics.prune`) -> `ferrite-store` (traits; `catalogue`, `export`
+reader and `import_writer` for the portable copies; `NodeMetricsRepo`, `node_metrics` skipped
+by the catalogue); `ferrite-core` -> `ferrite-store` (traits) <-
+`ferrite-store-sqlite` / `ferrite-store-postgres` (+ `ferrite-store-tests` contract suite, `CountingStore`, `window::in_one_window`, `FailingOptionsStore`);
+`ferrite-domain` (types; `metrics`: counts, series buckets, page p95), `ferrite-config`,
+`ferrite-sdk` (guest SDK; M4-3a: `form`, `html::escape`, `options`, `settings`, `time`,
+`mail`, `viewers::allow`, `route::html`, `Head` additions; helpers used by module path).
+Packaging: `Dockerfile`, `packaging/systemd/`, `.github/workflows/{ci,release}.yml` and
+`.github/scripts/` (package, package-plugins, repro-tar, test-repro, sums, verify-sig, newest, compat). Starter
+themes (embedded): `themes/blog`, `themes/docs` (page-tree sidebar, TOC, pager) and
+`themes/business` (hero, feature cards, contact form). Plugins: `plugins/examples/` (own
+workspace, built for `wasm32-wasip2`): the shipped examples `seo`, `analytics`, `contact-form` (a README
+each), the rest test fixtures. Admin SPA: `admin/` (pnpm, Vite + React + TS; `pnpm build` writes
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
-placeholder page; Vitest + Playwright E2E, see `admin/README.md`). Not built yet: backups,
-metrics and the other M4 operations (`docs/design/01-architecture.md` §1; API status per
-endpoint in 07 §1, admin status per screen in 07 §3).
+placeholder page; Vitest + Playwright E2E, see `admin/README.md`; the axe checks of the
+public themes in the `public-themes-chromium` project). Docs site: `site/` (`content/`
+Markdown, `build.sh`, `README.md`, `VERIFIED.md`). Not built yet: `ferrite plugin new`
+(later, 09 §8) (`docs/design/01-architecture.md` §1; API status
+per endpoint in 07 §1, admin status per screen in 07 §3).
 
 Run a site locally: build the admin first (`pnpm -C admin install && pnpm -C admin build`;
 needs Node >= 24.18 and pnpm 10.28.2; skip it for the placeholder page), then
 `cargo run -p ferrite -- init --data /tmp/site --url http://localhost:8080` (for a solo site
 it also creates the site key `<data>/secret.key`), then optionally
-`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content), then an account:
+`cargo run -p ferrite -- seed demo --data /tmp/site` (sample content; `--profile business`
+writes a small-business site with a static front page for the `business` theme, then
+`theme activate business --data /tmp/site`), then an account:
 `cargo run -p ferrite -- user create --data /tmp/site --login me --email me@example.com`
 (prints a one-time password that must be changed at the first login; `--password-stdin`
 reads one from stdin instead; seed's own `admin` has no password until
@@ -115,15 +177,23 @@ and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` 
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`, exit 1 lists
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
 `*.wasm`; with SQLite `serve` must be stopped), or the API (`/api/v1/themes` takes the bundle
 `ferrite theme pack --dir DIR --out FILE` writes, without a data folder;
 `/api/v1/plugins`: inspect, then install with the report's `fingerprint` as `approve`), or
-the admin's Appearance and Plugins screens. Mail (password reset, plugin `notify-admins`, the
+the admin's Appearance and Plugins screens. The example plugins: unpack the release asset
+`ferrite-plugins-<version>.tar.gz` (folders `seo/`, `analytics/`, `contact-form/`, each a
+`--dir`), then `ferrite plugin install --data DIR --dir seo --enable [--yes]`; the stats and
+inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
+`viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
+Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
+S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
+runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
+3 schema incompatible; 09 §8).
 Import a WordPress site (Tools → Export in WordPress gives the WXR file): `cargo run -p
 ferrite -- import wordpress export.xml --data /tmp/site [--uploads <copy of
 wp-content/uploads, or a .zip of it>] [--fetch-media] [--dry-run] [--report DIR] [--no-keep-permalinks]
@@ -141,6 +211,61 @@ next `serve`). With `serve` running, import from the admin's Import screen
 wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
 `GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
 `import:read` to read; `409` while another import is queued or running).
+Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
+markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
+[--source NAME] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
+folder's page; with SQLite `serve` must be stopped; prints the counts and one
+`<kind>  <file>  <detail>` line per problem; exit 0 done, 2 skipped files, missing or
+refused images or broken links, 3 another import running (`--takeover` takes over one with
+no heartbeat for 120 s), 1 error; a re-run of the same
+`--source` (default the folder's name) updates changed files and keeps pages edited here).
+Build the docs site: `site/build.sh OUT_DIR [URL]` (a fresh folder;
+`FERRITE=target/release/ferrite` to use a built binary, default `cargo run -q -p ferrite
+--`; it runs `init`, `user create --login docs`, `import markdown site/content --front-page
+--source ferrite-docs` and `theme activate docs`, fails on an import exit 2, then prints the
+`serve` command; `site/README.md`). `cargo test -p ferrite --test docs_site` builds and
+link-checks it;
+`pnpm -C admin e2e --project public-themes-chromium` runs axe on the three starter themes
+(after `cargo build --release -p ferrite`; `admin/README.md`).
+Move, copy and back up a site (09 §4 and §8; with SQLite `serve` must be stopped for each
+of these except `media sync`, which opens no database): `ferrite export --data DIR --out
+FILE|- [--with-media]` (0, 2 artifacts missing from the store, 3 schema newer, 1 error; never
+holds `secret.key`), `ferrite import-site ARCHIVE|- --data DIR [--with-media]` (into a fresh
+`init` folder; 0, 3 newer, 1), `ferrite db copy --from URL --to URL [--from-schema S]
+[--to-schema S]` (`postgres://…` or `sqlite:<path>`; 0, 3, 1; copies no media), `ferrite
+backup --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]`
+(SQLite only; 0, 2 artifacts missing, 3 newer repository, 1), `ferrite restore SOURCE --data
+DIR [--snapshot NAME] [--force]` (0, 2 restored but the check afterwards failed, 3, 1),
+`ferrite media sync --to STORE (--from STORE |
+--data DIR)` (`local:PATH` or `s3://bucket[/prefix]`, `AWS_*` env; 0, 2 some failed, 1),
+`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 2 store refused or a
+delete failed, 3 lock held, 1),
+`ferrite media regenerate --data DIR [--all] [--item ID]` (0, 2 some failed, 1). A running
+SQLite site is backed up by `[backup] schedule = "daily"|"weekly"`, `to` (a folder outside
+the data folder, or `s3://`), `keep`, `with_media` (the `site.backup` job; on Postgres it
+writes export archives). Config: `[media] strip_metadata`, `gc_grace_days` (1..=365, default
+7), `[media.s3] copy_if_not_exists`, `conditional_put`. One running site per media store:
+each database has an install id (`schema_meta.install_id`; `restore`, `import-site` and `db
+copy` give the copy its own), and the GC deletes only from a store whose
+`ferrite-owner.json` names it (`media gc --claim` after a restore in place).
+Update and roll back (09 §1–§2, runbook `docs/operations/solo-upgrade.md`): `ferrite
+self-update [--version X] [--check] [--yes] [--data DIR [--skip-config-check]]` (0 updated or up to date, 2 newer
+release with `--check`, 1 error; clap usage errors are 2 too; a repository build has no
+release key and refuses), `ferrite rollback [--data DIR] [--schema] [--allow-lossy]
+[--restore-snapshot] [--yes]` (0, 3 the kept binary cannot open the schema, 1; `--schema`
+runs as the record's `to`). A test-seams binary for local release tests: `cargo build -p
+ferrite --features test-seams` (not `--features ferrite/test-seams`, which with `-p ferrite`
+names the self dev-dependency and enables nothing), then `--base-url`, `--test-current-exe`
+and `FERRITE_TEST_RELEASE_PUBKEY`. HTTPS for solo sites: `[server.tls] mode = "acme"`,
+`contact = "mailto:…"`, `directory = "staging"` first (09 §5; `FERRITE_TEST_PEBBLE=1 cargo
+test -p ferrite --test tls` runs Pebble in Docker). Metrics: `[server] metrics_listen =
+"127.0.0.1:9464"` serves `GET /metrics`; `GET /api/v1/system/metrics/series?from&to&step=
+minute|hour|day[&node]` (`system:read`). Release: `.github/workflows/release.yml` (a manual
+run is a dry run with a throwaway key; publishing needs the release gate in
+`m4-2-exit.md`; it also attaches the plugins asset from `.github/scripts/package-plugins.sh
+VERSION OUT_DIR`, which refuses a manifest whose `version` is not the workspace version, so a
+version bump moves the three `plugins/examples/{seo,analytics,contact-form}/ferrite-plugin.toml`
+with it); systemd: `packaging/systemd/` (README there).
 
 Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site.url`,
 `database.url` (Postgres) + `database.schema`, and `[media] root = "<shared dir>"` with
@@ -148,8 +273,9 @@ Run two cluster nodes locally: two data folders whose `ferrite.toml` share `site
 `cluster.node_name`s, and the same site key in `FERRITE_AUTH__SECRET_KEY` (64 hex
 characters, e.g. `openssl rand -hex 32`; cluster mode refuses to start without one); `init`
 the first folder with `--db postgres://… --schema …`, then
-`serve` both. Docker example (not run in CI, only validated): `examples/cluster/`
-(`docker compose -f examples/cluster/docker-compose.yml up --build`; design 09 §7).
+`serve` both. Docker example (not run in CI, only validated; Postgres 18 and RustFS):
+`examples/cluster/` (`docker compose -f examples/cluster/docker-compose.yml up --build`;
+design 09 §7).
 Cluster integration tests: `FERRITE_TEST_PG_URL=… cargo test -p ferrite --test cluster`
 (serialised in-process; about 30 s).
 

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ferrite_core::import::{ImportBatch, ImportMedia, Written};
+use ferrite_core::import::{ImportBatch, ImportMedia, WP_ID_META, Written};
 use ferrite_core::{MAX_MEDIA_ALT, MAX_MEDIA_TITLE, NewUpload, check_file_name};
 use ferrite_domain::{Artifact, ArtifactKind, ContentId, ImportMapKind, Timestamp, UserId};
 use ferrite_media::ingest::stage_stream;
@@ -248,10 +248,21 @@ async fn stage(
         }
         Err(e) => return Err(e),
     };
-    let staged = match stage_stream(staging, &file_name, stream, max).await {
+    let staged = match stage_stream(
+        staging,
+        &file_name,
+        stream,
+        max,
+        session.opts().strip_metadata,
+    )
+    .await
+    {
         Ok(staged) => staged,
         Err(
-            e @ (MediaError::TooLarge { .. } | MediaError::Unsupported { .. } | MediaError::Svg(_)),
+            e @ (MediaError::TooLarge { .. }
+            | MediaError::Unsupported { .. }
+            | MediaError::Svg(_)
+            | MediaError::Metadata(_)),
         ) => {
             refused(report, &e);
             return Ok(None);
@@ -279,6 +290,7 @@ async fn stage(
             bytes: i64::try_from(staged.bytes).unwrap_or(i64::MAX),
             mime: staged.mime.clone(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         },
         mime: staged.mime,
         bytes: staged.bytes,
@@ -344,6 +356,7 @@ async fn write_batch(
         let outcome = b
             .media(ImportMedia {
                 wp_id: s.item.wp_id,
+                id_meta: WP_ID_META,
                 hash: s.hash.clone(),
                 upload: s.upload.clone(),
                 author,

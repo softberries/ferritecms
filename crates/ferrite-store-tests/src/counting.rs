@@ -6,6 +6,8 @@
 //! there, except the content-type reads: [`CountingStore::type_lists`] counts
 //! `types().list()` and [`CountingStore::type_reads`] `types().get()` and `list()`,
 //! through `read()` and every transaction (nested ones too).
+//! [`CountingStore::listed_rows`] counts the rows `ContentRepo::list` returned through
+//! `read()`.
 
 use std::{
     collections::HashMap,
@@ -22,11 +24,11 @@ use ferrite_domain::{
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
-    ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
+    LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -34,6 +36,8 @@ use serde_json::Value;
 struct Inner {
     store: Arc<dyn Store>,
     calls: Arc<AtomicUsize>,
+    /// Rows `ContentRepo::list` returned through `read()`.
+    listed: Arc<AtomicUsize>,
     types: TypeCounters,
 }
 
@@ -72,6 +76,7 @@ impl CountingStore {
         let inner = Inner {
             store,
             calls: Arc::new(AtomicUsize::new(0)),
+            listed: Arc::new(AtomicUsize::new(0)),
             types: TypeCounters::default(),
         };
         Self {
@@ -87,6 +92,12 @@ impl CountingStore {
         self.inner.calls.load(Ordering::SeqCst)
     }
 
+    /// Content rows `ContentRepo::list` returned through `read()` (the rows a read
+    /// walked), summed over its calls.
+    pub fn listed_rows(&self) -> usize {
+        self.inner.listed.load(Ordering::SeqCst)
+    }
+
     /// `ContentTypeRepo::list` calls, through `read()` and inside transactions.
     pub fn type_lists(&self) -> usize {
         self.inner.types.lists.load(Ordering::SeqCst)
@@ -100,6 +111,7 @@ impl CountingStore {
 
     pub fn reset(&self) {
         self.inner.calls.store(0, Ordering::SeqCst);
+        self.inner.listed.store(0, Ordering::SeqCst);
         self.inner.types.lists.store(0, Ordering::SeqCst);
         self.inner.types.reads.store(0, Ordering::SeqCst);
     }
@@ -201,12 +213,18 @@ impl Repos for CountingRepos {
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.read().imports()
     }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.read().node_metrics()
+    }
 }
 
 #[async_trait]
 impl Store for CountingStore {
     fn backend(&self) -> Backend {
         self.inner.store.backend()
+    }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.store.pool_stats()
     }
     fn read(&self) -> &dyn Repos {
         &self.repos
@@ -234,7 +252,10 @@ impl Store for CountingStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.store.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.store.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -242,6 +263,12 @@ impl Store for CountingStore {
     }
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.inner.store.verify_migrations().await
+    }
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        self.inner.store.export_reader().await
+    }
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        self.inner.store.import_writer().await
     }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.store.snapshot(dest).await
@@ -278,10 +305,19 @@ impl ContentRepo for Counted {
         self.0.read().content().set_updated_at(id, at).await
     }
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
-        self.0.read().content().list(query).await
+        let page = self.0.read().content().list(query).await?;
+        self.0.listed.fetch_add(page.items.len(), Ordering::SeqCst);
+        Ok(page)
     }
     async fn count(&self, query: &ContentQuery) -> Result<u64, StoreError> {
         self.0.read().content().count(query).await
+    }
+    async fn file_bounds(
+        &self,
+        query: &ContentQuery,
+        file_len: u32,
+    ) -> Result<Vec<FileBound>, StoreError> {
+        self.0.read().content().file_bounds(query, file_len).await
     }
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<ContentItem>, StoreError> {
         self.0.read().content().get_many(ids).await
@@ -610,6 +646,9 @@ impl Repos for CountingTx {
     }
     fn imports(&self) -> &dyn ImportRepo {
         self.tx.imports()
+    }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.tx.node_metrics()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

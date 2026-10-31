@@ -1,6 +1,9 @@
 use std::sync::{Arc, atomic::Ordering};
 
-use ferrite_core::events::{archive_key, menu_key, post_key};
+use ferrite_core::{
+    events::{archive_key, menu_key, post_key},
+    site::ListOrder,
+};
 use ferrite_domain::ContentId;
 use ferrite_theme::{ImageRef, MAX_BRIDGE_CALLS, RenderOutput, Renderer};
 
@@ -72,7 +75,7 @@ fn filters_in_templates() {
 fn date_rejects_bad_format_without_panicking() {
     let mut c = ctx();
     c.item = Some(item("post", "x"));
-    for fmt in ["%Q", "%", "%-", "%:"] {
+    for fmt in ["%J", "%", "%-", "%:"] {
         let err = render_str(&format!("{{{{ post.date | date('{fmt}') }}}}"), c.clone());
         assert!(err.is_err(), "{fmt}");
     }
@@ -183,8 +186,13 @@ fn query_takes_kwargs_and_clamps_limit() {
     assert_eq!(
         *bridge.queries.lock().unwrap(),
         vec![
-            ("event".into(), Some("category/news".into()), 50),
-            ("post".into(), None, 10)
+            (
+                "event".into(),
+                Some("category/news".into()),
+                50,
+                ListOrder::Date
+            ),
+            ("post".into(), None, 10, ListOrder::Date)
         ]
     );
     assert!(out.deps.contains(&archive_key("event")));
@@ -335,4 +343,71 @@ fn comments_helper_shape() {
         .render(&t, "t.html", c, Arc::new(ferrite_theme::NoBridge))
         .unwrap();
     assert_eq!(out.html, "True");
+}
+
+fn date_out(tpl: &str, tz: &str) -> Result<String, ferrite_theme::ThemeError> {
+    let mut c = ctx();
+    c.site.timezone = tz.into();
+    render_str(tpl, c).map(|o| o.html)
+}
+
+#[test]
+fn date_uses_site_timezone() {
+    let fmt = "{{ '2024-01-15T23:30:00Z' | date('%Y-%m-%d %H:%M') }}|{{ '2024-07-15T23:30:00Z' | date('%Y-%m-%d %H:%M') }}";
+    assert_eq!(
+        date_out(fmt, "Europe/Warsaw").unwrap(),
+        "2024-01-16 00:30|2024-07-16 01:30"
+    );
+    assert_eq!(
+        date_out(fmt, "UTC").unwrap(),
+        "2024-01-15 23:30|2024-07-15 23:30"
+    );
+    // An empty zone (a SiteInfo built by hand) is UTC.
+    assert_eq!(date_out(fmt, "").unwrap(), date_out(fmt, "UTC").unwrap());
+}
+
+#[test]
+fn date_tz_argument_overrides() {
+    let out = date_out(
+        "{{ '2024-07-15T23:30:00Z' | date('%H:%M', tz='America/New_York') }}|{{ '2024-07-15T23:30:00Z' | date(tz='Asia/Tokyo') }}|{{ '2024-07-15T23:30:00Z' | date('%H:%M %Z %z', tz='UTC') }}|{{ '2024-07-15T23:30:00Z' | date('%Z', tz='Europe/Warsaw') }}",
+        "Europe/Warsaw",
+    )
+    .unwrap();
+    assert_eq!(out, "19:30|2024-07-16|23:30 UTC +0000|CEST");
+    // An unknown zone, an unknown keyword and a non-string zone are template errors.
+    for tpl in [
+        "{{ '2024-07-15T23:30:00Z' | date('%H', tz='Mars/Base') }}",
+        "{{ '2024-07-15T23:30:00Z' | date('%H', zone='UTC') }}",
+        "{{ '2024-07-15T23:30:00Z' | date('%H', tz=3) }}",
+    ] {
+        assert!(date_out(tpl, "UTC").is_err(), "{tpl}");
+    }
+}
+
+#[test]
+fn date_strftime_common_specifiers_match_chrono() {
+    // The specifiers the bundled themes and the docs use, in UTC.
+    let ts = "2024-03-05T09:07:03Z";
+    for fmt in [
+        "%Y-%m-%d",
+        "%d %b %Y",
+        "%-d %B %Y",
+        "%-d %B %Y, %H:%M",
+        "%B %Y",
+        "%A %a",
+        "%y %e|%j",
+        "%H:%M:%S",
+        "%I:%M %p",
+        "%-m-%-d",
+        "%%",
+        "%F %T",
+        "%Y-%m-%dT%H:%M:%S%:z",
+    ] {
+        let want = chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .format(fmt)
+            .to_string();
+        let got = date_out(&format!("{{{{ '{ts}' | date('{fmt}') }}}}"), "UTC").unwrap();
+        assert_eq!(got, want, "{fmt}");
+    }
 }

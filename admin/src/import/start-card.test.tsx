@@ -1,6 +1,6 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { setCsrfToken } from "@/api/csrf";
 import { renderWithRouter } from "@/test/render";
 import { StartCard } from "./start-card";
@@ -296,4 +296,43 @@ test("focus follows the upload and progress is announced at milestones", async (
   await vi.waitFor(() =>
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "New import" })),
   );
+});
+
+test("in_progress_wait_offers_retry", async () => {
+  // Fake timers that still follow the real clock (user-event's own delays keep working):
+  // the end of the automatic wait is reached with `advanceTimersByTime`, not a sleep.
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const user = await startedCard();
+  const key = sent[0]!.headers["Idempotency-Key"];
+  // While the one automatic retry waits (`Retry-After`, at most 10 s), Retry runs it now.
+  sent[0]!.respond(409, problem(409, "conflict"), { ...PROBLEM, "Retry-After": "1" });
+  await screen.findByText("This upload is still being received. Trying again in a moment…");
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.headers["Idempotency-Key"]).toBe(key);
+  // The manual retry replaced the pending automatic one: nothing more is sent after the
+  // wait would have ended.
+  sent[1]!.onerror?.();
+  await screen.findByRole("button", { name: "Retry" });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
+  expect(sent).toHaveLength(2);
+});
+
+test("the upload's live region is in the page before its first text", async () => {
+  renderWithRouter(<StartCard onStarted={vi.fn()} />);
+  await screen.findByRole("button", { name: "Start import" });
+  const live = document.querySelector<HTMLElement>("[data-slot=import-progress-live]");
+  // Present and empty before any upload, so "Upload started" is a change it announces.
+  expect(live).not.toBeNull();
+  expect(live).toHaveAttribute("aria-live", "polite");
+  expect(live).toBeEmptyDOMElement();
+  const user = await choose();
+  await user.click(screen.getByRole("button", { name: "Start import" }));
+  await vi.waitFor(() => expect(live).toHaveTextContent("Upload started"));
+  expect(document.querySelector("[data-slot=import-progress-live]")).toBe(live);
 });

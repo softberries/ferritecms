@@ -42,8 +42,10 @@
 //!    cache variant; both answer `Cache-Control: private, no-store`, and plugins see
 //!    `is_logged_in = true`.
 //! 6. The render pipeline (06 §5): the candidates' items through `SiteReader`
-//!    (published-only; a hit counts only if its URL equals the request path), plugin
-//!    filters `content.body`/`content.excerpt` on every item, `render.footer` once
+//!    (published-only; a hit counts only if its URL equals the request path; a hit that
+//!    is the static front page is a cached 301 to `/`, keeping `?cpage=N`, M4-4 P67),
+//!    plugin filters `content.body`/`content.excerpt` on the page's item and its
+//!    listing's items, `render.footer` once
 //!    (template helper `footer()`), the head (core SEO + `render.head`), the template hierarchy, and `Renderer::render` on a blocking
 //!    thread with a store-backed `HelperBridge` (`Handle::block_on`). The page's
 //!    dependency keys are the reads', the plugin trace's, the renderer's,
@@ -71,7 +73,9 @@
 //! with tower-http's default predicate (no images, nothing under 32 bytes). Each request
 //! runs in a `request` span with method, path, status, latency (never the query) and
 //! the client address (`client_ip`; `X-Forwarded-For` only from
-//! `server.trusted_proxies`, see [`client`]).
+//! `server.trusted_proxies`, see [`client`]). With [`AppState::with_metrics`] every
+//! response is counted by route class and status class, with its latency, and the
+//! public handler counts page views ([`crate::metrics`]).
 //!
 //! **406 (tower-http 0.7 compression).** A request whose `Accept-Encoding` rules out
 //! every encoding we offer, identity included (`identity;q=0` alone, or `*;q=0`), gets
@@ -172,13 +176,20 @@ fn shared_layers(state: &AppState, router: Router) -> Router {
     let resolver = Arc::new(client::ClientResolver::new(
         state.config.trusted_proxies.clone().into(),
     ));
-    app.layer(
+    let mut app = app.layer(
         TraceLayer::new_for_http()
             .make_span_with(response::request_span)
             .on_response(response::record_response),
-    )
+    );
+    // Counts every response, the built-in 500 of a panic included (P34).
+    if let Some(metrics) = &state.metrics {
+        app = app.layer(axum::middleware::from_fn_with_state(
+            metrics.clone(),
+            crate::metrics::track,
+        ));
+    }
     // Outermost: the client address is known before the request span opens.
-    .layer(axum::middleware::from_fn_with_state(
+    app.layer(axum::middleware::from_fn_with_state(
         resolver,
         client::record_client,
     ))

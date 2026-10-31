@@ -729,6 +729,11 @@ pub async fn import_lock_held_for_the_run(db: &TestDb) {
 
 /// A job in state `running` (fresh lease), or `dead` when `dead`.
 async fn job(store: &dyn Store, dead: bool) -> JobId {
+    leased_job(store, dead, std::time::Duration::from_secs(600)).await
+}
+
+/// A job claimed with `lease`, then `dead` when `dead`.
+async fn leased_job(store: &dyn Store, dead: bool, lease: std::time::Duration) -> JobId {
     let kind = format!("t-{}", uuid::Uuid::now_v7().simple());
     let jobs = store.read().jobs();
     let id = jobs
@@ -737,12 +742,7 @@ async fn job(store: &dyn Store, dead: bool) -> JobId {
         .unwrap()
         .unwrap();
     let claimed = jobs
-        .claim(
-            NodeId::new(),
-            std::slice::from_ref(&kind),
-            1,
-            std::time::Duration::from_secs(600),
-        )
+        .claim(NodeId::new(), std::slice::from_ref(&kind), 1, lease)
         .await
         .unwrap();
     if dead {
@@ -753,9 +753,10 @@ async fn job(store: &dyn Store, dead: bool) -> JobId {
 }
 
 /// P27 as built: an import job's start takes over a stale run unless that run belongs
-/// to another job that is still `running` (a CLI run, a dead job's, its own); a fresh
-/// run is busy for everyone, and a CLI start still needs `takeover`. The job's
-/// pre-check (`job_may_start`) says the same before anything is fetched.
+/// to another job that is still `running` with an unexpired lease (a CLI run, a dead
+/// job's, an expired lease's (M4-4 P80), its own); a fresh run is busy for everyone, and
+/// a CLI start still needs `takeover`. The job's pre-check (`job_may_start`) says the
+/// same before anything is fetched.
 pub async fn job_start_takes_over_stale_runs_without_a_live_job(db: &TestDb) {
     let store = db.store();
     let admin = admin(store).await;
@@ -763,6 +764,10 @@ pub async fn job_start_takes_over_stale_runs_without_a_live_job(db: &TestDb) {
     let me = job(store, false).await;
     let live = job(store, false).await;
     let dead = job(store, true).await;
+    // `running` with a lease of one second, which has run out by the time it is asked
+    // about (the lease is the store's clock; the wait leaves room for skew).
+    let expired = leased_job(store, false, std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     let stale = |run: &ferrite_domain::ImportRun| {
         let (id, token) = (run.id, run.token);
         async move {
@@ -789,6 +794,7 @@ pub async fn job_start_takes_over_stale_runs_without_a_live_job(db: &TestDb) {
     for (owner, taken) in [
         (None, true),
         (Some(dead), true),
+        (Some(expired), true),
         (Some(JobId::new()), true),
         (Some(me), true),
         (Some(live), false),

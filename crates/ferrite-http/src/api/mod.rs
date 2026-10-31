@@ -221,6 +221,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(system::retry_job))
         .routes(routes!(system::send_test_mail))
         .routes(routes!(system::metrics_summary))
+        .routes(routes!(system::metrics_series))
         .merge(uploads(
             routes!(import::start_wordpress_import),
             import::IMPORT_ROUTE_LIMIT,

@@ -163,6 +163,36 @@ pub(crate) async fn set_many_in(
     write_changes(repos, actor, &pending, true).await
 }
 
+/// [`OptionService::set`] inside the caller's `Tx` for a key that is not `permalink.*`
+/// (those need the `types` lock), without the capability check: the same key check, row
+/// and `options.changed` event.
+pub(crate) async fn set_in(
+    repos: &dyn Repos,
+    actor: &Actor,
+    key: &str,
+    value: &Value,
+    autoload: bool,
+) -> Result<(), CoreError> {
+    check_key(key)?;
+    if is_permalink(key) {
+        return Err(CoreError::Invalid(
+            "permalink options need a transaction under the types lock".into(),
+        ));
+    }
+    write_changes(
+        repos,
+        actor,
+        &[Change {
+            key,
+            value: Some(value),
+            autoload,
+        }],
+        false,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Whether `changes` sets or deletes a `permalink.*` option.
 pub(crate) fn touches_permalinks(changes: &[(String, Option<Value>)]) -> bool {
     changes.iter().any(|(key, _)| is_permalink(key))

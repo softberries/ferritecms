@@ -2,7 +2,9 @@
 //! admin SPA under `/admin/` ([`admin`]) and the REST API under `/api/v1` ([`api`];
 //! merged by [`build_site`]), the pure URL
 //! router ([`route`]), plugin wiring ([`plugins`]), the install pipeline
-//! ([`extensions`]), media upload staging ([`media`]) and the page `<head>` ([`head`]).
+//! ([`extensions`]), media upload staging ([`media`]), the page `<head>` ([`head`]) and
+//! the metrics registry with its `/metrics` app ([`metrics`]), and HSTS plus the https
+//! redirect app for the built-in TLS ([`tls`]).
 
 pub mod admin;
 pub mod api;
@@ -13,8 +15,10 @@ pub mod import_blobs;
 pub mod import_fetch;
 pub mod mail;
 pub mod media;
+pub mod metrics;
 pub mod plugins;
 pub mod route;
+pub mod tls;
 
 pub use app::{
     AppParts, AppState, HttpConfig, LoggedIn, build_app, build_site, client::ClientIp,

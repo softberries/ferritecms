@@ -1,10 +1,11 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
-    audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning, batch::*, comment::*,
-    comment_counts::*, comment_threads::*, constraints::*, content::*, event::*, idempotency::*,
-    import::*, job::*, job_list::*, lock::*, menu::*, migration_dirs, migration_files,
-    migrations::*, node::*, notify::*, plugin::*, plugin_failure::*, search::*, semantics::*,
-    site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
+    batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
+    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
+    menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
+    plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
+    user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -19,6 +20,14 @@ backend_tests!(
     migration_0008_roundtrip,
     migration_0009_roundtrip,
     migration_0010_roundtrip,
+    migration_0012_roundtrip,
+    migrate_up_reports_snapshot,
+);
+
+backend_tests!(
+    node_metrics_insert_and_series_sum_across_nodes,
+    series_p95_from_combined_histogram,
+    prune_older_than_7_days,
 );
 
 backend_tests!(
@@ -26,7 +35,9 @@ backend_tests!(
     fence_true_only_for_matching_running_token,
     abandon_stale_only_when_still_stale,
     abandon_stale_for_job_spares_live_jobs,
+    an_expired_lease_does_not_keep_a_run_live,
     import_map_upsert_and_get,
+    import_map_list_pages_by_wp_id,
     content_insert_keeps_explicit_timestamps,
     import_run_job_link_and_step,
     import_run_report_hash,
@@ -106,6 +117,7 @@ backend_tests!(
     list_readable_by,
     list_readable_by_hides_future_dated,
     count_matches_list,
+    sitemap_file_bounds,
     get_many_order_and_missing,
     slugs_with_prefix_matches,
     slugs_with_prefix_limit_1000,
@@ -158,6 +170,13 @@ backend_tests!(
 
 backend_tests!(
     artifact_insert_if_absent,
+    artifact_list_page_is_ordered_and_paged,
+    existing_returns_present_subset,
+    migration_0011_roundtrip,
+    delete_if_orphaned_keeps_each_reference_kind,
+    mark_orphans_marks_unreferenced_and_clears_referenced,
+    insert_if_absent_clears_orphan_mark,
+    delete_if_orphaned_respects_before_refs_and_protected,
     media_insert_get_update_variants,
     media_find_by_artifact,
     media_variants_backfill,
@@ -232,10 +251,13 @@ backend_tests!(
     lock_is_exclusive_and_released,
     lock_excludes_peer_store,
     lock_released_when_holder_dies,
+    pg_lock_wait_times_out,
+    pg_lock_wait_cancel_does_not_leak,
     lock_names_are_validated,
     nodes_register_heartbeat_list_prune,
     nodes_prune_in_batches,
     nodes_list_keeps_newest_heartbeats,
+    pool_stats_count_used_and_idle,
 );
 
 backend_tests!(
@@ -267,6 +289,8 @@ backend_tests!(
 
 backend_tests_spawning!(
     lock_waits_then_busy,
+    pg_lock_wait_wakes_on_release,
+    pg_lock_wait_opens_one_connection,
     concurrent_writers,
     events_concurrent_appends_unique_seq,
     kv_quota_never_exceeded,
@@ -364,3 +388,17 @@ fn no_unsupported_left() {
     );
     assert!(hits.iter().any(|h| h.contains(expected[0])), "{hits:#?}");
 }
+
+backend_tests!(
+    catalogue_matches_live_schema,
+    catalogue_is_fk_ordered,
+    artifact_foreign_keys_are_gc_references,
+    export_reader_encodes_neutrally,
+    export_reader_pages_by_key,
+    export_reader_sees_one_snapshot,
+    export_reader_drop_releases,
+    import_writer_round_trip,
+    import_writer_rollback_leaves_nothing,
+    import_writer_self_refs_any_order,
+    import_writer_site_id_batches_refusals,
+);

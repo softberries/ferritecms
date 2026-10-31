@@ -19,6 +19,7 @@ import {
   FilesIcon,
   KeyboardIcon,
   ListTreeIcon,
+  LoaderCircleIcon,
   MonitorIcon,
   MoonIcon,
   Rows3Icon,
@@ -221,7 +222,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
         data-slot="palette-header"
         className="flex h-14 shrink-0 items-center gap-3 border-b px-4 max-sm:pr-2"
       >
-        <SearchIcon aria-hidden="true" className="size-4.5 shrink-0 text-muted-foreground" />
+        {/* A slow search turns the field's icon into a spinner (with reduced motion it
+            stands still; its shape still differs): the cue for rows that are about to
+            change, which keep their full colour (P81). */}
+        {slow ? (
+          <LoaderCircleIcon
+            aria-hidden="true"
+            data-slot="palette-spinner"
+            className="size-4.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+          />
+        ) : (
+          <SearchIcon aria-hidden="true" className="size-4.5 shrink-0 text-muted-foreground" />
+        )}
         {/* No focus ring or fill: the open dialog is the focused context (Linear,
             Raycast); the active row's highlight carries the keyboard position. */}
         <CommandPrimitive.Input
@@ -238,7 +250,7 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           <Button
             variant="ghost"
             size="icon-sm"
-            className="text-muted-foreground hover:text-foreground pointer-coarse:size-11"
+            className="text-muted-foreground hover:text-foreground"
             aria-label={t("clear")}
             onClick={() => setQ("")}
           >
@@ -258,6 +270,10 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
       <div className="relative flex min-h-0 flex-1 flex-col sm:flex-none">
         <CommandList
           data-slot="palette-list"
+          // A slow search: the rows (the previous query's hits, or none yet) are about to
+          // change. On the listbox, not a wrapper of the hits: a `div` with `aria-busy`
+          // inside a listbox fails axe `aria-required-children` (M4-4 fix round 1).
+          aria-busy={slow || undefined}
           className="max-h-none min-h-0 flex-1 scroll-py-2 overscroll-contain p-2 sm:h-[min(26rem,calc(76svh-7rem))] sm:flex-none"
         >
           {query === "" && recentRows.length > 0 ? (
@@ -425,15 +441,11 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           {/* Last: groups stay in render order (cmdk 1.1.1 sorts the rows inside a group;
               its group sort looks groups up by id in `data-value`, which holds the
               heading, so it never moves one), and the hits are the open-ended part. */}
+          {/* Stale hits (the previous query's) are not dimmed: at 60 % muted text fell
+              below 4.5:1. The spinner and the listbox's `aria-busy` say a search runs
+              (P81). */}
           {hits.length > 0 ? (
-            <CommandGroup
-              heading={t("group.content")}
-              className={cn(
-                "transition-opacity duration-(--dur-fast)",
-                // Stale hits (the previous query's) dim only once the wait is noticeable.
-                slow && search.isPlaceholderData && "opacity-60",
-              )}
-            >
+            <CommandGroup heading={t("group.content")}>
               {hits.map((hit) => (
                 <HitRow
                   key={`${hit.type}:${hit.id}`}

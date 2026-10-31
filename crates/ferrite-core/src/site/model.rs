@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 use ferrite_domain::{ContentId, ContentStatus, TermId, Timestamp, UserId};
 use serde::Serialize;
 
+use crate::blocks::TocEntry;
+
 /// A read result plus the dependency keys it touched (renderer side of the contract in
 /// [`crate::events`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +90,11 @@ pub struct PageItem {
     /// safe), so any later transformation (plugin `content.body` filters included)
     /// must re-sanitise before the result is stored here.
     pub html: String,
+    /// The body's headings in document order, as rendered into [`html`](Self::html)
+    /// (`post.toc` in templates; M4-3b P55). Computed with the body: a plugin
+    /// `content.body` filter that changes the HTML leaves it as it was, so a filter that
+    /// removes a heading leaves a dead entry.
+    pub toc: Vec<TocEntry>,
     /// `None` only if the author row is gone.
     pub author: Option<UserPublic>,
     /// In stored position order.
@@ -165,16 +172,25 @@ pub struct MediaPublic {
 
 impl MediaPublic {
     /// The `srcset` candidates of the item: one `(width, url)` per known width,
-    /// ascending. Of several files with the same width (a `hero` crop and the `large`
-    /// resize can both be 1280 wide), the variant named `preferred` wins, then the
-    /// original, then the variant first by name. Variants without a width are left
-    /// out, and so is the original when its width is unknown. The theme's `image()`
-    /// helper and inline body images (06 §4) both use it.
-    pub fn srcset_candidates(&self, preferred: Option<&str>) -> Vec<(i32, &str)> {
+    /// ascending. With `shape` (a `(width, height)`), only the files of that aspect
+    /// ratio (up to the rounding of a resize) are candidates, the original included
+    /// only when it has that shape too, so a browser never swaps a crop for a different
+    /// picture; a file whose height is unknown is then left out. Without `shape` every
+    /// file with a known width is. Of several files with the same width (a `hero` crop and the
+    /// `large` resize can both be 1280 wide), the variant named `preferred` wins, then
+    /// the original, then the variant first by name. The theme's `image()` helper and
+    /// inline body images (06 §4) both use it.
+    pub fn srcset_candidates(
+        &self,
+        shape: Option<(i32, i32)>,
+        preferred: Option<&str>,
+    ) -> Vec<(i32, &str)> {
+        let fits = |w: Option<i32>, h: Option<i32>| shape.is_none_or(|s| same_shape(s, w.zip(h)));
         // (width, rank, url): lower rank wins a width.
         let mut candidates: Vec<(i32, u8, &str)> = self
             .variants
             .iter()
+            .filter(|v| fits(v.width, v.height))
             .filter_map(|v| {
                 let rank = if Some(v.name.as_str()) == preferred {
                     0
@@ -184,7 +200,9 @@ impl MediaPublic {
                 v.width.map(|w| (w, rank, v.url.as_str()))
             })
             .collect();
-        if let Some(w) = self.width {
+        if let Some(w) = self.width
+            && fits(self.width, self.height)
+        {
             candidates.push((w, 1, self.url.as_str()));
         }
         // Stable: equal (width, rank) keep the variants' name order.
@@ -192,6 +210,17 @@ impl MediaPublic {
         candidates.dedup_by_key(|c| c.0);
         candidates.into_iter().map(|(w, _, url)| (w, url)).collect()
     }
+}
+
+/// Whether a file of `size` has the aspect ratio of `shape`, up to the rounding of a
+/// resize (`|w·sh − h·sw| ≤ max(sw, sh)`); a file whose size is unknown does not.
+fn same_shape(shape: (i32, i32), size: Option<(i32, i32)>) -> bool {
+    let Some((w, h)) = size else {
+        return false;
+    };
+    let (sw, sh) = (i64::from(shape.0), i64::from(shape.1));
+    let (w, h) = (i64::from(w), i64::from(h));
+    w > 0 && h > 0 && (w * sh - h * sw).abs() <= sw.max(sh)
 }
 
 /// `srcset` text for `candidates`: `url 640w, url 1280w`.
@@ -267,9 +296,38 @@ pub struct SitemapPage {
     pub next_cursor: Option<String>,
 }
 
+/// Where one sitemap file of a type starts, and its `lastmod`
+/// ([`SiteReader::sitemap_files`](super::SiteReader::sitemap_files)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SitemapFile {
+    /// The cursor to pass to [`SiteReader::sitemap`](super::SiteReader::sitemap) for
+    /// this file; `None` for the first.
+    pub after: Option<String>,
+    /// The newest `updated_at` of the file's items.
+    pub lastmod: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SitemapEntry {
     pub url: String,
     /// The item's `updated_at`.
     pub lastmod: Timestamp,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_shape;
+
+    #[test]
+    fn same_shape_allows_rounding_only() {
+        // A 4:3 original: resizes (rounded either way) match, crops do not.
+        assert!(same_shape((2000, 1500), Some((768, 576))));
+        assert!(same_shape((2000, 1500), Some((1001, 751))));
+        assert!(same_shape((1999, 1333), Some((768, 512))));
+        assert!(!same_shape((2000, 1500), Some((1280, 640))));
+        assert!(!same_shape((2000, 1500), Some((150, 150))));
+        assert!(!same_shape((2000, 1500), Some((640, 360))));
+        assert!(!same_shape((2000, 1500), None));
+        assert!(!same_shape((2000, 1500), Some((0, 0))));
+    }
 }

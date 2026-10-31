@@ -154,6 +154,13 @@ pub fn clock_skew(local_before: Timestamp, db: Timestamp, local_after: Timestamp
     mid.saturating_sub(db.as_micros()) / 1000
 }
 
+/// Whether a node whose last heartbeat was `heartbeat_at` is live at `db_now` (both by the
+/// database clock): its heartbeat is at most `stale_after` old ([`STALE_AFTER`] unless the
+/// timings say otherwise); a heartbeat in the future counts as age zero.
+pub fn is_live(db_now: Timestamp, heartbeat_at: Timestamp, stale_after: Duration) -> bool {
+    age(db_now, heartbeat_at) <= stale_after
+}
+
 /// Time since `heartbeat_at` by the database clock (zero if it is in the future).
 fn age(db_now: Timestamp, heartbeat_at: Timestamp) -> Duration {
     let micros = db_now.as_micros().saturating_sub(heartbeat_at.as_micros());
@@ -201,7 +208,7 @@ async fn measure(store: &dyn Store) -> Result<(Timestamp, i64), StoreError> {
 fn live_others(nodes: &[Node], me: NodeId, db: Timestamp, stale_after: Duration) -> Vec<&Node> {
     nodes
         .iter()
-        .filter(|n| n.id != me && age(db, n.heartbeat_at) <= stale_after)
+        .filter(|n| n.id != me && is_live(db, n.heartbeat_at, stale_after))
         .collect()
 }
 
@@ -496,6 +503,18 @@ impl Registry {
         self.inner.wake.notify_one();
     }
 
+    /// Writes one heartbeat with `meta()` and waits for it, bounded by
+    /// [`HEARTBEAT_EVERY`]: a node that joined with an empty meta publishes its state
+    /// before it serves, so its row is complete from the first request (M4-4). A failure
+    /// is logged; the heartbeat task writes the meta again at its next beat.
+    pub async fn beat_once(&self, meta: &(dyn Fn() -> Value + Send + Sync)) {
+        match tokio::time::timeout(HEARTBEAT_EVERY, self.inner.beat(meta)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "node heartbeat failed"),
+            Err(_) => tracing::warn!("node heartbeat timed out"),
+        }
+    }
+
     /// Removes this node's row (clean shutdown); a missing row is fine.
     pub async fn leave(&self) -> Result<(), StoreError> {
         self.inner
@@ -747,5 +766,13 @@ mod tests {
             Duration::from_secs(31)
         );
         assert_eq!(age(db, at("2026-10-23T10:00:40.000Z")), Duration::ZERO);
+    }
+
+    #[test]
+    fn liveness_is_inclusive_at_stale_after() {
+        let db = at("2026-10-23T10:00:30.000Z");
+        assert!(is_live(db, at("2026-10-23T10:00:00.000Z"), STALE_AFTER));
+        assert!(!is_live(db, at("2026-10-23T09:59:59.999Z"), STALE_AFTER));
+        assert!(is_live(db, at("2026-10-23T10:00:45.000Z"), STALE_AFTER));
     }
 }

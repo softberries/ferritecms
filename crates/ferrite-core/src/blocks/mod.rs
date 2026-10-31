@@ -3,11 +3,13 @@
 //! Input is untrusted: every function copes with arbitrary JSON (wrong types, huge
 //! nesting) without panicking or overflowing the stack.
 
+mod anchor;
 mod render;
 mod text;
 mod url;
 
-pub use render::render_html;
+pub use anchor::TocEntry;
+pub use render::{render_html, render_html_toc};
 pub use text::{excerpt, extract_text};
 pub use url::{canonical_embed_url, embed_id, safe_href};
 

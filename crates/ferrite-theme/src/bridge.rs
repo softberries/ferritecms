@@ -1,6 +1,10 @@
 //! The data-backed template helpers (plan ruling P2).
 
-use ferrite_core::{DepKeys, MediaPublic, PageItem, comments::CommentThread, site::srcset};
+use ferrite_core::{
+    DepKeys, MediaPublic, PageItem,
+    comments::CommentThread,
+    site::{ContentTree, ListOrder, srcset},
+};
 use ferrite_domain::ContentId;
 use serde::Serialize;
 
@@ -30,10 +34,17 @@ pub trait HelperBridge: Send + Sync {
     /// `item` itself is public (loaded through `SiteReader`, published-only). Keys:
     /// at least `archive:<kind>` and `post:<item>`, even when the result is empty.
     fn related(&self, item: ContentId, n: u32) -> Bridged<Vec<PageItem>>;
-    /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`]) public items of `kind`, newest first;
-    /// `term` narrows to one term, written `"<taxonomy>/<slug>"`. Keys: at least
-    /// `archive:<kind>`, plus `term:<id>` for the term when it exists.
-    fn query(&self, kind: &str, term: Option<&str>, limit: u32) -> Bridged<Vec<PageItem>>;
+    /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`]) public items of `kind` in `order`
+    /// (newest first, or `menu_order` then title); `term` narrows to one term, written
+    /// `"<taxonomy>/<slug>"`. Keys: at least `archive:<kind>`, plus `term:<id>` for the
+    /// term when it exists.
+    fn query(
+        &self,
+        kind: &str,
+        term: Option<&str>,
+        limit: u32,
+        order: ListOrder,
+    ) -> Bridged<Vec<PageItem>>;
     /// The menu at location `name`, with links to non-public items removed. Keys:
     /// `menu:<name>`, plus `post:<id>`/`term:<id>` for **every** target, including
     /// removed (draft, trashed, missing) ones.
@@ -49,6 +60,14 @@ pub trait HelperBridge: Send + Sync {
     fn comments(&self, _item: ContentId, _page: u32) -> Bridged<Option<CommentThread>> {
         (None, DepKeys::default())
     }
+    /// The public items of `kind` as a flat tree (`SiteReader::tree`, M4-3b P56): the
+    /// sitemap's items and paths, at most `MAX_TREE_NODES`; `None` for media or a type
+    /// without public items. A node's `featured` is set only for a public media item.
+    /// Keys: `archive:<kind>`, plus `post:<media>` for every featured id checked. The
+    /// default has no data.
+    fn tree(&self, _kind: &str) -> Bridged<Option<ContentTree>> {
+        (None, DepKeys::default())
+    }
 }
 
 /// A bridge with no data: every helper returns nothing. For error pages and tests.
@@ -59,7 +78,7 @@ impl HelperBridge for NoBridge {
     fn related(&self, _: ContentId, _: u32) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
-    fn query(&self, _: &str, _: Option<&str>, _: u32) -> Bridged<Vec<PageItem>> {
+    fn query(&self, _: &str, _: Option<&str>, _: u32, _: ListOrder) -> Bridged<Vec<PageItem>> {
         (Vec::new(), DepKeys::default())
     }
     fn menu(&self, _: &str) -> Bridged<Option<MenuTree>> {
@@ -95,16 +114,21 @@ pub struct ImageRef {
 
 impl ImageRef {
     /// The `size` variant of `m`, or the original for an unknown size. `srcset` lists
-    /// one candidate per known width, ascending: of several files with the same width
-    /// (a `hero` crop and the `large` resize can both be 1280 wide), the requested
-    /// `size` wins, then the original, then the variant first by name.
+    /// one candidate per known width, ascending, of the files with the shape of the
+    /// image chosen (M4-4): a `hero` crop offers only `hero`-shaped files, never the
+    /// original of another aspect ratio. A chosen variant whose height is unknown takes
+    /// the original's shape; with no dimensions known at all every file with a width is
+    /// a candidate. Of several files with the same width (a crop and a resize can both
+    /// be 1280 wide), the requested `size` wins, then the original, then the variant
+    /// first by name.
     pub fn from_media(m: &MediaPublic, size: &str) -> Self {
-        let srcset = srcset(&m.srcset_candidates(Some(size)));
         let (url, width, height) = m
             .variants
             .iter()
             .find(|v| v.name == size)
             .map_or((&m.url, m.width, m.height), |v| (&v.url, v.width, v.height));
+        let shape = width.zip(height).or(m.width.zip(m.height));
+        let srcset = srcset(&m.srcset_candidates(shape, Some(size)));
         ImageRef {
             url: url.clone(),
             width,
@@ -120,31 +144,40 @@ mod tests {
 
     use super::*;
 
-    fn variant(name: &str, width: i32) -> MediaVariant {
+    fn variant(name: &str, width: i32, height: i32) -> MediaVariant {
         MediaVariant {
             name: name.into(),
             url: format!("/_media/{name}/a.png"),
             width: Some(width),
-            height: None,
+            height: Some(height),
+        }
+    }
+
+    fn media(width: Option<i32>, height: Option<i32>, variants: Vec<MediaVariant>) -> MediaPublic {
+        MediaPublic {
+            id: ContentId::new(),
+            url: "/_media/orig/a.png".into(),
+            alt: String::new(),
+            width,
+            height,
+            variants,
         }
     }
 
     #[test]
     fn srcset_has_one_candidate_per_width() {
-        let m = MediaPublic {
-            id: ContentId::new(),
-            url: "/_media/orig/a.png".into(),
-            alt: String::new(),
-            width: Some(1280),
-            height: Some(720),
-            variants: vec![
-                variant("card", 640),
-                variant("hero", 1280),
-                variant("large", 1280),
-                variant("medium", 768),
-                variant("other", 640),
+        // All 16:9, so every file is a candidate.
+        let m = media(
+            Some(1280),
+            Some(720),
+            vec![
+                variant("card", 640, 360),
+                variant("hero", 1280, 720),
+                variant("large", 1280, 720),
+                variant("medium", 768, 432),
+                variant("other", 640, 360),
             ],
-        };
+        );
         // The requested size wins its width.
         let r = ImageRef::from_media(&m, "hero");
         assert_eq!(r.url, "/_media/hero/a.png");
@@ -164,6 +197,78 @@ mod tests {
             r.srcset.starts_with("/_media/card/a.png 640w, "),
             "{}",
             r.srcset
+        );
+    }
+
+    /// M4-4: `srcset` offers only files of the requested size's shape, so a browser
+    /// picking a candidate never swaps a crop for a different picture.
+    #[test]
+    fn image_srcset_keeps_one_shape() {
+        // A 4:3 original with 4:3 resizes, a 16:7 `hero` crop and a square `thumb`.
+        let m = media(
+            Some(2000),
+            Some(1500),
+            vec![
+                variant("hero", 1600, 700),
+                variant("hero-small", 800, 350),
+                variant("large", 1280, 960),
+                variant("medium", 768, 576),
+                variant("thumb", 150, 150),
+                MediaVariant {
+                    height: None,
+                    ..variant("unmeasured", 1000, 0)
+                },
+            ],
+        );
+        // A crop: its own shape only, never the 4:3 original.
+        let r = ImageRef::from_media(&m, "hero");
+        assert_eq!(
+            (r.url.as_str(), r.width, r.height),
+            ("/_media/hero/a.png", Some(1600), Some(700))
+        );
+        assert_eq!(
+            r.srcset,
+            "/_media/hero-small/a.png 800w, /_media/hero/a.png 1600w"
+        );
+        // A resize: the original's shape, the original included.
+        let r = ImageRef::from_media(&m, "medium");
+        assert_eq!(r.url, "/_media/medium/a.png");
+        assert_eq!(
+            r.srcset,
+            "/_media/medium/a.png 768w, /_media/large/a.png 1280w, /_media/orig/a.png 2000w"
+        );
+        let r = ImageRef::from_media(&m, "thumb");
+        assert_eq!(r.srcset, "/_media/thumb/a.png 150w");
+        // An unknown size is the original: its shape.
+        let r = ImageRef::from_media(&m, "full");
+        assert_eq!(r.url, "/_media/orig/a.png");
+        assert_eq!(
+            r.srcset,
+            "/_media/medium/a.png 768w, /_media/large/a.png 1280w, /_media/orig/a.png 2000w"
+        );
+        // A size without a recorded height: the original's shape.
+        let r = ImageRef::from_media(&m, "unmeasured");
+        assert_eq!(r.url, "/_media/unmeasured/a.png");
+        assert_eq!(
+            r.srcset,
+            "/_media/medium/a.png 768w, /_media/large/a.png 1280w, /_media/orig/a.png 2000w"
+        );
+        // Nothing measured (an SVG, or before the variants job): every width, as before.
+        let m = media(
+            None,
+            None,
+            vec![
+                MediaVariant {
+                    height: None,
+                    ..variant("card", 640, 0)
+                },
+                variant("hero", 1600, 700),
+            ],
+        );
+        let r = ImageRef::from_media(&m, "full");
+        assert_eq!(
+            r.srcset,
+            "/_media/card/a.png 640w, /_media/hero/a.png 1600w"
         );
     }
 }

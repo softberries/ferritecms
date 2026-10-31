@@ -38,6 +38,7 @@
 //! | `TooLarge { limit }` | 413 | `too-large` (`errors[0].field` = `file`) |
 //! | `Unsupported { mime }` | 415 | `unsupported-media-type` (`errors[0].field` = `file`) |
 //! | `Svg(_)` | 422 | `validation` (`errors[0].field` = `file`; fixed text per kind, never the SVG's own text) |
+//! | `Metadata(_)` | 422 | `validation` (`errors[0].field` = `file`; `media.strip_metadata` is on and the image cannot be stripped) |
 //! | `Busy` | 503 | `busy` + `Retry-After: 5` |
 //! | `Idle { secs }` | 400 | `malformed-body` (`errors[0].field` = `file`; no bytes for `media.upload_idle_timeout`) |
 //! | `Body(_)` | 413 / 400 | `too-large` (over the route limit) / `malformed-body` |
@@ -441,6 +442,11 @@ impl From<UploadError> for Problem {
             }
             UploadError::Svg(svg) => {
                 let detail = format!("the SVG could not be made safe: {}", svg_reason(&svg));
+                Self::validation(detail.clone()).with_error(Some("file"), detail)
+            }
+            UploadError::Metadata(reason) => {
+                // `reason` is a fixed text of the media crate, never input text.
+                let detail = format!("metadata could not be removed: {reason}");
                 Self::validation(detail.clone()).with_error(Some("file"), detail)
             }
             UploadError::Busy => Self::busy(),

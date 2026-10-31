@@ -21,7 +21,10 @@ use super::{
     AppState, LoggedIn,
     error_page::{self, Missing},
     media, pipeline,
-    response::{method_not_allowed, noindex, page_response, private_no_store, redirect, text},
+    response::{
+        HtmlRevalidation, method_not_allowed, noindex, page_response, private_no_store, redirect,
+        text,
+    },
     theme_asset,
 };
 use crate::api::cookie::read_session_cookie;
@@ -49,6 +52,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(2);
 /// recorded: non-GET/HEAD requests, health checks, `/_media` and `/_theme` assets,
 /// previews (any path whose first segment decodes to `_preview`, also the 404s), and
 /// plugin routes and the API (separate axum routes, never this handler).
+///
+/// With a metrics registry ([`AppState::with_metrics`]) the same page responses may
+/// count as a page view (P34; see `is_page_view`).
 pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Body> {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return method_not_allowed();
@@ -73,7 +79,12 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         _ => {}
     }
-    let (res, cache) = page(&state, req.headers(), route, path, raw_query).await;
+    let (res, cache, logged_in) = page(&state, req.headers(), route, path, raw_query).await;
+    if let Some(metrics) = &state.metrics
+        && is_page_view(req.method(), req.headers(), &res, logged_in)
+    {
+        metrics.count_page_view();
+    }
     if let Some(served) = &state.served
         && !is_preview_path(req.uri().path())
     {
@@ -87,27 +98,56 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     res
 }
 
-/// A page response for `route` and how the cache answered it: redirects and logged-in
-/// bypass requests skip the cache; otherwise a hit is a request whose render closure
-/// did not run (another request's render, or the stored page, served it).
+/// A page view (P34, M4-2 R8): a `GET` of an HTML page (not a feed, sitemap or robots
+/// file) answered `200`, or `304` when the browser revalidated its stored copy (a
+/// returning reader; [`HtmlRevalidation`]), not logged in, whose `User-Agent` (if any)
+/// is not a bot's ([`is_bot`](crate::metrics::is_bot)). Previews never get here.
+fn is_page_view(
+    method: &Method,
+    headers: &HeaderMap,
+    res: &Response<Body>,
+    logged_in: bool,
+) -> bool {
+    let html = match res.status() {
+        StatusCode::OK => res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| ct.starts_with("text/html")),
+        StatusCode::NOT_MODIFIED => res.extensions().get::<HtmlRevalidation>().is_some(),
+        _ => false,
+    };
+    method == Method::GET
+        && html
+        && !logged_in
+        && !headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(crate::metrics::is_bot)
+}
+
+/// A page response for `route`, how the cache answered it and whether the request was
+/// logged in: redirects and logged-in bypass requests skip the cache; otherwise a hit is
+/// a request whose render closure did not run (another request's render, or the stored
+/// page, served it).
 async fn page(
     state: &Arc<AppState>,
     headers: &HeaderMap,
     route: Route,
     path: String,
     raw_query: Option<String>,
-) -> (Response<Body>, CacheOutcome) {
+) -> (Response<Body>, CacheOutcome, bool) {
     // Redirect rows, before the cache. Longer paths cannot match a row: sources are at
     // most 2048 characters (`RedirectService`), a raw path matches only an ASCII one,
     // and the lookup also tries the path with its trailing slash toggled (+1 byte).
     if path.len() <= MAX_PATH_BYTES + 1 {
         match state.redirects.resolve(&path).await {
-            Ok(Some(r)) => return (follow(state, r).await, CacheOutcome::Bypass),
+            Ok(Some(r)) => return (follow(state, r).await, CacheOutcome::Bypass, false),
             Ok(None) => {}
             Err(e) => {
                 tracing::error!(error = %e, "redirect lookup failed");
                 let res = page_response(&error_page::server_error(state).await, None);
-                return (res, CacheOutcome::Bypass);
+                return (res, CacheOutcome::Bypass, false);
             }
         }
     }
@@ -117,7 +157,7 @@ async fn page(
             // Unreachable: the router writes visible ASCII only.
             Err(_) => missing(state, Missing::NotFound).await,
         };
-        return (res, CacheOutcome::Bypass);
+        return (res, CacheOutcome::Bypass, false);
     }
     let mut query = NormalQuery::parse(raw_query.as_deref());
     // A comment page exists on single items only: elsewhere `?cpage=N` is ignored, so
@@ -184,7 +224,7 @@ async fn page(
     if logged_in {
         private_no_store(&mut res);
     }
-    (res, cache)
+    (res, cache, logged_in)
 }
 
 /// The session behind the request's session cookie (`__Host-ferrite_session` on an

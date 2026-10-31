@@ -175,7 +175,6 @@ export function UsersScreen({ search, setSearch, me }: UsersScreenProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className="pointer-coarse:size-control"
               aria-label={t("users.openOn", { name: u.display_name })}
               title={t("users.open")}
               onClick={() => open(u)}
@@ -191,9 +190,7 @@ export function UsersScreen({ search, setSearch, me }: UsersScreenProps) {
             two_factor: "hidden lg:table-cell",
             last_login: "hidden whitespace-nowrap xl:table-cell",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (

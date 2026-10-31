@@ -170,7 +170,7 @@ fn migrate_status_output() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 10"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
     assert!(
         out.contains(&format!("(ferrite {})", env!("CARGO_PKG_VERSION"))),
         "{out}"
@@ -196,7 +196,7 @@ fn migrate_status_output() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let out = stdout_code(
         {
             let mut c = ferrite();
@@ -238,7 +238,7 @@ fn migrate_status_output() {
 
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -261,7 +261,7 @@ fn migrate_down_requires_yes() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 10"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
 }
 
 #[test]
@@ -303,6 +303,181 @@ fn status_on_missing_database_creates_nothing() {
             .code(1);
     }
     assert_eq!(std::fs::read_dir(&data).expect("readdir").count(), 0);
+}
+
+/// P70: a `rollback --restore-snapshot` killed between moving `ferrite.db` aside and
+/// renaming the staged copy into place leaves only `ferrite.db.restore-<ts>.tmp`. Opening
+/// the store then refuses (naming the file and the `mv` that finishes the restore) instead
+/// of creating an empty database that `serve` would migrate and serve.
+#[test]
+fn serve_refuses_when_only_a_restore_tmp_is_left() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let db = data.join("ferrite.db");
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::rename(&db, &staged).expect("stage");
+    let aside = data.join("backups").join("rolled-back-20260101T000000Z.db");
+    std::fs::write(&aside, b"the database that was current").expect("aside");
+
+    let mut serve = ferrite();
+    serve
+        .env("FERRITE_SERVER__LISTEN", "127.0.0.1:0")
+        .args(["serve", "--data"])
+        .arg(&data)
+        .timeout(std::time::Duration::from_secs(60));
+    let out = serve.assert().code(1).get_output().clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(
+        err.contains(&format!("mv {} {}", staged.display(), db.display())),
+        "{err}"
+    );
+    assert!(err.contains(&aside.display().to_string()), "{err}");
+    assert!(!db.exists(), "no empty database may be created");
+    // The other commands that may create the database refuse too.
+    ferrite()
+        .args(["migrate", "up", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1);
+    assert!(!db.exists());
+    assert!(staged.is_file());
+}
+
+/// P70: a staged copy left beside a database that is still in place (a run killed before
+/// it moved anything) only warns.
+#[test]
+fn a_leftover_restore_tmp_beside_the_db_only_warns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("WARN"), "{err}");
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(staged.is_file(), "the leftover is not deleted");
+}
+
+/// M4-4 R-c2 (amends P70): a run killed after it moved `ferrite.db-wal` (and `-shm`) into
+/// `backups/` but before it moved `ferrite.db` leaves the database in place without its
+/// WAL. Opening it would lose the transactions committed there, so it refuses and names the
+/// `mv` that puts each file back; likewise when the kill came inside the database's own
+/// move (`rolled-back-<ts>.db` is a second name of `ferrite.db`).
+#[test]
+fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let db = data.join("ferrite.db");
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(&db, &staged).expect("copy");
+    let backups = data.join("backups");
+    let wal = backups.join("rolled-back-20260101T000000Z.db-wal");
+    let shm = backups.join("rolled-back-20260101T000000Z.db-shm");
+    // `init` leaves its schema in the WAL (the database file alone is an empty page), the
+    // very state a killed run loses: move both side files as `replace_db` does.
+    let (db_wal, db_shm) = (data.join("ferrite.db-wal"), data.join("ferrite.db-shm"));
+    assert!(db_wal.is_file() && db_shm.is_file(), "init left a WAL");
+    std::fs::rename(&db_wal, &wal).expect("move wal");
+    std::fs::rename(&db_shm, &shm).expect("move shm");
+    let refused = |extra: &[&str]| {
+        let out = ferrite()
+            .args(["migrate", "status", "--data"])
+            .arg(&data)
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        for want in [
+            format!("mv {} {}-wal", wal.display(), db.display()),
+            format!("mv {} {}-shm", shm.display(), db.display()),
+            staged.display().to_string(),
+        ] {
+            assert!(err.contains(&want), "{want}: {err}");
+        }
+        for want in extra {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+        // Nothing was opened: no WAL was created beside the database.
+        assert!(!db_wal.exists(), "{err}");
+    };
+    refused(&[]);
+
+    // Fix round 3: while another process holds the folder lock (a rollback still moving
+    // its files), the files are in flight, not leftovers: "in use", and no advice.
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(data.join("ferrite.lock"))
+        .expect("lock file");
+    lock.try_lock().expect("lock");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .output()
+        .expect("run");
+    drop(lock);
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("in use") && !err.contains("mv "), "{err}");
+
+    // Killed inside the database's own move: the link exists, the source was not unlinked.
+    let aside = backups.join("rolled-back-20260101T000000Z.db");
+    std::fs::hard_link(&db, &aside).expect("link");
+    let rm = format!("rm {}", aside.display());
+    refused(&[&rm]);
+
+    // The steps the message gives: the site opens again with everything its WAL held.
+    std::fs::rename(&wal, &db_wal).expect("mv wal back");
+    std::fs::rename(&shm, &db_shm).expect("mv shm back");
+    std::fs::remove_file(&aside).expect("rm aside");
+    std::fs::remove_file(&staged).expect("rm tmp");
+    let out = stdout_code(
+        {
+            let mut c = ferrite();
+            c.args(["migrate", "status", "--data"]).arg(&data);
+            c
+        },
+        0,
+    );
+    assert!(out.contains("database version: 12"), "{out}");
+}
+
+/// M4-4 fix round 2 (Minor A): killed inside the `-wal` move (the link made, the source not
+/// yet unlinked), nothing is missing beside the database, so the open only warns, and the
+/// warning names the `rm` of the second name too.
+#[cfg(unix)]
+#[test]
+fn a_restore_tmp_with_a_linked_wal_warns_with_the_rm() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    init_sqlite(&data);
+    let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
+    std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    let link = data
+        .join("backups")
+        .join("rolled-back-20260101T000000Z.db-wal");
+    std::fs::hard_link(data.join("ferrite.db-wal"), &link).expect("link");
+    let out = ferrite()
+        .args(["migrate", "status", "--data"])
+        .arg(&data)
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains(&staged.display().to_string()), "{err}");
+    assert!(err.contains(&format!("rm {}", link.display())), "{err}");
 }
 
 #[test]
@@ -740,7 +915,7 @@ fn postgres_init_and_migrate() {
         stdout(c)
     };
     let out = status(tmp.path());
-    assert!(out.contains("database version: 10"), "{out}");
+    assert!(out.contains("database version: 12"), "{out}");
     assert!(out.contains("verdict: up to date"), "{out}");
 
     let mut c = ferrite();
@@ -754,13 +929,13 @@ fn postgres_init_and_migrate() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let mut c = ferrite();
     c.args(["migrate", "status", "--data"]).arg(tmp.path());
     assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -781,11 +956,149 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off"
     );
+    // `server.metrics_listen` (P34) is reported as its address.
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_SERVER__METRICS_LISTEN", "127.0.0.1:9464");
+        c
+    });
+    assert!(out.contains(" metrics=127.0.0.1:9464 "), "{out}");
+    // `[server.tls]` (P33) is reported as its mode.
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(tmp.path())
+            .env("FERRITE_SERVER__TLS__MODE", "acme")
+            .env("FERRITE_SERVER__TLS__CONTACT", "mailto:ops@example.com");
+        c
+    });
+    assert!(out.contains(" tls=acme "), "{out}");
+    // TLS keys without `mode = "acme"` load, with a warning that they are ignored.
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_SERVER__TLS__REDIRECT_HTTP", "0.0.0.0:80")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("warning: server.tls.redirect_http: ignored: server.tls.mode is \"off\""),
+        "{err}"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains(" tls=off "));
     // Never touches the database or media folder.
     assert!(!tmp.path().join("ferrite.db").exists());
     assert!(!tmp.path().join("media").exists());
+}
+
+#[test]
+fn config_check_prints_backup() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data = tmp.path().join("site");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[cluster]\nworkers = 2\n\
+         [backup]\nschedule = \"weekly\"\nto = \"../repo\"\n",
+    )
+    .unwrap();
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"]).arg(&data);
+        c
+    });
+    assert_eq!(
+        out.trim(),
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly"
+    );
+    // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
+    let out = stdout({
+        let mut c = ferrite();
+        c.args(["config", "check", "--data"])
+            .arg(&data)
+            .env("FERRITE_BACKUP__SCHEDULE", "daily");
+        c
+    });
+    assert!(out.trim().ends_with(" backup=daily"), "{out}");
+    std::fs::write(
+        data.join("ferrite.toml"),
+        "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\n",
+    )
+    .unwrap();
+    let out = ferrite()
+        .args(["config", "check", "--data"])
+        .arg(&data)
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(out).unwrap();
+    assert!(err.contains("backup.to: required"), "{err}");
+    // Nothing is created by the check.
+    assert!(!tmp.path().join("repo").exists());
+
+    // `--data .` (a relative data folder): an absolute or sibling `to` is fine.
+    let elsewhere = tmp.path().join("elsewhere");
+    for to in [elsewhere.to_str().unwrap(), "../backups"] {
+        std::fs::write(
+            data.join("ferrite.toml"),
+            format!(
+                "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\nto = \"{to}\"\n"
+            ),
+        )
+        .unwrap();
+        let out = stdout({
+            let mut c = ferrite();
+            c.current_dir(&data)
+                .args(["config", "check", "--data", "."]);
+            c
+        });
+        assert!(out.trim().ends_with(" backup=daily"), "{to}: {out}");
+    }
+
+    // The same location check as `serve`: a symlink into the data folder and the media
+    // root are refused.
+    #[cfg(unix)]
+    {
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&data, &link).unwrap();
+        let inside = link.join("repo");
+        for (to, media) in [
+            (inside.to_str().unwrap().to_owned(), String::new()),
+            (
+                tmp.path().join("media/repo").to_str().unwrap().to_owned(),
+                format!(
+                    "[media]\nroot = \"{}\"\n",
+                    tmp.path().join("media").display()
+                ),
+            ),
+        ] {
+            std::fs::write(
+                data.join("ferrite.toml"),
+                format!(
+                    "[site]\nurl = \"https://example.com\"\n{media}[backup]\nschedule = \"daily\"\nto = \"{to}\"\n"
+                ),
+            )
+            .unwrap();
+            let out = ferrite()
+                .args(["config", "check", "--data"])
+                .arg(&data)
+                .assert()
+                .code(1)
+                .get_output()
+                .stderr
+                .clone();
+            let err = String::from_utf8(out).unwrap();
+            assert!(err.contains("backup.to: "), "{to}: {err}");
+            assert!(err.contains("inside the"), "{to}: {err}");
+        }
+    }
 }
 
 #[test]
@@ -811,7 +1124,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off"
     );
 }
 
@@ -1844,4 +2157,277 @@ fn plugin_install_refuses_bad_packages() {
     // Nothing was stored by any of them.
     assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
     assert!(!site.join("media/artifacts").exists());
+}
+
+// ---- seed demo profiles (M4-3b P61), on both backends ----
+
+/// An `init`ed site: SQLite, or Postgres in `pg`'s schema (local media either way).
+fn seed_site(dir: &Path, pg: Option<&PgSchema>) {
+    let mut c = ferrite();
+    c.args(["init", "--url", "https://example.com"]);
+    if let Some(pg) = pg {
+        c.args(["--db", &pg.url, "--schema", &pg.schema]);
+    }
+    c.arg("--data").arg(dir).assert().success();
+}
+
+fn seed_cmd(dir: &Path, extra: &[&str]) -> Command {
+    let mut c = ferrite();
+    c.args(["seed", "demo"]).args(extra).arg("--data").arg(dir);
+    c
+}
+
+/// Runs `f` against the site's store (SQLite through [`with_site_store`], else `pg`).
+fn with_seeded_store<T>(
+    dir: &Path,
+    pg: Option<&PgSchema>,
+    f: impl AsyncFnOnce(std::sync::Arc<dyn ferrite_store::Store>) -> T,
+) -> T {
+    let Some(pg) = pg else {
+        return with_site_store(dir, f);
+    };
+    tokio_rt().expect("runtime").block_on(async {
+        let store: std::sync::Arc<dyn ferrite_store::Store> = std::sync::Arc::new(
+            ferrite_store_postgres::PgStore::open(ferrite_store_postgres::PgOptions {
+                max_connections: 2,
+                schema: Some(pg.schema.clone()),
+                ..ferrite_store_postgres::PgOptions::new(pg.url.clone())
+            })
+            .await
+            .unwrap(),
+        );
+        let out = f(store.clone()).await;
+        store.close().await;
+        out
+    })
+}
+
+/// Each backend: SQLite always, Postgres when `FERRITE_TEST_PG_URL` is set.
+fn on_both_backends(check: impl Fn(&Path, Option<&PgSchema>)) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    check(&tmp.path().join("sqlite"), None);
+    if let Some(pg) = PgSchema::new() {
+        check(&tmp.path().join("pg"), Some(&pg));
+    }
+}
+
+fn content_query(kind: &str) -> ferrite_domain::ContentQuery {
+    ferrite_domain::ContentQuery {
+        kind: Some(kind.into()),
+        limit: 100,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn seed_business_profile() {
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        let out = stdout(seed_cmd(dir, &["--profile", "business"]));
+        assert!(
+            out.contains("Seeded business demo content: 3 posts, 6 pages"),
+            "{out}"
+        );
+        let next = format!(
+            "next: ferrite theme activate business --data {}\n",
+            dir.display()
+        );
+        assert!(out.ends_with(&next), "{out}");
+
+        with_seeded_store(dir, pg, async |store| {
+            let read = store.read();
+            let home = read
+                .content()
+                .get_by_slug("page", None, "home")
+                .await
+                .unwrap()
+                .expect("the front page");
+            assert_eq!(home.title, "Gardens that grow with you");
+            assert_eq!(home.status, ferrite_domain::ContentStatus::Published);
+            assert!(
+                home.fields["featured_image"].is_string(),
+                "Home has a featured image: {}",
+                home.fields
+            );
+            let front = read
+                .options()
+                .get("reading.front_page")
+                .await
+                .unwrap()
+                .expect("front page set");
+            assert_eq!(front.value, serde_json::json!(home.id.to_string()));
+
+            let mut q = content_query("page");
+            q.parent = ferrite_domain::ParentFilter::Of(home.id);
+            let mut kids = read.content().list(&q).await.unwrap().items;
+            kids.sort_by_key(|k| k.menu_order);
+            let kids: Vec<(String, i32, bool)> = kids
+                .into_iter()
+                .map(|k| (k.title, k.menu_order, !k.excerpt.is_empty()))
+                .collect();
+            assert_eq!(
+                kids,
+                vec![
+                    ("Garden design".to_owned(), 1, true),
+                    ("Consulting".to_owned(), 2, true),
+                    ("Aftercare".to_owned(), 3, true),
+                ]
+            );
+            for slug in ["about", "contact"] {
+                let p = read
+                    .content()
+                    .get_by_slug("page", None, slug)
+                    .await
+                    .unwrap();
+                assert!(p.is_some(), "page {slug}");
+            }
+            let pages = read.content().count(&content_query("page")).await.unwrap();
+            let posts = read.content().count(&content_query("post")).await.unwrap();
+            assert_eq!((pages, posts), (6, 3));
+
+            let mut menus: Vec<String> = read
+                .menus()
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect();
+            menus.sort();
+            assert_eq!(menus, ["footer", "primary"]);
+            let primary = read.menus().get("primary").await.unwrap().unwrap();
+            let labels: Vec<&str> = primary.items.iter().map(|i| i.label.as_str()).collect();
+            assert_eq!(labels, ["Home", "About", "News", "Contact"]);
+            let footer = read.menus().get("footer").await.unwrap().unwrap();
+            let labels: Vec<&str> = footer.items.iter().map(|i| i.label.as_str()).collect();
+            assert_eq!(labels, ["Garden design", "About", "Contact", "RSS feed"]);
+            let design = read
+                .content()
+                .get_by_slug("page", Some(home.id), "garden-design")
+                .await
+                .unwrap()
+                .expect("garden design");
+            assert_eq!(footer.items[0].target_id, Some(design.id.as_uuid()));
+            let news = primary.items.iter().find(|i| i.label == "News").unwrap();
+            assert_eq!(news.url.as_deref(), Some("/post/"));
+
+            let title = read.options().get("site.title").await.unwrap().unwrap();
+            assert_eq!(title.value, serde_json::json!("Larkspur Studio"));
+        });
+    });
+}
+
+#[test]
+fn seed_default_profile_is_unchanged() {
+    const LINE: &str =
+        "Seeded demo content: 12 posts, 3 pages, 4 terms, 2 menus, 1 image (admin user: admin).\n";
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        assert_eq!(stdout(seed_cmd(dir, &[])), LINE);
+        with_seeded_store(dir, pg, async |store| {
+            let read = store.read();
+            let posts = read
+                .content()
+                .list(&content_query("post"))
+                .await
+                .unwrap()
+                .items;
+            assert_eq!(posts.len(), 12);
+            assert!(posts.iter().any(|p| p.title == "Welcome to FerriteCMS"));
+            // One body, byte for byte as before M4-3b.
+            let hello = posts.iter().find(|p| p.slug == "hello-world").unwrap();
+            let text = |t: &str| serde_json::json!({ "type": "text", "text": t });
+            let para = |t: &str| serde_json::json!({ "type": "paragraph", "content": [text(t)] });
+            assert_eq!(
+                hello.body,
+                serde_json::json!({ "type": "doc", "content": [
+                    para("Every CMS starts with a hello world post. This is ours."),
+                    { "type": "heading", "attrs": { "level": 2 }, "content": [text("What you get")] },
+                    { "type": "bulletList", "content": [
+                        { "type": "listItem", "content": [para("A single binary and a single data folder")] },
+                        { "type": "listItem", "content": [para("Plugins in a capability-scoped sandbox")] },
+                        { "type": "listItem", "content": [para("Themes that are templates, not programs")] },
+                    ]},
+                    para("Try it on your own machine:"),
+                    { "type": "codeBlock", "attrs": { "language": "sh" }, "content": [
+                        text("ferrite init --data ./site --url http://localhost:8080\nferrite seed demo --data ./site\nferrite serve --data ./site")
+                    ]},
+                    { "type": "blockquote", "content": [
+                        para("Plugins are untrusted. They get only what their manifest declares.")
+                    ]},
+                    { "type": "paragraph", "content": [
+                        text("Read more in "),
+                        { "type": "text", "text": "the about page", "marks": [{ "type": "link", "attrs": { "href": "/about/" } }] },
+                        text("."),
+                    ]},
+                ]})
+            );
+            // The sample image: the same PNG (its SHA-256 is the artifact hash).
+            let image = read
+                .content()
+                .list(&content_query("media"))
+                .await
+                .unwrap()
+                .items;
+            let row = read.media().get(image[0].id).await.unwrap().unwrap();
+            assert_eq!(
+                row.artifact_hash.as_str(),
+                "e61905d85f1a6e2d40815f7ad69c4b8f1fdb0a2e9133e69c3539504541b247d0"
+            );
+            assert_eq!(row.bytes, 338_103);
+            let mut pages: Vec<String> = read
+                .content()
+                .list(&content_query("page"))
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|p| p.title)
+                .collect();
+            pages.sort();
+            assert_eq!(pages, ["About", "Contact", "Team"]);
+            assert_eq!(
+                read.content().count(&content_query("media")).await.unwrap(),
+                1
+            );
+            let title = read.options().get("site.title").await.unwrap().unwrap();
+            assert_eq!(title.value, serde_json::json!("FerriteCMS Demo"));
+            assert!(
+                read.options()
+                    .get("reading.front_page")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(read.menus().list().await.unwrap().len(), 2);
+        });
+        // `--profile blog` is the same profile.
+        assert_eq!(
+            stdout(seed_cmd(dir, &["--profile", "blog", "--force"])),
+            LINE
+        );
+    });
+}
+
+#[test]
+fn seed_unknown_profile_is_a_usage_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = seed_cmd(tmp.path(), &["--profile", "docs"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("blog") && err.contains("business"), "{err}");
+    // Nothing was written.
+    let n = with_site_store(tmp.path(), async |store| {
+        store
+            .read()
+            .content()
+            .count(&ferrite_domain::ContentQuery::default())
+            .await
+            .unwrap()
+    });
+    assert_eq!(n, 0);
 }

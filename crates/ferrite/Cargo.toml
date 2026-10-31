@@ -24,6 +24,7 @@ ferrite-config = { path = "../ferrite-config" }
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
 ferrite-http = { path = "../ferrite-http" }
+ferrite-import-md = { path = "../ferrite-import-md" }
 ferrite-import-wp = { path = "../ferrite-import-wp" }
 ferrite-media = { path = "../ferrite-media" }
 ferrite-plugin-host = { path = "../ferrite-plugin-host" }
@@ -31,30 +32,49 @@ ferrite-store = { path = "../ferrite-store" }
 ferrite-store-postgres = { path = "../ferrite-store-postgres" }
 ferrite-store-sqlite = { path = "../ferrite-store-sqlite" }
 ferrite-theme = { path = "../ferrite-theme" }
+chrono.workspace = true
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 futures.workspace = true
 image.workspace = true
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+minisign-verify = { version = "=0.3.0", default-features = false }
+object_store.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-acme.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
 semver.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
-tokio = { workspace = true, features = ["net", "signal"] }
+tar.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net", "process", "signal"] }
 toml.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url.workspace = true
 uuid.workspace = true
+zstd.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 ferrite = { path = ".", features = ["test-seams"] }
 assert_cmd = "2.2.2"
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 hyper-util.workspace = true
+minisign = { version = "=0.10.0", default-features = false }
+# A self-signed certificate for the TLS listener tests; already in the tree through
+# rustls-acme.
+rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 s3s.workspace = true
 s3s-fs.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "net"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "test-util"] }
 uuid.workspace = true
 zip.workspace = true

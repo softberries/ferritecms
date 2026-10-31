@@ -4,11 +4,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{DEFAULT_MAX_ATTEMPTS, NewJob, Timestamp};
+use ferrite_domain::{NewJob, Timestamp};
 use ferrite_store::Store;
 use serde_json::Value;
 use tokio::{task::JoinHandle, time::MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
+
+use crate::ClusterError;
 
 /// How often each node's scheduler tries to insert the current period's jobs.
 pub const SCHEDULER_TICK: Duration = Duration::from_secs(10);
@@ -21,6 +23,43 @@ pub struct Periodic {
     pub every: Duration,
     /// The job payload (a JSON object).
     pub payload: Value,
+    /// Attempts each period's job gets (usually [`ferrite_domain::DEFAULT_MAX_ATTEMPTS`]).
+    pub max_attempts: i32,
+    /// When in its period the job is due: `run_at` is the period start plus this (keep it
+    /// below `every`). The key stays the period start, so the offset only moves the time
+    /// (M4-4 P75: `artifacts.gc` at 03:00 UTC, apart from a daily backup at 00:00).
+    pub offset: Duration,
+}
+
+impl Periodic {
+    /// Whether [`Periodic::offset`] is below the period as [`period_key`] counts it (whole
+    /// seconds, at least 1 s): otherwise `run_at` would fall in a later period under this
+    /// period's key.
+    pub fn offset_fits(&self) -> bool {
+        self.offset < Duration::from_secs(self.every.as_secs().max(1))
+    }
+
+    /// The job of the period holding `db_now`: keyed by [`period_key`], due at the period
+    /// start plus [`Periodic::offset`] (in the past when a node ticks after it: due at
+    /// once). [`Scheduler::new`] refuses a periodic whose offset does not
+    /// [fit](Self::offset_fits).
+    pub fn job_at(&self, db_now: Timestamp) -> NewJob {
+        let (key, start) = period_key(self.kind, self.every, db_now);
+        let offset = i64::try_from(self.offset.as_micros()).unwrap_or(i64::MAX);
+        let run_at = start
+            .as_micros()
+            .checked_add(offset)
+            .and_then(|us| Timestamp::from_micros(us).ok())
+            .unwrap_or(start);
+        NewJob {
+            kind: self.kind.to_owned(),
+            payload: self.payload.clone(),
+            unique_key: Some(key),
+            run_at: Some(run_at),
+            priority: 0,
+            max_attempts: self.max_attempts,
+        }
+    }
 }
 
 /// `(unique_key, period start)` for `kind` at `db_now`: the start is
@@ -47,12 +86,25 @@ pub struct Scheduler {
 
 impl Scheduler {
     /// A scheduler ticking every `tick` ([`SCHEDULER_TICK`] in production).
-    pub fn new(store: Arc<dyn Store>, periodics: Vec<Periodic>, tick: Duration) -> Self {
-        Self {
+    /// [`ClusterError::PeriodicOffset`] when a periodic's offset is not below its period
+    /// (checked in every build, not per tick).
+    pub fn new(
+        store: Arc<dyn Store>,
+        periodics: Vec<Periodic>,
+        tick: Duration,
+    ) -> Result<Self, ClusterError> {
+        if let Some(p) = periodics.iter().find(|p| !p.offset_fits()) {
+            return Err(ClusterError::PeriodicOffset {
+                kind: p.kind,
+                offset: p.offset,
+                every: p.every,
+            });
+        }
+        Ok(Self {
             store,
             periodics,
             tick,
-        }
+        })
     }
 
     /// Ticks on the current runtime until `stop`; the first tick is immediate.
@@ -83,15 +135,7 @@ impl Scheduler {
             }
         };
         for periodic in &self.periodics {
-            let (key, start) = period_key(periodic.kind, periodic.every, now);
-            let job = NewJob {
-                kind: periodic.kind.to_owned(),
-                payload: periodic.payload.clone(),
-                unique_key: Some(key),
-                run_at: Some(start),
-                priority: 0,
-                max_attempts: DEFAULT_MAX_ATTEMPTS,
-            };
+            let job = periodic.job_at(now);
             match repos.jobs().enqueue(&job).await {
                 Ok(Some(id)) => tracing::debug!(kind = periodic.kind, %id, "periodic job inserted"),
                 Ok(None) => {}
@@ -133,5 +177,41 @@ mod tests {
         assert_eq!(key, format!("k:{}", ten + 5));
         let (key, _) = period_key("k", Duration::from_secs(30), at(10, 0, 59_000_000));
         assert_eq!(key, format!("k:{}", ten + 30));
+    }
+
+    /// P75: an offset moves the job's `run_at` within its period; the key stays the
+    /// period start, so a node ticking before or after the offset inserts the same row.
+    #[test]
+    fn periodic_offset_shifts_run_at() {
+        let mut periodic = Periodic {
+            kind: "artifacts.gc",
+            every: Duration::from_secs(86_400),
+            payload: serde_json::json!({"v": 1}),
+            max_attempts: 3,
+            offset: Duration::ZERO,
+        };
+        assert!(periodic.offset_fits());
+        periodic.offset = Duration::from_secs(86_400);
+        assert!(
+            !periodic.offset_fits(),
+            "an offset of a whole period does not fit"
+        );
+        periodic.offset = Duration::ZERO;
+        let plain = periodic.job_at(at(1, 30, 0));
+        assert_eq!(
+            plain.unique_key.as_deref(),
+            Some(&*format!("artifacts.gc:{DAY}"))
+        );
+        assert_eq!(plain.run_at, Some(at(0, 0, 0)));
+        assert_eq!(plain.max_attempts, 3);
+
+        periodic.offset = Duration::from_secs(3 * 3600);
+        for now in [at(1, 30, 0), at(3, 0, 0), at(23, 59, 0)] {
+            let job = periodic.job_at(now);
+            assert_eq!(job.unique_key, plain.unique_key, "{now:?}");
+            assert_eq!(job.run_at, Some(at(3, 0, 0)), "{now:?}");
+            assert_eq!(job.kind, "artifacts.gc");
+            assert_eq!(job.payload, periodic.payload);
+        }
     }
 }

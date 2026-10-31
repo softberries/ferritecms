@@ -4,15 +4,20 @@
 // The matrix (M2b P55, `e2e/support/projects.ts`): `chromium-sqlite`, `chromium-pg` (with
 // FERRITE_TEST_PG_URL), `firefox-sqlite` and `webkit-sqlite`, every spec in each. Run it
 // through `pnpm e2e` (Chromium) or `pnpm e2e:all` (all four), whose wrapper
-// (`scripts/e2e.mjs`) picks the projects and keeps single-file runs to that file.
+// (`scripts/e2e.mjs`) picks the projects and keeps single-file runs to that file. Beside
+// the matrix, `public-themes-chromium` runs axe on the public starter themes (M4-3b P64):
+// `pnpm e2e --project public-themes-chromium` (an unfiltered `pnpm e2e:all` includes it).
 
 import { defineConfig, devices } from "@playwright/test";
 import type { Options } from "./e2e/support/fixtures";
 import {
   definedProjects,
+  PUBLIC_THEMES_PROJECT,
+  PUBLIC_THEMES_SPEC,
   selectedProjects,
   SITE_WIDE_SUFFIX,
   SITE_WIDE_SPECS,
+  themeSiteKey,
   type Engine,
 } from "./e2e/support/projects";
 import { VIEWPORTS } from "./e2e/support/snap";
@@ -42,7 +47,28 @@ export default defineConfig<Options>({
     trace: "retain-on-failure",
     colorScheme: "light",
   },
-  projects: definedProjects().flatMap((p) => {
+  projects: [
+    ...siteProjects(),
+    // The public starter themes under axe (M4-3b P64, ruling R-b16): Chromium against one
+    // SQLite site per theme (global setup), this spec only, no site-wide twin. CI runs it
+    // as its own step: `pnpm -C admin e2e --project public-themes-chromium`.
+    {
+      name: PUBLIC_THEMES_PROJECT,
+      testMatch: PUBLIC_THEMES_SPEC,
+      timeout: 30_000,
+      use: {
+        ...DEVICES.chromium,
+        viewport: VIEWPORTS.desktop,
+        backend: "sqlite",
+        // Each `describe` of the spec picks its theme's site (`themeSiteKey`).
+        siteKey: themeSiteKey("blog"),
+      },
+    },
+  ],
+});
+
+function siteProjects() {
+  return definedProjects().flatMap((p) => {
     // Every project at the desktop viewport; `snap` changes it for its phone shots.
     const use = {
       ...DEVICES[p.engine],
@@ -59,7 +85,7 @@ export default defineConfig<Options>({
     return [
       {
         name: p.name,
-        testIgnore: SITE_WIDE_SPECS,
+        testIgnore: [SITE_WIDE_SPECS, PUBLIC_THEMES_SPEC],
         teardown: `${p.name}${SITE_WIDE_SUFFIX}`,
         timeout,
         use,
@@ -72,5 +98,5 @@ export default defineConfig<Options>({
         use,
       },
     ];
-  }),
-});
+  });
+}

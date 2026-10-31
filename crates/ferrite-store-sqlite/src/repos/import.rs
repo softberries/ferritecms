@@ -137,12 +137,14 @@ impl ImportRepo for SqliteRepos {
             "UPDATE import_runs SET state = 'abandoned', finished_at = ? \
              WHERE id = ? AND state = 'running' AND heartbeat_at < ? \
              AND (job_id IS NULL OR job_id = ? OR NOT EXISTS \
-             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running'))"
+             (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running' \
+             AND (jobs.locked_until IS NULL OR jobs.locked_until >= ?)))"
         )
         .bind(now.as_micros())
         .bind(id.as_uuid())
         .bind(stale_before.as_micros())
         .bind(job.as_uuid())
+        .bind(now.as_micros())
         .execute(e))?;
         Ok(done.rows_affected() == 1)
     }
@@ -298,5 +300,28 @@ impl ImportRepo for SqliteRepos {
         .bind(row.version)
         .execute(e))
         .map(|_| ())
+    }
+
+    async fn map_list(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        after: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ImportMapRow>, StoreError> {
+        validate_text("import source", source)?;
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.reader, |e| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {MAP_COLUMNS} FROM import_map \
+             WHERE source = ? AND kind = ? AND (? IS NULL OR wp_id > ?) \
+             ORDER BY wp_id LIMIT ?"
+        )))
+        .bind(source)
+        .bind(kind.as_str())
+        .bind(after)
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(import_map).collect()
     }
 }

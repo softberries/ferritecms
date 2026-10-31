@@ -20,10 +20,10 @@ use ferrite_http::{AppParts, AppState, HttpConfig, RouteTable, build_app, load_r
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeRepo, OptionRepo, PluginFailureRepo,
-    PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo,
-    SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo, TermRepo, ThemeRepo,
-    Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
+    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
+    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
+    TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::json;
 
@@ -184,12 +184,18 @@ impl Repos for HookRepos {
     fn imports(&self) -> &dyn ImportRepo {
         self.inner.read().imports()
     }
+    fn node_metrics(&self) -> &dyn NodeMetricsRepo {
+        self.inner.read().node_metrics()
+    }
 }
 
 #[async_trait]
 impl Store for HookStore {
     fn backend(&self) -> Backend {
         self.inner.backend()
+    }
+    fn pool_stats(&self) -> ferrite_store::PoolStats {
+        self.inner.pool_stats()
     }
     fn read(&self) -> &dyn Repos {
         &self.repos
@@ -212,7 +218,10 @@ impl Store for HookStore {
     ) -> Result<MigrationStatus, StoreError> {
         self.inner.migration_status(binary).await
     }
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.inner.migrate_up(to).await
     }
     async fn migrate_down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -220,6 +229,12 @@ impl Store for HookStore {
     }
     async fn verify_migrations(&self) -> Result<(), StoreError> {
         self.inner.verify_migrations().await
+    }
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        self.inner.export_reader().await
+    }
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        self.inner.import_writer().await
     }
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.inner.snapshot(dest).await

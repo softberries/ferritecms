@@ -1,0 +1,13 @@
+{#- Previous/next links from `pagination`, whose URLs the server builds (canonical, the
+    search query already percent-encoded). -#}
+{%- if pagination and pagination.pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  {%- if pagination.prev_url %}
+  <a class="pagination__prev" rel="prev" href="{{ pagination.prev_url }}"><span aria-hidden="true">←</span> Previous page</a>
+  {%- endif %}
+  <p class="pagination__status">Page {{ pagination.page }} of {{ pagination.pages }}</p>
+  {%- if pagination.next_url %}
+  <a class="pagination__next" rel="next" href="{{ pagination.next_url }}">Next page <span aria-hidden="true">→</span></a>
+  {%- endif %}
+</nav>
+{%- endif %}

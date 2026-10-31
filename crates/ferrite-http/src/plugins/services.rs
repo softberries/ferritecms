@@ -8,8 +8,9 @@ use ferrite_core::{
     auth::SiteKey,
     events::{invalidate, option_key, post_key},
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
-    mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
+    mail::{MailQueue, Mailer, OutgoingMail, check_address, subject_title},
     settings,
+    site::ListOrder,
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{
@@ -20,9 +21,9 @@ use ferrite_store::Store;
 use super::apply::{mark_degraded, record, scoped_preview};
 use super::egress::Egress;
 
-/// Most value bytes one plugin may keep in `kv` (design 05 §3).
+/// Most value bytes one plugin may keep in `kv` (design 05 §6).
 pub const KV_MAX_BYTES: u64 = 10 * 1024 * 1024;
-/// Most keys one plugin may keep in `kv` (design 05 §3).
+/// Most keys one plugin may keep in `kv` (design 05 §6).
 pub const KV_MAX_KEYS: u64 = 10_000;
 /// Error text for any storage failure; details go to the log, not to the guest.
 const STORAGE_ERROR: &str = "storage error";
@@ -37,10 +38,6 @@ pub const MAIL_PER_PLUGIN_HOUR: u32 = 10;
 /// Most admins one plugin mail goes to (P18).
 pub const MAIL_MAX_ADMINS: u32 = 50;
 const MAIL_WINDOW: Duration = Duration::from_secs(3600);
-/// Longest site title used as the plugin-mail subject prefix, in characters: with the
-/// brackets and a 200-char plugin subject the subject stays below
-/// `ferrite_core::mail::MAX_SUBJECT_CHARS` (400).
-pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 
 /// Store-backed services for the plugin imports. Capability and key-scope checks are
 /// the host's (`ferrite-plugin-host`); this layer adds visibility:
@@ -57,7 +54,12 @@ pub const MAIL_TITLE_PREFIX_CHARS: usize = 100;
 ///   (M1c-1 P1): an item unpublished in between still gets the value. `meta.set` is one
 ///   short `Tx` (item exists, set, `invalidate` with `post:<id>`), so a call dropped
 ///   mid-write leaves nothing half-done.
-/// * `options.get`: JSON text of the option; never `plugin.*` keys.
+/// * `options.get`: JSON text of the option; never `plugin.*` keys. Two keys are
+///   answered from the configuration, as JSON strings: `site.url` (the configured site
+///   URL without a trailing slash; it is not an option) and `site.title` (the
+///   `site.title` option when it is a non-blank string, else the configured title; see
+///   [`with_site_title`](Self::with_site_title)). The manifest's `options.read` grant
+///   applies to both, as to every key (the host checks it before this layer).
 /// * `kv`: per plugin, quota [`KV_MAX_BYTES`] / [`KV_MAX_KEYS`] via `set_with_quota`.
 /// * `settings.get`: option `plugin.<name>.settings.<key>` of the calling plugin (the
 ///   host passes its name and the loaded manifest's definition, and answers declared
@@ -101,9 +103,11 @@ pub struct StoreHostServices {
     site_url: String,
     /// Opens sealed plugin secrets; `None`: secrets read as unset.
     site_key: Option<SiteKey>,
-    /// The node's mail queue and the configured site title (`ferrite.toml`, the
-    /// fallback when the `site.title` option is unset); `None`: no `[mail]`.
-    mail: Option<(Arc<MailQueue>, String)>,
+    /// The configured site title (`ferrite.toml`): what `options.get("site.title")`
+    /// and the plugin-mail subject prefix fall back to when the option is unset.
+    site_title: String,
+    /// The node's mail queue; `None`: no `[mail]`.
+    mail: Option<Arc<MailQueue>>,
     /// The node's outbound HTTPS client; `None`: `http.fetch` is not configured.
     egress: Option<Arc<Egress>>,
 }
@@ -115,22 +119,35 @@ impl StoreHostServices {
             reader,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_key: None,
+            site_title: String::new(),
             mail: None,
             egress: None,
         }
     }
 
+    /// The configured site title (`ferrite.toml`), the fallback of the `site.title`
+    /// option for `options.get` and for the plugin-mail subject prefix. Without it the
+    /// fallback is empty.
+    pub fn with_site_title(mut self, site_title: String) -> Self {
+        self.site_title = site_title;
+        self
+    }
+
     /// Mail for `mail.notify-admins` through the node's queue (never a transport
     /// directly: SMTP must not run inside a plugin call, F28). The subject prefix is the
-    /// site title at send time (P51): the `site.title` option, else `site_title` (the
-    /// configured one).
+    /// site title at send time (P51): the `site.title` option, else the configured one
+    /// ([`with_site_title`](Self::with_site_title)).
     ///
-    /// The title is checked at each send, so it cannot break a plugin mail (review M3):
-    /// one that is not header-safe (control characters, line separators) is not used
-    /// (no prefix, logged), and a longer one is cut to `MAIL_TITLE_PREFIX_CHARS`. An
-    /// empty title gives no prefix.
-    pub fn with_mailer(mut self, queue: Arc<MailQueue>, site_title: String) -> Self {
-        self.mail = Some((queue, site_title));
+    /// The title is checked at each send, so it cannot break a plugin mail (review M3),
+    /// by the rules core mails use (`ferrite_core::mail::subject_title`): one that is
+    /// not header-safe (control characters, line separators) is not used (no prefix,
+    /// logged), and a longer one is cut to
+    /// `ferrite_core::mail::MAX_SUBJECT_TITLE_CHARS` (100; with the brackets and a
+    /// 200-char plugin subject the subject stays below `MAX_SUBJECT_CHARS`, 400). An
+    /// empty title gives no prefix; an unreadable `site.title` option gives the
+    /// configured title.
+    pub fn with_mailer(mut self, queue: Arc<MailQueue>) -> Self {
+        self.mail = Some(queue);
         self
     }
 
@@ -247,11 +264,16 @@ impl HostServices for StoreHostServices {
     }
 
     async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
-        take("list_posts", self.reader.latest(kind, limit, offset).await)
-            .unwrap_or_default()
-            .iter()
-            .map(|p| self.public_post(p))
-            .collect()
+        take(
+            "list_posts",
+            self.reader
+                .latest(kind, limit, offset, ListOrder::Date)
+                .await,
+        )
+        .unwrap_or_default()
+        .iter()
+        .map(|p| self.public_post(p))
+        .collect()
     }
 
     async fn meta_get(&self, post: &str, key: &str) -> Option<String> {
@@ -302,7 +324,20 @@ impl HostServices for StoreHostServices {
         if key.starts_with(PLUGIN_OPTION_PREFIX) {
             return None;
         }
-        option_text(self.store.as_ref(), key).await
+        match key {
+            // Not stored as options: the configured values themes see.
+            "site.url" => Some(json_text(&self.site_url.as_str().into())),
+            "site.title" => match settings::site_title(self.store.as_ref(), &self.site_title).await
+            {
+                Ok(title) => Some(json_text(&title.into())),
+                Err(e) => {
+                    tracing::warn!(error = %e, "plugin site title read failed");
+                    mark_degraded();
+                    None
+                }
+            },
+            _ => option_text(self.store.as_ref(), key).await,
+        }
     }
 
     async fn kv_get(&self, plugin: &str, key: &str) -> Option<Vec<u8>> {
@@ -408,7 +443,7 @@ impl HostServices for StoreHostServices {
     }
 
     async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
-        let Some((queue, configured_title)) = &self.mail else {
+        let Some(queue) = &self.mail else {
             return Err(ferrite_plugin_host::MAIL_NOT_CONFIGURED.to_owned());
         };
         let bucket = format!("mail:plugin:{plugin}");
@@ -452,13 +487,8 @@ impl HostServices for StoreHostServices {
         if bcc.is_empty() {
             return Err("no active admin has a usable e-mail address".to_owned());
         }
-        // The option read failing costs the prefix, not the mail.
-        let title = settings::site_title(self.store.as_ref(), configured_title)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(plugin, error = %e, "site title unreadable; using the configured one");
-                configured_title.clone()
-            });
+        // The option read failing costs the stored title, not the mail.
+        let title = settings::site_title_or_configured(self.store.as_ref(), &self.site_title).await;
         let subject = format!("{}{subject}", mail_prefix(&title));
         let mail = OutgoingMail {
             to: Vec::new(),
@@ -470,21 +500,21 @@ impl HostServices for StoreHostServices {
     }
 }
 
-/// `"[<title>] "` for plugin-mail subjects: nothing for an empty or header-unsafe
-/// title, at most `MAIL_TITLE_PREFIX_CHARS` characters of it otherwise.
+/// `"[<title>] "` for plugin-mail subjects, from core's [`subject_title`] (trimmed, at
+/// most `MAX_SUBJECT_TITLE_CHARS` characters): nothing for an empty or header-unsafe
+/// title (the latter logged).
 fn mail_prefix(site_title: &str) -> String {
-    let title = site_title.trim();
-    if title.is_empty() {
-        return String::new();
+    match subject_title(site_title) {
+        Some(title) => format!("[{title}] "),
+        None => {
+            if !site_title.trim().is_empty() {
+                tracing::warn!(
+                    "site.title contains control characters; plugin mail subjects get no site prefix"
+                );
+            }
+            String::new()
+        }
     }
-    if !header_safe(title) {
-        tracing::warn!(
-            "site.title contains control characters; plugin mail subjects get no site prefix"
-        );
-        return String::new();
-    }
-    let cut: String = title.chars().take(MAIL_TITLE_PREFIX_CHARS).collect();
-    format!("[{}] ", cut.trim_end())
 }
 
 /// The core definition of a loaded manifest's setting (the value rules are shared,

@@ -226,6 +226,7 @@ pub async fn artifact_kind_import_round_trips(db: &TestDb) {
         bytes: 4096,
         mime: "application/xml".into(),
         created_at: later(0),
+        orphaned_at: None,
     };
     assert!(artifacts.insert_if_absent(&artifact).await.unwrap());
     assert_eq!(
@@ -476,6 +477,77 @@ pub async fn abandon_stale_for_job_spares_live_jobs(db: &TestDb) {
     }
 }
 
+/// P80 (real clock): the owner job of a stale run counts as live only while it is
+/// `running` and its lease has not expired. A job whose runner died keeps `running` with
+/// a lease in the past until the reaper reclaims it; its stale run is abandoned at once.
+/// The leases come from the store's clock (Postgres `now()`, which also judges them
+/// there), so the test waits out a 1 s lease on the real clock instead of using the fixed
+/// epoch of the other tests. On Postgres an app `now` far ahead does not expire a lease
+/// early.
+pub async fn an_expired_lease_does_not_keep_a_run_live(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let jobs = repos.jobs();
+    let admin = fixture_user(store).await;
+    let job = |kind: &str| ferrite_domain::NewJob::new(kind, json!({}));
+    let me = jobs.enqueue(&job("t.me")).await.unwrap().unwrap();
+    let expired = jobs.enqueue(&job("t.expired")).await.unwrap().unwrap();
+    let live = jobs.enqueue(&job("t.live")).await.unwrap().unwrap();
+    let node = ferrite_domain::NodeId::new();
+    for (kind, lease) in [("t.expired", 1), ("t.live", 600)] {
+        let claimed = jobs
+            .claim(node, &[kind.to_owned()], 1, Duration::from_secs(lease))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1, "{kind}");
+    }
+    let run_of = |owner| ImportRun {
+        job_id: Some(owner),
+        ..new_run(admin.id, "https://wp.example")
+    };
+    if store.backend() == Backend::Postgres {
+        // The 1 s lease is still running on the database clock: an app clock a minute
+        // ahead does not make it expired (P80 on the reaper's clock, P6).
+        let run = run_of(expired);
+        imports.create_run(&run).await.unwrap();
+        let ahead = Timestamp::from_micros(Timestamp::now().as_micros() + 60_000_000).unwrap();
+        assert!(
+            !imports
+                .abandon_stale_for_job(run.id, ahead, ahead, me)
+                .await
+                .unwrap()
+        );
+        assert!(imports.abandon_stale(run.id, ahead, ahead).await.unwrap());
+    }
+    // Wait out the 1 s lease (with room for skew between the clocks).
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let now = Timestamp::now();
+    for (owner, abandoned) in [(expired, true), (live, false)] {
+        assert_eq!(
+            jobs.get(owner).await.unwrap().unwrap().status,
+            ferrite_domain::JobStatus::Running
+        );
+        let run = run_of(owner);
+        imports.create_run(&run).await.unwrap();
+        assert_eq!(
+            imports
+                .abandon_stale_for_job(run.id, now, now, me)
+                .await
+                .unwrap(),
+            abandoned,
+            "{owner:?}"
+        );
+        let state = imports.get_run(run.id).await.unwrap().unwrap().state;
+        if abandoned {
+            assert_eq!(state, ImportRunState::Abandoned);
+        } else {
+            assert_eq!(state, ImportRunState::Running);
+            assert!(imports.abandon_stale(run.id, now, now).await.unwrap());
+        }
+    }
+}
+
 /// Postgres only: a takeover's `abandon_stale` waits for a batch that fenced (fresh
 /// heartbeat) and then sees the new heartbeat, so it abandons nothing.
 pub async fn abandon_stale_rechecks_after_fence(db: Arc<TestDb>) {
@@ -681,6 +753,76 @@ pub async fn import_map_upsert_and_get(db: &TestDb) {
     };
     assert!(matches!(
         imports.map_put(&bad).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+/// `map_list` pages one (source, kind) by `wp_id` ascending, after a given `wp_id`.
+pub async fn import_map_list_pages_by_wp_id(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let a = "markdown:docs";
+    for wp_id in [9, 0, 3, i64::MAX, 5] {
+        imports
+            .map_put(&map_row(a, ImportMapKind::Content, wp_id))
+            .await
+            .unwrap();
+    }
+    // Other kinds and sources are left out.
+    imports
+        .map_put(&map_row(a, ImportMapKind::Media, 4))
+        .await
+        .unwrap();
+    imports
+        .map_put(&map_row("markdown:other", ImportMapKind::Content, 4))
+        .await
+        .unwrap();
+    let ids = |rows: Vec<ImportMapRow>| rows.into_iter().map(|r| r.wp_id).collect::<Vec<_>>();
+    let all = imports
+        .map_list(a, ImportMapKind::Content, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        Some(&all[0]),
+        imports
+            .map_get(a, ImportMapKind::Content, 0)
+            .await
+            .unwrap()
+            .as_ref()
+    );
+    assert_eq!(ids(all), [0, 3, 5, 9, i64::MAX]);
+    let first = imports
+        .map_list(a, ImportMapKind::Content, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(first), [0, 3]);
+    let next = imports
+        .map_list(a, ImportMapKind::Content, Some(3), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(next), [5, 9]);
+    let last = imports
+        .map_list(a, ImportMapKind::Content, Some(9), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(last), [i64::MAX]);
+    assert!(
+        imports
+            .map_list(a, ImportMapKind::Content, Some(i64::MAX), 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        imports
+            .map_list(a, ImportMapKind::Comment, None, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        imports.map_list(a, ImportMapKind::Content, None, 0).await,
         Err(StoreError::Invalid(_))
     ));
 }

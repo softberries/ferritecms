@@ -45,6 +45,7 @@
 
 mod hydrate;
 mod model;
+mod tree;
 
 use std::{
     collections::HashMap,
@@ -57,8 +58,8 @@ use std::{
 
 use chrono::NaiveDate;
 use ferrite_domain::{
-    ArtifactHash, ContentId, ContentItem, ContentQuery, ContentStatus, MAX_PAGE, MEDIA_KIND,
-    SearchQuery, Taxonomy, TermId, Timestamp,
+    ArtifactHash, ContentId, ContentItem, ContentOrder, ContentQuery, ContentStatus, MAX_PAGE,
+    MEDIA_KIND, SearchQuery, Taxonomy, TermId, Timestamp,
 };
 use ferrite_store::{
     MAX_CONTENT_KINDS, MAX_ID_FILTER, MAX_PAGE_ROWS, MAX_SEARCH_KINDS, Repos, Store,
@@ -74,9 +75,10 @@ use crate::{
 use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapPage, TermPublic, UserPublic,
-    srcset,
+    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapFile, SitemapPage, TermPublic,
+    UserPublic, srcset,
 };
+pub use tree::{ContentTree, TreeNode};
 
 /// Maps an artifact hash and a file name to a public URL (`MediaStore::public_url`).
 pub type MediaUrlFn = Arc<dyn Fn(&ArtifactHash, &str) -> String + Send + Sync>;
@@ -111,6 +113,55 @@ pub const MAX_LATEST: u32 = 100;
 /// Most search matches paged through; a search `total` never exceeds it (ruling R9:
 /// bounds what one anonymous request can make the store load).
 pub const SEARCH_CAP: usize = 200;
+/// Most nodes [`SiteReader::tree`] returns (M4-3b P56); past it the tree is marked
+/// `truncated`.
+pub const MAX_TREE_NODES: usize = 1000;
+
+/// The order of [`SiteReader::latest`] and [`SiteReader::term_items`] (the theme's
+/// `query(order=)`, M4-3b P58).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListOrder {
+    /// Newest first (`published_at` descending).
+    #[default]
+    Date,
+    /// [`menu_order_key`]: `menu_order` ascending, then title, then id.
+    Menu,
+}
+
+impl ListOrder {
+    fn content_order(self) -> ContentOrder {
+        match self {
+            ListOrder::Date => ContentOrder::PublishedDesc,
+            ListOrder::Menu => ContentOrder::MenuOrderAsc,
+        }
+    }
+
+    /// Sorts rows the store returned in [`content_order`](Self::content_order): the
+    /// store breaks `menu_order` ties by id, the menu order by title first.
+    fn sort(self, rows: &mut [ContentItem]) {
+        if self == ListOrder::Menu {
+            rows.sort_by_cached_key(|r| menu_order_key(r.menu_order, &r.title, r.id));
+        }
+    }
+}
+
+/// The sort key of the menu order: `menu_order` ascending, then the title compared
+/// case-insensitively (Unicode `to_lowercase`), then the id, so the order is total.
+/// Sort with `sort_by_cached_key`, which lower-cases each title once (M4-4).
+/// `query(order="menu")` and `page_tree()`'s siblings use it (M4-3b P57, P58).
+pub fn menu_order_key(menu_order: i32, title: &str, id: ContentId) -> (i32, String, ContentId) {
+    (menu_order, title.to_lowercase(), id)
+}
+
+/// The item `reading.front_page` names, when its value is an id (the item may be
+/// missing, not public or media; the callers check).
+async fn front_page_id(repos: &dyn Repos) -> Result<Option<ContentId>, CoreError> {
+    Ok(repos
+        .options()
+        .get(FRONT_PAGE_OPTION)
+        .await?
+        .and_then(|e| e.value.as_str().and_then(|s| s.parse::<ContentId>().ok())))
+}
 
 /// Whether `item` is publicly visible at `now`: published, with a publish time not in
 /// the future. The one definition of "public": `SiteReader`'s re-checks and
@@ -135,24 +186,52 @@ pub(crate) async fn public_paths(
     items: Vec<ContentItem>,
     deps: &mut DepKeys,
 ) -> Result<Vec<(ContentItem, String)>, CoreError> {
+    let mut out = Vec::with_capacity(items.len());
+    paths_with(
+        repos,
+        rules,
+        items,
+        &mut Nodes::new(),
+        Some(deps),
+        |item, url| {
+            out.push((item, url));
+        },
+    )
+    .await?;
+    Ok(out)
+}
+
+/// The path of each of `items` (callers pass items with a public page only), handed to
+/// `each` in order: terms (for the primary term) in one call per 200 ids, ancestors
+/// one `get_many` per missing level, kept in `nodes` so a paged walk reads each
+/// ancestor once; none for no items. With `deps`, records the keys of every term of
+/// the items and of the ancestors the paths use.
+async fn paths_with(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    items: Vec<ContentItem>,
+    nodes: &mut Nodes,
+    mut deps: Option<&mut DepKeys>,
+    mut each: impl FnMut(ContentItem, String),
+) -> Result<(), CoreError> {
     if items.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let mut terms = HashMap::new();
     for chunk in unique(items.iter().map(|i| i.id)).chunks(MAX_ID_FILTER) {
         terms.extend(repos.terms().for_items(chunk).await?);
     }
-    let mut nodes = Nodes::new();
-    load_ancestors(repos, &items, &mut nodes).await?;
-    let mut out = Vec::with_capacity(items.len());
+    load_ancestors(repos, &items, nodes).await?;
     for item in items {
         let item_terms = terms.remove(&item.id).unwrap_or_default();
-        for t in &item_terms {
-            deps.insert(term_key(t.id));
-        }
-        let ancestors = chain(&nodes, item.parent_id);
-        for (id, _) in &ancestors {
-            deps.insert(post_key(*id));
+        let ancestors = chain(nodes, item.parent_id);
+        if let Some(deps) = deps.as_deref_mut() {
+            for t in &item_terms {
+                deps.insert(term_key(t.id));
+            }
+            for (id, _) in &ancestors {
+                deps.insert(post_key(*id));
+            }
         }
         let input = PermalinkInput {
             item,
@@ -160,9 +239,40 @@ pub(crate) async fn public_paths(
             primary_term: primary_term(item_terms),
         };
         let url = rules.path(&input);
-        out.push((input.item, url));
+        each(input.item, url);
     }
-    Ok(out)
+    Ok(())
+}
+
+/// Up to `max` items of `q` from `q.cursor` (callers pass a [`published`] query of one
+/// type that is not media), each with its path ([`paths_with`]), handed to `each` in
+/// the query's order. Pages of up to `MAX_PAGE` rows; each page's rows are dropped
+/// once handed on. Leaves `q.cursor` after the last item handed on, `None` when no
+/// matching row follows. Records no keys: the sitemap and the tree depend on
+/// `archive:<kind>` alone, which every content and term write emits.
+async fn walk_paths(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    q: &mut ContentQuery,
+    max: usize,
+    mut each: impl FnMut(ContentItem, String),
+) -> Result<(), CoreError> {
+    let mut nodes = Nodes::new();
+    let mut seen = 0;
+    while seen < max {
+        q.limit = u32::try_from((max - seen).min(MAX_PAGE as usize)).unwrap_or(MAX_PAGE);
+        let page = repos.content().list(q).await?;
+        seen += page.items.len();
+        paths_with(repos, rules, page.items, &mut nodes, None, &mut each).await?;
+        match page.next_cursor {
+            Some(c) => q.cursor = Some(c),
+            None => {
+                q.cursor = None;
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The published-only read facade; see the module docs.
@@ -212,20 +322,34 @@ impl SiteReader {
         self
     }
 
-    /// How many sitemap files `kind` has: `ceil(public items / file length)`, from one
-    /// count query (no rows loaded); 0 for media. Records `archive:<kind>`.
-    pub async fn sitemap_files(&self, kind: &str) -> Result<SiteRead<u32>, CoreError> {
+    /// The sitemap files of `kind` (`ceil(public items / file length)` of them), each
+    /// with the cursor that starts it in [`sitemap`](Self::sitemap) and its `lastmod`
+    /// (the newest `updated_at` of its items): one store query that loads no rows
+    /// (`ContentRepo::file_bounds`, M4-4 P76); none for media. Records
+    /// `archive:<kind>`.
+    pub async fn sitemap_files(&self, kind: &str) -> Result<SiteRead<Vec<SitemapFile>>, CoreError> {
         let now = (self.clock)();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
         if kind == MEDIA_KIND {
-            return Ok(public(0, deps));
+            return Ok(public(Vec::new(), deps));
         }
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
-        let count = self.store.read().content().count(&q).await?;
-        let files = count.div_ceil(self.sitemap_file_len as u64);
-        Ok(public(u32::try_from(files).unwrap_or(u32::MAX), deps))
+        let len = u32::try_from(self.sitemap_file_len).unwrap_or(u32::MAX);
+        let files = self
+            .store
+            .read()
+            .content()
+            .file_bounds(&q, len)
+            .await?
+            .into_iter()
+            .map(|b| SitemapFile {
+                after: b.after,
+                lastmod: b.lastmod,
+            })
+            .collect();
+        Ok(public(files, deps))
     }
 
     /// The published item of `kind` at `path_parts`: the decoded slug segments after
@@ -286,12 +410,7 @@ impl SiteReader {
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(option_key(FRONT_PAGE_OPTION));
-        let id = repos
-            .options()
-            .get(FRONT_PAGE_OPTION)
-            .await?
-            .and_then(|e| e.value.as_str().and_then(|s| s.parse::<ContentId>().ok()));
-        if let Some(id) = id {
+        if let Some(id) = front_page_id(repos).await? {
             // Recorded even while it is not public: publishing it must flush the root.
             deps.insert(post_key(id));
             if let Some(item) = repos.content().get(id).await?
@@ -309,6 +428,18 @@ impl SiteReader {
         }
         let listing = self.posts(repos, now, rules, page, &mut deps).await?;
         Ok(public(listing.map(FrontPage::Posts), deps))
+    }
+
+    /// Whether `item` (a public item this reader returned) is the static front page
+    /// that [`front_page`](Self::front_page) shows at `/`: `reading.front_page` names
+    /// it and it is not media (M4-4 P67; its own permalink then answers 301 to `/`).
+    /// One option read; records `option:reading.front_page`, so changing the option
+    /// refreshes a page that asked.
+    pub async fn is_front_page(&self, item: &PublicItem) -> Result<SiteRead<bool>, CoreError> {
+        let mut deps = DepKeys::default();
+        deps.insert(option_key(FRONT_PAGE_OPTION));
+        let id = front_page_id(self.store.read()).await?;
+        Ok(public(item.kind != MEDIA_KIND && id == Some(item.id), deps))
     }
 
     /// Page `page` of all public items of `kind`, newest first. Media is never listed.
@@ -605,11 +736,14 @@ impl SiteReader {
     }
 
     /// One sitemap file of `kind`: up to [`SITEMAP_FILE_LEN`] (or the length a test seam
-    /// set) public items, newest first, as URL and `updated_at`. Pass the returned cursor back for the next file.
+    /// set) public items, newest first, as URL and `updated_at`, from `cursor` (a
+    /// [`SitemapFile::after`], or the returned cursor of the previous file). The
+    /// static front page (`reading.front_page`) is listed as `/` (M4-4 P67), as in
+    /// [`tree`](Self::tree); its children keep their paths.
     ///
-    /// Deps are `archive:<kind>` only: every content write (and every term write)
-    /// emits it, which covers any URL change; per-item keys for 50 000 URLs would only
-    /// bloat the cache index.
+    /// Deps are `archive:<kind>`: every content write (and every term write) emits
+    /// it, which covers any URL change; per-item keys for 50 000 URLs would only bloat
+    /// the cache index. Plus `option:reading.front_page`.
     pub async fn sitemap(
         &self,
         kind: &str,
@@ -629,41 +763,22 @@ impl SiteReader {
         if kind == MEDIA_KIND {
             return Ok(public(out, deps));
         }
+        deps.insert(option_key(FRONT_PAGE_OPTION));
+        let front = front_page_id(repos).await?;
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
-        let mut nodes = Nodes::new();
-        let file_len = self.sitemap_file_len;
-        while out.entries.len() < file_len {
-            q.limit = u32::try_from((file_len - out.entries.len()).min(MAX_PAGE as usize))
-                .unwrap_or(MAX_PAGE);
-            let page = repos.content().list(&q).await?;
-            load_ancestors(repos, &page.items, &mut nodes).await?;
-            let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
-            let mut terms = if ids.is_empty() {
-                Default::default()
-            } else {
-                repos.terms().for_items(&ids).await?
-            };
-            for item in page.items {
-                let input = PermalinkInput {
-                    ancestors: chain(&nodes, item.parent_id),
-                    primary_term: primary_term(terms.remove(&item.id).unwrap_or_default()),
-                    item,
-                };
-                out.entries.push(SitemapEntry {
-                    url: rules.path(&input),
-                    lastmod: input.item.updated_at,
-                });
-            }
-            match page.next_cursor {
-                Some(c) => q.cursor = Some(c),
-                None => {
-                    q.cursor = None;
-                    break;
-                }
-            }
-        }
+        walk_paths(repos, rules, &mut q, self.sitemap_file_len, |item, url| {
+            out.entries.push(SitemapEntry {
+                url: if front == Some(item.id) {
+                    "/".to_owned()
+                } else {
+                    url
+                },
+                lastmod: item.updated_at,
+            });
+        })
+        .await?;
         out.next_cursor = q.cursor;
         Ok(public(out, deps))
     }
@@ -748,7 +863,9 @@ impl SiteReader {
     /// ancestors (hierarchical types) of the public ones; no authors, media or body
     /// rendering. Records `post:<id>` for every id asked for, shown or not, so
     /// publishing a hidden target refreshes the page, plus the keys of the terms and
-    /// ancestors the URLs use.
+    /// ancestors the URLs use. The static front page links `/` (M4-4 P67, its permalink
+    /// redirects there): when any item is public, one option read and
+    /// `option:reading.front_page`.
     pub async fn links(
         &self,
         ids: &[ContentId],
@@ -774,10 +891,21 @@ impl SiteReader {
                     .filter(|i| has_public_page(i, now)),
             );
         }
+        let front = if items.is_empty() {
+            None
+        } else {
+            deps.insert(option_key(FRONT_PAGE_OPTION));
+            front_page_id(repos).await?
+        };
         let out = public_paths(repos, rules, items, &mut deps)
             .await?
             .into_iter()
             .map(|(item, url)| {
+                let url = if front == Some(item.id) {
+                    "/".to_owned()
+                } else {
+                    url
+                };
                 (
                     item.id,
                     ItemLink {
@@ -989,14 +1117,19 @@ impl SiteReader {
         Ok(item.is_some_and(|i| i.kind != MEDIA_KIND && is_public(&i, now)))
     }
 
-    /// Up to `limit` (at most [`MAX_LATEST`]) public items of `kind`, newest first,
-    /// after skipping `offset` of them; empty for media and when `offset` exceeds
-    /// [`MAX_SKIP`] (the same paging bound as archives).
+    /// Up to `limit` (at most [`MAX_LATEST`]) public items of `kind` in `order` (newest
+    /// first, or the menu order), after skipping `offset` of them; empty for media and
+    /// when `offset` exceeds [`MAX_SKIP`] (the same paging bound as archives).
+    ///
+    /// [`ListOrder::Menu`] pages by the store's `(menu_order, id)` and sorts the
+    /// returned rows by [`menu_order_key`], so items tied on `menu_order` across the
+    /// `offset` or `limit` boundary keep the store's id order.
     pub async fn latest(
         &self,
         kind: &str,
         limit: u32,
         offset: u32,
+        order: ListOrder,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         let now = (self.clock)();
         // One set of rules for the whole read (R10).
@@ -1011,11 +1144,13 @@ impl SiteReader {
         }
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
+        q.order = order.content_order();
         if skip_rows(repos, &mut q, u64::from(offset)).await?.is_err() {
             return Ok(public(Vec::new(), deps));
         }
         q.limit = limit;
-        let rows = repos.content().list(&q).await?.items;
+        let mut rows = repos.content().list(&q).await?.items;
+        order.sort(&mut rows);
         let items = self
             .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
@@ -1024,8 +1159,8 @@ impl SiteReader {
     }
 
     /// Up to `limit` (1..=[`MAX_QUERY_LIMIT`], else `Invalid`) public items of `kind`
-    /// with the term `taxonomy`/`slug`, newest first, for the theme's
-    /// `query(type, term, limit)` helper: one content query, then hydration (no
+    /// with the term `taxonomy`/`slug` in `order` (as [`latest`](Self::latest)), for the
+    /// theme's `query(type, term, limit, order)` helper: one content query, then hydration (no
     /// `reading.per_page`, no count). Empty for an unknown term or taxonomy and when
     /// `kind` is not a public type of the taxonomy. Records `archive:<kind>`, and
     /// `term:<id>` when the term exists.
@@ -1035,6 +1170,7 @@ impl SiteReader {
         taxonomy: &str,
         slug: &str,
         limit: u32,
+        order: ListOrder,
     ) -> Result<SiteRead<Vec<PageItem>>, CoreError> {
         if !(1..=MAX_QUERY_LIMIT).contains(&limit) {
             return Err(CoreError::invalid_field(
@@ -1059,8 +1195,10 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.term = Some(term.id);
+        q.order = order.content_order();
         q.limit = limit;
-        let rows = repos.content().list(&q).await?.items;
+        let mut rows = repos.content().list(&q).await?.items;
+        order.sort(&mut rows);
         let items = self
             .hydrator(repos, now, rules)
             .hydrate(rows, Nodes::new(), &mut deps)
@@ -1300,4 +1438,66 @@ fn date_range(year: i32, month: Option<u32>) -> Option<(Timestamp, Timestamp)> {
             .map(|d| Timestamp::from(d.and_utc()))
     };
     Some((at(start)?, at(end)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use ferrite_domain::ContentId;
+
+    use super::menu_order_key;
+
+    /// The comparator `menu_order_key` replaced (M4-3b P57), kept here to prove the
+    /// order did not change.
+    fn old_cmp(a: (i32, &str, ContentId), b: (i32, &str, ContentId)) -> Ordering {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+            .then_with(|| a.2.cmp(&b.2))
+    }
+
+    #[test]
+    fn menu_order_sort_matches_the_old_order() {
+        let titles = [
+            "beta",
+            "Beta",
+            "alpha",
+            "Älpha",
+            "İstanbul",
+            "istanbul",
+            "ß",
+            "SS",
+            "ss",
+            "",
+            "Zeta",
+            "zeta",
+            "éclair",
+            "Eclair",
+            "beta",
+        ];
+        let rows: Vec<(i32, String, ContentId)> = titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                (
+                    i32::try_from(i % 3).unwrap(),
+                    (*t).to_owned(),
+                    ContentId::new(),
+                )
+            })
+            .collect();
+        // The input forwards and reversed.
+        for mut input in [rows.clone(), rows.iter().rev().cloned().collect()] {
+            let mut old = input.clone();
+            old.sort_by(|a, b| old_cmp((a.0, &a.1, a.2), (b.0, &b.1, b.2)));
+            input.sort_by_cached_key(|r| menu_order_key(r.0, &r.1, r.2));
+            assert_eq!(input, old);
+        }
+        // Equal titles fall back to the id; case and Unicode lower-casing as before.
+        let (a, b) = (ContentId::new(), ContentId::new());
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        assert!(menu_order_key(0, "Same", hi) > menu_order_key(0, "same", lo));
+        assert!(menu_order_key(0, "zeta", lo) > menu_order_key(0, "Beta", hi));
+        assert!(menu_order_key(-1, "zeta", hi) < menu_order_key(0, "alpha", lo));
+    }
 }

@@ -60,6 +60,8 @@ pub fn s3_config(endpoint: String, prefix: &str) -> MediaConfig {
             secret_access_key: Some(Secret::new(SECRET_KEY)),
             allow_http: true,
             virtual_hosted_style: false,
+            copy_if_not_exists: None,
+            conditional_put: None,
         }),
         prefix: prefix.into(),
         public: public_mode(),

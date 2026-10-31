@@ -8,8 +8,9 @@ use ferrite_domain::{
     Artifact, ArtifactHash, ContentId, InstalledPlugin, InstalledTheme, Media, Timestamp,
 };
 use ferrite_store::{
-    ArtifactRepo, MAX_ID_FILTER, MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin, StoreError,
-    ThemeRepo, check_len, check_limit, check_prune_limit, retained_marker, validate_json,
+    ARTIFACT_UNREFERENCED_SQL, ArtifactRepo, MAX_EXISTING_HASHES, MAX_ID_FILTER, MarkCounts,
+    MediaRepo, PluginKvRepo, PluginRepo, RetainedPlugin, StoreError, ThemeRepo,
+    artifact_hash_array, check_len, check_limit, check_prune_limit, retained_marker, validate_json,
     validate_text,
 };
 
@@ -30,19 +31,33 @@ const KV_LOCK_CLASS: i32 = 0x4652_4b56; // "FRKV"
 impl ArtifactRepo for PgRepos {
     async fn insert_if_absent(&self, artifact: &Artifact) -> Result<bool, StoreError> {
         validate_text("artifact mime", &artifact.mime)?;
-        let done = run!(&self.exec, |e| {
+        // An existing row is reused, so it counts as referenced again: its GC mark goes.
+        // The update also takes the row lock, so a concurrent `delete_if_orphaned`
+        // either deletes first (and this inserts) or sees the cleared mark. A row
+        // without a mark returns nothing (no write). `RETURNING (xmax = 0)` relies on a
+        // Postgres implementation detail: a freshly inserted tuple has `xmax` 0, while
+        // the update path stamps the updating transaction id there. It is not a
+        // documented guarantee; the contract test `insert_if_absent_clears_orphan_mark`
+        // (and `artifact_insert_if_absent`) pin it, so a server change shows up there.
+        let row = run!(&self.exec, |e| {
             sqlx::query(
-            "INSERT INTO artifacts (hash, kind, bytes, mime, created_at) VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT DO NOTHING"
-        )
-        .bind(artifact.hash.as_str())
-        .bind(artifact.kind.as_str())
-        .bind(artifact.bytes)
-        .bind(&artifact.mime)
-        .bind(DateTime::<Utc>::from(artifact.created_at))
-        .execute(e)
+                "INSERT INTO artifacts (hash, kind, bytes, mime, created_at) \
+                 VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (hash) DO UPDATE SET orphaned_at = NULL \
+                 WHERE artifacts.orphaned_at IS NOT NULL \
+                 RETURNING (xmax = 0) AS inserted",
+            )
+            .bind(artifact.hash.as_str())
+            .bind(artifact.kind.as_str())
+            .bind(artifact.bytes)
+            .bind(&artifact.mime)
+            .bind(DateTime::<Utc>::from(artifact.created_at))
+            .fetch_optional(e)
         })?;
-        Ok(done.rows_affected() == 1)
+        match row {
+            Some(r) => r.try_get("inserted").map_err(map_db_err),
+            None => Ok(false),
+        }
     }
 
     async fn get(&self, hash: &ArtifactHash) -> Result<Option<Artifact>, StoreError> {
@@ -61,6 +76,107 @@ impl ArtifactRepo for PgRepos {
         .bind(hash.as_str())
         .execute(e))
         .map(|_| ())
+    }
+
+    async fn list_page(
+        &self,
+        after: Option<&ArtifactHash>,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError> {
+        let limit = check_limit(limit)?;
+        let after = after.map(ArtifactHash::as_str);
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE ($1::text IS NULL OR hash > $1) \
+             ORDER BY hash LIMIT $2"
+        )))
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::artifact).collect()
+    }
+
+    async fn existing(&self, hashes: &[ArtifactHash]) -> Result<Vec<ArtifactHash>, StoreError> {
+        check_len("artifact hashes", hashes.len(), MAX_EXISTING_HASHES)?;
+        let list = artifact_hash_array(hashes)?;
+        let rows = run!(&self.exec, |e| sqlx::query(
+            "SELECT hash FROM artifacts \
+             WHERE hash IN (SELECT jsonb_array_elements_text($1::text::jsonb)) ORDER BY hash"
+        )
+        .bind(list.as_str())
+        .fetch_all(e))?;
+        rows.iter()
+            .map(|r| {
+                let hash: String = r.try_get("hash").map_err(map_db_err)?;
+                ArtifactHash::parse(&hash).map_err(Into::into)
+            })
+            .collect()
+    }
+
+    async fn mark_orphans(
+        &self,
+        now: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<MarkCounts, StoreError> {
+        let list = artifact_hash_array(protected)?;
+        atomic!(&self.exec, |conn| async {
+            let unmarked = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE artifacts SET orphaned_at = NULL WHERE orphaned_at IS NOT NULL AND \
+                 (hash IN (SELECT jsonb_array_elements_text($1::text::jsonb)) \
+                  OR NOT ({ARTIFACT_UNREFERENCED_SQL}))"
+            )))
+            .bind(list.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(map_db_err)?
+            .rows_affected();
+            let marked = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE artifacts SET orphaned_at = $1 WHERE orphaned_at IS NULL AND \
+                 hash NOT IN (SELECT jsonb_array_elements_text($2::text::jsonb)) \
+                 AND {ARTIFACT_UNREFERENCED_SQL}"
+            )))
+            .bind(DateTime::<Utc>::from(now))
+            .bind(list.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(map_db_err)?
+            .rows_affected();
+            Ok(MarkCounts { marked, unmarked })
+        })
+    }
+
+    async fn orphaned_before(
+        &self,
+        before: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<Artifact>, StoreError> {
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE orphaned_at < $1 \
+             ORDER BY hash LIMIT $2"
+        )))
+        .bind(DateTime::<Utc>::from(before))
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(codec::artifact).collect()
+    }
+
+    async fn delete_if_orphaned(
+        &self,
+        hash: &ArtifactHash,
+        before: Timestamp,
+        protected: &[ArtifactHash],
+    ) -> Result<bool, StoreError> {
+        let list = artifact_hash_array(protected)?;
+        let done = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM artifacts WHERE hash = $1 AND orphaned_at < $2 AND \
+             hash NOT IN (SELECT jsonb_array_elements_text($3::text::jsonb)) \
+             AND {ARTIFACT_UNREFERENCED_SQL}"
+        )))
+        .bind(hash.as_str())
+        .bind(DateTime::<Utc>::from(before))
+        .bind(list.as_str())
+        .execute(e))?;
+        Ok(done.rows_affected() == 1)
     }
 }
 
@@ -90,7 +206,7 @@ impl MediaRepo for PgRepos {
             .bind(media.sanitized)
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?;
+            .map_err(map_db_err)?;
             sync_variants(&mut *conn, media.item_id).await
         })
     }
@@ -133,7 +249,7 @@ impl MediaRepo for PgRepos {
             .bind(media.item_id.as_uuid())
             .execute(&mut *conn)
             .await
-            .map_err(crate::exec::map_db_err)?;
+            .map_err(map_db_err)?;
             if done.rows_affected() == 0 {
                 return Err(StoreError::NotFound);
             }
@@ -141,7 +257,7 @@ impl MediaRepo for PgRepos {
                 .bind(media.item_id.as_uuid())
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             sync_variants(&mut *conn, media.item_id).await
         })
     }
@@ -207,7 +323,7 @@ async fn sync_variants(conn: &mut sqlx::PgConnection, item: ContentId) -> Result
         .bind(item.as_uuid())
         .execute(conn)
         .await
-        .map_err(crate::exec::map_db_err)?;
+        .map_err(map_db_err)?;
     Ok(())
 }
 
@@ -564,12 +680,12 @@ impl ThemeRepo for PgRepos {
             sqlx::query("UPDATE themes SET active = false WHERE active")
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             let done = sqlx::query("UPDATE themes SET active = true WHERE name = $1")
                 .bind(id)
                 .execute(&mut *conn)
                 .await
-                .map_err(crate::exec::map_db_err)?;
+                .map_err(map_db_err)?;
             if done.rows_affected() == 0 {
                 return Err(StoreError::NotFound);
             }

@@ -4,6 +4,19 @@
 //! and wires them to hooks with [`export_plugin!`]; hook priorities live in the
 //! plugin's `ferrite-plugin.toml`, not in code.
 
+// The helper modules are used by path (`settings::text`, `viewers::allow`, …); the root
+// re-exports only the WIT types and the core handles.
+pub mod form;
+mod head;
+pub mod html;
+mod json;
+pub mod mail;
+pub mod options;
+pub mod route;
+pub mod settings;
+pub mod time;
+pub mod viewers;
+
 pub mod bindings {
     //! Raw `wit-bindgen` output for the `ferrite:plugin/plugin@0.1.0` world.
     wit_bindgen::generate!({
@@ -14,9 +27,8 @@ pub mod bindings {
     });
 }
 
-use bindings::ferrite::plugin::types as wit;
 use bindings::ferrite::plugin::{
-    content, http as wit_http, kv as wit_kv, log as wit_log, settings,
+    content, http as wit_http, kv as wit_kv, log as wit_log, settings as wit_settings,
 };
 
 pub use bindings::exports::ferrite::plugin::guest::Guest;
@@ -26,6 +38,7 @@ pub use bindings::ferrite::plugin::types::{
     ActionEvent, FilterValue, LinkTag, MetaTag, PluginError, Post, RequestInfo, RouteRequest,
     RouteResponse, ScriptTag, TermRef,
 };
+pub use head::Head;
 
 /// Result type used by all hook functions.
 pub type Result<T> = core::result::Result<T, PluginError>;
@@ -76,9 +89,10 @@ impl Ctx {
         Http(())
     }
 
-    /// One of this plugin's own settings, as JSON text.
+    /// One of this plugin's own settings, as JSON text ([`settings`] decodes the scalar
+    /// types).
     pub fn setting(&self, key: &str) -> Option<String> {
-        settings::get(key)
+        wit_settings::get(key)
     }
 }
 
@@ -109,77 +123,6 @@ pub struct Http(());
 impl Http {
     pub fn fetch(&self, req: &HttpRequest) -> core::result::Result<HttpResponse, String> {
         wit_http::fetch(req)
-    }
-}
-
-/// Builder over the WIT `head` record.
-#[derive(Debug, Clone)]
-pub struct Head(wit::Head);
-
-impl Default for Head {
-    fn default() -> Self {
-        Self(wit::Head {
-            title: None,
-            metas: Vec::new(),
-            links: Vec::new(),
-            scripts: Vec::new(),
-        })
-    }
-}
-
-impl Head {
-    /// Add `<meta name=… content=…>`.
-    pub fn meta(&mut self, name: &str, content: &str) -> &mut Self {
-        self.0.metas.push(MetaTag {
-            name: Some(name.to_owned()),
-            property: None,
-            content: content.to_owned(),
-        });
-        self
-    }
-
-    /// Add `<meta property=… content=…>` (Open Graph and friends).
-    pub fn og(&mut self, property: &str, content: &str) -> &mut Self {
-        self.0.metas.push(MetaTag {
-            name: None,
-            property: Some(property.to_owned()),
-            content: content.to_owned(),
-        });
-        self
-    }
-
-    /// Add `<link rel=… href=…>`.
-    pub fn link(&mut self, rel: &str, href: &str) -> &mut Self {
-        self.0.links.push(LinkTag {
-            rel: rel.to_owned(),
-            href: href.to_owned(),
-            hreflang: None,
-            kind: None,
-        });
-        self
-    }
-
-    /// Set the document title.
-    pub fn title(&mut self, title: &str) -> &mut Self {
-        self.0.title = Some(title.to_owned());
-        self
-    }
-
-    /// Borrow the underlying WIT record.
-    pub fn as_wit(&self) -> &wit::Head {
-        &self.0
-    }
-}
-
-impl From<wit::Head> for Head {
-    fn from(h: wit::Head) -> Self {
-        Self(h)
-    }
-}
-
-impl From<Head> for wit::Head {
-    fn from(h: Head) -> Self {
-        h.0
     }
 }
 

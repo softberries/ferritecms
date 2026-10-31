@@ -199,7 +199,8 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
         }}
       />
     ) : null;
-  const dim = list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity";
+  // The previous answer stays up at full colour while a new search or kind loads.
+  const stale = list.isPlaceholderData;
 
   const page = (
     <>
@@ -256,7 +257,7 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
           footer={footer}
           selection={{ state: selectedIds, onChange: setSelected }}
           onOpen={open}
-          className={dim}
+          stale={stale}
         />
       ) : (
         <MediaTable
@@ -267,7 +268,7 @@ export function MediaLibrary({ search, me, setSearch }: MediaLibraryProps) {
           footer={footer}
           selection={{ state: selectedIds, onChange: setSelected }}
           onOpen={open}
-          className={dim}
+          stale={stale}
         />
       )}
       {/* Room for the floating bars, so they never hide the last row. */}

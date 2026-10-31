@@ -85,7 +85,8 @@ impl TestServer {
             .collect::<Result<_, _>>()
             .unwrap();
         let key = PrivateKeyDer::from_pem_slice(KEY).unwrap();
-        // F29: both rustls providers are compiled in and none is installed here.
+        // ring named explicitly: the test server must not depend on which test installed
+        // the process default first (only ring is compiled in, M4-2 P28).
         let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))

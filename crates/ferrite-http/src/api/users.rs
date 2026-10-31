@@ -68,7 +68,7 @@ use super::{
         (status = 400, description = "`validation` (`limit`, `cursor`) or `malformed-query` (also an unknown `role` or `status`)", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (`manage_users`, `users:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: `q` blank or longer than 100 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `q` longer than 100 characters (`errors[0].field` = `q`)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn list_users(

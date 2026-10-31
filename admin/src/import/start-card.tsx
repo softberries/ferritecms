@@ -4,8 +4,8 @@
 // progress (`uploadWordpressImport`) under one `Idempotency-Key`. The key is kept for a
 // retry after a network error, an unreadable reply, a `5xx`, a cancel, or a `409` that
 // says the same key's request is still being received (retried once on its own after
-// `Retry-After`, at most 10 s): the server replays a finished start instead of queuing a
-// second import. Changing a file or an option, a `4xx` refusal and a start make a new
+// `Retry-After`, at most 10 s, while Retry runs it at once): the server replays a finished
+// start instead of queuing a second import. Changing a file or an option, a `4xx` refusal and a start make a new
 // key. Focus moves to the progress while the files go up and back to the card's heading
 // when the upload ends; progress is announced at 0, 25, 50, 75 and 100 %.
 
@@ -51,6 +51,8 @@ const RETRYABLE: ReadonlySet<Failure["kind"]> = new Set([
   "reply",
   "server",
   "inProgress",
+  // While the one automatic retry waits: Retry runs it now (`start` clears the timer).
+  "inProgressWait",
 ]);
 
 type BooleanOption = "dry_run" | "keep_permalinks" | "site_options" | "fetch_media";
@@ -386,6 +388,11 @@ export function StartCard({ onStarted, onBusy, busyAction, focusHeading = false 
       </fieldset>
 
       <div className="flex min-w-0 flex-col gap-3 border-t px-5 py-4">
+        {/* Always in the page (empty while nothing uploads): text in a live region that
+            appears with it is often not read, so "Upload started" must be a change. */}
+        <span data-slot="import-progress-live" className="sr-only" aria-live="polite">
+          {announced}
+        </span>
         {failure && failure.kind !== "fields" ? (
           <Alert tone={failure.kind === "inProgressWait" ? "warning" : "error"}>
             {t(`start.errors.${failure.kind}`)}
@@ -408,9 +415,6 @@ export function StartCard({ onStarted, onBusy, busyAction, focusHeading = false 
             data-slot="import-progress"
             className="flex min-w-0 flex-col gap-2 rounded-sm focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
-            <span data-slot="import-progress-live" className="sr-only" aria-live="polite">
-              {announced}
-            </span>
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-foreground tabular-nums">
                 {t("start.uploading", { percent })}

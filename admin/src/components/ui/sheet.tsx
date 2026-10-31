@@ -66,7 +66,14 @@ function SheetContent({
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close data-slot="sheet-close" asChild>
-            <Button variant="ghost" className="absolute top-3 right-3" size="icon-sm">
+            {/* On touch screens the button is 44 px and centred on the title's line:
+                `--sheet-title-center` (28 px: a 16 px-padded `SheetHeader` or a 56 px bar;
+                sheets whose header is padded 20 px set 33 px on `SheetContent`). */}
+            <Button
+              variant="ghost"
+              className="absolute top-3 right-3 pointer-coarse:top-[calc(var(--sheet-title-center,28px)-22px)]"
+              size="icon-sm"
+            >
               <XIcon />
               <span className="sr-only">{t("ui.close")}</span>
             </Button>
@@ -81,7 +88,8 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-header"
-      className={cn("flex flex-col gap-0.5 p-4", className)}
+      // On touch screens the close button is 44 px (top-3 right-3): the title keeps clear.
+      className={cn("flex flex-col gap-0.5 p-4 pointer-coarse:pr-15", className)}
       {...props}
     />
   );

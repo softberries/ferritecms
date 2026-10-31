@@ -388,23 +388,26 @@ async fn bearer_needs_no_csrf(api: Api) -> Api {
 
 async fn login_429_has_retry_after(api: Api) -> Api {
     api.user("dan", Role::Author, false).await;
-    api.align_to_window(Duration::from_secs(40)).await;
-    // Ten failures from one address, over three logins so the per-login limit (5/min)
-    // never applies (F9).
-    let logins = [
-        "ann", "ann", "ann", "ann", "ben", "ben", "ben", "ben", "cat", "cat",
-    ];
-    for (i, login) in logins.iter().enumerate() {
-        let r = Client::new().login(&api, login, "wrong password!!").await;
-        r.assert_problem(401, "invalid-credentials");
-        assert_eq!(r.header("retry-after"), None, "attempt {}", i + 1);
-    }
-    // The 11th is refused, even with the right password.
-    let r = Client::new().login(&api, "dan", PASSWORD).await;
-    r.assert_problem(429, "rate-limited");
-    assert!(r.header("set-cookie").is_none());
-    let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
-    assert!((1..=60).contains(&retry), "{retry}");
+    let a = &api;
+    api.in_one_window(Duration::from_secs(40), |_| async move {
+        // Ten failures from one address, over three logins so the per-login limit (5/min)
+        // never applies (F9).
+        let logins = [
+            "ann", "ann", "ann", "ann", "ben", "ben", "ben", "ben", "cat", "cat",
+        ];
+        for (i, login) in logins.iter().enumerate() {
+            let r = Client::new().login(a, login, "wrong password!!").await;
+            r.assert_problem(401, "invalid-credentials");
+            assert_eq!(r.header("retry-after"), None, "attempt {}", i + 1);
+        }
+        // The 11th is refused, even with the right password.
+        let r = Client::new().login(a, "dan", PASSWORD).await;
+        r.assert_problem(429, "rate-limited");
+        assert!(r.header("set-cookie").is_none());
+        let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
+        assert!((1..=60).contains(&retry), "{retry}");
+    })
+    .await;
     api
 }
 
@@ -510,66 +513,72 @@ async fn password_change_keeps_only_this_session(api: Api) -> Api {
 /// R11: the current-password check of a self password change counts on the login's
 /// per-login bucket (5/min).
 async fn password_check_is_rate_limited(api: Api) -> Api {
-    let ann = api.user("ann", Role::Author, false).await;
-    api.align_to_window(Duration::from_secs(40)).await;
-    // The login counts once on the bucket.
-    let mut c = api.logged_in("ann").await;
-    // Refusals before the password check take no slot: a new password breaking the
-    // policy, and a token without `users:write`.
-    for _ in 0..6 {
-        c.post(
-            &api,
-            PASSWORD_PATH,
-            json!({"current": "not the password", "new": "short"}),
-        )
-        .await
-        .assert_problem(422, "validation");
-    }
-    let (read_only, _) = api
-        .api
-        .auth
-        .create_token(
-            &Actor::new(ann.id, ann.role),
-            ann.id,
-            "read",
-            Scopes::from_strs(&["users:read".to_owned()]).unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-    for _ in 0..6 {
-        let req = json_body(
-            builder(Method::POST, PASSWORD_PATH).header(
-                header::AUTHORIZATION,
-                format!("Bearer {}", read_only.expose()),
-            ),
-            &json!({"current": "not the password", "new": NEW_PASSWORD}),
-        );
-        api.send(req).await.assert_problem(403, "forbidden");
-    }
-    for i in 0..4 {
+    let a = &api;
+    // A run again starts in the next window with a new account: a rolled-over run may
+    // have changed `ann`'s password.
+    api.in_one_window(Duration::from_secs(40), |n| async move {
+        let login = format!("ann{n}");
+        let ann = &a.user(&login, Role::Author, false).await;
+        // The login counts once on the bucket.
+        let mut c = a.logged_in(&login).await;
+        // Refusals before the password check take no slot: a new password breaking the
+        // policy, and a token without `users:write`.
+        for _ in 0..6 {
+            c.post(
+                a,
+                PASSWORD_PATH,
+                json!({"current": "not the password", "new": "short"}),
+            )
+            .await
+            .assert_problem(422, "validation");
+        }
+        let (read_only, _) = a
+            .api
+            .auth
+            .create_token(
+                &Actor::new(ann.id, ann.role),
+                ann.id,
+                "read",
+                Scopes::from_strs(&["users:read".to_owned()]).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..6 {
+            let req = json_body(
+                builder(Method::POST, PASSWORD_PATH).header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", read_only.expose()),
+                ),
+                &json!({"current": "not the password", "new": NEW_PASSWORD}),
+            );
+            a.send(req).await.assert_problem(403, "forbidden");
+        }
+        for i in 0..4 {
+            let r = c
+                .post(
+                    a,
+                    PASSWORD_PATH,
+                    json!({"current": "not the password", "new": NEW_PASSWORD}),
+                )
+                .await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN, "attempt {}: {r:?}", i + 1);
+        }
+        // The 6th guess on the bucket is refused, even with the right password.
         let r = c
             .post(
-                &api,
+                a,
                 PASSWORD_PATH,
-                json!({"current": "not the password", "new": NEW_PASSWORD}),
+                json!({"current": PASSWORD, "new": NEW_PASSWORD}),
             )
             .await;
-        assert_eq!(r.status, StatusCode::FORBIDDEN, "attempt {}: {r:?}", i + 1);
-    }
-    // The 6th guess on the bucket is refused, even with the right password.
-    let r = c
-        .post(
-            &api,
-            PASSWORD_PATH,
-            json!({"current": PASSWORD, "new": NEW_PASSWORD}),
-        )
-        .await;
-    r.assert_problem(429, "rate-limited");
-    let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
-    assert!((1..=60).contains(&retry), "{retry}");
-    // Nothing changed: the session and the old password still work.
-    assert_eq!(c.get(&api, ME).await.status, StatusCode::OK);
+        r.assert_problem(429, "rate-limited");
+        let retry: u64 = r.header("retry-after").unwrap().parse().unwrap();
+        assert!((1..=60).contains(&retry), "{retry}");
+        // Nothing changed: the session and the old password still work.
+        assert_eq!(c.get(a, ME).await.status, StatusCode::OK);
+    })
+    .await;
     api
 }
 

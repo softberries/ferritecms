@@ -2,8 +2,8 @@
 //! bookkeeping and checksum verification. No automatic snapshot on Postgres (02 §7).
 
 use ferrite_store::{
-    Directives, MigrationStatus, PendingMigration, SCHEMA_META_MIN_BINARY, StoreError,
-    next_min_binary, parse_directives, plan_down,
+    Directives, MigrateReport, MigrationStatus, PendingMigration, SCHEMA_META_INSTALL_ID,
+    SCHEMA_META_MIN_BINARY, StoreError, next_min_binary, parse_directives, plan_down,
 };
 use semver::Version;
 use sqlx::migrate::{MigrateError, Migrator};
@@ -120,7 +120,8 @@ impl PgStore {
         ))
     }
 
-    pub(crate) async fn up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    /// No snapshot on Postgres: the report's `snapshot` is always `None`.
+    pub(crate) async fn up(&self, to: Option<i64>) -> Result<MigrateReport, StoreError> {
         let applied = self.applied_versions().await?;
         let pending: Vec<i64> = embedded_versions()
             .into_iter()
@@ -139,7 +140,10 @@ impl PgStore {
             tracing::info!(from, to = target, "applied migrations {pending:?}");
         }
         self.sync_schema_meta(&[]).await?;
-        Ok(pending)
+        Ok(MigrateReport {
+            applied: pending,
+            snapshot: None,
+        })
     }
 
     pub(crate) async fn down(&self, to: i64, allow_lossy: bool) -> Result<Vec<i64>, StoreError> {
@@ -175,15 +179,17 @@ impl PgStore {
         Ok(())
     }
 
-    /// Writes `site_id` and `created_by_version` when absent and updates
+    /// Writes `site_id`, `install_id` (R16) and `created_by_version` when absent and updates
     /// `min_binary_version` per [`next_min_binary`]; `reverted` = versions just undone.
     async fn sync_schema_meta(&self, reverted: &[i64]) -> Result<(), StoreError> {
         if !self.table_exists("schema_meta").await? {
             return Ok(());
         }
         let site_id = uuid::Uuid::now_v7().to_string();
+        let install_id = uuid::Uuid::now_v7().to_string();
         for (key, value) in [
             ("site_id", site_id.as_str()),
+            (SCHEMA_META_INSTALL_ID, install_id.as_str()),
             ("created_by_version", env!("CARGO_PKG_VERSION")),
         ] {
             sqlx::query(

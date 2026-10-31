@@ -7,14 +7,14 @@ use std::{
 };
 
 use ferrite_domain::{
-    ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, NewContent, ParentFilter,
-    Revision, RevisionId, Term, TermId, Timestamp,
+    ContentId, ContentItem, ContentQuery, ContentStatus, ContentType, MEDIA_KIND, NewContent,
+    ParentFilter, Revision, RevisionId, Term, TermId, Timestamp,
 };
 use ferrite_store::{MAX_ID_FILTER, Repos, Store, StoreError, Tx};
 
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, actions,
-    actor::{Capability, can_edit, require},
+    actor::{Area, Capability, can_edit, can_read, require, require_read},
     blocks, events, fields,
     permalink::{PermalinkInput, Permalinks, ancestors, load_input, primary_term},
     redirects::{move_redirects, redirect_keys},
@@ -166,6 +166,7 @@ impl ContentService {
         let types = tx.types().list().await?;
         check_item(
             tx,
+            actor,
             &types,
             &draft.kind,
             &draft.fields,
@@ -308,7 +309,7 @@ impl ContentService {
             .parent_id
             .filter(|_| draft.parent_id != current.parent_id)
             .map(|p| (p, Some(id)));
-        check_item(tx, &types, &current.kind, &draft.fields, new_parent).await?;
+        check_item(tx, actor, &types, &current.kind, &draft.fields, new_parent).await?;
         let old_term_rows = tx.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
 
@@ -607,9 +608,12 @@ pub(crate) async fn save_with_free_slug(
 /// Refuses a relation value naming an item whose type its field does not list
 /// (M2b-3 P52), as `InvalidKey` at the value's path (`fields.chapters[1].related`). The
 /// items are read in one `get_many` per [`MAX_ID_FILTER`] distinct ids (one for any
-/// usual item); a missing item is accepted, as [`fields`] says.
+/// usual item); a missing item is accepted, as [`fields`] says, and so is one `actor`
+/// cannot read (M4-4 P77, [`readable_target`]), so the answer never tells whether
+/// someone else's draft exists or what type it has.
 async fn check_relations(
     repos: &dyn Repos,
+    actor: &Actor,
     schema: &serde_json::Value,
     value: &serde_json::Value,
 ) -> Result<(), CoreError> {
@@ -620,10 +624,13 @@ async fn check_relations(
     let mut ids: Vec<ContentId> = refs.iter().map(|r| r.id).collect();
     ids.sort_unstable();
     ids.dedup();
+    let now = Timestamp::now();
     let mut kinds = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(MAX_ID_FILTER) {
         for item in repos.content().get_many(chunk).await? {
-            kinds.insert(item.id, item.kind);
+            if readable_target(actor, &item, now) {
+                kinds.insert(item.id, item.kind);
+            }
         }
     }
     for r in refs {
@@ -666,8 +673,9 @@ async fn after_save(
     Ok(())
 }
 
-/// The search entry of a saved `item` (title and body text).
-pub(crate) async fn index_search(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+/// The search entry of a saved `item` (title and body text). Every content write indexes
+/// through this; `ferrite import-site` and `db copy` rebuild the index with it (M4-1 P2).
+pub async fn index_search(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
     repos
         .search()
         .index(item.id, &item.title, &blocks::extract_text(&item.body))
@@ -819,12 +827,14 @@ async fn move_descendants(
     Ok(moved)
 }
 
-/// The checks every content write runs on an item of `kind`: its type is registered
-/// (`types` is every registered type), `fields` satisfies the type's schema and its
-/// relation targets, and `new_parent`, when given as (parent, the item itself for an
-/// existing one), passes [`check_parent`].
+/// The checks every content write by `actor` runs on an item of `kind`: its type is
+/// registered (`types` is every registered type), `fields` satisfies the type's schema
+/// and its relation targets (those `actor` may read, [`check_relations`]), and
+/// `new_parent`, when given as (parent, the item itself for an existing one), passes
+/// [`check_parent`].
 pub(crate) async fn check_item(
     repos: &dyn Repos,
+    actor: &Actor,
     types: &[ContentType],
     kind: &str,
     fields: &serde_json::Value,
@@ -832,11 +842,19 @@ pub(crate) async fn check_item(
 ) -> Result<(), CoreError> {
     let ty = content_type(types, kind)?;
     fields::validate_item(&ty.fields, fields)?;
-    check_relations(repos, &ty.fields, fields).await?;
+    check_relations(repos, actor, &ty.fields, fields).await?;
     if let Some((parent, child)) = new_parent {
-        check_parent(repos, ty, child, parent).await?;
+        check_parent(repos, actor, ty, child, parent).await?;
     }
     Ok(())
+}
+
+/// Whether `actor` may see that `item` exists when it names it in a write (a relation
+/// target, a parent): [`can_read`] at `now`, and media only with `media:read`, the
+/// rule of `ContentService::refs` (M4-4 P77).
+fn readable_target(actor: &Actor, item: &ContentItem, now: Timestamp) -> bool {
+    can_read(actor, item, now)
+        && (item.kind != MEDIA_KIND || require_read(actor, Area::Media).is_ok())
 }
 
 /// Type `kind` from `types` (every registered type).
@@ -848,10 +866,13 @@ fn content_type<'a>(types: &'a [ContentType], kind: &str) -> Result<&'a ContentT
 }
 
 /// A parent is allowed only for a hierarchical type `ty`; it must exist, be of the same
-/// type and not be trashed. For an existing item (`child`), it must not be the item
-/// itself or one of its descendants.
+/// type and not be trashed. One `actor` cannot read ([`readable_target`]) is an
+/// "unknown parent", exactly as a missing one, so the answer never tells whether
+/// someone else's draft exists or what type it has (M4-4 P77). For an existing item
+/// (`child`), it must not be the item itself or one of its descendants.
 async fn check_parent(
     repos: &dyn Repos,
+    actor: &Actor,
     ty: &ContentType,
     child: Option<ContentId>,
     parent: ContentId,
@@ -865,7 +886,12 @@ async fn check_parent(
             ),
         ));
     }
-    let Some(mut item) = repos.content().get(parent).await? else {
+    let Some(mut item) = repos
+        .content()
+        .get(parent)
+        .await?
+        .filter(|item| readable_target(actor, item, Timestamp::now()))
+    else {
         return Err(CoreError::invalid_field("parent_id", "unknown parent"));
     };
     if item.kind != ty.name {

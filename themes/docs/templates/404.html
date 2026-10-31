@@ -1,0 +1,19 @@
+{#- Shared 404/410 body (ruling R26): rendered once for every missing URL, so it must not
+    depend on the request path. The sidebar shows the tree with nothing current. -#}
+{% extends "base.html" %}
+{% block body_class %}is-error{% endblock %}
+{% block content %}
+<div class="docs-listing error-page">
+  {%- if request.status == 410 %}
+  <p class="error-page__code">410</p>
+  <h1 class="docs-title">Page gone</h1>
+  <p>This page has been removed and is not coming back. Search the documentation or pick a page from the list.</p>
+  {%- else %}
+  <p class="error-page__code">404</p>
+  <h1 class="docs-title">Page not found</h1>
+  <p>There is nothing at this address. It may have moved, or the link may be mistyped. Search the documentation or pick a page from the list.</p>
+  {%- endif %}
+  {% with form_id = "docs-search-error", form_label = "Search the documentation" %}{% include "partials/search-form.html" %}{% endwith %}
+  <p><a href="/">Go to the home page</a></p>
+</div>
+{% endblock %}

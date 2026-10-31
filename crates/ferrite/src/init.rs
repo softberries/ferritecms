@@ -68,7 +68,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<()> {
         &media,
     );
     let data_existed = args.data.exists();
-    std::fs::create_dir_all(&args.data)
+    create_data_dir(&args.data)
         .with_context(|| format!("cannot create {}", args.data.display()))?;
     write_private(&config_path, &rendered)?;
 
@@ -145,7 +145,15 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     std::fs::create_dir_all(&backups)
         .with_context(|| format!("cannot create {}", backups.display()))?;
     let store = open_store(&config, OpenMode::CreateIfMissing).await?;
-    let applied = crate::migrate::up_locked(store.as_ref(), None, MIGRATE_LOCK_WAIT).await?;
+    // A new database: stores `last_binary_version`, writes no upgrade.json (P30).
+    let applied = crate::migrate::up_recorded(
+        store.as_ref(),
+        None,
+        &config.data_dir,
+        &crate::binary_version()?,
+        MIGRATE_LOCK_WAIT,
+    )
+    .await?;
     tracing::info!(?applied, "database migrated");
     Ok(())
 }
@@ -190,8 +198,41 @@ async fn ensure_pg_unmigrated(url: &str, schema: Option<&str>) -> anyhow::Result
     Ok(())
 }
 
+/// Creates the data folder. A folder that does not exist yet gets mode 0750 (the database
+/// beside it holds password hashes and sessions, and is created readable by the group);
+/// missing parents are created as usual, and a folder that already exists is left as it is
+/// (09 §8, `ferrite doctor`'s `fs.data_dir`).
+fn create_data_dir(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o750);
+    }
+    match builder.create(dir) {
+        Ok(()) => Ok(()),
+        // Created by someone else in between.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Creates `path` exclusively with mode 0600 (it can hold the database URL).
 fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
+    let mut file = create_private(path)?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("cannot write {}", path.display()))
+}
+
+/// Creates `path` exclusively (an existing file is refused) with mode 0600, for files that
+/// hold secrets: `ferrite.toml`, archives.
+pub(crate) fn create_private(path: &Path) -> anyhow::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -199,9 +240,6 @@ fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts
-        .open(path)
-        .with_context(|| format!("cannot create {}", path.display()))?;
-    file.write_all(contents.as_bytes())
-        .with_context(|| format!("cannot write {}", path.display()))
+    opts.open(path)
+        .with_context(|| format!("cannot create {}", path.display()))
 }

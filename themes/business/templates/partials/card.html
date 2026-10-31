@@ -1,0 +1,20 @@
+{#- One listing entry. Expects `p` (an item). The image is decorative (alt=""): the
+    linked title right below names the same item. -#}
+<article class="card">
+  {%- set img = image(p.featured, "card") %}
+  {%- if img %}
+  <div class="card__media">
+    <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw"{% endif %} loading="lazy" decoding="async">
+  </div>
+  {%- endif %}
+  <div class="card__body">
+    {%- if p.date %}
+    <p class="card__date"><time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time></p>
+    {%- endif %}
+    <h2 class="card__title"><a href="{{ p.url }}">{{ p.title }}</a></h2>
+    {%- set summary = p.excerpt or (p.body | excerpt(30)) %}
+    {%- if summary %}
+    <p class="card__excerpt">{{ summary }}</p>
+    {%- endif %}
+  </div>
+</article>

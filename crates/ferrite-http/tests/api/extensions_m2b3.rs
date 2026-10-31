@@ -16,6 +16,7 @@ use crate::{
 
 api_tests!(
     theme_dto_has_manifest_facts,
+    theme_homepage_is_web_url_checked,
     plugin_dto_has_manifest_facts,
     retained_list_and_purge,
     purged_delete_is_not_retained,
@@ -122,6 +123,30 @@ async fn theme_dto_has_manifest_facts(api: Api) -> Api {
     assert_eq!(min["has_settings"], false, "{min}");
     assert_eq!(min["menus"], json!([]), "{min}");
     assert_eq!(min["images"], json!([]), "{min}");
+    api
+}
+
+/// A stored theme row whose homepage is not `http(s)://` (written before `theme.toml`
+/// refused it, or edited in the database) is never offered as a link (P77, the plugin
+/// rule).
+async fn theme_homepage_is_web_url_checked(api: Api) -> Api {
+    let mut c = admin(&api).await;
+    let r = c.post_empty(&api, &format!("{THEMES}/blog/activate")).await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let themes = api.store.read().themes();
+    for bad in [
+        "javascript:alert(1)",
+        "data:text/html,<b>x</b>",
+        "ftp://x.test/",
+    ] {
+        let mut row = themes.get("blog").await.unwrap().unwrap();
+        row.manifest["homepage"] = json!(bad);
+        themes.upsert(&row).await.unwrap();
+        let list = c.get(&api, THEMES).await.json();
+        let blog = theme(&list, "blog");
+        assert_eq!(blog["homepage"], Value::Null, "{bad}: {blog}");
+        assert_eq!(blog["author"], "FerriteCMS", "the row still loads: {blog}");
+    }
     api
 }
 

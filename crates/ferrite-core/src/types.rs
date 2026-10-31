@@ -384,13 +384,19 @@ impl Change {
 /// (`GET /content/refs`), so no type (nor, sharing the rules, taxonomy) may take them.
 pub const API_WORDS: &[&str] = &["refs"];
 
+/// Whether `name` has the shape of a type or taxonomy name, `[a-z][a-z0-9_-]{0,31}`
+/// (the reserved words that type creation also refuses aside). Lets a reader refuse a malformed
+/// name before any query (the theme's `page_tree(kind=)`).
+pub fn is_type_name_shaped(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && name.len() <= MAX_TYPE_NAME
+        && bytes.all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+}
+
 /// The pure name rules of the module docs (`InvalidField { field: "name", .. }`).
 pub(crate) fn check_type_name(name: &str) -> Result<(), CoreError> {
-    let mut bytes = name.bytes();
-    let shaped = matches!(bytes.next(), Some(b'a'..=b'z'))
-        && name.len() <= MAX_TYPE_NAME
-        && bytes.all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'));
-    if !shaped {
+    if !is_type_name_shaped(name) {
         return Err(CoreError::invalid_field(
             NAME,
             "name must match [a-z][a-z0-9_-]{0,31}",

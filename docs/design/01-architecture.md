@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M2a-1: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M4-3: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -17,15 +17,33 @@ ferritecms/
 │   │                             #   `config check`, `healthcheck`, `user`, `theme` (with `pack`,
 │   │                             #   M2b-3), `plugin`), logging, startup check,
 │   │                             #   site key file, node wiring (hot swap, jobs), shutdown; anyhow
-│   │                             #   at the top level
+│   │                             #   at the top level. M4-1: `export`, `import-site`, `db copy`
+│   │                             #   (`archive`, `site_copy`, `export_cmd`), `backup`/`restore`
+│   │                             #   (`backup/`), `media sync|gc|regenerate` (`media_cmd`,
+│   │                             #   `media_url`, `gc`), the `artifacts.gc` and `site.backup`
+│   │                             #   jobs (`jobs/{gc,backup}.rs`). M4-2: `self-update` and
+│   │                             #   `rollback` (`update/{mod,release,verify,swap,rollback}.rs`),
+│   │                             #   `upgrade` (`upgrade.json`, `last_binary_version`), `tls`
+│   │                             #   (ACME via rustls-acme, the TLS and redirect listeners),
+│   │                             #   `node_metrics` (the minute writer), `build.rs` (the target
+│   │                             #   triple) and `release.pub` (the embedded release key).
+│   │                             #   M4-3a: `doctor/` (`ferrite doctor`, 09 §8). M4-3b:
+│   │                             #   `import markdown` (`import_cmd`), `seed demo --profile
+│   │                             #   blog|business` (`seed/business.rs`)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
-│   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors
-│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL)
+│   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
+│   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
+│   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
+│   │                             #   the table `catalogue`, `export` reader, `import_writer`;
+│   │                             #   M4-2: `MigrateReport`, `NodeMetricsRepo` (`node_metrics`,
+│   │                             #   skipped by the catalogue like `jobs`)
 │   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
 │   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
 │   │                             #   other crates reuse its harness as a dev-dependency
-│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants
+│   ├── ferrite-media/            # (built) MediaStore over object_store, sniffing, image variants;
+│   │                             #   M4-1: metadata stripping (`strip`), store listing and copy,
+│   │                             #   the owner marker
 │   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
 │   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
@@ -43,11 +61,16 @@ ferritecms/
 │   │                             #   `diagnostics::scrub`. M2b-3: user filters, sessions, an
 │   │                             #   admin's TOTP reset, retained plugin data, audit filters,
 │   │                             #   the test mail, relation `types`, inline image `srcset`.
+│   │                             #   M4-1: `seed` (`DemoBatch`, the atomic `seed demo`).
+│   │                             #   M4-3b: heading ids and `TocEntry` (`blocks/anchor.rs`),
+│   │                             #   `SiteReader::tree` (`site/tree.rs`), `ListOrder`, the
+│   │                             #   Markdown import's map key (`import.md.id`).
 │   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
-│   │                             #   MiniJinja renderer and helpers
+│   │                             #   MiniJinja renderer and helpers; M4-3b: `page_tree()`
+│   │                             #   (`page_tree.rs`), `query(order=)`
 │   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
 │   │                             #   output validation + ammonia sanitising, call tracing;
 │   │                             #   M2a-2a: grants, permission report, call cap, render budget
@@ -64,12 +87,20 @@ ferritecms/
 │   │                             #   `index.html`; M3-1: `import_fetch::HttpSource`, the
 │   │                             #   import's attachment fetcher over the egress SSRF rules;
 │   │                             #   M3-2: the `/import` endpoints and `import_blobs::MediaArtifacts`,
-│   │                             #   core's report storage over the media store))
+│   │                             #   core's report storage over the media store; M4-2: the
+│   │                             #   metrics registry and `/metrics` text (`metrics`), HSTS
+│   │                             #   and the redirect app (`tls`), the series endpoint))
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
+│   ├── ferrite-import-md/        # (built, M4-3b) Markdown importer: folder scan, TOML front
+│   │                             #   matter, Markdown to blocks (pulldown-cmark, then the WP
+│   │                             #   crate's HTML converter), `run` over `ImportService`;
+│   │                             #   `ferrite import markdown` runs it (08 §8)
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
-│                                 #   lives in the crate; there is no separate macros crate)
+│                                 #   lives in the crate; there is no separate macros crate);
+│                                 #   M4-3a: `form`, `html`, `options`, `settings`, `time`,
+│                                 #   `mail`, `route`, `viewers` and `Head` additions (05 §10)
 ├── wit/                          # WIT packages (source of truth for plugin API)
 │   └── ferrite-plugin@0.1.0/
 ├── admin/                        # (built, M2b-1 to M2b-3) admin SPA: one pnpm package (not a
@@ -82,14 +113,24 @@ ferritecms/
 │                                 #   plugins/, system/, auth/, lib/, i18n/), e2e/ (Playwright
 │                                 #   + support), scripts/ (dist and bundle checks, API drift
 │                                 #   check, the E2E wrapper), bundle-budget.json
-├── themes/                       # (built) starter themes embedded in the binary: `blog`
+├── themes/                       # (built) starter themes embedded in the binary: `blog`,
+│                                 #   `docs` (M4-3b P59) and `business` (P60); each under
+│                                 #   150 KB (P65)
+├── site/                         # (M4-3b P63) the docs site: `content/` (Markdown),
+│                                 #   `build.sh`, `README.md`, `VERIFIED.md`
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
 │                                 #   counter, settings-probe, fetcher, admin-e2e (the admin
-│                                 #   E2E's plugin, M2b-3), hostile/*; seo, analytics,
-│                                 #   contact-form are M4
+│                                 #   E2E's plugin, M2b-3), hostile/*; and the shipped
+│                                 #   seo, analytics, contact-form (M4-3a; a release asset,
+│                                 #   09 §7)
+├── packaging/systemd/            # (M4-2) ferrite.service + install guide (09 §7)
+├── Dockerfile                    # (M1.5; digests pinned M4-2) the image (09 §7)
+├── .github/                      # workflows ci.yml, release.yml (M4-2); scripts/ (package,
+│                                 #   package-plugins, sums, verify-sig, newest, compat)
 ├── tests/                        # cross-crate integration tests (planned; per-crate tests/ exist)
-└── docs/
+└── docs/                         # design/, superpowers/ (plans, rulings, exits), operations/
+                                  #   (M4-2: cluster-runbook.md, solo-upgrade.md)
 ```
 
 > Migrations live in each store crate (`crates/ferrite-store-*/migrations/`); CLAUDE.md
@@ -103,7 +144,8 @@ built are marked with their milestone):
 ```
 ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme, ferrite-core,
  │               ferrite-plugin-host, ferrite-media, ferrite-config, ferrite-store,
- │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1)
+ │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1),
+ │               ferrite-import-md (M4-3b)
  ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
  │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
@@ -113,9 +155,10 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                ├─ ferrite-import-wp (M3-1: `import_fetch::HttpSource` implements its
  │                │                     `MediaSource`)
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
- ├─ ferrite-config ─── ferrite-domain
+ ├─ ferrite-config ─── ferrite-domain, ferrite-media (M4-1 R4: `ConditionalPut`, the `copy_if_not_exists` check)
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
- └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
+ ├─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
+ └─ ferrite-import-md (M4-3b) ─── ferrite-import-wp, ferrite-core, ferrite-media, ferrite-domain
 ```
 
 `ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built
@@ -127,11 +170,16 @@ with core and themes); `ferrite-http` adapts between them (`StoreHostServices`).
 Only the binary crate depends on concrete store crates; everything else sees
 `Arc<dyn Store>` (see [02](02-storage.md#repository-layer)). Both store crates are always
 compiled in; Cargo features to leave one out (`sqlite`, `postgres`) are planned but do not
-exist yet (no `[features]` section in any crate).
+exist yet. The only Cargo features are the `test-seams` ones of `ferrite`, `ferrite-http`,
+`ferrite-core` and `ferrite-import-wp` (10 §2), which only tests enable. M4-2 added no
+crate edges, only external dependencies (`minisign-verify`, `rustls-acme`,
+`tokio-rustls`, `webpki-roots`, `flate2` and `jiff`; `minisign` and `rcgen` for tests).
+M4-3b added one crate, `ferrite-import-md` (edges above), and one external dependency,
+`pulldown-cmark` (`html` feature only; it brings `pulldown-cmark-escape`).
 
 ## 2. Runtime components
 
-One `ferrite serve` process contains (as built after M2a-2a; planned parts marked):
+One `ferrite serve` process contains (as built after M4-2; planned parts marked):
 
 | Component | Responsibility | Crate |
 |---|---|---|
@@ -149,7 +197,10 @@ One `ferrite serve` process contains (as built after M2a-2a; planned parts marke
 | Invalidation loop | Polls the `events` outbox every `cache.poll_interval_ms` (default 250; woken by `LISTEN` in cluster mode) and applies events to the page cache; its hook drives the hot swap | ferrite-cache |
 | Reloader | Hot swap of theme, plugin registry and permalink rules/route table on events (P18) | ferrite (bin) |
 | Scheduled publishing | `content.publish_scheduled` job per scheduled item, `content.publish_due` periodic every 30 s (P12) | ferrite (bin) + core |
-| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); later `/metrics` (M4) | ferrite-http |
+| HTTP | Public routes, `/_media`, `/_theme`, `/_preview/<id>`, `/healthz`, `/readyz`, the REST API `/api/v1` (M2a-1, same process and layers, never cached), plugin routes `/_p/<plugin>/…` (M2a-2a, never cached), the embedded admin `/admin/` (M2b, 07 §3); with `[server.tls] mode = "acme"` the same site over HTTPS on `server.tls.listen` (HSTS) and an optional `redirect_http` listener that only answers `301` (M4-2, 09 §5) | ferrite-http + ferrite (bin) |
+| ACME client | `rustls-acme` on the TLS listener (TLS-ALPN-01), certificates and account key in `<data>/tls/`, renewal and backoff (M4-2 P33; solo only) | ferrite (bin) |
+| Metrics | One registry per node (`ferrite_http::metrics::Metrics`): request counts and latency by class, page views, page cache, plugin hooks, jobs, DB pool, nodes; `/metrics` only on `server.metrics_listen` (M4-2 P34, §7) | ferrite-http + ferrite (bin) |
+| Minute writer | One `node_metrics` row per node and whole UTC minute from the registry's deltas, flushed at shutdown (M4-2 P35, 09 §6) | ferrite (bin) |
 | Workers | Job queue consumers (`cluster.workers` per node): prune jobs incl. `sessions.prune`, publishing, `plugin.action`, `plugin.purge` and `plugin.purge_sweep` (M2a-2a), `media.variants` (M2a-2b), `permalink.redirects` and `import.wordpress` (M3-2; 04 §6) | ferrite-cluster + core + ferrite (bin) |
 
 Startup order as built (`crates/ferrite/src/serve.rs`, `ferrite::start`; any failure exits
@@ -163,18 +214,25 @@ with `[mail]`, the SMTP mailer and mail queue (a value lettre refuses exits 1) �
 from the `plugins` table + artifacts (a broken row is skipped) → route table → the API's
 services (`AuthService`, users, content types, options, the node's extension
 `Installer`) → bind
-`server.listen` → background tasks: invalidation loop (`LISTEN` in cluster mode) with the
-reloader hook, plugin-failure flusher, `request.served` flusher, job runner, periodic
-scheduler, heartbeat → serve the
-public site with the API merged in front of it (`build_site`) and print
-`Listening on http://<addr>`. Signal handlers are installed before all of this; a signal
+`server.listen`, `server.metrics_listen` when set, and with TLS `server.tls.listen` and
+`redirect_http` (all before any background task, so a busy port fails cleanly) →
+background tasks: invalidation loop (`LISTEN` in cluster mode) with the reloader hook,
+plugin-failure flusher, `request.served` flusher, redirect-hits flusher, job runner,
+periodic scheduler, heartbeat, `node_metrics` minute writer, the `/metrics` listener and
+the ACME client → serve the public site with the API merged in front of it
+(`build_site`) and print `Listening on http://<addr>` (and `Listening on https://<addr>`
+with TLS). The migration check is also where the start is recorded (M4-2 P30): it writes
+`<data>/upgrade.json` when the binary version or the schema changed and sets
+`schema_meta.last_binary_version` (09 §1). Signal handlers are installed before all of this; a signal
 during startup exits at once (130/143), after deregistering the node (bounded at 1 s) if it
 had already joined.
 
 Shutdown on SIGINT or SIGTERM, as built: stop accepting **and** stop the job runner → drain
 open requests for up to 10 s while running jobs get 9 s, then the rest are released without
-using an attempt (runner abandoned after 12 s) → stop the background tasks (final failure
-flush) and deregister the node (together up to 1 s) → close the database pools (up to 2 s,
+using an attempt (runner abandoned after 12 s); the plain, TLS and redirect listeners
+drain together → stop the background tasks (final failure flush, `request.served` and
+redirect-hits flushes, the partial minute's `node_metrics` row in at most 500 ms, the
+`/metrics` listener and the ACME client) and deregister the node (together up to 1 s) → close the database pools (up to 2 s,
 cut to end within 13 s of the signal) → the runtime gets a 1 s grace, then remaining
 connection tasks are dropped. The process is gone at most 14 s after the first signal; a
 second signal during startup or shutdown exits at once (130 for SIGINT, 143 for SIGTERM).
@@ -263,12 +321,24 @@ MB/MiB = 1024², GB/GiB = 1024³ (`cx.rs`, `parse_size`). Durations: seconds, `"
 url        = "https://example.com"     # required; absolute http(s) URL
 title      = ""                        # default empty
 locale     = "en"                      # default "en"; must not be empty
-timezone   = "UTC"                     # default "UTC"; must not be empty (not validated as a zone)
+timezone   = "UTC"                     # default "UTC"; an IANA zone name (e.g. `Europe/Warsaw`), validated at load against the bundled database; an unknown name is a config error. The theme `date` filter formats in it (06 §4); permalinks stay UTC. Config only: a change needs a restart
 
 [server]
 listen     = "127.0.0.1:8080"          # default; a socket address
 trusted_proxies = []                   # CIDRs or bare IPs
-# tls = ...                            # planned (M4: ACME); rejected as an unknown key today
+# metrics_listen = "127.0.0.1:9464"    # M4-2: serve GET /metrics (Prometheus, no auth) here; off when unset; must not share listen's port (same or 0.0.0.0/:: address)
+
+[server.tls]                           # M4-2 (P33): built-in HTTPS, solo mode only (09 §5)
+mode       = "off"                     # "off" (default: a reverse proxy terminates TLS) | "acme"
+# contact  = "mailto:ops@example.com"  # required with acme; a mailto: URI (the ACME account contact)
+# domains  = ["example.com"]           # default: the host of site.url, which must be among them; DNS names only (no IP, no wildcard)
+# directory = "production"             # "production" (Let's Encrypt) | "staging" | an https:// ACME directory URL
+# listen   = "0.0.0.0:443"             # the HTTPS listener; TLS-ALPN-01 is answered here, so it must be reachable as :443 from the internet
+# redirect_http = "0.0.0.0:80"         # optional plain listener answering every request with 301 to site.url's origin
+# With acme: site.url must be https://; cluster mode (explicit or auto) is a config error; the
+# listeners must not share a socket with server.listen or metrics_listen. server.listen keeps
+# serving plain HTTP (keep it on 127.0.0.1 for `healthcheck`). Account key and certificates:
+# <data>/tls/ (0700, files 0600).
 
 [database]
 url        = "sqlite://ferrite.db"     # default; sqlite:… (relative to the data folder) or postgres[ql]://…
@@ -288,6 +358,8 @@ root         = "media"                 # default; relative to the data folder
 # max_upload = "256MB"                 # M2a-2b: largest uploaded file, 1 byte..=1GiB; default 256MB
 # image_workers = 1                    # M2a-2b: image variant jobs at once per node, 1..=16; default 1
 # upload_idle_timeout = "30s"          # M2a-2b: an upload receiving nothing this long is aborted
+# strip_metadata = false               # M4-1: strip EXIF/XMP (GPS) from JPEG/PNG/WebP originals on ingest
+# gc_grace_days = 7                    # M4-1: days the artifacts GC keeps unreferenced files, 1..=365; default 7
 # s3 (required when backend = "s3"):
 # [media.s3]
 # bucket = "my-site"                   # required
@@ -296,6 +368,8 @@ root         = "media"                 # default; relative to the data folder
 # access_key_id / secret_access_key (or *_file)        # both or neither; neither = environment credentials
 # allow_http = false
 # virtual_hosted_style = false
+# copy_if_not_exists = "..."          # M4-1: object_store encoding (header:<name>:<value>, header-with-status:…, multipart); unset = head + copy fallback (03 §3); values per provider and what is verified: 09 §4a
+# conditional_put = "etag"            # M4-1: "etag" (default) | "disabled" for stores that reject If-None-Match
 # prefix = ""
 # public_base_url = "https://cdn.example.com"          # optional, http(s) URL
 
@@ -332,6 +406,13 @@ volatile_ttl = "60s"                   # M2a-2b: TTL of pages with volatile or f
 # smtp_url = "smtps://user:pass@mail.example.com"   # or smtp_url_file; a secret
 #   smtps:// implicit TLS; smtp://…?tls=required STARTTLS; plain smtp:// (credentials only to a loopback relay)
 # from = "Site <noreply@example.com>"  # required with smtp_url; "a@b" or "Name <a@b>"
+
+[backup]                               # M4-1 P15; optional
+schedule = "off"                       # "off" | "daily" | "weekly"
+# to = "../backups"                    # required unless off: a folder outside the data
+                                       #   folder (relative to it) or s3://bucket[/prefix]
+keep = 7                               # 1 ..= 1000 snapshots (SQLite) or archives (Postgres)
+with_media = true
 ```
 
 **Mail** (`[mail]`, M2a-2 P17). The SMTP password lives only in the URL, so only in the
@@ -348,8 +429,8 @@ most 16 sends in flight (more are refused), each bounded by 10 s, run in backgro
 so no plugin call or request waits for SMTP, and cancelled at shutdown inside the
 background-stop second (only an explicit shutdown cancels; a dropped queue lets its sends
 finish). Plugin mail subjects are prefixed with `[<site.title>] `, the title cut to 100
-characters, and left out when it is empty or contains control characters (checked once
-when `serve` builds the services). Every mailer refuses (never folds) control characters, CR/LF and
+characters (`ferrite_core::mail::subject_title`, the rule core mails use), and left out when it is empty or contains control characters (checked at each
+send; an unreadable `site.title` option gives the configured title, M4-4 P77). Every mailer refuses (never folds) control characters, CR/LF and
 Unicode line separators in subjects and addresses. Without `[mail]` the plugin
 `mail.notify-admins` import answers "mail is not configured".
 
@@ -384,7 +465,46 @@ before the store switches to a staging object (2 MiB for an SVG, which is read w
 be sanitised), so uploads use at most about 64 MiB per node (8 slots × 8 MiB) besides
 the 8 KiB head each; size small VMs for it. The file name is checked (1..=255 bytes, no
 control or format characters) before the file is read. `image_workers` bounds the `media.variants` jobs a node runs at once (Task 6);
-variants are made only for raster originals of at most 64 MiB.
+variants are made only for raster originals of at most 64 MiB. `strip_metadata` (boolean,
+default `false`, M4-1 P17) removes EXIF and XMP losslessly from JPEG, PNG and WebP originals
+before they are hashed and stored, for browser uploads and the WordPress importer alike
+(03 §4). **Refusal rule:** with the option on, a JPEG, PNG or WebP whose metadata cannot
+be removed is refused, never stored with it: one over 64 MiB (`STRIP_MAX_BYTES`) or one
+the walker cannot parse (a truncated PNG, a WebP whose RIFF size runs past the file) gets
+`422 validation` on `POST /media` (`errors[0].field` = `file`, "metadata could not be
+removed: ...") and is recorded as refused media in an import report. **Memory with the
+option on:** the image is buffered whole, so a slot holds up to the buffer (at most 64 MiB
+of data in a `BytesMut` that grows by doubling, so up to 128 MiB reserved) plus the
+stripped copy (at most the input's size, 64 MiB): about 192 MiB per upload at the peak, so
+up to about 1.5 GiB for 8 slots, plus up to 192 MiB for a running import. The 64 MiB
+figure above holds only with the option off.
+
+**Artifacts GC grace** (`[media] gc_grace_days`, M4-1 P11, `Config.uploads.gc_grace_days`):
+an integer number of days, 1..=365, default 7, valid with either backend. An artifact row
+is deleted once it has been marked unreferenced for longer than this, and a file under
+`artifacts/` with no row once it is older than this (03 §6), and only on a pass that
+reads the media store's owner marker naming this database's install id (R16, R19, 03 §6); `ferrite media gc
+--grace-days N` overrides it for one run. `config check` reports an out-of-range value as
+`media.gc_grace_days: must be between 1 and 365`.
+
+**Scheduled backups** (`[backup]`, M4-1 P15, `Config.backup: BackupConfig`). `schedule` is
+`"off"` (default), `"daily"` or `"weekly"`; when it is not off, `serve` runs the
+`site.backup` job (09 §4): on SQLite a repository snapshot, on Postgres an export archive
+to `<to>/exports/`. `to` is kept as written and required unless the schedule is off
+(`backup.to: required unless backup.schedule is "off"`); it is a folder or
+`s3://bucket[/prefix]` (credentials and endpoint from the `AWS_*` environment), and `-`, a
+`.tar.zst` path, another `scheme://` and a folder inside the data folder (`load` compares
+lexically after making the data folder absolute and resolving a relative `to` against it)
+are refused. `config check` and `serve` (which then refuses to start) also run the
+repository location check of `ferrite backup`: symlinks resolved where the paths exist, not
+inside the local media root, no S3 prefix overlapping the media store's, and a local folder
+absent, empty (but for `lost+found`) or already a repository (its marker present; an S3
+prefix is checked when the job runs). On SQLite they also refuse a `database.url` other than
+`sqlite://ferrite.db` (`database.url: …`), since a backup of a database elsewhere could not be
+restored (09 §4).
+`keep` (1..=1000, default 7) is how many snapshots or archives are kept; `with_media`
+(default `true`) includes the blobs. With Postgres in cluster mode a local `to` is on
+whichever node runs the job; use `s3://` or a shared folder.
 
 **Cluster mode** (`Config::effective_cluster_mode`, `validate_cluster`): `auto` resolves to
 `cluster` only when the database is Postgres **and** media is shareable between nodes (S3,
@@ -421,7 +541,7 @@ secrets.
 
 `ferrite config check --data DIR` runs exactly this `load` (file + `FERRITE_*` environment)
 without opening the database or media, and prints
-`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off>` (exit 0)
+`ok: mode=<solo|cluster> database=<sqlite|postgres> media=<local|s3> workers=<n> mail=<configured|off> metrics=<off|address> tls=<off|acme> backup=<off|daily|weekly>` (exit 0)
 or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 `ferrite-config` also renders the template that `ferrite init` writes
@@ -452,9 +572,39 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
 
 - `tracing` with JSON output in production, pretty in dev. Spans: `http.request`,
   `render`, `plugin.hook{plugin,hook}`, `db.query{repo,op}`, `job{kind}`.
-- `/metrics` (Prometheus text): request latency histograms by route class, cache
-  hit/miss, plugin hook duration/fuel/failures by plugin+hook, job queue depth/latency,
-  DB pool usage, node count.
+- `/metrics` (Prometheus text format 0.0.4; as built in M4-2, P34): served only on the
+  separate listener `server.metrics_listen` (off by default; no auth, so bind it to a
+  private address; never on the public listener), `GET /metrics` alone. The registry is
+  hand-rolled (`crates/ferrite-http/src/metrics.rs`, no dependency): atomics per route
+  class and status class on the request path, gauges read at scrape time. Families:
+  - `ferrite_build_info{version,target}` 1;
+  - `ferrite_http_requests_total{class,status}`: `class` is
+    `page|api|admin|media|plugin|preview|other` (`/api/v1`, `/admin`, `/_media` and
+    `/_theme`, `/_p`, `/_preview`; the health checks `/healthz` and `/readyz` are
+    `other`; everything else, any method, is `page`: the comment form `POST /_comment`
+    and 405s on the public site too, so their 5xx errors show), `status` is `2xx|3xx|4xx|5xx`
+    (every series is present, zeros included);
+  - `ferrite_http_request_duration_seconds{class}` (time to the response headers),
+    buckets .005 .01 .025 .05 .1 .25 .5 1 2.5 5 10;
+  - `ferrite_page_cache_hits_total`, `ferrite_page_cache_misses_total` (page cache
+    lookups), `ferrite_page_cache_entries`, `ferrite_page_cache_bytes`;
+  - `ferrite_plugin_hook_calls_total{plugin,hook}`,
+    `ferrite_plugin_hook_failures_total{plugin,hook}`,
+    `ferrite_plugin_hook_duration_seconds{plugin,hook}` with the host's buckets .001
+    .005 .025 .1 .5; labels are plugin and hook names only: every plugin route call is
+    the hook `route` (no request path in a label), and the host tracks at most 64 hooks
+    per plugin. There is no fuel family (the host keeps no fuel counter; follow-up);
+  - `ferrite_jobs{status}` (the site's jobs, one `GROUP BY`);
+  - `ferrite_db_pool_connections{state="idle|used"}` (this node's pools; SQLite: reader
+    plus writer; dedicated `LISTEN`/lock connections are not pooled);
+  - `ferrite_nodes` (live nodes: heartbeat within 30 s of the database clock);
+  - `ferrite_page_views_total`: `GET`s of public HTML pages answered `200`, or `304`
+    when a browser revalidated its stored copy (a returning reader, M4-2 R8), that are
+    not previews or logged-in requests and whose `User-Agent` does not match
+    `bot|crawler|spider|slurp|preview` (case-insensitive); nothing per visitor is kept.
+
+  A store read that fails or takes over 2 s leaves its family out of that scrape. Job
+  queue latency (named in the original design) is not exported: P34 does not list it.
 - `/healthz` (process alive) and `/readyz` (DB reachable, migrations compatible, theme
   loaded) for load balancers.
 
@@ -468,7 +618,8 @@ or every problem (stderr, exit 1); see [09 §8](09-operations.md#8-cli-summary).
   are `Cache-Control: no-store`. Extension endpoints check `manage_themes` /
   `manage_plugins` with the `extensions` scope in core before reading an upload.
 - Strict security headers by default (CSP for admin, `X-Content-Type-Options`,
-  `Referrer-Policy`, HSTS when TLS).
+  `Referrer-Policy`; `Strict-Transport-Security: max-age=31536000` on every response of the
+  built-in TLS listener, never on the plain one, M4-2 P33).
 - Uploaded files: content-type sniffed, SVG sanitised or served with
   `Content-Disposition: attachment` and a sandboxing CSP; never executed.
 - Plugins: see [05](05-plugin-host.md): an install needs the admin's approval of the

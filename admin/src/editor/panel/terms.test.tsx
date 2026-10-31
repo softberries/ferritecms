@@ -156,6 +156,26 @@ describe("terms", () => {
     expect(seen.some((u) => u.pathname === "/api/v1/taxonomies/tag/terms")).toBe(true);
   });
 
+  test("tag_chip_holds_its_44px_remove_button_on_touch", async () => {
+    // On a coarse pointer the remove button is 44 px (`Button` icon-xs); the chip grows to
+    // 46 px (the button plus its 1 px border), so the button never sticks out over the
+    // chips of the next row.
+    stubRoutes({ "/api/v1/taxonomies/tag/terms": () => json({ items: TAGS, next_cursor: null }) });
+    renderWithRouter(
+      <TermsSection
+        taxonomy={TAG}
+        selected={["t1", "t2"]}
+        onChange={vi.fn()}
+        canCreate={false}
+        disabled={false}
+      />,
+    );
+    const remove = await screen.findByRole("button", { name: "Remove rust" });
+    expect(remove).toHaveClass("pointer-coarse:size-11");
+    const chip = remove.closest("li")!;
+    expect(chip).toHaveClass("h-7", "pointer-coarse:h-11.5", "pointer-coarse:pr-0");
+  });
+
   test("disabled_sections_change_nothing", async () => {
     stubRoutes({ "/api/v1/taxonomies/tag/terms": () => json({ items: TAGS, next_cursor: null }) });
     renderWithRouter(

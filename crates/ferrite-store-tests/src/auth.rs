@@ -9,7 +9,11 @@ use ferrite_domain::{
 use ferrite_store::{MAX_PRUNE_BATCH, Store, StoreError, USER_CURSOR_TAG, encode_text_cursor};
 use serde_json::json;
 
-use crate::{TestDb, fixtures::fixture_user};
+use crate::{
+    TestDb,
+    fixtures::fixture_user,
+    window::{align_to_window, in_one_window},
+};
 
 const DAY: i64 = 24 * 3600 * 1_000_000;
 
@@ -325,18 +329,6 @@ pub async fn api_tokens_prune_expired(db: &TestDb) {
     );
 }
 
-/// Sleeps until 50 ms past the next `window` boundary of the database clock when fewer
-/// than `need` remain in the current window, so a test's hits share one window (F10).
-pub async fn align_to_window(store: &dyn Store, window: Duration, need: Duration) {
-    let w = i64::try_from(window.as_micros()).unwrap();
-    let now = store.read().nodes().db_now().await.unwrap().as_micros();
-    let left = w - now.rem_euclid(w);
-    if left < i64::try_from(need.as_micros()).unwrap() {
-        tokio::time::sleep(Duration::from_micros(left.unsigned_abs()) + Duration::from_millis(50))
-            .await;
-    }
-}
-
 pub async fn rate_limit_counts_within_window_and_resets(db: &TestDb) {
     let store = db.store();
     let limits = store.read().rate_limits();
@@ -350,29 +342,40 @@ pub async fn rate_limit_counts_within_window_and_resets(db: &TestDb) {
     assert!(is_invalid(limits.hit("a", Duration::ZERO).await));
     assert_eq!(limits.hit(&"é".repeat(200), window).await.unwrap().count, 1);
 
-    align_to_window(store, window, window).await;
-    let first = limits.hit("login:ip:1", window).await.unwrap();
-    let other = limits.hit("login:ip:2", window).await.unwrap();
-    let second = limits.hit("login:ip:1", window).await.unwrap();
-    let third = limits.hit("login:ip:1", window).await.unwrap();
-    assert_eq!((first.count, second.count, third.count), (1, 2, 3));
-    assert_eq!(other.count, 1, "buckets are independent");
-    assert_eq!(first.reset_at, third.reset_at);
-    assert_eq!(first.reset_at, other.reset_at);
-    let start = first.reset_at.as_micros() - w;
-    assert_eq!(
-        start.rem_euclid(w),
-        0,
-        "window_start is floored to the window"
-    );
-    for hit in [first, second, third] {
-        assert!(
-            hit.now.as_micros() >= start && hit.now < hit.reset_at,
-            "{hit:?}"
+    // The four hits share one window (a run again in the next window resets the buckets).
+    let kept = std::sync::Mutex::new(None);
+    let (limits, kept_ref) = (&limits, &kept);
+    in_one_window(store, window, window, |_| async move {
+        let first = limits.hit("login:ip:1", window).await.unwrap();
+        let other = limits.hit("login:ip:2", window).await.unwrap();
+        let second = limits.hit("login:ip:1", window).await.unwrap();
+        let third = limits.hit("login:ip:1", window).await.unwrap();
+        assert_eq!((first.count, second.count, third.count), (1, 2, 3));
+        assert_eq!(other.count, 1, "buckets are independent");
+        assert_eq!(first.reset_at, third.reset_at);
+        assert_eq!(first.reset_at, other.reset_at);
+        let start = first.reset_at.as_micros() - w;
+        assert_eq!(
+            start.rem_euclid(w),
+            0,
+            "window_start is floored to the window"
         );
-    }
+        for hit in [&first, &second, &third] {
+            assert!(
+                hit.now.as_micros() >= start && hit.now < hit.reset_at,
+                "{hit:?}"
+            );
+        }
+        *kept_ref.lock().unwrap() = Some(first);
+    })
+    .await;
+    let first = kept.lock().unwrap().take().unwrap();
 
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    // 50 ms into the next window by the database clock; a fixed sleep after the hits
+    // could land a window later when the hits themselves were slow.
+    let now = store.read().nodes().db_now().await.unwrap().as_micros();
+    let into_next = first.reset_at.as_micros() + 50_000 - now;
+    tokio::time::sleep(Duration::from_micros(into_next.max(0).unsigned_abs())).await;
     let reset = limits.hit("login:ip:1", window).await.unwrap();
     assert_eq!(reset.count, 1, "a new window starts over");
     assert_eq!(reset.reset_at, plus(first.reset_at, w));

@@ -104,20 +104,21 @@ impl UserService {
     }
 
     /// Lists users by login (`manage_users` role, `users:read` scope). `query.q` is
-    /// trimmed and must then be 1..=[`MAX_USER_QUERY`] characters (`InvalidField` `q`);
-    /// it matches the login, display name or e-mail as a case-insensitive substring,
-    /// wildcards literal ([`UserRepo::list`](ferrite_store::UserRepo::list)).
+    /// trimmed; blank is no search (M4-4 P77, as for redirects, media and content), else
+    /// at most [`MAX_USER_QUERY`] characters (`InvalidField` `q`); it matches the login,
+    /// display name or e-mail as a case-insensitive substring, wildcards literal
+    /// ([`UserRepo::list`](ferrite_store::UserRepo::list)).
     pub async fn list(&self, actor: &Actor, mut query: UserQuery) -> Result<Page<User>, CoreError> {
         require_manage_read(actor)?;
         if let Some(q) = query.q.take() {
             let q = q.trim();
-            if q.is_empty() || q.chars().count() > MAX_USER_QUERY {
+            if q.chars().count() > MAX_USER_QUERY {
                 return Err(CoreError::invalid_field(
                     "q",
-                    format!("q must be 1 to {MAX_USER_QUERY} characters"),
+                    format!("q must be at most {MAX_USER_QUERY} characters"),
                 ));
             }
-            query.q = Some(q.to_owned());
+            query.q = (!q.is_empty()).then(|| q.to_owned());
         }
         Ok(self.store.read().users().list(&query).await?)
     }

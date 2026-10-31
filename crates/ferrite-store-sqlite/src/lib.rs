@@ -5,25 +5,28 @@ mod codec;
 mod connect;
 mod constraint;
 mod exec;
+mod export;
+mod import_writer;
 mod lock;
 mod migrate;
 mod repos;
 
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use ferrite_store::{
-    Backend, Channel, LockGuard, MigrationStatus, Repos, Store, StoreError, Subscription, Tx,
-    check_lock_name,
+    Backend, Channel, LockGuard, MigrationStatus, PoolStats, Repos, Store, StoreError,
+    Subscription, Tx, check_lock_name,
 };
 use sqlx::SqlitePool;
 
-pub use connect::SqliteOptions;
+pub use connect::{KeepSnapshot, SqliteOptions};
 use exec::map_db_err;
+pub use migrate::{latest_schema_version, status_from, table_exists};
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
 use repos::{SqliteRepos, SqliteTx};
 
-/// A SQLite-backed [`Store`]. Holds the data-folder lock until dropped.
+/// A SQLite-backed [`Store`]. Holds the data-folder lock until closed or dropped.
 pub struct SqliteStore {
     /// Max one connection; every write and every `Tx` goes through it.
     writer: SqlitePool,
@@ -32,15 +35,30 @@ pub struct SqliteStore {
     /// Autocommit repositories: reads on `reader`, writes on `writer`.
     read: SqliteRepos,
     backups_dir: PathBuf,
+    /// Never pruned (see [`SqliteOptions::keep_snapshot`]).
+    keep_snapshot: Option<KeepSnapshot>,
     /// Named locks (`Store::try_lock`).
     locks: lock::Locks,
-    _lock: File,
+    /// `ferrite.lock`, released by `close` or on drop.
+    folder_lock: connect::FolderLock,
 }
 
 #[async_trait]
 impl Store for SqliteStore {
     fn backend(&self) -> Backend {
         Backend::Sqlite
+    }
+
+    fn pool_stats(&self) -> PoolStats {
+        let (idle, size) = [&self.reader, &self.writer]
+            .into_iter()
+            .fold((0u64, 0u64), |(idle, size), pool| {
+                (idle + pool.num_idle() as u64, size + u64::from(pool.size()))
+            });
+        PoolStats {
+            idle,
+            used: size.saturating_sub(idle),
+        }
     }
 
     fn read(&self) -> &dyn Repos {
@@ -76,7 +94,10 @@ impl Store for SqliteStore {
         self.status(binary).await
     }
 
-    async fn migrate_up(&self, to: Option<i64>) -> Result<Vec<i64>, StoreError> {
+    async fn migrate_up(
+        &self,
+        to: Option<i64>,
+    ) -> Result<ferrite_store::MigrateReport, StoreError> {
         self.up(to).await
     }
 
@@ -88,6 +109,20 @@ impl Store for SqliteStore {
         self.verify().await
     }
 
+    async fn export_reader(&self) -> Result<Box<dyn ferrite_store::ExportReader>, StoreError> {
+        Ok(Box::new(
+            export::SqliteExportReader::open(&self.reader).await?,
+        ))
+    }
+
+    /// One transaction on the writer connection: other writes wait until the load ends.
+    async fn import_writer(&self) -> Result<Box<dyn ferrite_store::ImportWriter>, StoreError> {
+        let tx = self.writer.begin().await.map_err(map_db_err)?;
+        Ok(Box::new(ferrite_store::Loader::new(
+            import_writer::SqliteLoadTarget::new(tx),
+        )))
+    }
+
     async fn snapshot(&self, dest: &std::path::Path) -> Result<(), StoreError> {
         self.vacuum_into(dest).await
     }
@@ -96,5 +131,7 @@ impl Store for SqliteStore {
         // Readers first: the writer's close checkpoints the WAL as the last connection.
         self.reader.close().await;
         self.writer.close().await;
+        // Closed for good: the next command on the folder may open it now.
+        self.folder_lock.release();
     }
 }

@@ -3,9 +3,13 @@
 // down (07 §3; the rest of the dashboard keeps working).
 
 import { cn } from "cn";
+import { CircleAlertIcon } from "lucide-react";
 import { useId, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/kit/error-state";
+import { StaleBar } from "@/components/kit/stale-bar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { uiLocale } from "@/lib/locale";
 
 export interface PanelProps {
   title: string;
@@ -17,6 +21,11 @@ export interface PanelProps {
   footer?: ReactNode;
   /** Still loading: `aria-busy`, so assistive tech waits for the content. */
   busy?: boolean;
+  /**
+   * The figures shown are the previous answer while the next loads (a new range): they
+   * keep full colour, and a `StaleBar` runs along the card's top (M4-4 R-c3). Also busy.
+   */
+  stale?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -28,6 +37,7 @@ export function Panel({
   action,
   footer,
   busy = false,
+  stale = false,
   className,
   children,
 }: PanelProps) {
@@ -35,13 +45,14 @@ export function Panel({
   return (
     <section
       aria-labelledby={id}
-      aria-busy={busy || undefined}
+      aria-busy={busy || stale || undefined}
       data-slot="dashboard-panel"
       className={cn(
-        "flex min-w-0 flex-col rounded-xl border bg-card text-card-foreground shadow-1",
+        "relative flex min-w-0 flex-col rounded-xl border bg-card text-card-foreground shadow-1",
         className,
       )}
     >
+      {stale ? <StaleBar className="inset-x-3" /> : null}
       <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-5 pt-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-2">
@@ -72,6 +83,21 @@ export function ScopeBadge({ children }: { children: ReactNode }) {
 /** A panel's failed load, sized for a card (the page around it keeps working). */
 export function PanelError({ error, retry }: { error: unknown; retry: () => void }) {
   return <ErrorState error={error} retry={retry} className="flex-1 border-dashed py-8" />;
+}
+
+/**
+ * A refresh failed but earlier figures are still shown: says from when (a polling card
+ * keeps its chart rather than turning into an error every minute).
+ */
+export function StaleNote({ at }: { at: number }) {
+  const { t } = useTranslation("dashboard");
+  const time = new Intl.DateTimeFormat(uiLocale(), { hour: "numeric", minute: "2-digit" });
+  return (
+    <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+      <CircleAlertIcon aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+      {t("metrics.stale", { time: time.format(new Date(at)) })}
+    </p>
+  );
 }
 
 /** Skeleton rows shaped like a list panel. */

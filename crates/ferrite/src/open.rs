@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use ferrite_config::{Config, DatabaseConfig, DbKind};
@@ -7,6 +7,8 @@ use ferrite_store::{
 };
 use ferrite_store_postgres::{PgOptions, PgStore};
 use ferrite_store_sqlite::{SqliteOptions, SqliteStore};
+
+use crate::upgrade::{Migrate, UpgradeRecord, migrate_and_record};
 
 /// Whether opening may create a missing database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +23,11 @@ pub enum OpenMode {
 pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<dyn Store>> {
     match config.database_kind() {
         DbKind::Sqlite { path } => {
+            crate::update::rollback::check_restore_tmps(
+                &path,
+                &config.data_dir,
+                &config.data_dir.join("backups"),
+            )?;
             if mode == OpenMode::MustExist && !path.is_file() {
                 bail!(
                     "database not found at {}; run `ferrite init` first",
@@ -30,6 +37,8 @@ pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<d
             let mut opts = SqliteOptions::new(path);
             opts.lock_dir = Some(config.data_dir.clone());
             opts.backups_dir = Some(config.data_dir.join("backups"));
+            // Pruning never deletes the snapshot a rollback may restore (M4-2 P30).
+            opts.keep_snapshot = crate::upgrade::keep_snapshot(&config.data_dir);
             let store = SqliteStore::open(opts)
                 .await
                 .context("cannot open the SQLite database")?;
@@ -46,6 +55,156 @@ pub async fn open_store(config: &Config, mode: OpenMode) -> anyhow::Result<Arc<d
             .context("cannot open the Postgres database")?;
             Ok(Arc::new(store))
         }
+    }
+}
+
+/// Opens a database from a bare URL (`ferrite db copy`, M4-1 P8): `postgres://…` (or
+/// `postgresql://…`) with an optional `schema`, or `sqlite:<path to ferrite.db>`, whose
+/// folder lock is taken on the file's parent. With `CreateIfMissing` an absent SQLite file
+/// is created (its folder must exist). Does not migrate.
+pub async fn open_store_url(
+    url: &str,
+    schema: Option<&str>,
+    mode: OpenMode,
+) -> anyhow::Result<Arc<dyn Store>> {
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        let store = PgStore::open(PgOptions {
+            url: url.to_owned(),
+            max_connections: 4,
+            schema: schema.map(str::to_owned),
+            application_name: "ferrite".into(),
+        })
+        .await
+        .context("cannot open the Postgres database")?;
+        return Ok(Arc::new(store));
+    }
+    let Some(rest) = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+    else {
+        bail!("unsupported database URL (use postgres://… or sqlite:<path to ferrite.db>)");
+    };
+    if schema.is_some() {
+        bail!("a schema applies to Postgres only");
+    }
+    let path = std::path::PathBuf::from(rest);
+    if mode == OpenMode::MustExist && !path.is_file() {
+        bail!("database not found at {}", path.display());
+    }
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_owned(),
+        _ => std::path::PathBuf::from("."),
+    };
+    if !parent.is_dir() {
+        bail!("folder {} does not exist", parent.display());
+    }
+    let mut opts = SqliteOptions::new(&path);
+    opts.lock_dir = Some(parent);
+    let store = SqliteStore::open(opts)
+        .await
+        .context("cannot open the SQLite database")?;
+    Ok(Arc::new(store))
+}
+
+/// `<db><suffix>`: SQLite's `-wal` and `-shm` files beside the database file `db`.
+pub(crate) fn sqlite_side_file(db: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = db.as_os_str().to_owned();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+/// A read-only view of a SQLite database, for `ferrite doctor` (M4-3a P49/P50, X3) and for
+/// `rollback --restore-snapshot`'s look at the snapshot's schema (M4-4 P73): one connection that takes no data-folder lock, opens no writer, runs no migration and
+/// creates no file, so it works while `serve` holds the store and takes no lock that would
+/// stop one from starting. Being read-only it never checkpoints the WAL; SQLite still updates the
+/// shared-memory index in `-shm` as every reader of a WAL database does.
+///
+/// A read-only open of a WAL database creates a missing `-wal` or `-shm` and leaves it, so:
+/// with no `-wal` (every committed page is in the database file, and a running node always
+/// has one) it opens `immutable`, which touches neither; with a `-wal` but no `-shm` it
+/// refuses with [`MissingWalIndex`] rather than create the index.
+pub(crate) struct SqliteReadOnly {
+    conn: tokio::sync::Mutex<sqlx::SqliteConnection>,
+    immutable: bool,
+}
+
+/// `<db>-wal` exists without `<db>-shm`: a read-only open would create the WAL index
+/// (owned by whoever runs doctor), so [`SqliteReadOnly::open`] does not open the database.
+#[derive(Debug)]
+pub(crate) struct MissingWalIndex(pub(crate) std::path::PathBuf);
+
+impl std::fmt::Display for MissingWalIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} has a -wal file but no -shm (the WAL index is missing): not opened, since \
+             reading it would create the index and doctor creates no file; starting `serve` \
+             as its own user recovers it",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for MissingWalIndex {}
+
+impl SqliteReadOnly {
+    /// Opens the database at `path`, which must exist; [`MissingWalIndex`] when its `-wal`
+    /// exists without its `-shm`.
+    pub(crate) async fn open(path: &Path) -> anyhow::Result<Self> {
+        use sqlx::ConnectOptions;
+        if !path.is_file() {
+            bail!(
+                "database not found at {}; run `ferrite init` first",
+                path.display()
+            );
+        }
+        let side = |suffix: &str| sqlite_side_file(path, suffix).exists();
+        let immutable = !side("-wal");
+        if !immutable && !side("-shm") {
+            return Err(MissingWalIndex(path.to_path_buf()).into());
+        }
+        let conn = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .create_if_missing(false)
+            .immutable(immutable)
+            .busy_timeout(Duration::from_secs(5))
+            .connect()
+            .await
+            .context("cannot open the SQLite database read-only")?;
+        Ok(Self {
+            conn: tokio::sync::Mutex::new(conn),
+            immutable,
+        })
+    }
+
+    /// Whether it was opened `immutable` (no `-wal` existed).
+    pub(crate) fn immutable(&self) -> bool {
+        self.immutable
+    }
+
+    /// What [`Store::migration_status`] reports, by the same reads
+    /// ([`ferrite_store_sqlite::status_from`]).
+    pub(crate) async fn migration_status(
+        &self,
+        binary: &semver::Version,
+    ) -> anyhow::Result<MigrationStatus> {
+        let mut conn = self.conn.lock().await;
+        Ok(ferrite_store_sqlite::status_from(&mut conn, binary).await?)
+    }
+
+    /// A `schema_meta` value (`None` without the table or the key).
+    pub(crate) async fn schema_meta(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let mut conn = self.conn.lock().await;
+        if !ferrite_store_sqlite::table_exists(&mut conn, "schema_meta").await? {
+            return Ok(None);
+        }
+        Ok(
+            sqlx::query_scalar("SELECT value FROM schema_meta WHERE key = ?")
+                .bind(key)
+                .fetch_optional(&mut *conn)
+                .await?,
+        )
     }
 }
 
@@ -165,15 +324,19 @@ pub async fn release_migrate_lock(guard: Box<dyn LockGuard>) {
 }
 
 /// Startup compatibility check (02 §7-§8): applies pending migrations when allowed,
-/// refuses to start when the schema is incompatible with `binary`. Runs under the migrate
-/// lock, so concurrent starts migrate once and none reads a half-migrated schema.
+/// refuses to start when the schema is incompatible with `binary`, then records the start
+/// in `<data_dir>/upgrade.json` and `schema_meta.last_binary_version` (M4-2 P30,
+/// [`crate::upgrade::migrate_and_record`]); returns the record when one was written. Runs under the
+/// migrate lock, so concurrent starts migrate (and record) once and none reads a
+/// half-migrated schema.
 pub async fn startup_check(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,
-) -> anyhow::Result<()> {
+    data_dir: &Path,
+) -> anyhow::Result<Option<UpgradeRecord>> {
     let guard = migrate_lock(store).await?;
-    let result = check_and_migrate(store, binary, db).await;
+    let result = check_and_migrate(store, binary, db, data_dir).await;
     release_migrate_lock(guard).await;
     result
 }
@@ -182,19 +345,22 @@ async fn check_and_migrate(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,
-) -> anyhow::Result<()> {
+    data_dir: &Path,
+) -> anyhow::Result<Option<UpgradeRecord>> {
     let status = store.migration_status(binary).await?;
-    match decide(&status, store.backend(), db, binary)? {
-        Decision::Proceed => {}
+    let migrate = match decide(&status, store.backend(), db, binary)? {
+        Decision::Proceed => Migrate::No,
         Decision::ProceedNewerSchema { db, bin } => {
             tracing::warn!(db, bin, "running against newer schema");
+            Migrate::No
         }
-        Decision::MigrateUp => {
-            let applied = store.migrate_up(None).await?;
-            tracing::info!(?applied, "applied pending migrations");
-        }
+        Decision::MigrateUp => Migrate::UpTo(None),
+    };
+    let (report, written) = migrate_and_record(store, data_dir, binary, migrate).await?;
+    if !report.applied.is_empty() {
+        tracing::info!(applied = ?report.applied, "applied pending migrations");
     }
-    Ok(())
+    Ok(written)
 }
 
 #[cfg(test)]
@@ -318,5 +484,50 @@ mod tests {
         let e = err_text(decide(&s, Backend::Sqlite, &dbconf(true, false), &bin()));
         assert!(e.contains("requires ferrite >= 0.5.0"), "{e}");
         assert!(e.contains("ferrite migrate down --to 4"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn read_only_view_matches_the_store_while_it_holds_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferrite.db");
+        let store = SqliteStore::open(SqliteOptions::new(&path)).await.unwrap();
+        store.migrate_up(None).await.unwrap();
+        store
+            .read()
+            .schema_meta()
+            .set("min_binary_version", "0.0.1")
+            .await
+            .unwrap();
+        // The store holds the folder lock; the view needs none.
+        let view = SqliteReadOnly::open(&path).await.unwrap();
+        assert!(!view.immutable(), "the store's WAL files exist");
+        let binary = semver::Version::new(0, 1, 0);
+        assert_eq!(
+            view.migration_status(&binary).await.unwrap(),
+            store.migration_status(&binary).await.unwrap()
+        );
+        for key in ["site_id", "install_id", "nope"] {
+            assert_eq!(
+                view.schema_meta(key).await.unwrap(),
+                store.read().schema_meta().get(key).await.unwrap(),
+                "{key}"
+            );
+        }
+        // A write through the view is refused.
+        let mut conn = view.conn.lock().await;
+        let err = sqlx::query("INSERT INTO schema_meta (key, value) VALUES ('x', 'y')")
+            .execute(&mut *conn)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("readonly"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_only_view_needs_an_existing_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ferrite.db");
+        let err = SqliteReadOnly::open(&path).await.err().unwrap();
+        assert!(format!("{err:#}").contains("not found"), "{err:#}");
+        assert!(!path.exists());
     }
 }

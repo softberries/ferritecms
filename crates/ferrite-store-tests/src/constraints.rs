@@ -157,6 +157,7 @@ pub async fn unique_violations_name_the_constraint(db: &TestDb) {
             bytes: 1,
             mime: "image/png".into(),
             created_at: Timestamp::now(),
+            orphaned_at: None,
         })
         .await
         .unwrap();
