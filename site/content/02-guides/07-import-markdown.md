@@ -83,7 +83,8 @@ The Markdown is CommonMark plus tables and strikethrough.
 ## The front page
 
 `--front-page` makes the top-level `index.md` (or `README.md`) the site's front page, as long as it is
-published:
+published. The page then has one address, `/`: its own (`/home/`) redirects there, and its
+child pages keep theirs:
 
 ```sh
 ferrite import markdown ./docs --data ./mysite --front-page

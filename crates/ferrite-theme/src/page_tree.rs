@@ -10,7 +10,7 @@
 //!   `current.children`, the same list), whose nodes keep one level of their own
 //!   children. Nested nodes are shared values, built once, so the cost is linear in the
 //!   tree, never one copy per path.
-//! * **Order:** siblings by [`menu_order_cmp`] (`menu_order`, title case-insensitively,
+//! * **Order:** siblings by [`menu_order_key`] (`menu_order`, title case-insensitively,
 //!   id); `prev`/`next` in depth-first pre-order over the whole tree.
 //! * **Hidden parents:** a node whose parent is not in the tree is dropped with its
 //!   subtree, so it has no place: with it as current, `current`, `prev` and `next` are
@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use ferrite_core::{
     MAX_PARENT_DEPTH,
-    site::{ContentTree, TreeNode, menu_order_cmp},
+    site::{ContentTree, TreeNode, menu_order_key},
 };
 use ferrite_domain::ContentId;
 use minijinja::value::Value;
@@ -150,12 +150,9 @@ fn preorder(nodes: &[TreeNode]) -> Vec<Placed> {
         kids.entry(n.parent).or_default().push(i);
     }
     for list in kids.values_mut() {
-        list.sort_by(|&a, &b| {
-            let (a, b) = (&nodes[a], &nodes[b]);
-            menu_order_cmp(
-                (a.menu_order, &a.title, a.id),
-                (b.menu_order, &b.title, b.id),
-            )
+        list.sort_by_cached_key(|&i| {
+            let n = &nodes[i];
+            menu_order_key(n.menu_order, &n.title, n.id)
         });
     }
     let mut placed = vec![false; nodes.len()];
@@ -248,6 +245,7 @@ mod tests {
             kind: "page".into(),
             nodes,
             truncated: false,
+            media: Default::default(),
         };
         let deepest = tree_value(&tree, Some(ids[MAX_PARENT_DEPTH]));
         assert_eq!(

@@ -521,13 +521,43 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
     let mut checked: HashMap<String, Result<(), String>> = HashMap::new();
     let mut problems = Vec::new();
     let mut with_toc = 0;
+    let root_listed = urls
+        .iter()
+        .any(|u| resolve(u, "/", &origin).as_deref() == Some("/"));
+    let mut front_permalink = None;
+    // Each page's sidebar links, checked against the front page's permalink after the
+    // loop (pages before the permalink in sitemap order too).
+    let mut sidebars: Vec<(String, Vec<String>)> = Vec::new();
     for url in &urls {
-        let path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
-        let page = get(port, &path);
+        let mut path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
+        let mut page = get(port, &path);
+        // M4-4 P67: the front page's own permalink answers 301 to `/`. Until the sitemap
+        // names the front page `/` itself (M4-4 Task 3), it lists that permalink: then,
+        // and only for a redirect to `/`, `/` is checked in its place.
+        if page.status == 301
+            && page.location.as_deref() == Some("/")
+            && !root_listed
+            && front_permalink.is_none()
+        {
+            front_permalink = Some(path);
+            path = "/".to_owned();
+            page = get(port, &path);
+        }
         if page.status != 200 {
             problems.push(format!("{path}: answers {}", page.status));
             continue;
         }
+        // The sidebar (the page tree) links the front page as `/`, never its permalink.
+        let tree_links: Vec<String> = tags(&page.body)
+            .iter()
+            .filter(|t| t.name == "a" && t.attr("class") == Some("tree__link"))
+            .filter_map(|t| t.attr("href"))
+            .filter_map(|href| resolve(href, &path, &origin))
+            .collect();
+        if !tree_links.iter().any(|l| l == "/") {
+            problems.push(format!("{path}: the sidebar does not link `/`"));
+        }
+        sidebars.push((path.clone(), tree_links));
         let scan = scan(&page.body);
         if scan.h1 != 1 {
             problems.push(format!("{path}: {} <h1> elements", scan.h1));
@@ -575,6 +605,13 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         urls.len(),
         checked.keys().collect::<BTreeSet<_>>()
     );
+    if let Some(p) = &front_permalink {
+        for (path, links) in &sidebars {
+            if links.contains(p) {
+                problems.push(format!("{path}: the sidebar links the front page as {p}"));
+            }
+        }
+    }
     // The TOC check above must not pass because no page had a TOC.
     assert!(with_toc >= 1, "no page has a <nav class=\"docs-toc\">");
     assert!(

@@ -1,6 +1,7 @@
 //! `SiteReader::tree` and `ListOrder` on both backends (M4-3b P56, P58): the tree has
-//! exactly the sitemap's items and paths, comes in `menu_order` order, records only
-//! `archive:<kind>`, and stops at `MAX_TREE_NODES`.
+//! exactly the sitemap's items and paths (the front page as `/`, M4-4 P67), comes in
+//! `menu_order` order, records `archive:<kind>` and `option:reading.front_page`, and
+//! stops at `MAX_TREE_NODES`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -8,12 +9,12 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use ferrite_core::{
     DepKeys, PermalinkRules, SiteReader,
-    events::{archive_key, post_key},
-    site::{ListOrder, MAX_TREE_NODES},
+    events::{archive_key, option_key, post_key},
+    site::{FRONT_PAGE_OPTION, ListOrder, MAX_TREE_NODES},
 };
 use ferrite_domain::{
-    ArtifactHash, ContentId, ContentStatus, ContentType, NewContent, NewUser, Role, Term, TermId,
-    Timestamp, User, UserId, UserStatus,
+    Artifact, ArtifactHash, ArtifactKind, ContentId, ContentStatus, ContentType, Media, NewContent,
+    NewUser, Role, Term, TermId, Timestamp, User, UserId, UserStatus,
 };
 use ferrite_store::Store;
 use ferrite_store_tests::{TestDb, backend_tests};
@@ -238,6 +239,75 @@ pub async fn tree_nodes_carry_excerpt_and_featured(db: &TestDb) {
     assert!(read.deps.contains(&post_key(draft_media)));
 }
 
+/// A media row for content item `id`: an 800×600 original and a `card` variant.
+async fn media_row(store: &dyn Store, id: ContentId, n: u8) {
+    let hash = ArtifactHash::parse(&format!("{n:0>64}")).unwrap();
+    let card = ArtifactHash::parse(&format!("{n:f>64}")).unwrap();
+    let repos = store.read();
+    for h in [&hash, &card] {
+        repos
+            .artifacts()
+            .insert_if_absent(&Artifact {
+                hash: h.clone(),
+                kind: ArtifactKind::Media,
+                bytes: 10,
+                mime: "image/png".into(),
+                created_at: at(0),
+                orphaned_at: None,
+            })
+            .await
+            .unwrap();
+    }
+    repos
+        .media()
+        .insert(&Media {
+            item_id: id,
+            artifact_hash: hash,
+            mime: "image/png".into(),
+            bytes: 10,
+            width: Some(800),
+            height: Some(600),
+            alt: "a cat".into(),
+            original_name: "cat.png".into(),
+            variants: json!({"card": {"hash": card.as_str(), "w": 400, "h": 300, "mime": "image/png"}}),
+            sanitized: false,
+        })
+        .await
+        .unwrap();
+}
+
+/// M4-4: the tree carries the public featured media it checked, exactly as
+/// `SiteReader::media` (the theme's `image()` bridge read) gives it, so card images
+/// cost no bridge call; draft media is not carried.
+pub async fn tree_carries_the_public_featured_media(db: &TestDb) {
+    let store = db.store();
+    let ana = author(store).await;
+    let shown = one(store, &ana, row("media", "shown", 0)).await;
+    media_row(store, shown, 1).await;
+    let mut hidden = row("media", "hidden", 0);
+    hidden.status = ContentStatus::Draft;
+    let hidden = one(store, &ana, hidden).await;
+    media_row(store, hidden, 2).await;
+    let featured = |id: ContentId| json!({"featured_image": id.to_string()});
+    let mut a = row("page", "a", 0);
+    a.fields = featured(shown);
+    one(store, &ana, a).await;
+    let mut b = row("page", "b", 1);
+    b.fields = featured(hidden);
+    one(store, &ana, b).await;
+    let mut c = row("page", "c", 2);
+    c.fields = featured(shown);
+    one(store, &ana, c).await;
+
+    let r = reader(db.shared_store());
+    let tree = r.tree("page").await.unwrap().value.unwrap();
+    let want = r.media(shown).await.unwrap().value.expect("public media");
+    assert_eq!(want.variants.len(), 1);
+    assert_eq!(tree.media.len(), 1, "{:?}", tree.media.keys());
+    assert_eq!(tree.media.get(&shown), Some(&want));
+    assert!(!tree.media.contains_key(&hidden));
+}
+
 pub async fn tree_of_media_or_unknown_is_none(db: &TestDb) {
     let store = db.store();
     let ana = author(store).await;
@@ -278,7 +348,63 @@ pub async fn tree_deps_are_archive_kind(db: &TestDb) {
     assert!(read.cacheable);
     let mut want = DepKeys::default();
     want.insert(archive_key("page"));
+    want.insert(option_key(FRONT_PAGE_OPTION));
     assert_eq!(read.deps, want);
+}
+
+async fn set_front_page(store: &dyn Store, value: serde_json::Value) {
+    store
+        .read()
+        .options()
+        .set(FRONT_PAGE_OPTION, &value, false)
+        .await
+        .unwrap();
+}
+
+/// M4-4 P67: the front page's node links `/` (its permalink answers 301 to `/`); its
+/// children keep their paths, and every other type's tree is unchanged.
+pub async fn the_tree_names_the_front_page_root(db: &TestDb) {
+    let store = db.store();
+    let ana = author(store).await;
+    let home = one(store, &ana, row("page", "home", 0)).await;
+    let x = one(store, &ana, child("x", home, 0)).await;
+    let other = one(store, &ana, row("page", "other", 1)).await;
+    let post = one(store, &ana, row("post", "home", 0)).await;
+    let r = reader(db.shared_store());
+    let url = |tree: &ferrite_core::site::ContentTree, id| {
+        tree.nodes.iter().find(|n| n.id == id).unwrap().url.clone()
+    };
+
+    // No front page: every node has its permalink.
+    let tree = r.tree("page").await.unwrap().value.unwrap();
+    assert_eq!(url(&tree, home), "/home/");
+
+    set_front_page(store, json!(home.to_string())).await;
+    let read = r.tree("page").await.unwrap();
+    assert!(read.deps.contains(&option_key(FRONT_PAGE_OPTION)));
+    let tree = read.value.unwrap();
+    assert_eq!(url(&tree, home), "/");
+    assert_eq!(url(&tree, x), "/home/x/", "a child keeps its path");
+    assert_eq!(url(&tree, other), "/other/");
+    let posts = r.tree("post").await.unwrap().value.unwrap();
+    assert_ne!(
+        url(&posts, post),
+        "/",
+        "a post sharing the slug is not the front page"
+    );
+
+    // Another page as the front page: `home` gets its path back.
+    set_front_page(store, json!(other.to_string())).await;
+    let tree = r.tree("page").await.unwrap().value.unwrap();
+    assert_eq!(url(&tree, home), "/home/");
+    assert_eq!(url(&tree, other), "/");
+
+    // A value that names no item, or is not an id, changes nothing.
+    for value in [json!(ContentId::new().to_string()), json!("nope"), json!(7)] {
+        set_front_page(store, value.clone()).await;
+        let tree = r.tree("page").await.unwrap().value.unwrap();
+        assert!(tree.nodes.iter().all(|n| n.url != "/"), "{value}");
+    }
 }
 
 /// 1001 published pages: the first 1000 in `menu_order` come back, marked truncated.
@@ -413,8 +539,10 @@ pub async fn query_menu_order(db: &TestDb) {
 backend_tests!(
     tree_matches_the_sitemap,
     tree_nodes_carry_excerpt_and_featured,
+    tree_carries_the_public_featured_media,
     tree_of_media_or_unknown_is_none,
     tree_deps_are_archive_kind,
+    the_tree_names_the_front_page_root,
     tree_truncates_at_1000,
     query_menu_order,
 );

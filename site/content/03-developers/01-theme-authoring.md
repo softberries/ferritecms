@@ -140,7 +140,7 @@ or `.js`.
 | `related(post, n=3)` | up to `n` (at most 10) public items of the same type that share a term with `post`, newest first. |
 | `query(type=…, term="tax/slug", limit=10, order="date")` | public items of a type, at most 50. With `term` only those with that term. `order="date"` is newest first; `order="menu"` sorts by the order field, then the title, then the id. |
 | `page_tree(post=none, kind=none)` | the public items of one type as a tree: for a sidebar, breadcrumbs and previous/next links. See below. |
-| `image(media, size)` | `{url, width, height, srcset}` for a public media item (an item, an object with an `id`, or an id) in that size; the original for an unknown size. |
+| `image(media, size)` | `{url, width, height, srcset}` for a public media item (an item, an object with an `id`, or an id) in that size; the original for an unknown size. `srcset` lists only the files with that size's shape. |
 | `comments(post)` | one page of the approved comments of a public post, with the form's details; `none` for other items. |
 | `plugin_route(name, path)` | the URL of a plugin's route, `/_p/<name><path>`. |
 
@@ -171,7 +171,8 @@ MiniJinja's `range`, `dict` and `namespace`, its standard filters and tests, and
   are in the tree.
 
 Every node is `{id, title, url, depth, current, open, excerpt, featured, children}`, with
-`depth` from 0 and `open` true on the current page and its ancestors. Siblings are sorted
+`depth` from 0 and `open` true on the current page and its ancestors. The front page's
+`url` is `/`. `excerpt` is the page's own excerpt, empty when it has none. Siblings are sorted
 by their order field, then by title. A page whose parent is not public is left out of
 the tree with everything below it; the page itself still renders. With no type, or a
 type with no public items, `page_tree` returns `none`.

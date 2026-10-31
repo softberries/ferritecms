@@ -190,7 +190,8 @@ candidate wins; `index.html` is always last.
 WordPress aliases for terms: for `category`, `category-{slug}.html` is tried just before
 `taxonomy-category-{slug}.html` and `category.html` just before `taxonomy-category.html`; the
 same with `tag-…` for `tag` (and `post_tag`). The front page is a static page when the
-`reading.front_page` option holds the id of a public item; otherwise it lists posts.
+`reading.front_page` option holds the id of a public item; otherwise it lists posts. A static
+front page has one address, `/`: its own permalink answers 301 to `/` (§3, M4-4 P67).
 
 ## 3. Routing
 
@@ -236,6 +237,29 @@ slash; anything else under `/_preview/` is 404), `/healthz`, `/readyz`. Listings
 left goes to the permalink matcher, which returns the candidates in order (pages, then posts,
 then other types); a hit counts only when the item's computed URL equals the request path, so
 a wrong year, month or category is a 404.
+
+**The front page's permalink** (M4-4 P67, as WordPress does). A hit that is the static front
+page (the item `reading.front_page` names, not media; `SiteReader::is_front_page`) answers
+`301` to `/`, so the page has one URL and one canonical (the head's canonical is the request
+path, so `/` canonicals `/`). The target keeps `?cpage=N` (a comment page) and nothing else:
+`cpage` is the only query parameter in a single item's cache key, so the redirect is cached
+like the page under the request path, with the page's dependency keys plus
+`option:reading.front_page`; changing the option refreshes it (and the old front page's
+permalink is a page again). The 301 carries `Cache-Control: public, max-age=3600`: without
+it browsers keep a 301 as long as they like, and this one depends on an option, not on a
+moved URL; after `reading.front_page` changes, the page cache drops the entry at once, but a
+browser holding the 301 would keep sending the old front page's permalink to `/`, where
+another page now is. One hour keeps repeat visits cheap and bounds that. `/` is the `Front`
+route and never redirects; the front page's children keep their paths (`/home/x/`); a page of
+the same slug under another parent, or any page while the front page lists posts, is an
+ordinary page; a preview (`/_preview/<id>`) renders the item itself. Logged-in requests get the
+same 301 (`private, no-store`, like any logged-in answer). `/home` (no slash) reaches `/` in
+two hops: the router's canonical 301 to `/home/` (it has no store), then this one. The content
+tree (§4) and `SiteReader::links` (menus, the comment form's redirect and back links) name the
+front page `/`; links built from `PageItem.url` (listings, cards, `related`, feeds, breadcrumbs
+from items, plugin `Post.url`, the API's `url`) and redirect rows that point at the permalink
+still name it and take one hop. Making hydration name it `/` would also break this check:
+`content()` matches `item.url` against the request path, so `/home/` would become a 404.
 
 **Term archives** (P25). `/{taxonomy}/{slug}/` lists the public items of every public type the
 taxonomy applies to (its `content_types` but media, at most 20, through `ContentQuery.kinds`),
@@ -366,10 +390,10 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order: with the default `menu_order` 0 everywhere, `limit=3` gives the three oldest-created items, shown by title, not the first three by title. This deviates from P58's "`menu_order` ascending, then title" for the rows picked, and is an accepted limit of M4-3b (final review A-M2); set `menu_order` to choose the rows). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_key`, a sort key each title is lower-cased for once, M4-4; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order: with the default `menu_order` 0 everywhere, `limit=3` gives the three oldest-created items, shown by title, not the first three by title. This deviates from P58's "`menu_order` ascending, then title" for the rows picked, and is an accepted limit of M4-3b (final review A-M2); set `menu_order` to choose the rows). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
 | `page_tree(post=none, kind=none)` | the public items of one type as a tree (M4-3b P56, P57; below) | `archive:<kind>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
-| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
+| `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width among the files of that image's shape (M4-4): a resize offers the original and the other resizes of its aspect ratio, a crop (`hero`, `card`, `thumbnail`) only the files of its own, so a browser never swaps in a different picture; a variant without a recorded height takes the original's shape, and with no dimensions known at all every file with a width is a candidate (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original). The media of featured images already in the context (the item's, listing items', and the nodes of a `page_tree()` the template read) costs no bridge call | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
 | `footer()` | the plugins' footer HTML (`render.footer`, §5; sanitised like `content.body`); `""` without footer plugins and on error pages. `blog` prints it just before `</body>` | — |
 | `comments(post)` | one page of the public thread of a **public post** (other kinds, drafts, unknown ids: `none`), through `SiteReader::comments` (M2b-2 P34): the page is the request's `?cpage=N` on a single item (a positive integer, anything else is 1; past the last page shows the last). A page holds `comments.per_page` top-level threads (default 50, 1..=100), oldest first, each with all its approved replies; a **root** is an approved comment whose parent is null or not approved (a reply under a spam or held comment starts its own thread). A page always shows every one of its top-level threads; its rows are capped at 2,000 (`MAX_PAGE_ROWS`), and past that only replies are cut: the roots first, then replies in thread order (depth first, oldest first) until the budget is used, so the latest replies of a page's later threads may not show (a shown reply's parent always shows). `open` (`comments.enabled`, default on; a closed thread still lists its comments, as WordPress does, and the theme hides the form), `count` = `total` (every approved comment of the post, not only this page's), `page`, `pages` (at least 1), `per_page`, `prev_url` / `next_url` (the post's permalink, `?cpage=N` past page 1, without a fragment: the theme adds its section's anchor, `blog` links to `…#comments`; `none` at either end), `items` in thread order (each reply right after its parent, siblings oldest first), `action` (`/_comment`), `honeypot` (`website`). Each item: `id`, `parent_id`, `depth` (0 at the top level), `author_name` (plain text), `author_url` (`http(s)` only, else `none`), `html` (the plain-text body escaped by core into `<p>`/`<br>`, marked safe), `date` (RFC 3339), `can_reply` (a reply would be accepted: core's own depth rule over the stored chain, so it holds when a parent is hidden). Approved comments only; never an e-mail or address hash. One bridge call | `post:<id>`, `option:comments.enabled`, `option:comments.per_page`; with more than one page the permalink's term and ancestor keys |
@@ -382,7 +406,8 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 GIF, WebP) whose dimensions the `media.variants` job has recorded:
 
 - `srcset` lists the original and every ready variant of the same shape, one per width
-  with `w` descriptors (`MediaPublic::srcset_candidates`). A variant cropped to another
+  with `w` descriptors (`MediaPublic::srcset_candidates` with the original's shape, as
+  `image()` of a resize). A variant cropped to another
   aspect ratio (the core `thumbnail`, the `blog` theme's `card` and `hero`) is left out:
   a browser picking it would show a different picture.
 - `src` is the widest of those no wider than the theme's largest size (the widest
@@ -448,20 +473,29 @@ node, for up to 16 of them per render (a template drawing more is correct, just 
 **What is in it.** `SiteReader::tree(kind)` lists the type's public items with exactly the
 sitemap's visibility and paths (`published_at <= now`, the same ancestor and primary-term
 loading, the same permalink rules; the sitemap and the tree share one walk), in pages of
-200 rows ordered by `menu_order` then id. Media, an unknown type and a type without public
-items give `none`. At most **1 000 nodes** (`MAX_TREE_NODES`); past that `truncated` is
-true and the nodes are the first 1 000 by `menu_order`, so a theme should say the list is
-cut short. The dependency keys are `archive:<kind>`, which every content write in the
-type emits, so publishing, moving, reordering or trashing an item refreshes every cached
-page that drew the tree, and `post:<media>` for every featured image id the read checked,
-public or not, so publishing or unpublishing that media refreshes it too.
+200 rows ordered by `menu_order` then id. The static front page's node has the URL `/`
+(M4-4 P67: its permalink redirects there, §3); its children keep their paths. Media, an
+unknown type and a type without public items give `none`. At most **1 000 nodes**
+(`MAX_TREE_NODES`); past that `truncated` is true and the nodes are the first 1 000 by
+`menu_order`, so a theme should say the list is cut short. The read also carries the public
+media of the nodes' featured images (`ContentTree::media`, read with one `media().get_many`
+per 200 ids, as `SiteReader::media` gives them), which the render adds to the media
+already in the context, so `image(node.featured, …)` costs no bridge call however many
+cards a page draws (M4-4). The dependency keys are `archive:<kind>`, which every content
+write in the type emits, so publishing, moving, reordering or trashing an item refreshes
+every cached page that drew the tree, `option:reading.front_page`, and `post:<media>` for
+every featured image id the read checked, public or not, so publishing or unpublishing that
+media refreshes it too.
 
 **The value** is `{items, current, ancestors, children, prev, next, truncated}`:
 
 - every node is `{id, title, url, depth, current, open, excerpt, featured, children}`:
   `depth` starts at 0, `current` is true on the current node only, `open` on the current
-  node and its ancestors, `excerpt` is the stored excerpt (empty when none was written; no
-  body fallback), `featured` is the `fields.featured_image` media id when it names a
+  node and its ancestors, `excerpt` is the stored excerpt only (empty when none was
+  written; no body fallback and no plugin `content.excerpt` filter: items from `query()`
+  and `related()` fall back to a text from the body when they have no excerpt, and that
+  filter runs only on the page's own item and its listing's items, §5, never on helper
+  results), `featured` is the `fields.featured_image` media id when it names a
   public media item, else `none` (checked in bulk, one `get_many` per 200 ids, as the
   public view of an item keeps `featured_image`, R8): pass it to `image()`;
 - `items` holds the root nodes, each with all its descendants nested in `children`;
@@ -470,7 +504,7 @@ public or not, so publishing or unpublishing that media refreshes it too.
   `ancestors`, `prev`, `next` and the nodes one level under `children` have an empty
   `children` (the nested nodes are built once, so the value stays linear in the tree);
 - siblings sort by `menu_order`, then the title compared case-insensitively
-  (`to_lowercase`), then the id;
+  (`to_lowercase`), then the id (`menu_order_key`, as `query(order="menu")`);
 - `prev` and `next` follow depth-first pre-order over the whole tree, as mdBook and
   Docusaurus do (the last page of one section is followed by the next section);
   `none` at either end.
@@ -533,7 +567,9 @@ leaves a dead or stale entry (a filter that only adds markup keeps every entry l
 
 ```
 Route ─► SiteReader loads item(s), published-only (blocks were rendered to sanitised HTML by core)
-      ─► plugin filters on every item: content.body (html), content.excerpt (text)
+      ─► (the static front page's permalink stops here: a cached 301 to `/`, §3)
+      ─► plugin filters on the page's item and its listing's items: content.body (html),
+         content.excerpt (text); helper results (query, related, page_tree) are not filtered
       ─► footer(): render.footer filter chain over "" (html), once per page
       ─► head(): core SEO tags + render.head filter chain → structured head → HTML (host-escaped)
       ─► template by hierarchy ─► Renderer::render on a blocking thread with the HelperBridge

@@ -51,6 +51,13 @@ enum Shown {
     Listing(Listing, TemplateKey, Box<ArchiveInfo>),
 }
 
+/// What [`load`] found: something to render, or the static front page's own permalink,
+/// answered with a 301 to `/` without rendering (M4-4 P67).
+enum Loaded {
+    Shown(Shown),
+    FrontPermalink,
+}
+
 /// The response for a content route: the rendered page, a 503 when no render slot
 /// frees up in time, the 500 page when rendering fails, or [`NotFound`]. Runs as the
 /// page cache's render future under the request path (or uncached for a logged-in
@@ -134,8 +141,10 @@ async fn render_route(
     let slot = acquire_slot(state).await?;
     let until = budget_end(state.config.render_budget);
     let mut deps = DepKeys::default();
-    let Some(shown) = load(state, route, path, &mut deps).await? else {
-        return Ok(None);
+    let shown = match load(state, route, path, &mut deps).await? {
+        None => return Ok(None),
+        Some(Loaded::FrontPermalink) => return Ok(Some(front_redirect(query.cpage, deps))),
+        Some(Loaded::Shown(shown)) => shown,
     };
     let target = Target {
         route,
@@ -351,6 +360,38 @@ async fn render_in_slot(
     Ok(out)
 }
 
+/// `Cache-Control` of the front page's 301 ([`front_redirect`]): one hour.
+const FRONT_REDIRECT_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// The 301 from the static front page's permalink to `/` (M4-4 P67), cached like the
+/// page under the request path and its `deps`. Only `?cpage=N` is kept: it is the one
+/// parameter of a single item's cache key (`NormalQuery::cache_query`), so the answer
+/// is the same for every request the entry serves.
+///
+/// It carries [`FRONT_REDIRECT_CACHE_CONTROL`]: without it browsers keep a 301 for as
+/// long as they like, and unlike a moved URL this one depends on an option. When
+/// `reading.front_page` changes, the page cache drops the entry at once, but a browser
+/// that kept the 301 would go on sending the old front page's permalink to `/`, which
+/// then shows another page, and nothing on the server can undo that. An hour keeps the
+/// hop cheap for repeat visits while bounding how long a changed front page leaves old
+/// links pointing at the wrong page. Logged-in answers get `private, no-store` from the
+/// handler instead.
+fn front_redirect(cpage: Option<u32>, deps: DepKeys) -> CachedPage {
+    let location = match cpage {
+        Some(n) => format!("/?cpage={n}"),
+        None => "/".to_owned(),
+    };
+    let mut page = html_page(301, String::new(), deps.into_vec(), None);
+    page.headers = vec![
+        ("location".to_owned(), location),
+        (
+            "cache-control".to_owned(),
+            FRONT_REDIRECT_CACHE_CONTROL.to_owned(),
+        ),
+    ];
+    page
+}
+
 /// A non-HTML response (feeds, sitemaps, robots.txt) as the cache stores it.
 pub(crate) fn cached_page(content_type: &str, body: String, deps: DepKeys) -> CachedPage {
     let mut page = html_page(200, body, deps.into_vec(), None);
@@ -435,10 +476,10 @@ async fn load(
     route: &Route,
     path: &str,
     deps: &mut DepKeys,
-) -> Result<Option<Shown>, CoreError> {
+) -> Result<Option<Loaded>, CoreError> {
     let r = &state.reader;
-    Ok(match route {
-        Route::Content(candidates) => content(state, candidates, path, deps).await?,
+    let shown = match route {
+        Route::Content(candidates) => return content(state, candidates, path, deps).await,
         Route::Front { page } => match take(r.front_page(*page).await?, deps) {
             // A static front page has no `/page/N/`.
             Some(FrontPage::Page(_)) if *page > 1 => None,
@@ -523,18 +564,22 @@ async fn load(
         // Answered by the handler through `preview`, never through the cache.
         Route::Preview { .. } => None,
         Route::Canonical(_) | Route::Health | Route::Ready | Route::NotFound => None,
-    })
+    };
+    Ok(shown.map(Loaded::Shown))
 }
 
 /// The first candidate whose item exists, is public and has exactly `path` as its URL
 /// (the router's handler obligation). A missed candidate records `archive:<kind>`, so a
 /// page that a later-created item of an earlier candidate would shadow is refreshed.
+/// A hit that is the static front page is [`Loaded::FrontPermalink`] (M4-4 P67): `/`
+/// shows it, so its permalink is a duplicate (the hit records
+/// `option:reading.front_page` either way, so changing the option refreshes it).
 async fn content(
     state: &AppState,
     candidates: &[Candidate],
     path: &str,
     deps: &mut DepKeys,
-) -> Result<Option<Shown>, CoreError> {
+) -> Result<Option<Loaded>, CoreError> {
     for candidate in candidates {
         let (kind, parts) = match candidate {
             Candidate::Single { kind, parts } => (kind.as_str(), parts.clone()),
@@ -543,8 +588,11 @@ async fn content(
         let found = take(state.reader.single(kind, &parts).await?, deps);
         match found.filter(|item| item.url == path) {
             Some(item) => {
+                if take(state.reader.is_front_page(&item.item).await?, deps) {
+                    return Ok(Some(Loaded::FrontPermalink));
+                }
                 let key = item_template(&item);
-                return Ok(Some(Shown::Item(Box::new(item), key)));
+                return Ok(Some(Loaded::Shown(Shown::Item(Box::new(item), key))));
             }
             None => deps.insert(archive_key(kind)),
         }
