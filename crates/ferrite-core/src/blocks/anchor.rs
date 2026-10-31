@@ -130,6 +130,40 @@ mod tests {
         assert_eq!(one("Content"), "content-1");
     }
 
+    /// The plugin sanitiser keeps a heading id only when `heading_id_allowed` accepts
+    /// it, so every id the rule gives must pass it.
+    #[test]
+    fn every_given_id_survives_the_plugin_sanitiser() {
+        let mut a = Anchors::new();
+        let texts = [
+            "Install the binary",
+            "What's new?",
+            "Zażółć GĘŚLĄ",
+            "ΟΔΟΣ ΣΑΣ",
+            "İstanbul",
+            "ǅemal",
+            "Привет мир",
+            "日本語",
+            "🎉",
+            "",
+            "a  b",
+            "snake_case",
+            "Content",
+            "Comment pending",
+            "CF Name",
+            "Setup",
+            "Setup",
+            "\"><script>alert(1)</script>",
+        ];
+        for text in texts.into_iter().chain(RESERVED_FRAGMENT_IDS) {
+            let id = a.id(text);
+            assert!(
+                ferrite_domain::html::heading_id_allowed(&id),
+                "{text:?} gave {id:?}"
+            );
+        }
+    }
+
     #[test]
     fn empty_heading_id_is_counted_like_any_other() {
         let mut a = Anchors::new();

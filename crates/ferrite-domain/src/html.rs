@@ -28,12 +28,62 @@ pub fn relative_url_allowed(url: &str) -> bool {
         && !url.chars().any(|c| c == '\\' || c.is_control())
 }
 
-/// Fragment ids that theme landmarks and core markup use (M4-3b P54). The block
-/// renderer seeds its heading-id counter with them, so a heading "Content" gets
-/// `content-1` and never collides with a landmark.
-pub const RESERVED_FRAGMENT_IDS: [&str; 10] = [
-    "content", "comments", "respond", "search", "menu", "top", "main", "toc", "nav", "footer",
+/// Fragment ids that theme landmarks, core markup and the starter themes' fixed ids use
+/// (M4-3b P54). The block renderer seeds its heading-id counter with them, so a heading
+/// "Content" gets `content-1` and never collides with a landmark, and the plugin
+/// sanitiser drops them from headings ([`heading_id_allowed`]). Every fixed id of
+/// `themes/{blog,business,docs}` is here (test `fixed_ids` in `ferrite-theme`); ids built
+/// from data (`comment-<id>`, `reply-<id>`) are not.
+pub const RESERVED_FRAGMENT_IDS: [&str; 30] = [
+    // Landmarks and core markup (`content` is also the skip links' target).
+    "content",
+    "comments",
+    "respond",
+    "search",
+    "menu",
+    "top",
+    "main",
+    "toc",
+    "nav",
+    "footer",
+    // The comment thread (`comment-pending` is the held-comment redirect's fragment).
+    "comment-pending",
+    "comments-title",
+    "comment-form",
+    "comment-form-author",
+    "comment-form-email",
+    "comment-form-url",
+    "comment-form-trap",
+    "comment-form-comment",
+    // Section titles and search forms.
+    "related-title",
+    "news-title",
+    "contact-form-title",
+    "search-main",
+    "search-error",
+    "docs-search-page",
+    "docs-search-error",
+    // The contact form's fields.
+    "cf-name",
+    "cf-email",
+    "cf-subject",
+    "cf-message",
+    "cf-website",
 ];
+
+/// Whether `id` may stay on an `h1`–`h6` in sanitised plugin output: an id core's block
+/// renderer could have given a heading (M4-3b P54). That is a non-empty string of
+/// lowercase (Unicode) alphanumerics, `-` and `_` (the heading-id rule's output
+/// alphabet) that is not one of [`RESERVED_FRAGMENT_IDS`]. Such an id needs no escaping
+/// in an attribute and cannot take a theme's landmark.
+pub fn heading_id_allowed(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'))
+        && id.to_lowercase() == id
+        && !RESERVED_FRAGMENT_IDS.contains(&id)
+}
 
 /// The YouTube player URL prefix of a content `embed` node's `<iframe>` (M3 P11); the
 /// 11-character video id follows.
@@ -64,6 +114,55 @@ pub fn embed_player_src_allowed(src: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heading_ids() {
+        for ok in [
+            "install-the-binary",
+            "zażółć-gęślą",
+            "привет-мир",
+            "日本語",
+            "section",
+            "content-1",
+            "a--b",
+            "snake_case",
+            "-",
+            "v12-beta",
+        ] {
+            assert!(heading_id_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "Upper",
+            "ZAŻÓŁĆ",
+            "a b",
+            "a.b",
+            "a:b",
+            "javascript:alert(1)",
+            "a\"b",
+            "a\tb",
+            "a\u{0}b",
+            "🎉",
+        ] {
+            assert!(!heading_id_allowed(bad), "{bad:?}");
+        }
+        for reserved in RESERVED_FRAGMENT_IDS {
+            assert!(!heading_id_allowed(reserved), "{reserved}");
+        }
+    }
+
+    #[test]
+    fn reserved_ids_are_unique_and_in_the_alphabet() {
+        let mut seen = std::collections::HashSet::new();
+        for id in RESERVED_FRAGMENT_IDS {
+            assert!(seen.insert(id), "{id} twice");
+            assert!(
+                id.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "{id}"
+            );
+        }
+    }
 
     #[test]
     fn embed_player_srcs() {

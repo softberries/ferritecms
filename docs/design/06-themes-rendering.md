@@ -497,21 +497,35 @@ after an import:
 3. turn each space into `-`; runs are not collapsed (`"a  b"` is `a--b`).
 
 An empty result becomes `section`. A repeated id within one body gets `-1`, `-2`, …
-appended (`setup`, `setup-1`). The counter starts with the reserved ids `content`,
-`comments`, `respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`
-(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`), so a heading "Content" becomes
-`content-1` and cannot collide with a theme landmark; a theme should not use another id
+appended (`setup`, `setup-1`). The counter starts with the reserved ids
+(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`): the landmarks `content`, `comments`,
+`respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`, and every other fixed
+id the three starter themes write (`comment-pending`, `comments-title`, `comment-form` and
+its `comment-form-author|email|url|trap|comment` fields, `related-title`, `news-title`,
+`contact-form-title`, `search-main`, `search-error`, `docs-search-page`,
+`docs-search-error`, `cf-name|email|subject|message|website`; test `fixed_ids` in
+`ferrite-theme` reads the templates and fails on a fixed id missing from the list). So a
+heading "Content" becomes `content-1` and a heading "Comment pending" `comment-pending-1`,
+and neither can take a theme's landmark or `:target`. Ids a theme builds from data
+(`comment-<id>`, `reply-<id>`) are not reserved; a theme should not use another fixed id
 that a heading could take. The kept characters need no escaping in the attribute, and the
 renderer escapes it anyway. Only headings with a valid level (1–6) that are not nested past
 `MAX_DEPTH` get an id; an invalid level renders as `<p>` without one. `html` blocks keep
 ammonia's rules (ids stripped), and no anchor link is added to the body (a theme can add
 one with a little JavaScript).
 
+The plugin sanitiser (05 §7, R22) keeps a heading's `id` only when
+`ferrite_domain::html::heading_id_allowed` accepts it: non-empty, only lowercase (Unicode)
+alphanumerics, `-` and `_` (the rule's output alphabet), and not reserved. Every id the rule
+gives passes (test `every_given_id_survives_the_plugin_sanitiser`), so a sanitising
+`content.body` filter keeps the TOC's targets; it drops an `id` on any other element and a
+heading id that the rule could not have given.
+
 `post.toc` is a list of `{level, id, text}` (`text` is the heading's plain text), in
 document order, for every heading the body renders. The theme chooses the levels it shows.
 It is computed with the body, before the plugin filters: when a `content.body` filter
 changes the HTML, `toc` stays as computed, so a filter that removes or renames a heading
-leaves a dead or stale entry.
+leaves a dead or stale entry (a filter that only adds markup keeps every entry live).
 
 ## 5. Rendering pipeline (as built)
 
@@ -549,7 +563,8 @@ TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust 
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
 sanitised with `ammonia`. A `codeBlock` renders as `<pre tabindex="0"><code
 class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b
-R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only. M3 (P11) adds an
+R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only, as it keeps a
+heading's `id` only in the heading rule's form (§4). M3 (P11) adds an
 `embed` node (`provider` `youtube` or `vimeo`, `url`), rendered as a privacy-mode
 player `<iframe>` (`youtube-nocookie.com`, `player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
 recognise renders as a paragraph with a link), and an optional plain-text `caption` on
@@ -680,10 +695,9 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   author and date archives), `search`, `404`, `500`; partials `sidebar`, `toc`,
   `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
   shared by page, single and index) and `listing`.
-- **Fixed ids** are reserved ones (`content`, `nav`, `toc`, `search`; 06 §4) or start
-  with `docs-` (`docs-search-page`, `docs-search-error`; test
-  `fixed_ids_are_reserved_or_prefixed`). A reserved id never collides with a heading id;
-  the `docs-` ones appear only on the search and 404 pages, which render no body.
+- **Fixed ids** are all reserved (`content`, `nav`, `toc`, `search`, `docs-search-page`,
+  `docs-search-error`; §4; tests `fixed_ids_are_reserved_or_prefixed` and `fixed_ids`), so
+  none collides with a heading id.
 - **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
   pages work without it; a second run adds nothing) puts each body heading with an id
   in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link

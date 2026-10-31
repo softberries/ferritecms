@@ -267,6 +267,23 @@ impl Site {
         status: ContentStatus,
         published: Option<i64>,
     ) -> ContentId {
+        let body = json!({"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": format!("Body of {slug}")}]}
+        ]});
+        self.post_with_body(author, slug, title, status, published, body)
+            .await
+    }
+
+    /// [`Site::post`] with the block document `body`.
+    pub async fn post_with_body(
+        &self,
+        author: &User,
+        slug: &str,
+        title: &str,
+        status: ContentStatus,
+        published: Option<i64>,
+        body: serde_json::Value,
+    ) -> ContentId {
         let id = ContentId::new();
         let now = Timestamp::now().as_micros();
         let tx = self.store.begin().await.unwrap();
@@ -280,9 +297,7 @@ impl Site {
                 author_id: author.id,
                 title: title.into(),
                 excerpt: format!("Excerpt of {slug}."),
-                body: json!({"type": "doc", "content": [
-                    {"type": "paragraph", "content": [{"type": "text", "text": format!("Body of {slug}")}]}
-                ]}),
+                body,
                 body_html: None,
                 fields: json!({}),
                 menu_order: 0,
