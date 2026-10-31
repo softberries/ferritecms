@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="{{ site.locale or 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+{{ head() }}
+<link rel="stylesheet" href="{{ asset('style.css') }}">
+{% include "partials/accent.html" %}
+{% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <a class="site-title" href="/" rel="home">{{ site.title or "Home" }}</a>
+    {%- set primary = menu("primary") %}
+    {%- if primary and primary.items %}
+    <nav class="site-nav" aria-label="Primary">
+      {% with items = primary.items %}{% include "partials/menu.html" %}{% endwith %}
+    </nav>
+    {%- endif %}
+    {#- Hidden on the page it links to; only on 200 pages, so the shared 404 body
+        never depends on the path. #}
+    {%- if not (request.status == 200 and request.path and request.path == site.settings.cta_url) %}
+    {% with cta_class = "site-header__cta" %}{% include "partials/cta.html" %}{% endwith %}
+    {%- endif %}
+  </div>
+</header>
+{%- if request.preview %}
+<p class="preview-notice" role="status"><span class="wrap">Preview: this content is not published.</span></p>
+{%- endif %}
+<main id="content" class="site-main" tabindex="-1">
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">{{ site.title or "Home" }}</p>
+      {%- if site.description %}
+      <p class="site-footer__description">{{ site.description }}</p>
+      {%- endif %}
+    </div>
+    {%- set footer_menu = menu("footer") %}
+    {%- if footer_menu and footer_menu.items %}
+    <nav class="footer-nav" aria-label="Footer">
+      {% with items = footer_menu.items %}{% include "partials/menu.html" %}{% endwith %}
+    </nav>
+    {%- endif %}
+    <p class="site-credit">Powered by FerriteCMS</p>
+  </div>
+</footer>
+{{ footer() }}
+</body>
+</html>

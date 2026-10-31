@@ -1,7 +1,6 @@
 /target
 **/*.rs.bk
 .DS_Store
-/site/
 *.db
 *.db-shm
 *.db-wal

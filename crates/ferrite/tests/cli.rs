@@ -1983,3 +1983,276 @@ fn plugin_install_refuses_bad_packages() {
     assert_eq!(stdout(plugin_cmd(&site, &["list"])), "");
     assert!(!site.join("media/artifacts").exists());
 }
+
+// ---- seed demo profiles (M4-3b P61), on both backends ----
+
+/// An `init`ed site: SQLite, or Postgres in `pg`'s schema (local media either way).
+fn seed_site(dir: &Path, pg: Option<&PgSchema>) {
+    let mut c = ferrite();
+    c.args(["init", "--url", "https://example.com"]);
+    if let Some(pg) = pg {
+        c.args(["--db", &pg.url, "--schema", &pg.schema]);
+    }
+    c.arg("--data").arg(dir).assert().success();
+}
+
+fn seed_cmd(dir: &Path, extra: &[&str]) -> Command {
+    let mut c = ferrite();
+    c.args(["seed", "demo"]).args(extra).arg("--data").arg(dir);
+    c
+}
+
+/// Runs `f` against the site's store (SQLite through [`with_site_store`], else `pg`).
+fn with_seeded_store<T>(
+    dir: &Path,
+    pg: Option<&PgSchema>,
+    f: impl AsyncFnOnce(std::sync::Arc<dyn ferrite_store::Store>) -> T,
+) -> T {
+    let Some(pg) = pg else {
+        return with_site_store(dir, f);
+    };
+    tokio_rt().expect("runtime").block_on(async {
+        let store: std::sync::Arc<dyn ferrite_store::Store> = std::sync::Arc::new(
+            ferrite_store_postgres::PgStore::open(ferrite_store_postgres::PgOptions {
+                max_connections: 2,
+                schema: Some(pg.schema.clone()),
+                ..ferrite_store_postgres::PgOptions::new(pg.url.clone())
+            })
+            .await
+            .unwrap(),
+        );
+        let out = f(store.clone()).await;
+        store.close().await;
+        out
+    })
+}
+
+/// Each backend: SQLite always, Postgres when `FERRITE_TEST_PG_URL` is set.
+fn on_both_backends(check: impl Fn(&Path, Option<&PgSchema>)) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    check(&tmp.path().join("sqlite"), None);
+    if let Some(pg) = PgSchema::new() {
+        check(&tmp.path().join("pg"), Some(&pg));
+    }
+}
+
+fn content_query(kind: &str) -> ferrite_domain::ContentQuery {
+    ferrite_domain::ContentQuery {
+        kind: Some(kind.into()),
+        limit: 100,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn seed_business_profile() {
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        let out = stdout(seed_cmd(dir, &["--profile", "business"]));
+        assert!(
+            out.contains("Seeded business demo content: 3 posts, 6 pages"),
+            "{out}"
+        );
+        let next = format!(
+            "next: ferrite theme activate business --data {}\n",
+            dir.display()
+        );
+        assert!(out.ends_with(&next), "{out}");
+
+        with_seeded_store(dir, pg, async |store| {
+            let read = store.read();
+            let home = read
+                .content()
+                .get_by_slug("page", None, "home")
+                .await
+                .unwrap()
+                .expect("the front page");
+            assert_eq!(home.title, "Gardens that grow with you");
+            assert_eq!(home.status, ferrite_domain::ContentStatus::Published);
+            assert!(
+                home.fields["featured_image"].is_string(),
+                "Home has a featured image: {}",
+                home.fields
+            );
+            let front = read
+                .options()
+                .get("reading.front_page")
+                .await
+                .unwrap()
+                .expect("front page set");
+            assert_eq!(front.value, serde_json::json!(home.id.to_string()));
+
+            let mut q = content_query("page");
+            q.parent = ferrite_domain::ParentFilter::Of(home.id);
+            let mut kids = read.content().list(&q).await.unwrap().items;
+            kids.sort_by_key(|k| k.menu_order);
+            let kids: Vec<(String, i32, bool)> = kids
+                .into_iter()
+                .map(|k| (k.title, k.menu_order, !k.excerpt.is_empty()))
+                .collect();
+            assert_eq!(
+                kids,
+                vec![
+                    ("Garden design".to_owned(), 1, true),
+                    ("Consulting".to_owned(), 2, true),
+                    ("Aftercare".to_owned(), 3, true),
+                ]
+            );
+            for slug in ["about", "contact"] {
+                let p = read
+                    .content()
+                    .get_by_slug("page", None, slug)
+                    .await
+                    .unwrap();
+                assert!(p.is_some(), "page {slug}");
+            }
+            let pages = read.content().count(&content_query("page")).await.unwrap();
+            let posts = read.content().count(&content_query("post")).await.unwrap();
+            assert_eq!((pages, posts), (6, 3));
+
+            let mut menus: Vec<String> = read
+                .menus()
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect();
+            menus.sort();
+            assert_eq!(menus, ["footer", "primary"]);
+            let primary = read.menus().get("primary").await.unwrap().unwrap();
+            let labels: Vec<&str> = primary.items.iter().map(|i| i.label.as_str()).collect();
+            assert_eq!(labels, ["Home", "About", "News", "Contact"]);
+            let footer = read.menus().get("footer").await.unwrap().unwrap();
+            let labels: Vec<&str> = footer.items.iter().map(|i| i.label.as_str()).collect();
+            assert_eq!(labels, ["Garden design", "About", "Contact", "RSS feed"]);
+            let design = read
+                .content()
+                .get_by_slug("page", Some(home.id), "garden-design")
+                .await
+                .unwrap()
+                .expect("garden design");
+            assert_eq!(footer.items[0].target_id, Some(design.id.as_uuid()));
+            let news = primary.items.iter().find(|i| i.label == "News").unwrap();
+            assert_eq!(news.url.as_deref(), Some("/post/"));
+
+            let title = read.options().get("site.title").await.unwrap().unwrap();
+            assert_eq!(title.value, serde_json::json!("Larkspur Studio"));
+        });
+    });
+}
+
+#[test]
+fn seed_default_profile_is_unchanged() {
+    const LINE: &str =
+        "Seeded demo content: 12 posts, 3 pages, 4 terms, 2 menus, 1 image (admin user: admin).\n";
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        assert_eq!(stdout(seed_cmd(dir, &[])), LINE);
+        with_seeded_store(dir, pg, async |store| {
+            let read = store.read();
+            let posts = read
+                .content()
+                .list(&content_query("post"))
+                .await
+                .unwrap()
+                .items;
+            assert_eq!(posts.len(), 12);
+            assert!(posts.iter().any(|p| p.title == "Welcome to FerriteCMS"));
+            // One body, byte for byte as before M4-3b.
+            let hello = posts.iter().find(|p| p.slug == "hello-world").unwrap();
+            let text = |t: &str| serde_json::json!({ "type": "text", "text": t });
+            let para = |t: &str| serde_json::json!({ "type": "paragraph", "content": [text(t)] });
+            assert_eq!(
+                hello.body,
+                serde_json::json!({ "type": "doc", "content": [
+                    para("Every CMS starts with a hello world post. This is ours."),
+                    { "type": "heading", "attrs": { "level": 2 }, "content": [text("What you get")] },
+                    { "type": "bulletList", "content": [
+                        { "type": "listItem", "content": [para("A single binary and a single data folder")] },
+                        { "type": "listItem", "content": [para("Plugins in a capability-scoped sandbox")] },
+                        { "type": "listItem", "content": [para("Themes that are templates, not programs")] },
+                    ]},
+                    para("Try it on your own machine:"),
+                    { "type": "codeBlock", "attrs": { "language": "sh" }, "content": [
+                        text("ferrite init --data ./site --url http://localhost:8080\nferrite seed demo --data ./site\nferrite serve --data ./site")
+                    ]},
+                    { "type": "blockquote", "content": [
+                        para("Plugins are untrusted. They get only what their manifest declares.")
+                    ]},
+                    { "type": "paragraph", "content": [
+                        text("Read more in "),
+                        { "type": "text", "text": "the about page", "marks": [{ "type": "link", "attrs": { "href": "/about/" } }] },
+                        text("."),
+                    ]},
+                ]})
+            );
+            // The sample image: the same PNG (its SHA-256 is the artifact hash).
+            let image = read
+                .content()
+                .list(&content_query("media"))
+                .await
+                .unwrap()
+                .items;
+            let row = read.media().get(image[0].id).await.unwrap().unwrap();
+            assert_eq!(
+                row.artifact_hash.as_str(),
+                "e61905d85f1a6e2d40815f7ad69c4b8f1fdb0a2e9133e69c3539504541b247d0"
+            );
+            assert_eq!(row.bytes, 338_103);
+            let mut pages: Vec<String> = read
+                .content()
+                .list(&content_query("page"))
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|p| p.title)
+                .collect();
+            pages.sort();
+            assert_eq!(pages, ["About", "Contact", "Team"]);
+            assert_eq!(
+                read.content().count(&content_query("media")).await.unwrap(),
+                1
+            );
+            let title = read.options().get("site.title").await.unwrap().unwrap();
+            assert_eq!(title.value, serde_json::json!("FerriteCMS Demo"));
+            assert!(
+                read.options()
+                    .get("reading.front_page")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(read.menus().list().await.unwrap().len(), 2);
+        });
+        // `--profile blog` is the same profile.
+        assert_eq!(
+            stdout(seed_cmd(dir, &["--profile", "blog", "--force"])),
+            LINE
+        );
+    });
+}
+
+#[test]
+fn seed_unknown_profile_is_a_usage_error() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = seed_cmd(tmp.path(), &["--profile", "docs"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("blog") && err.contains("business"), "{err}");
+    // Nothing was written.
+    let n = with_site_store(tmp.path(), async |store| {
+        store
+            .read()
+            .content()
+            .count(&ferrite_domain::ContentQuery::default())
+            .await
+            .unwrap()
+    });
+    assert_eq!(n, 0);
+}

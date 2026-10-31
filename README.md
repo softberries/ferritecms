@@ -20,8 +20,15 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 > Status: in development, not released (no tag yet). The server, the REST API, the admin,
 > the WordPress importer, backups and restores, signed self-updates with rollback,
 > built-in HTTPS (ACME) for solo sites, Prometheus metrics, the release packaging, three
-> example plugins (SEO, analytics, a contact form; [`plugins/examples/`](plugins/examples/))
-> and `ferrite doctor` are built. See [`docs/BRIEF.md`](docs/BRIEF.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
+> example plugins (SEO, analytics, a contact form; [`plugins/examples/`](plugins/examples/)),
+> `ferrite doctor`, three starter themes (`blog`, `docs`, `business`; [`themes/`](themes/))
+> and `ferrite import markdown` are built. See [`docs/BRIEF.md`](docs/BRIEF.md) and
+> [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+Documentation for site owners, operators and developers is written as Markdown in
+[`site/`](site/) and built with FerriteCMS itself: `site/build.sh OUT_DIR` imports it into a
+fresh local site with the `docs` theme (see [`site/README.md`](site/README.md)). It is not
+hosted anywhere yet.
 
 Running a site: [`packaging/systemd/README.md`](packaging/systemd/README.md) (install
 under systemd), [`docs/operations/solo-upgrade.md`](docs/operations/solo-upgrade.md)

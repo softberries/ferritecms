@@ -1,0 +1,6 @@
+# Fixture theme for the ferrite-http page tree tests (M4-3b P57): `page.html` draws the
+# page tree as a sidebar with previous and next links.
+[theme]
+name = "tree-test"
+version = "0.1.0"
+license = "MIT"

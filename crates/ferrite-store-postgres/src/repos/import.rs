@@ -301,4 +301,26 @@ impl ImportRepo for PgRepos {
         .execute(e))
         .map(|_| ())
     }
+
+    async fn map_list(
+        &self,
+        source: &str,
+        kind: ImportMapKind,
+        after: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ImportMapRow>, StoreError> {
+        validate_text("import source", source)?;
+        let limit = check_limit(limit)?;
+        let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {MAP_COLUMNS} FROM import_map \
+             WHERE source = $1 AND kind = $2 AND ($3::BIGINT IS NULL OR wp_id > $3) \
+             ORDER BY wp_id LIMIT $4"
+        )))
+        .bind(source)
+        .bind(kind.as_str())
+        .bind(after)
+        .bind(i64::from(limit))
+        .fetch_all(e))?;
+        rows.iter().map(import_map).collect()
+    }
 }

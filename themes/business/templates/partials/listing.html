@@ -1,0 +1,12 @@
+{#- The cards of `posts` plus pagination, or a message when there are none.
+    `role="list"` keeps list semantics in Safari, which drops them with `list-style: none`. -#}
+{%- if posts and posts.items %}
+<ul class="card-grid" role="list">
+  {%- for p in posts.items %}
+  <li>{% include "partials/card.html" %}</li>
+  {%- endfor %}
+</ul>
+{% include "partials/pagination.html" %}
+{%- else %}
+<p class="empty">Nothing has been published here yet.</p>
+{%- endif %}

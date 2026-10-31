@@ -32,7 +32,7 @@ mod types;
 mod users;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
-pub(crate) const MAX_PARENT_DEPTH: usize = 64;
+pub const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
@@ -67,7 +67,9 @@ pub use site::{
 };
 pub use system::{MetricsSeries, SystemService};
 pub use taxonomy::TaxonomyService;
-pub use types::{ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch};
+pub use types::{
+    ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch, is_type_name_shaped,
+};
 pub use users::{
     MAX_DISPLAY_NAME, MAX_EMAIL, MAX_LOGIN, MAX_USER_QUERY, NewAccount, OperatorUsers, UserPatch,
     UserService, is_bidi_control, normalize_display_name, normalize_email, normalize_login,

@@ -1,4 +1,5 @@
-use super::text::collect_text;
+use super::anchor::{Anchors, TocEntry};
+use super::text::{collect_text, heading_text};
 use super::url::{ImageSrc, embed_id, image_src, safe_href};
 use super::{InlineImage, MAX_DEPTH, RenderCtx};
 use ferrite_domain::html::{
@@ -32,16 +33,34 @@ fn keep_relative(url: &str) -> Option<Cow<'_, str>> {
     relative_url_allowed(url).then_some(Cow::Borrowed(url))
 }
 
+/// What one render collects besides the HTML: the heading-id counter (one per document,
+/// so ids are unique within it) and the table of contents.
+struct Walk {
+    anchors: Anchors,
+    toc: Vec<TocEntry>,
+}
+
 /// Renders a TipTap/ProseMirror JSON document to HTML. All text and attribute values
 /// are escaped; unsafe URLs are dropped. Nodes deeper than `MAX_DEPTH` render their
 /// escaped text only.
 pub fn render_html(doc: &Value, ctx: &RenderCtx) -> String {
-    let mut out = String::new();
-    render_node(doc, 0, ctx, &mut out);
-    out
+    render_html_toc(doc, ctx).0
 }
 
-fn render_node(node: &Value, depth: usize, ctx: &RenderCtx, out: &mut String) {
+/// [`render_html`], and the document's headings in order. Every heading with a valid
+/// level (1–6) that is not nested deeper than `MAX_DEPTH` gets an `id` (GitHub's rule,
+/// unique within the document and never a reserved fragment id; M4-3b P54) and an entry.
+pub fn render_html_toc(doc: &Value, ctx: &RenderCtx) -> (String, Vec<TocEntry>) {
+    let mut out = String::new();
+    let mut walk = Walk {
+        anchors: Anchors::new(),
+        toc: Vec::new(),
+    };
+    render_node(doc, 0, ctx, &mut walk, &mut out);
+    (out, walk.toc)
+}
+
+fn render_node(node: &Value, depth: usize, ctx: &RenderCtx, walk: &mut Walk, out: &mut String) {
     if depth > MAX_DEPTH {
         push_text_only(node, out);
         return;
@@ -49,10 +68,10 @@ fn render_node(node: &Value, depth: usize, ctx: &RenderCtx, out: &mut String) {
     match node {
         Value::Array(items) => {
             for item in items {
-                render_node(item, depth + 1, ctx, out);
+                render_node(item, depth + 1, ctx, walk, out);
             }
         }
-        Value::Object(map) => render_object(map, node, depth, ctx, out),
+        Value::Object(map) => render_object(map, node, depth, ctx, walk, out),
         _ => {}
     }
 }
@@ -68,32 +87,46 @@ fn render_object(
     node: &Value,
     depth: usize,
     ctx: &RenderCtx,
+    walk: &mut Walk,
     out: &mut String,
 ) {
     let ty = map.get("type").and_then(Value::as_str).unwrap_or("");
     match ty {
-        "doc" => children(map, depth, ctx, out),
-        "paragraph" => wrap("p", "", map, depth, ctx, out),
+        "doc" => children(map, depth, ctx, walk, out),
+        "paragraph" => wrap("p", "", map, depth, ctx, walk, out),
         "heading" => match map
             .get("attrs")
             .and_then(|a| a.get("level"))
             .and_then(Value::as_u64)
         {
-            Some(l @ 1..=6) => wrap(&format!("h{l}"), "", map, depth, ctx, out),
-            _ => wrap("p", "", map, depth, ctx, out),
+            Some(l @ 1..=6) => {
+                let text = heading_text(node);
+                let id = walk.anchors.id(&text);
+                let attrs = format!(" id=\"{}\"", encode_double_quoted_attribute(&id));
+                // `l` is 1..=6, so the cast cannot truncate.
+                walk.toc.push(TocEntry {
+                    level: l as u8,
+                    id,
+                    text,
+                });
+                wrap(&format!("h{l}"), &attrs, map, depth, ctx, walk, out);
+            }
+            _ => wrap("p", "", map, depth, ctx, walk, out),
         },
-        "bulletList" => wrap("ul", "", map, depth, ctx, out),
+        "bulletList" => wrap("ul", "", map, depth, ctx, walk, out),
         "orderedList" => {
             let attrs = match attr_u64(map, "start") {
                 Some(n) if n >= 1 => format!(" start=\"{n}\""),
                 _ => String::new(),
             };
-            wrap("ol", &attrs, map, depth, ctx, out);
+            wrap("ol", &attrs, map, depth, ctx, walk, out);
         }
-        "listItem" => wrap("li", "", map, depth, ctx, out),
-        "blockquote" => wrap("blockquote", "", map, depth, ctx, out),
+        "listItem" => wrap("li", "", map, depth, ctx, walk, out),
+        "blockquote" => wrap("blockquote", "", map, depth, ctx, walk, out),
         "codeBlock" => {
-            out.push_str("<pre><code");
+            // A focus stop, so a block that scrolls sideways can be scrolled from the
+            // keyboard (WCAG 2.1.1; axe `scrollable-region-focusable`; M4-3b R-b17).
+            out.push_str("<pre tabindex=\"0\"><code");
             if let Some(lang) = attr_str(map, "language").filter(|l| valid_language(l)) {
                 out.push_str(&format!(" class=\"language-{lang}\""));
             }
@@ -105,10 +138,10 @@ fn render_object(
         "hardBreak" => out.push_str("<br>"),
         "image" => render_image(map, ctx, out),
         "embed" => render_embed(map, out),
-        "table" => wrap("table", "", map, depth, ctx, out),
-        "tableRow" => wrap("tr", "", map, depth, ctx, out),
-        "tableHeader" => wrap("th", &span_attrs(map), map, depth, ctx, out),
-        "tableCell" => wrap("td", &span_attrs(map), map, depth, ctx, out),
+        "table" => wrap("table", "", map, depth, ctx, walk, out),
+        "tableRow" => wrap("tr", "", map, depth, ctx, walk, out),
+        "tableHeader" => wrap("th", &span_attrs(map), map, depth, ctx, walk, out),
+        "tableCell" => wrap("td", &span_attrs(map), map, depth, ctx, walk, out),
         "html" => {
             if let Some(h) = attr_str(map, "html") {
                 out.push_str(&HTML_SANITIZER.clean(h).to_string());
@@ -122,10 +155,16 @@ fn render_object(
     }
 }
 
-fn children(map: &Map<String, Value>, depth: usize, ctx: &RenderCtx, out: &mut String) {
+fn children(
+    map: &Map<String, Value>,
+    depth: usize,
+    ctx: &RenderCtx,
+    walk: &mut Walk,
+    out: &mut String,
+) {
     if let Some(Value::Array(items)) = map.get("content") {
         for item in items {
-            render_node(item, depth + 1, ctx, out);
+            render_node(item, depth + 1, ctx, walk, out);
         }
     }
 }
@@ -136,13 +175,14 @@ fn wrap(
     map: &Map<String, Value>,
     depth: usize,
     ctx: &RenderCtx,
+    walk: &mut Walk,
     out: &mut String,
 ) {
     out.push('<');
     out.push_str(tag);
     out.push_str(attrs);
     out.push('>');
-    children(map, depth, ctx, out);
+    children(map, depth, ctx, walk, out);
     out.push_str("</");
     out.push_str(tag);
     out.push('>');
@@ -310,6 +350,7 @@ fn log_unknown(ty: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::TocEntry;
     use super::*;
     use crate::blocks::Responsive;
     use serde_json::json;
@@ -343,7 +384,134 @@ mod tests {
             json!({"type":"heading","attrs":{"level":2},"content":[t("H")]}),
             json!({"type":"paragraph","content":[t("a < b & c")]}),
         ]);
-        assert_eq!(r(d), "<h2>H</h2><p>a &lt; b &amp; c</p>");
+        assert_eq!(r(d), "<h2 id=\"h\">H</h2><p>a &lt; b &amp; c</p>");
+    }
+
+    fn heading(level: u64, content: Vec<Value>) -> Value {
+        json!({"type":"heading","attrs":{"level":level},"content":content})
+    }
+
+    fn toc(doc: &Value) -> (String, Vec<TocEntry>) {
+        let media = |id: &str| Some(InlineImage::plain(format!("/m/{id}.jpg")));
+        render_html_toc(doc, &RenderCtx { media: &media })
+    }
+
+    fn entry(level: u8, id: &str, text: &str) -> TocEntry {
+        TocEntry {
+            level,
+            id: id.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn heading_id_comes_from_the_plain_text() {
+        let d = doc(vec![heading(
+            2,
+            vec![
+                marked("Install ", json!([{"type":"bold"}])),
+                marked("the", json!([{"type":"link","attrs":{"href":"/x"}}])),
+                t(" binary"),
+            ],
+        )]);
+        let (html, entries) = toc(&d);
+        assert_eq!(
+            html,
+            "<h2 id=\"install-the-binary\"><strong>Install </strong><a href=\"/x\">the</a> binary</h2>"
+        );
+        assert_eq!(
+            entries,
+            vec![entry(2, "install-the-binary", "Install the binary")]
+        );
+    }
+
+    #[test]
+    fn heading_text_is_trimmed_and_breaks_are_spaces() {
+        let d = doc(vec![
+            json!({"type":"heading","attrs":{"level":2},"content":[t("Setup ")]}),
+            json!({"type":"heading","attrs":{"level":2},"content":[
+                t("a"), {"type":"hardBreak"}, t("b")]}),
+        ]);
+        let (html, entries) = toc(&d);
+        assert!(html.contains(r#"<h2 id="setup">"#), "{html}");
+        assert!(html.contains(r#"<h2 id="a-b">"#), "{html}");
+        assert_eq!(entries[0].text, "Setup");
+        assert_eq!(entries[1].text, "a b");
+    }
+
+    #[test]
+    fn toc_lists_headings_in_order_with_levels() {
+        let d = doc(vec![
+            heading(1, vec![t("Title")]),
+            json!({"type":"paragraph","content":[t("x")]}),
+            heading(2, vec![t("Setup")]),
+            heading(3, vec![t("Setup")]),
+            heading(6, vec![t("Content")]),
+            heading(2, vec![t("🎉")]),
+            heading(2, vec![t("section")]),
+        ]);
+        let (html, entries) = toc(&d);
+        assert_eq!(
+            entries,
+            vec![
+                entry(1, "title", "Title"),
+                entry(2, "setup", "Setup"),
+                entry(3, "setup-1", "Setup"),
+                entry(6, "content-1", "Content"),
+                entry(2, "section", "🎉"),
+                entry(2, "section-1", "section"),
+            ]
+        );
+        assert!(html.contains("<h6 id=\"content-1\">Content</h6>"), "{html}");
+        // `render_html` returns the same HTML.
+        assert_eq!(r(d), html);
+    }
+
+    #[test]
+    fn ids_are_unique_across_nested_headings() {
+        let d = doc(vec![
+            heading(2, vec![t("A")]),
+            json!({"type":"blockquote","content":[heading(2, vec![t("A")])]}),
+        ]);
+        let (html, entries) = toc(&d);
+        assert_eq!(
+            html,
+            "<h2 id=\"a\">A</h2><blockquote><h2 id=\"a-1\">A</h2></blockquote>"
+        );
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn invalid_level_has_no_id_and_no_entry() {
+        let d = doc(vec![
+            json!({"type":"heading","attrs":{"level":7},"content":[t("H")]}),
+            json!({"type":"heading","content":[t("H")]}),
+        ]);
+        let (html, entries) = toc(&d);
+        assert_eq!(html, "<p>H</p><p>H</p>");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn heading_ids_keep_only_safe_characters() {
+        let d = doc(vec![heading(2, vec![t("\"><script>x</script>")])]);
+        let (html, entries) = toc(&d);
+        // Only the heading's own tags: the text is escaped and the id has no markup.
+        assert_eq!(html.matches('<').count(), 2, "{html}");
+        assert!(html.starts_with("<h2 id=\"scriptxscript\">"), "{html}");
+        assert_eq!(entries[0].id, "scriptxscript");
+        assert_eq!(entries[0].text, "\"><script>x</script>");
+    }
+
+    #[test]
+    fn headings_past_the_depth_limit_get_no_id() {
+        let mut d = heading(2, vec![t("Deep")]);
+        for _ in 0..MAX_DEPTH + 2 {
+            d = json!({"type":"blockquote","content":[d]});
+        }
+        let (html, entries) = toc(&doc(vec![d]));
+        assert!(!html.contains("id="), "{html}");
+        assert!(entries.is_empty());
     }
 
     #[test]
@@ -408,7 +576,7 @@ mod tests {
         };
         assert_eq!(
             r(mk(json!("c++"))),
-            "<pre><code class=\"language-c++\">&lt;b&gt;x&lt;/b&gt;</code></pre>"
+            "<pre tabindex=\"0\"><code class=\"language-c++\">&lt;b&gt;x&lt;/b&gt;</code></pre>"
         );
         for bad in [
             json!("\"><script>"),
@@ -417,7 +585,10 @@ mod tests {
             json!("a".repeat(33)),
             json!(5),
         ] {
-            assert_eq!(r(mk(bad)), "<pre><code>&lt;b&gt;x&lt;/b&gt;</code></pre>");
+            assert_eq!(
+                r(mk(bad)),
+                "<pre tabindex=\"0\"><code>&lt;b&gt;x&lt;/b&gt;</code></pre>"
+            );
         }
         assert!(r(mk(json!("a".repeat(32)))).contains("language-aaaa"));
     }

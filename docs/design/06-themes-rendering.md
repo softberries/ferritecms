@@ -72,7 +72,8 @@ directory depth 16; symlinks are refused (`crates/ferrite-theme/src/package.rs`)
 hash is the first 16 hex digits of a SHA-256 over all files and is part of every asset URL.
 Sources (`ThemeSource`):
 
-- embedded starter themes (`rust-embed` over the workspace `themes/` folder): `blog`;
+- embedded starter themes (`rust-embed` over the workspace `themes/` folder): `blog`,
+  `docs` (§8);
 - a folder `<data>/themes/<name>/` (solo mode only, see below);
 - a **bundle** (`ThemeSource::Bundle`), the artifact a theme is installed as.
 
@@ -132,7 +133,7 @@ theme never takes the site down; the failure is logged and kept in `LoadedTheme:
 must run the same theme (C5). `reload_theme` is the hot-swap counterpart (P18): no change
 when the active row names the artifact already running, an error (the caller keeps the
 current theme) when the new artifact fails, never a fallback to `blog` at runtime.
-Theme names are `[a-z0-9_-]{1,64}`.
+Theme names are `[a-z0-9-]{1,64}` (no `_`: `manifest.rs` `is_name(…, false)`).
 
 **Install, activation and the fallback flag (as built, M2a-2a P8, P12).** Uploads (`POST
 /themes`, a raw bundle) and `ferrite theme install --dir` go through
@@ -342,7 +343,8 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
   data-backed helpers go through a `HelperBridge` that calls the async store with
   `Handle::block_on` from the blocking render thread, at most 20 calls per render
   (`MAX_BRIDGE_CALLS`); after that they return nothing and one warning is logged. Same-name
-  `menu()` calls are memoised, and `image()` of media already in the context needs no call.
+  `menu()` calls and same-kind `page_tree()` calls are memoised, and `image()` of media
+  already in the context needs no call.
   The objects are not lazy (the original idea of `minijinja::value::Object` impls querying on
   access was replaced by P2).
 - **Render slots (R28, R32):** at most `2 × available parallelism` pages are built at once. A
@@ -356,7 +358,7 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | Name | Description | Dependency keys recorded |
 |---|---|---|
 | `site` | `title`, `url`, `description`, `locale`, `timezone` (config `site.timezone`, config only: no option key, a change needs a restart), `settings` (every declared theme setting with its value) | `option:site.title`, `option:site.description`, `option:site.locale`, `theme` (`site.url` is config, not an option: no key); the HTTP layer adds `option:theme.<name>.settings` |
-| `post` | current item: `id`, `kind`, `slug`, `title`, `excerpt`, `url`, `body` (sanitised HTML after plugin filters, marked safe), `date`, `updated` (RFC 3339, UTC), `menu_order`, `parent_id`, `fields`, `author`, `terms`, `featured` | `post:<id>`, `user:<author>`, `term:<id>` per term, `post:<featured media>` |
+| `post` | current item: `id`, `kind`, `slug`, `title`, `excerpt`, `url`, `body` (sanitised HTML after plugin filters, marked safe), `toc` (the body's headings, below), `date`, `updated` (RFC 3339, UTC), `menu_order`, `parent_id`, `fields`, `author`, `terms`, `featured` | `post:<id>`, `user:<author>`, `term:<id>` per term, `post:<featured media>` |
 | `page` | same object as `post`, set when the item's kind is `page` | as `post` |
 | `posts` | current listing: `items`, `page`, `per_page`, `total`, `pages`, `prev_page`, `next_page` | per item as `post`; the read adds `archive:<kind>` / `term:<id>` |
 | `archive` | listing routes only (R30): `kind` (`front`, `type`, `term`, `author`, `date`, `search`), `content_type`, `term`, `author`, `year`, `month` | `term:<id>` / `user:<id>` |
@@ -364,7 +366,8 @@ As built (`crates/ferrite-theme/src/render.rs`, module docs):
 | `request` | `path`, `s` (the search query), `page`, `status`, `preview` (the comment page `?cpage=N` is not exposed; `comments()` reads it) | — |
 | `menu(name)` | menu tree; links to non-public items, and to terms without a public item, removed. Item targets load in one batch (`SiteReader::links`: titles and URLs only, no body render); each term target is one existence probe (`SiteReader::term_link`) | `menu:<name>`, plus `post:<id>`/`term:<id>` for every target, removed ones included, and `archive:post` plus `archive:<kind>` per type of the taxonomy for term targets |
 | `related(post, n=3)` | public items of the same type sharing a term with `post`, newest first per term; `n` ≤ 10 | `archive:<kind>`, `post:<item>` |
-| `query(type=…, term="<tax>/<slug>", limit=10)` | public items, newest first; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none | `archive:<kind>`, `term:<id>` |
+| `query(type=…, term="<tax>/<slug>", limit=10, order="date")` | public items; `limit` ≤ 50; with `term`, exactly up to `limit` items of `type` with the term in one query (`SiteReader::term_items`, any type the taxonomy applies to, not capped by `reading.per_page`); a type the taxonomy does not list gets none. `order` (M4-3b P58): `"date"` (the default) is newest first, `"menu"` is `menu_order` ascending, then the title case-insensitively, then the id (`ferrite_core::site::menu_order_cmp`; the store pages by `menu_order` and id, and the returned items are sorted by that rule, so items tied on `menu_order` across the `limit` (or the offset of `SiteReader::latest`) fall on each side in id order, not title order: with the default `menu_order` 0 everywhere, `limit=3` gives the three oldest-created items, shown by title, not the first three by title. This deviates from P58's "`menu_order` ascending, then title" for the rows picked, and is an accepted limit of M4-3b (final review A-M2); set `menu_order` to choose the rows). Any other `order` is a template error, like an unknown argument | `archive:<kind>`, `term:<id>` |
+| `page_tree(post=none, kind=none)` | the public items of one type as a tree (M4-3b P56, P57; below) | `archive:<kind>` |
 | `asset(path)` | `/_theme/<theme hash>/<path>`, each segment percent-encoded | `theme` |
 | `image(media, size)` | the `size` variant of a public media item (the original for an unknown size) with `width`, `height` and a `srcset` of one candidate per width (`MediaPublic::srcset_candidates`, shared with inline images below: of several files of one width the requested size wins, then the original) | `post:<media id>` |
 | `head()` | the pre-rendered `<head>` HTML (core SEO + `render.head` plugin filters, §5) | — |
@@ -431,6 +434,101 @@ such as `reading.per_page` and `reading.front_page`) are merged by the HTTP laye
 adds `theme` and `plugins` to every page. The full key grammar and the emitter/renderer
 contract are in `crates/ferrite-core/src/events.rs`.
 
+### The page tree: `page_tree()` (M4-3b P56, P57)
+
+`page_tree(post=none, kind=none)` gives a docs sidebar, breadcrumbs and a previous/next
+pager from one read. With `post` (an item, positionally or by name) it reads `post.kind`'s
+tree and marks `post` as current; with `kind` it reads that type's tree (with `post` too,
+`post` is still marked). With neither, or with a `kind` that is not a type name
+(`[a-z][a-z0-9_-]{0,31}`), it is `none` and costs no call. Otherwise it is one bridge call
+per kind and render, memoised (key `tree:<kind>`) and counted against `MAX_BRIDGE_CALLS`;
+once the budget is spent it is `none`. The built value is also kept per kind and current
+node, for up to 16 of them per render (a template drawing more is correct, just slower).
+
+**What is in it.** `SiteReader::tree(kind)` lists the type's public items with exactly the
+sitemap's visibility and paths (`published_at <= now`, the same ancestor and primary-term
+loading, the same permalink rules; the sitemap and the tree share one walk), in pages of
+200 rows ordered by `menu_order` then id. Media, an unknown type and a type without public
+items give `none`. At most **1 000 nodes** (`MAX_TREE_NODES`); past that `truncated` is
+true and the nodes are the first 1 000 by `menu_order`, so a theme should say the list is
+cut short. The dependency keys are `archive:<kind>`, which every content write in the
+type emits, so publishing, moving, reordering or trashing an item refreshes every cached
+page that drew the tree, and `post:<media>` for every featured image id the read checked,
+public or not, so publishing or unpublishing that media refreshes it too.
+
+**The value** is `{items, current, ancestors, children, prev, next, truncated}`:
+
+- every node is `{id, title, url, depth, current, open, excerpt, featured, children}`:
+  `depth` starts at 0, `current` is true on the current node only, `open` on the current
+  node and its ancestors, `excerpt` is the stored excerpt (empty when none was written; no
+  body fallback), `featured` is the `fields.featured_image` media id when it names a
+  public media item, else `none` (checked in bulk, one `get_many` per 200 ids, as the
+  public view of an item keeps `featured_image`, R8): pass it to `image()`;
+- `items` holds the root nodes, each with all its descendants nested in `children`;
+- `ancestors` runs root first and excludes `current`; `children` are `current`'s children,
+  each with one level of its own `children` (`current.children` is the same list);
+  `ancestors`, `prev`, `next` and the nodes one level under `children` have an empty
+  `children` (the nested nodes are built once, so the value stays linear in the tree);
+- siblings sort by `menu_order`, then the title compared case-insensitively
+  (`to_lowercase`), then the id;
+- `prev` and `next` follow depth-first pre-order over the whole tree, as mdBook and
+  Docusaurus do (the last page of one section is followed by the next section);
+  `none` at either end.
+
+**Hidden parents.** A node whose parent is not in the tree (a draft, trashed, future or
+truncated parent) is dropped together with its subtree. The page itself still renders at its
+URL (which keeps the hidden parent's slug, as in WordPress); only the navigation hides it.
+When `post` has no place in the tree (that case, or a preview of a draft), `current`, `prev`
+and `next` are `none`, `ancestors` and `children` are empty and nothing is open; `items` is
+the tree as usual. A node more than 64 levels deep (`MAX_PARENT_DEPTH`, the longest parent
+chain core writes or walks, so only rows written another way get there) is dropped the same
+way, which keeps the value shallow enough for a render thread's stack. An editor who leaves
+a section's parent page as a draft hides the whole section from the sidebar.
+
+### Heading ids and `post.toc` (M4-3b P54, P55)
+
+The block renderer (`crates/ferrite-core/src/blocks/anchor.rs`) gives every `heading` node an
+`id` by GitHub's rule, so links written for GitHub (`#install-the-binary`) keep working
+after an import:
+
+1. take the heading's text (all text descendants, marks ignored, a line break read as a space, trimmed at both ends) and lowercase it
+   (Unicode `to_lowercase`);
+2. keep alphanumeric characters (Unicode), `-`, `_` and the space, and drop the rest;
+3. turn each space into `-`; runs are not collapsed (`"a  b"` is `a--b`).
+
+An empty result becomes `section`. A repeated id within one body gets `-1`, `-2`, …
+appended (`setup`, `setup-1`). The counter starts with the reserved ids
+(`ferrite_domain::html::RESERVED_FRAGMENT_IDS`): the landmarks `content`, `comments`,
+`respond`, `search`, `menu`, `top`, `main`, `toc`, `nav` and `footer`, and every other fixed
+id the three starter themes write (`comment-pending`, `comments-title`, `comment-form` and
+its `comment-form-author|email|url|trap|comment` fields, `related-title`, `news-title`,
+`contact-form-title`, `search-main`, `search-error`, `docs-search-page`,
+`docs-search-error`, `cf-name|email|subject|message|website`; test `fixed_ids` in
+`ferrite-theme` reads the templates and fails on a fixed id missing from the list). So a
+heading "Content" becomes `content-1` and a heading "Comment pending" `comment-pending-1`,
+and neither can take a theme's landmark or `:target`. The ids a theme builds from a
+comment's id are reserved by pattern (`ferrite_domain::html::is_reserved_fragment_id`):
+`comment-<uuid>`, `reply-<uuid>` and `reply-<uuid>-author|email|url|trap|comment` (a
+heading "Comment <uuid>" gets `comment-<uuid>-1`). A theme should not use another fixed id
+that a heading could take. The kept characters need no escaping in the attribute, and the
+renderer escapes it anyway. Only headings with a valid level (1–6) that are not nested past
+`MAX_DEPTH` get an id; an invalid level renders as `<p>` without one. `html` blocks keep
+ammonia's rules (ids stripped), and no anchor link is added to the body (a theme can add
+one with a little JavaScript).
+
+The plugin sanitiser (05 §7, R22) keeps a heading's `id` only when
+`ferrite_domain::html::heading_id_allowed` accepts it: non-empty, only lowercase (Unicode)
+alphanumerics, `-` and `_` (the rule's output alphabet), and not reserved. Every id the rule
+gives passes (test `every_given_id_survives_the_plugin_sanitiser`), so a sanitising
+`content.body` filter keeps the TOC's targets; it drops an `id` on any other element and a
+heading id that the rule could not have given.
+
+`post.toc` is a list of `{level, id, text}` (`text` is the heading's plain text), in
+document order, for every heading the body renders. The theme chooses the levels it shows.
+It is computed with the body, before the plugin filters: when a `content.body` filter
+changes the HTML, `toc` stays as computed, so a filter that removes or renames a heading
+leaves a dead or stale entry (a filter that only adds markup keeps every entry live).
+
 ## 5. Rendering pipeline (as built)
 
 ```
@@ -465,9 +563,12 @@ empty footer (no plugin calls).
 Block rendering: blocks are JSON (`[{type:"paragraph", content:[…]}, …]`) using the
 TipTap/ProseMirror JSON document model ([07](07-admin-api.md#editor)). The Rust renderer in
 `ferrite-core` (`blocks`) maps node types to HTML with escaping; raw `html` blocks are
-sanitised with `ammonia`. M3 (P11) adds an `embed` node (`provider` `youtube` or `vimeo`,
-`url`), rendered as a privacy-mode player `<iframe>` (`youtube-nocookie.com`,
-`player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
+sanitised with `ammonia`. A `codeBlock` renders as `<pre tabindex="0"><code
+class="language-…">`: the focus stop lets keyboard users scroll a wide block (M4-3b
+R-b17), and the plugin sanitiser keeps `tabindex="0"` on `pre` only, as it keeps a
+heading's `id` only in the heading rule's form (§4). M3 (P11) adds an
+`embed` node (`provider` `youtube` or `vimeo`, `url`), rendered as a privacy-mode
+player `<iframe>` (`youtube-nocookie.com`, `player.vimeo.com`) built from the video id alone (`blocks::embed_id`; a URL it does not
 recognise renders as a paragraph with a link), and an optional plain-text `caption` on
 `image` (`<figure>…<figcaption>`; without one the output is a bare `<img>` as before).
 `blocks::is_editor_safe` is the twin of the admin editor's node and mark lists; both are
@@ -564,5 +665,105 @@ are never cached.
 ## 8. Starter themes
 
 M1: `blog` (built, `themes/blog`, MIT, plain CSS, no build step, light and dark schemes).
-M4: `docs`, `business`. WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
-themes are not set up yet.
+
+M4-3b: `docs` (built, `themes/docs`, MIT, P59; tests `crates/ferrite-theme/tests/docs.rs`).
+Plain CSS, system font stacks, no font files or images, light and dark from
+`prefers-color-scheme`, contrast ratios stated in the stylesheet's header (as `blog`).
+
+- **Layout.** A header (site title, the `primary` menu's top level, a search form; sticky
+  from 60rem); the page tree on the left; breadcrumbs, title, body, "Updated" date and a
+  previous/next pager in the centre (46rem wide at most); "On this page" on the right from
+  80rem. Under 60rem one column, and the tree's `<nav>` is hidden until the
+  `<details>` "Pages" right before it (a sibling holding only its `<summary>`, closed) is
+  opened (`.docs-pages-toggle:not([open]) + .docs-nav { display: none }`); the summary's
+  `aria-controls="nav"` names the nav it shows, since the disclosure itself is empty. From 60rem the
+  disclosure is hidden and the nav always shows, so the sidebar needs no script and no
+  `::details-content` in any engine. The `footer` menu sits in the footer.
+- **Data.** `base.html` reads `page_tree(post=post, kind=nav_type)` once (one bridge
+  call), so the sidebar, breadcrumbs and pager share one value; on search, archive and
+  404 pages (no `post`) the tree shows with nothing current, and the 404 body stays
+  independent of the path (R26). The sidebar is a recursive macro: each node with
+  children gets a `<details>` (open on the current trail) with its link outside the
+  `<summary>`, the current page `aria-current="page"`, and a `truncated` tree the note
+  "Only the first 1000 pages are listed.". Breadcrumbs (`<nav aria-label="Breadcrumb">`)
+  show for a page below the top level: the ancestors, then the current title unlinked.
+  The pager uses `rel="prev"`/`rel="next"`. The TOC lists `post.toc`'s level 2 and 3
+  entries when there are at least two. A tree of 1 110 nodes (10 × 10 × 10 under 10
+  roots) and a 65-level chain render within the default fuel and recursion limit
+  (tests); a 4 440-node tree also rendered within the fuel in a one-off run.
+- **Settings.** `accent_color` (color, `#2563eb`; links use it mixed with black or white
+  in oklab), `nav_type` (text, `page`: the type whose tree the sidebar shows; empty means
+  `page`), `show_toc` (bool, true), `show_updated` (bool, true). **Menus:** `primary`,
+  `footer`. **Templates:** `base`, `index`, `page`, `single`, `archive` (also term,
+  author and date archives), `search`, `404`, `500`; partials `sidebar`, `toc`,
+  `breadcrumbs`, `pager`, `search-form`, `accent`, `menu`, plus `article` (the item view
+  shared by page, single and index) and `listing`.
+- **Fixed ids** are all reserved (`content`, `nav`, `toc`, `search`, `docs-search-page`,
+  `docs-search-error`; §4; tests `fixed_ids_are_reserved_or_prefixed` and `fixed_ids`), so
+  none collides with a heading id.
+- **`docs.js`** (one deferred asset, under 3 KB, no network requests, the only script; the
+  pages work without it; a second run adds nothing) puts each body heading with an id
+  in a `.heading-row` followed by `<a class="heading-anchor" href="#id" aria-label="Link
+  to section: <heading text>">#</a>`, a sibling, so the heading's accessible name stays its
+  text and each anchor's name is its own (a list of links tells them apart),
+  and, where
+  `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
+  button that reports through a visually hidden `role="status"` text. No syntax
+  highlighting (Later).
+
+
+**`business`** (built, M4-3b P60; `themes/business`, MIT, plain CSS, no script, no image
+or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/business.rs`):
+
+- `front-page.html` shows, in order: a hero (the front page's featured image through
+  `image(.., "hero")` with `srcset`, `sizes="100vw"` and `fetchpriority="high"`, then a
+  panel with its title, excerpt and the CTA button), the page's body, its children from
+  `page_tree(post).children` as feature cards (`card` image, title, excerpt, in menu
+  order) and, with `show_news`, a "Latest news" strip from `query(type="post",
+  limit=3)` linking to `/post/`. Without a static front page it lists posts.
+- `page-contact.html` (the page with the slug `contact`): the body, then, with
+  `contact_form`, the contact-form plugin's form exactly as its README gives it (posting
+  to `plugin_route("contact-form", "/submit")`, `return` = `request.path`, the `website`
+  honeypot hidden off screen and `aria-hidden`). Without the plugin the form posts to a 404,
+  so the setting defaults to off.
+- Other templates: `base`, `index`, `page` (also shows its child pages as cards),
+  `single` (no comment thread), `archive` (type, term, author and date headings), `search`,
+  `404`, `500`. The header shows the CTA except on the (200) page it links to, so the
+  shared 404 body never depends on the path.
+- Settings: `accent_color` (`#0f766e`), `cta_label` ("Get in touch"), `cta_url`
+  (`/contact/`; a URL naming a scheme other than http(s), `mailto:` or `tel:` shows no
+  button, the scheme being the text before the first `:` when no `/`, `?` or `#` comes
+  first, so `/book/?at=10:00` is kept), `show_news` (true), `contact_form` (false).
+  Images: `hero` 1600×700 and `card` 640×400, both cropped. Menus: `primary`, `footer`.
+- CSS fallbacks: `forced-colors` (the current page in the nav is underlined, panels get
+  a border), the default accent's mixes where `color-mix()` is missing, and the card
+  links keep their own focus ring where `:has()` is missing.
+- Contrast, computed for the default accent with the WCAG formula, is listed at the top
+  of its `style.css` (every text pair at least 4.5:1 in both schemes). `ferrite seed demo
+  --profile business` writes content shaped for it (09 §8).
+
+**Accessibility checks** (M4-3b P64). WCAG 2.2 AA is the goal for every starter theme.
+`admin/e2e/public-themes.spec.ts` runs axe with the admin's tags (`wcag2a`, `wcag2aa`,
+`wcag21a`, `wcag21aa`, `wcag22aa`) in the light and the dark scheme, in Chromium at the
+desktop viewport, in the Playwright project `public-themes-chromium`. Global setup gives
+each theme a SQLite site of its own with the content it is checked on, written before
+`serve` starts. Each theme is activated through the API, and the spec waits until the node
+serves it. CI runs the project as its own step in the `admin-e2e` job (the
+`chromium-sqlite` leg).
+
+- `blog` on `seed demo`: the front page, a post, a page, a category archive, a search
+  and a 404.
+- `business` on `seed demo --profile business`: the front page, a child page, the
+  contact page, a search and a 404. The contact page is checked twice: as it renders by
+  default, and with `contact_form` on (the theme's form markup, without the plugin).
+- `docs` on the repository's `site/content` (`import markdown --front-page`): the front
+  page, a nested page, a search and a 404. A keyboard check runs too: the first Tab
+  reaches the skip link, and Enter moves focus to `<main>`; and each heading anchor's
+  name is `Link to section: <heading>`, all distinct.
+
+Code blocks scroll sideways in all three themes. Core's `<pre tabindex="0">` (§5) makes
+them keyboard-scrollable, and each theme's `:focus-visible` ring shows on them. The docs
+install page failed axe `scrollable-region-focusable` (WCAG 2.1.1) before that. Not
+checked: Firefox and WebKit, the phone layout, a comment thread with comments in it (the demo seed writes
+none, so the post shows the empty thread and the comment form, which are checked), and
+the contact-form plugin's own pages.

@@ -5,7 +5,7 @@
 The brief's layout (§7) is extended with storage, media and cluster crates. Dependencies
 point downwards only; no cycles.
 
-Status after M4-2: crates marked **(built)** exist in `crates/` and are workspace members
+Status after M4-3: crates marked **(built)** exist in `crates/` and are workspace members
 (`Cargo.toml`); the others are planned and carry their milestone.
 
 ```
@@ -27,7 +27,9 @@ ferritecms/
 │   │                             #   (ACME via rustls-acme, the TLS and redirect listeners),
 │   │                             #   `node_metrics` (the minute writer), `build.rs` (the target
 │   │                             #   triple) and `release.pub` (the embedded release key).
-│   │                             #   M4-3a: `doctor/` (`ferrite doctor`, 09 §8)
+│   │                             #   M4-3a: `doctor/` (`ferrite doctor`, 09 §8). M4-3b:
+│   │                             #   `import markdown` (`import_cmd`), `seed demo --profile
+│   │                             #   blog|business` (`seed/business.rs`)
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
 │   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
@@ -60,11 +62,15 @@ ferritecms/
 │   │                             #   admin's TOTP reset, retained plugin data, audit filters,
 │   │                             #   the test mail, relation `types`, inline image `srcset`.
 │   │                             #   M4-1: `seed` (`DemoBatch`, the atomic `seed demo`).
+│   │                             #   M4-3b: heading ids and `TocEntry` (`blocks/anchor.rs`),
+│   │                             #   `SiteReader::tree` (`site/tree.rs`), `ListOrder`, the
+│   │                             #   Markdown import's map key (`import.md.id`).
 │   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
 │   ├── ferrite-theme/            # (built, M1c-2) theme packages, hierarchy resolution, sandboxed
-│   │                             #   MiniJinja renderer and helpers
+│   │                             #   MiniJinja renderer and helpers; M4-3b: `page_tree()`
+│   │                             #   (`page_tree.rs`), `query(order=)`
 │   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
 │   │                             #   output validation + ammonia sanitising, call tracing;
 │   │                             #   M2a-2a: grants, permission report, call cap, render budget
@@ -87,6 +93,10 @@ ferritecms/
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
+│   ├── ferrite-import-md/        # (built, M4-3b) Markdown importer: folder scan, TOML front
+│   │                             #   matter, Markdown to blocks (pulldown-cmark, then the WP
+│   │                             #   crate's HTML converter), `run` over `ImportService`;
+│   │                             #   `ferrite import markdown` runs it (08 §8)
 │   └── ferrite-sdk/              # (built, M0) guest SDK for Rust plugins (`export_plugin!` macro
 │                                 #   lives in the crate; there is no separate macros crate);
 │                                 #   M4-3a: `form`, `html`, `options`, `settings`, `time`,
@@ -103,7 +113,11 @@ ferritecms/
 │                                 #   plugins/, system/, auth/, lib/, i18n/), e2e/ (Playwright
 │                                 #   + support), scripts/ (dist and bundle checks, API drift
 │                                 #   check, the E2E wrapper), bundle-budget.json
-├── themes/                       # (built) starter themes embedded in the binary: `blog`
+├── themes/                       # (built) starter themes embedded in the binary: `blog`,
+│                                 #   `docs` (M4-3b P59) and `business` (P60); each under
+│                                 #   150 KB (P65)
+├── site/                         # (M4-3b P63) the docs site: `content/` (Markdown),
+│                                 #   `build.sh`, `README.md`, `VERIFIED.md`
 ├── plugins/examples/             # (built) hello, hello-v2 (manifest only), order-a, order-b,
 │                                 #   clock, html-inject, meta-writer, reader, router, notifier,
 │                                 #   counter, settings-probe, fetcher, admin-e2e (the admin
@@ -130,7 +144,8 @@ built are marked with their milestone):
 ```
 ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme, ferrite-core,
  │               ferrite-plugin-host, ferrite-media, ferrite-config, ferrite-store,
- │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1)
+ │               ferrite-store-{sqlite,postgres}, ferrite-domain, ferrite-import-wp (M3-1),
+ │               ferrite-import-md (M4-3b)
  ├─ ferrite-http ─┬─ ferrite-cache ─── ferrite-store, ferrite-domain
  │                ├─ ferrite-theme ─── ferrite-core, ferrite-domain
  │                ├─ ferrite-core ──── ferrite-store (traits) ◄── ferrite-store-{sqlite,postgres}
@@ -142,7 +157,8 @@ ferrite (bin) ── ferrite-http, ferrite-cache, ferrite-cluster, ferrite-theme
  │                └─ ferrite-config (M2a-2a: `MailConfig`), ferrite-store, ferrite-domain
  ├─ ferrite-config ─── ferrite-domain, ferrite-media (M4-1 R4: `ConditionalPut`, the `copy_if_not_exists` check)
  ├─ ferrite-cluster ─── ferrite-store (traits), ferrite-domain
- └─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
+ ├─ ferrite-import-wp (M3-1) ─── ferrite-core, ferrite-media, ferrite-domain
+ └─ ferrite-import-md (M4-3b) ─── ferrite-import-wp, ferrite-core, ferrite-media, ferrite-domain
 ```
 
 `ferrite-core` does not use `ferrite-media` (media URLs reach `SiteReader` as a closure built
@@ -158,6 +174,8 @@ exist yet. The only Cargo features are the `test-seams` ones of `ferrite`, `ferr
 `ferrite-core` and `ferrite-import-wp` (10 §2), which only tests enable. M4-2 added no
 crate edges, only external dependencies (`minisign-verify`, `rustls-acme`,
 `tokio-rustls`, `webpki-roots`, `flate2` and `jiff`; `minisign` and `rcgen` for tests).
+M4-3b added one crate, `ferrite-import-md` (edges above), and one external dependency,
+`pulldown-cmark` (`html` feature only; it brings `pulldown-cmark-escape`).
 
 ## 2. Runtime components
 

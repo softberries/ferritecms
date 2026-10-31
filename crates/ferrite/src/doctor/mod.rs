@@ -211,8 +211,9 @@ pub struct DoctorArgs {
     /// The data folder to check.
     #[arg(long)]
     pub data: PathBuf,
-    /// Make no network connections: checks that need one (an S3 target, SMTP, the ACME
-    /// directory, the release lookup) are skipped.
+    /// Skip the checks that reach other services (an S3 store or backup target, SMTP, the
+    /// ACME directory, the release lookup). The database is still opened, and a running
+    /// node's own listeners are still probed.
     #[arg(long)]
     pub offline: bool,
     /// Test seam: the GitHub API root for `release.latest` instead of
@@ -234,8 +235,9 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::from(report.exit_code()))
 }
 
-/// Runs every check against the site in `data`, in the order of P53. With `offline`, no
-/// network connection is made. `release_api` (the test seam) replaces the GitHub API root
+/// Runs every check against the site in `data`, in the order of P53. With `offline`, the
+/// checks that reach other services are skipped (the database and the running node's
+/// listeners are still checked). `release_api` (the test seam) replaces the GitHub API root
 /// of the release lookup.
 async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     let mut findings = vec![version_binary()];

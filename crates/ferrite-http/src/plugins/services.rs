@@ -10,6 +10,7 @@ use ferrite_core::{
     ext_settings::{SettingDef, open_secret, plugin_option, resolve_plugin_value},
     mail::{MailQueue, Mailer, OutgoingMail, check_address, header_safe},
     settings,
+    site::ListOrder,
 };
 use ferrite_domain::{ContentId, ContentStatus};
 use ferrite_plugin_host::{
@@ -263,11 +264,16 @@ impl HostServices for StoreHostServices {
     }
 
     async fn list_posts(&self, kind: &str, limit: u32, offset: u32) -> Vec<Post> {
-        take("list_posts", self.reader.latest(kind, limit, offset).await)
-            .unwrap_or_default()
-            .iter()
-            .map(|p| self.public_post(p))
-            .collect()
+        take(
+            "list_posts",
+            self.reader
+                .latest(kind, limit, offset, ListOrder::Date)
+                .await,
+        )
+        .unwrap_or_default()
+        .iter()
+        .map(|p| self.public_post(p))
+        .collect()
     }
 
     async fn meta_get(&self, post: &str, key: &str) -> Option<String> {

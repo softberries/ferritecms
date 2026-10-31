@@ -1034,7 +1034,7 @@ ferrite migrate up     --data DIR [--to VERSION]
 ferrite migrate down   --data DIR --to VERSION [--allow-lossy] [--yes]
 ferrite migrate verify --data DIR
 ferrite serve          --data DIR                      # M1c-2; cluster wiring M1.5
-ferrite seed demo      --data DIR [--force]            # M1c-2
+ferrite seed demo      --data DIR [--force] [--profile blog|business]  # M1c-2; --profile M4-3b
 ferrite config check   --data DIR                      # M1.5
 ferrite media sync     --to STORE (--from STORE | --data DIR)   # M4-1; STORE = local:PATH | s3://bucket[/prefix]
 ferrite media gc       --data DIR [--dry-run] [--grace-days N] [--claim]  # M4-1
@@ -1060,6 +1060,8 @@ ferrite plugin list|enable|disable|remove --data DIR [NAME] [--purge]           
 ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--dry-run]
     [--report DIR] [--no-keep-permalinks] [--no-site-options] [--category-base B]
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
+ferrite import markdown DIR --data DATA [--as LOGIN] [--type page] [--front-page]
+    [--dry-run] [--source NAME] [--takeover]                                      # M4-3b
 ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
 ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ferrite doctor         --data DIR [--offline]                                    # M4-3a
@@ -1207,6 +1209,54 @@ or refused media, 3 another import running (`--takeover` takes over one with no 
 for 120 s), 1 on any error (a run that failed after it started still writes its partial
 report, M3-2). With SQLite `serve` holds the data folder's lock: stop it first. Media
 variants are made by the next `serve` (the `media.variants` jobs).
+
+**`ferrite import markdown`** (`crates/ferrite/src/import_cmd.rs`, `crates/ferrite-import-md`;
+M4-3b P62, design 08 §8): imports the folder `DIR` of Markdown files as pages of `--type`
+(default `page`) as the active admin `--as` names (default: the first active admin). It is an
+import run of source `markdown:<NAME>` (`--source`, default the folder's name) under the same
+lock and run fence as the WordPress import, so a re-run of the same name updates what changed in
+the files and keeps what was edited here. `--front-page` makes the root `index.md` (or
+`README.md`) `reading.front_page` (it needs `--type page`; a dry run only reports it), but only
+when that page is public after the run: a draft or scheduled root index is reported
+`front-page-not-public` (exit 2) and the setting is left as it was. A front matter `date`
+later than the run's start imports the page as scheduled at that date (`draft = true` wins); a
+past or absent date publishes it; a `date` outside the years 1 to 9999 (UTC; Postgres
+`timestamptz` starts at 4713 BC) skips the file as `bad-front-matter`. A front matter `description` (the excerpt and the SEO
+description) has every run of whitespace and control characters made one space and is cut to
+500 characters (a `description-cut` notice); NUL is stripped from `title` (Postgres refuses it in
+text). So no single file's front matter value can fail the run (final review B-I1 and its
+re-review); one that still could not
+be stored would skip that file as `bad-front-matter`. `--takeover` takes over an import whose
+process stopped (no heartbeat for 120 s), as with `import wordpress`; without it such a run
+makes every later import exit 3.
+`--dry-run` runs everything in one transaction and rolls it back; its images are staged under
+`<data>/import/<run-id>/` and deleted. Its only heartbeat is the one written when that
+transaction opens (rolled back with it), so a very large dry run, one that takes over 120 s,
+can outlive the staleness window: another import may then take the run over (`--takeover`,
+or a job), and closing the dry run's run fails (exit 1) instead of printing its report (by
+reading of the fence; not tested). On Postgres that one transaction also holds the row locks
+of every existing row it updates (pages, map rows, the run's row) until it ends, image
+reads and staging included, so on a live site an admin's save of one of those pages
+waits for the dry run.
+There is no report file: it prints
+`created N, updated N, unchanged N, kept (edited here) N, media N`, then `front page: <file>`
+when set (not when the site's own choice was kept: `front-page-kept`), then one line per problem, `<kind>  <file>  <detail>` (kinds: `bad-front-matter`,
+`too-large`, `not-utf8`, `unreadable`, `too-deep`, `outside`, `missing-image`,
+`refused-image`, `broken-link`, `other-type`, `no-front-page`, `front-page-not-public`, and the notices
+`synthesized`, `slug-changed`, `not-in-source`, `image-changed`, `front-page-kept`,
+`description-cut`). `broken-link` also names a link to a file in the folder that is neither a
+page nor a media item (a PDF; an image only linked to, never shown with `![…]`), and a link
+to a file that is not there: it would 404 on the site. A link to an image the import made a
+media item (shown somewhere with `![…]`) points at that media file.
+`outside` also names a protocol-relative image (`//host/x.png`), which is dropped. Exit
+0 done (notices only), 2 done with skipped files, missing or refused images, broken links or
+a `--front-page` that is not public,
+3 another import running, 1 on any error. These are checked before a run starts, so they
+write nothing and leave no run: `--front-page` with another type, a folder that is not a
+folder or cannot be scanned, and a `--type` that does not exist, is `media`, or is not
+hierarchical while the folder nests pages. An error after the run started marks that run
+`failed` (each batch it committed stays). With SQLite `serve` holds the data folder's lock:
+stop it first. Media variants are made by the next `serve`.
 
 **Imports through the admin and the API** (M3-2; design 08 §1): with `serve` running, an
 admin uploads the WXR file and, optionally, a zip of the uploads on the admin's Import
@@ -1527,7 +1577,8 @@ it on the data folder (or with the database URL) controls the site. Every subcom
 the config, opens the database and runs the same migration check as `serve`; with SQLite it
 takes the data-folder lock, so it fails while `serve` runs (stop the server first; Postgres
 has no folder lock). The same rules as the API apply (login format, unique login and
-e-mail, password policy of 12 to 1024 bytes); any error exits 1 with the message, e.g.
+e-mail, password policy of at least 12 characters and at most 1024 bytes); any error exits
+1 with the message, e.g.
 `Error: invalid login: …`, `Error: invalid login: login taken`, `Error: user not found:
 "bob"`.
 
@@ -1583,16 +1634,35 @@ the data-folder lock, so it fails while `serve` runs. Errors exit 1 with the mes
 
 **`ferrite seed demo`** (`crates/ferrite/src/seed.rs`):
 
-- Writes demo content through the core services where they exist: an `admin` user (no
-  password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
+- `--profile blog|business` (M4-3b P61) picks the content; `blog`, the default, is what
+  the next item describes. Another value is a usage error (exit 2).
+- `--profile business` writes the same `admin` user, then category News, four generated
+  PNGs (variants at the core sizes plus the embedded `business` theme's `[images]`, since
+  that is the theme the profile is for), the front page "Gardens that grow with you"
+  (slug `home`, with a featured image and an excerpt), Garden design, Consulting and
+  Aftercare (its children with `menu_order` 1–3, each with an excerpt and a card image),
+  About and Contact, three posts in News, menus `primary` (Home → `/`, About, News →
+  `/post/`, Contact) and `footer` (Garden design, About, Contact, RSS feed),
+  `site.title` "Larkspur Studio", `site.description` and `reading.front_page` = the front
+  page's id. It activates no theme: the output ends with
+  `next: ferrite theme activate business --data DIR`. The child pages live under the
+  front page's slug (`/home/garden-design/`), as pages follow their parents. The refusal
+  and atomicity rules below are the same for both profiles; `--force` differs in which
+  options it replaces (below).
+- With the `blog` profile, writes demo content through the core services where they
+  exist: an `admin` user (no password, `must_reset`, so it cannot log in until `ferrite user reset-password --login
   admin` sets one), categories News and Guides, tags rust and cms,
   12 published posts with block bodies dated over the past months, three pages (About,
   About/Team, Contact), a `primary` and a `footer` menu, one generated sample PNG with its
   variants (the core sizes plus the active theme's `[images]`) used as the featured image of
   some posts, and the `site.title` / `site.description` options.
 - Refuses (exit 1) when the site already has content, unless `--force`, which adds another
-  batch (user, terms and image file reused; posts and pages get fresh `-2`, `-3`, … slugs;
-  both menus and the two options are replaced to point at the new batch).
+  batch (user, terms and image files reused; posts and pages get fresh `-2`, `-3`, … slugs;
+  both menus and the profile's options are replaced to point at the new batch: `blog`
+  replaces `site.title` and `site.description`, `business` those two and
+  `reading.front_page`). `blog` never touches `reading.front_page`, so a `blog --force`
+  run after a `business` seed leaves the site on the business front page; clear it in
+  Settings (or `PATCH /api/v1/settings`) to list posts on `/` again.
 - **Atomic (M4-1 P20):** the image files are stored first (content-addressed), then every row
   (user, terms, the image's media item, artifacts and `media` row, posts, pages, menus,
   options, with the events the services emit) is written in one transaction

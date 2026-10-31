@@ -133,11 +133,11 @@ pub(super) const POSTS: [DemoPost; 12] = [
     },
 ];
 
-fn text(t: &str) -> Value {
+pub(super) fn text(t: &str) -> Value {
     json!({ "type": "text", "text": t })
 }
 
-fn paragraph(t: &str) -> Value {
+pub(super) fn paragraph(t: &str) -> Value {
     json!({ "type": "paragraph", "content": [text(t)] })
 }
 
@@ -201,10 +201,30 @@ pub(super) fn page(
 
 /// A 1280×720 PNG: a diagonal orange-to-violet gradient.
 pub(super) fn gradient_png() -> anyhow::Result<Vec<u8>> {
-    let img = ImageBuffer::from_fn(IMAGE_WIDTH, IMAGE_HEIGHT, |x, y| {
-        let t = (x + y) as f32 / (IMAGE_WIDTH + IMAGE_HEIGHT) as f32;
+    gradient_png_of(
+        IMAGE_WIDTH,
+        IMAGE_HEIGHT,
+        [234.0, 88.0, 12.0],
+        [109.0, 40.0, 217.0],
+    )
+}
+
+/// A `width`×`height` PNG: a diagonal gradient from the RGB colour `from` (top left) to
+/// `to` (bottom right).
+pub(super) fn gradient_png_of(
+    width: u32,
+    height: u32,
+    from: [f32; 3],
+    to: [f32; 3],
+) -> anyhow::Result<Vec<u8>> {
+    let img = ImageBuffer::from_fn(width, height, |x, y| {
+        let t = (x + y) as f32 / (width + height) as f32;
         let mix = |a: f32, b: f32| (a + (b - a) * t).round() as u8;
-        Rgb([mix(234.0, 109.0), mix(88.0, 40.0), mix(12.0, 217.0)])
+        Rgb([
+            mix(from[0], to[0]),
+            mix(from[1], to[1]),
+            mix(from[2], to[2]),
+        ])
     });
     let mut out = Cursor::new(Vec::new());
     img.write_to(&mut out, ImageFormat::Png)?;
@@ -221,6 +241,24 @@ mod tests {
         assert!(png.starts_with(b"\x89PNG"));
         let img = image::load_from_memory(&png).unwrap();
         assert_eq!((img.width(), img.height()), (IMAGE_WIDTH, IMAGE_HEIGHT));
+    }
+
+    /// The blog profile's image is unchanged byte for byte (M4-3b P61): the SHA-256 (the
+    /// artifact hash) a site seeded before `gradient_png_of` existed stored for
+    /// `sample-gradient.png`, 338 103 bytes.
+    #[test]
+    fn gradient_bytes_are_pinned() {
+        use sha2::{Digest, Sha256};
+        let png = gradient_png().unwrap();
+        assert_eq!(png.len(), 338_103);
+        let hex: String = Sha256::digest(&png)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "e61905d85f1a6e2d40815f7ad69c4b8f1fdb0a2e9133e69c3539504541b247d0"
+        );
     }
 
     #[test]
@@ -261,9 +299,9 @@ mod tests {
         );
         for tag in [
             "<p>",
-            "<h2>",
+            "<h2 id=",
             "<ul>",
-            "<pre><code",
+            "<pre tabindex=\"0\"><code",
             "<blockquote>",
             "<a href",
         ] {

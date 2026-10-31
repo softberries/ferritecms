@@ -441,6 +441,8 @@ M4-1 (data safety) is done: [`m4-1-exit.md`](superpowers/m4-1-exit.md), rulings 
 
 M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md) ("M4-2 plan rulings", "M4-2 execution rulings"). Nothing is published: the first tag waits for the release gate in the exit (license, release key, the `release` environment and tag ruleset, GHCR visibility).
 
+M4-3 (examples and docs) is done: [`m4-3-exit.md`](superpowers/m4-3-exit.md) (M4-3a and M4-3b). Next: M4-4 (the follow-up lists).
+
 - [x] `ferrite backup` / `restore`, `export` / `import-site` / `db copy`, `media sync` / `gc` (M4-1; 09 §4 and §8, 02 §10, 03 §6 and §8), plus the scheduled `[backup]` (`site.backup` job; 09 §4).
 - [x] Cluster follow-up (M1.5 ruling R3): waiting for a Postgres named lock holds one connection with `lock_timeout` instead of opening a connection per 250 ms poll (P13), which removes the connect churn while waiting (M4-1 P19, `Store::lock_wait`; 04 §7).
 - [x] `self-update` (signed), `rollback`, `rollback --schema`, `--restore-snapshot` (M4-2 P30–P32; 09 §1, §2; run end to end with two real binaries in the exit).
@@ -451,21 +453,24 @@ M4-2 (release) is done: [`m4-2-exit.md`](superpowers/m4-2-exit.md), rulings in [
 - [x] Release workflow for six targets and the GHCR image (publishing waits for the release gate), systemd unit, cluster and solo runbooks (M4-2 P27, P37, P38: `release.yml`, `packaging/systemd/`, `docs/operations/`; 09 §7). Checked locally only: one target (`aarch64-apple-darwin`) built and packed here, no GitHub run, nothing published (see M4-4, "Deferred from M4-2").
 - [x] Backward-compat CI job (M4-2 P38: `ci.yml` job `compat`, `.github/scripts/compat.sh`; it has something to run against from the second tag; run by hand in the exit with the M4-1 binary).
 
-### M4-3 — examples and docs
+### M4-3 — examples and docs (done)
 
 What the M4 list above already named and M4-1/M4-2 did not build. Split in two (M4 P41):
 M4-3a (the example plugins, their release asset and `ferrite doctor`) is done:
 [`m4-3a-exit.md`](superpowers/m4-3a-exit.md), rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)
-("M4-3a plan rulings", "M4-3a execution rulings"). M4-3b (the themes and the docs site) is next.
+("M4-3a plan rulings", "M4-3a execution rulings"). M4-3b (the themes, Markdown import and the
+docs site) is done too: [`m4-3b-exit.md`](superpowers/m4-3b-exit.md), rulings in
+[`rulings/m4.md`](superpowers/rulings/m4.md) ("M4-3b plan rulings" P54–P65, "M4-3b execution
+rulings" R-b1–R-b17). M4-3 as a whole: [`m4-3-exit.md`](superpowers/m4-3-exit.md).
 
 - [x] Example plugins: SEO, privacy-friendly analytics, contact form (M4-3a P42–P47: `plugins/examples/{seo,analytics,contact-form}` with a README each, SDK helpers, one host change for `options.get("site.url"|"site.title")` (X1), core percent-encoding of `request.served` paths (X5), analytics' two storage tiers under the 10 MiB KV quota (`detail_days`, X7, from the final review); shipped as the release asset `ferrite-plugins-<version>.tar.gz` made by `.github/scripts/package-plugins.sh`; 05 §10 and §12, 09 §7).
-- [ ] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b, P41).
-- [ ] Docs site (built with FerriteCMS itself; M4-3b).
+- [x] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b P54–P62: heading ids by GitHub's rule and `post.toc`; `SiteReader::tree` and the `page_tree()` helper with breadcrumbs and previous/next; `query(order="menu")`; `themes/docs` and `themes/business`, each under 150 KB; `seed demo --profile business`; `ferrite import markdown` in the new crate `ferrite-import-md`; code blocks as `<pre tabindex="0">` (R-b17); 06 §4 and §8, 08 §8, 09 §8).
+- [x] Docs site (built with FerriteCMS itself; M4-3b P63: `site/content/` (26 pages), `site/build.sh`, `site/VERIFIED.md` with every claim and how it was checked, `crates/ferrite/tests/docs_site.rs`; axe checks on all three starter themes, P64, in the `public-themes-chromium` Playwright project). Hosting it is the user's decision (`m4-3b-exit.md` "For the user").
 - [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order, exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
 
 ### M4-4 — follow-ups
 
-The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
+The open follow-up lists carried into M4 (from M1b to M4-3b), worked top-down.
 
 - [ ] Media follow-ups (from M1b):
   - [x] Document the S3 lifecycle rules: abort incomplete multipart uploads, expire `tmp/` (backstop for cancelled or failed staging cleanup). 09 §4a (M4-1 P22); its JSON example's field names are marked not verified.
@@ -558,11 +563,30 @@ The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
   - [ ] Analytics (Task 3): no end-to-end test sends a raw `\` or `"` path through the router to the plugin (the X5 encoder and the plugin are tested apart).
   - [ ] Contact form (Task 4): the `email` field keeps Unicode format (Cf) characters (it is shown escaped and never reaches the subject; `valid_email` could refuse them); an inbox blob whose version line is over 1 KiB (`MAX_VERSION_LINE`, a hypothetical future format) is read as corrupt and replaced rather than left alone.
   - [ ] Doctor (Task 7): `doctor/media.rs` `s3()` keeps an unreachable `MediaSection::Local` arm (pass the S3 fields in instead); the X3 `immutable` read can see a stale page if `serve` starts and checkpoints during doctor's few reads (a wrong finding or a `SQLITE_CORRUPT` line, never a write; accepted).
+- [ ] Deferred from M4-3b ([`m4-3b-exit.md`](superpowers/m4-3b-exit.md) "Not verified" and "Open follow-ups"; rulings in [`rulings/m4.md`](superpowers/rulings/m4.md)):
+  - [ ] The front page answers at `/` and at its own permalink (`/home/` on the docs site), each with its own canonical URL: duplicate content. Redirect the front page's permalink to `/` with a 301 (as WordPress does), or give both the canonical `/` (the router, `crates/ferrite-http/src/route.rs`, and `app/pipeline.rs`'s `Route::Front` and content arms). The docs sidebar's Introduction links to `/home/`.
+  - [ ] `image()`'s `srcset` lists one candidate per width across image shapes (the square thumbnail and the source-ratio resizes next to a crop size), unlike inline images, which filter by shape; `blog` and `business` hide it with `aspect-ratio` and `object-fit: cover`. Filter the candidates by the requested size's shape (core, 06 §4).
+  - [ ] rust-embed `debug-embed` does not notice a new theme folder until `cargo clean -p ferrite-theme` (the `business` tests failed with `NotFound` until then); a `build.rs` that reruns on `themes/` changes would fix it.
+  - [ ] The axe checks (P64) cover Chromium at desktop width only, with an empty comment thread: not Firefox, WebKit, the phone layout, a thread that has comments, or the contact-form plugin's own pages (the M4-3b exit rendered the docs site in Firefox and WebKit and submitted the form once, without axe).
+  - [ ] `query(order="menu")` and `latest` page by `(menu_order, id)` and sort ties by title only within the returned rows, so items tied on `menu_order` across a `limit` or offset fall on each side in id order; a store order `(menu_order, lower(title), id)` would make paging exact (Task 2 review Minor 1).
+  - [ ] Everything in M4-3b ran on macOS only (tests, builds, the exit's sites); watch the first Linux CI runs of `docs_site`, `import_md` and the `public-themes-chromium` step.
+  - [ ] From the final review (`m4-3b-exit.md` §9), not fixed in M4-3b:
+    - [ ] A `page_tree()` miss reads every full row of the type (bodies and fields) through `walk_paths`, for up to 1000 items, and every write in the type invalidates every page that drew the tree, so rewarming N pages after one edit decodes about N × all bodies. Add a store projection without `body`/`body_html` on both backends, with contract tests (`crates/ferrite-core/src/site/tree.rs:92-99`; review A Minor 3).
+    - [ ] Tree excerpts (`TreeNode::excerpt`, the business feature cards) are the stored excerpt and bypass `content.excerpt` filters, while `query` cards show the filtered one; document it on `TreeNode::excerpt` and 06 §4, or run the filter (`tree.rs:64`; A Minor 4).
+    - [ ] Card images spend the per-render bridge budget one `image()` call each, although `public_featured` already loaded the media rows: a business page with more than about 17 child pages renders the later cards without images (one warning). Carry the checked media in `ContentTree` and seed the render's `media` map (`crates/ferrite-theme/src/render.rs` `image()`, `tree.rs:118-140`; A Minor 5).
+    - [ ] Past the 16th distinct `(kind, current)` pair in one render, `page_tree()` rebuilds the tree on every call (fuel counts template instructions, not the build); same class as the R14 known gap (`render.rs:119,714-718`; A Minor 6).
+    - [ ] `menu_order_cmp` allocates two lowercased strings per comparison (about 20 000 to sort 1000 siblings); sort by a cached key (`crates/ferrite-core/src/site.rs:158-162`; A Minor 7).
+    - [ ] The Markdown import's 5000-file and 1 MiB limits still allow about 5 GB in memory (`MdDoc.source` is kept for the whole run): add a total-bytes cap or re-read sources lazily (`crates/ferrite-import-md/src/scan.rs:585-596`; B Minor 2).
+    - [ ] Folders without Markdown (asset trees, `node_modules`) count toward the 5000-folder limit, and passing it aborts the run; count only folders that hold pages, or name the cause in the message (`scan.rs:671-676`; B Minor 3).
+    - [ ] A WXR whose `wp:base_blog_url` is `markdown:<name>` runs under the same source as `ferrite import markdown <name>` and can match its map rows; restrict WordPress sources to `http(s)` (`crates/ferrite-import-wp/src/run.rs:739-745`; B Minor 4).
+    - [ ] `public-themes.spec.ts`: a binary built before a theme CSS edit fails the stylesheet poll with "the front page is drawn by <theme>", which does not say "rebuild the binary"; add the hint (`admin/e2e/public-themes.spec.ts` `activate`; C Minor 3).
+    - [ ] `site/build.sh` cannot parse an IPv6 loopback URL (`http://[::1]:8099`): no `FERRITE_SERVER__LISTEN` is printed; handle it, or say in the usage text that only `localhost` and `127.0.0.1` get a listen hint (`site/build.sh:57-63`; C Minor 7).
+    - [ ] Under any future public CSP, the themes' inline accent `<style>` (`partials/accent.html`) and the contact form honeypot's `style=` (`themes/business/templates/partials/contact-form.html`, the plugin README's markup) need `style-src 'unsafe-inline'` or a hash/nonce; moving the honeypot to a class means changing the README with it (C Minor 8).
 - [ ] Deferred from M1c-2:
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
   - [ ] `Cache-Control: public, max-age=0, s-maxage=<cfg>` on HTML for CDNs (06 §6; HTML pages send no `Cache-Control` today).
-  - [ ] Automated accessibility checks (axe) in CI for the starter themes (06 §8).
+  - [x] Automated accessibility checks (axe) in CI for the starter themes (06 §8). Done in M4-3b (P64): `admin/e2e/public-themes.spec.ts` in the `public-themes-chromium` project, its own step in the `admin-e2e` job.
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
 - [ ] Deferred from M2a-2a:
   - [ ] Per-node option cache, reintroduced only with a measured need (M2a-2 P14; theme settings and `site.*` are read per cache miss, plugin settings per call, each one primary-key read). It needs R13's refresh on `options.changed` on every node ([rulings/m2a.md](superpowers/rulings/m2a.md)).
@@ -592,6 +616,7 @@ The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
 - Managed hosting offering.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
 - Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
+- Docs and themes, later (M4-3b, left out on purpose): syntax highlighting in the `docs` theme (code blocks are plain, the language is only a `language-x` class), search snippets and section-scoped search, a static export (`ferrite site export --html`), versioned docs, admonitions, footnotes and task lists in Markdown import, YAML front matter (TOML only; the error says how to convert), per-menu-item attributes, and content types shipped by a theme.
 - SEO example, later (M4 P43): IndexNow pings, `robots.txt` and sitemap changes (core owns both), content analysis.
 - `ferrite doctor`, later (M4 P48, P53): `--json` output, a clock check against an HTTP `Date` header, detecting that it runs as another user than the service, and whether the binary's update path is writable for `self-update`.
 - Comments, later items (M2a-2b P29): comments on pages and custom types (a per-type flag), per-item closing, comment action hooks for plugins (e.g. anti-spam) and admin notification mails.

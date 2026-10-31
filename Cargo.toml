@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite-cache", "crates/ferrite-cluster", "crates/ferrite-import-wp", "crates/ferrite"]
+members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite-cache", "crates/ferrite-cluster", "crates/ferrite-import-wp", "crates/ferrite-import-md", "crates/ferrite"]
 
 [workspace.package]
 version = "0.1.0"
@@ -36,6 +36,8 @@ libc = "0.2"
 rustix = { version = "=1.1.5", default-features = false, features = ["fs", "std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 infer = "0.22"
+# The Markdown import (M4-3b P62): CommonMark to HTML only, no CLI (`getopts`).
+pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
 # No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
 moka = { version = "0.12", features = ["future"] }
 minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel", "urlencode"] }

@@ -8,7 +8,10 @@ use std::sync::Arc;
 use ferrite_core::{
     Actor, ContentService, CoreError, MediaService, NewUpload, PermalinkRules, Permalinks,
     events::{INVALIDATE, menu_key, post_key, redirect_key},
-    import::{ContentOutcome, ImportComment, ImportContent, ImportMedia, ImportService, Written},
+    import::{
+        ContentOutcome, ImportComment, ImportContent, ImportMedia, ImportService, WP_ID_META,
+        Written,
+    },
     jobs::{MEDIA_VARIANTS_KIND, PLUGIN_ACTION_KIND},
 };
 use ferrite_domain::{
@@ -67,6 +70,7 @@ fn body(text: &str) -> Value {
 fn post(wp_id: i64, slug: &str, status: ContentStatus, author: UserId) -> ImportContent {
     ImportContent {
         wp_id,
+        id_meta: WP_ID_META,
         hash: format!("hash-{wp_id}"),
         kind: "post".into(),
         title: format!("Title {slug}"),
@@ -114,6 +118,7 @@ fn upload(seed: u8, mime: &str, name: &str) -> NewUpload {
 fn media(wp_id: i64, seed: u8, author: UserId) -> ImportMedia {
     ImportMedia {
         wp_id,
+        id_meta: WP_ID_META,
         hash: format!("mhash-{wp_id}"),
         upload: upload(seed, "image/png", "photo.png"),
         author,

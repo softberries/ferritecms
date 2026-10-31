@@ -32,6 +32,30 @@ pub(super) fn collect_text(root: &Value, out: &mut String) {
     }
 }
 
+/// A heading's text for its id and its TOC entry: the text under `root` with each
+/// `hardBreak` read as a space, trimmed at both ends (inner runs are kept, M4-3b P54).
+/// Iterative: safe for any depth.
+pub(super) fn heading_text(root: &Value) -> String {
+    let mut out = String::new();
+    let mut stack = vec![root];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Array(items) => stack.extend(items.iter().rev()),
+            Value::Object(map) => match node_type(map) {
+                "text" => {
+                    if let Some(t) = map.get("text").and_then(Value::as_str) {
+                        out.push_str(t);
+                    }
+                }
+                "hardBreak" => out.push(' '),
+                _ => stack.extend(children(map).iter().rev()),
+            },
+            _ => {}
+        }
+    }
+    out.trim().to_owned()
+}
+
 fn push_break(out: &mut String) {
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');

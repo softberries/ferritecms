@@ -96,6 +96,7 @@ async fn term(store: &dyn Store, slug: &str) -> TermId {
 fn item(wp_id: i64, slug: &str, author: UserId) -> ImportContent {
     ImportContent {
         wp_id,
+        id_meta: WP_ID_META,
         hash: format!("hash-{wp_id}"),
         kind: "post".into(),
         title: format!("Title {slug}"),

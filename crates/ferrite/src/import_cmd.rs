@@ -1,9 +1,12 @@
-//! `ferrite import wordpress`: imports a WordPress export (WXR) into the site (M3-1).
+//! `ferrite import wordpress`: imports a WordPress export (WXR) into the site (M3-1);
+//! `ferrite import markdown`: imports a folder of Markdown files as pages (M4-3b P62).
 //!
-//! Opens the site as `seed demo` does (config, store, startup check, media store,
-//! permalink rules), runs [`ferrite_import_wp::run::run`], writes `report.json` and
-//! `report.html`, and prints the counts. A run that fails after it started still writes
-//! its report (P29); the error is printed and the exit code is 1.
+//! Both open the site as `seed demo` does (config, store, startup check, media store,
+//! permalink rules). `wordpress` runs [`ferrite_import_wp::run::run`], writes
+//! `report.json` and `report.html`, and prints the counts; a run that fails after it
+//! started still writes its report (P29), the error is printed and the exit code is 1.
+//! `markdown` starts a run of source `markdown:<NAME>`, runs [`ferrite_import_md::run`]
+//! and prints its report as text (there is no report file).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -13,7 +16,9 @@ use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use ferrite_core::{Actor, CoreError, SwappablePermalinks, import::ImportService};
+use ferrite_domain::ImportRunState;
 use ferrite_http::import_fetch::HttpSource;
+use ferrite_import_md::{MdOptions, MdReport};
 use ferrite_import_wp::ImportError;
 use ferrite_import_wp::report::Report;
 use ferrite_import_wp::run::{
@@ -44,6 +49,46 @@ pub enum ImportCommand {
     /// running, 1 on any error. With SQLite,
     /// `ferrite serve` holds the data folder's lock: stop it first.
     Wordpress(WordpressArgs),
+    /// Import a folder of Markdown files as pages.
+    ///
+    /// Each `*.md` file is a page (TOML front matter between `+++` lines: title, slug,
+    /// order, draft, date, description); a folder's `index.md` or `README.md` is the
+    /// parent of the files beside it. Images inside the folder become media, and links
+    /// to other files of the import point at their pages. A re-run with the same source
+    /// name updates what changed in the files and keeps what was edited here.
+    ///
+    /// Exit code: 0 done, 2 done with skipped files, missing or refused images or broken
+    /// links (each is printed), 3 when another import is running, 1 on any error. With
+    /// SQLite, `ferrite serve` holds the data folder's lock: stop it first.
+    Markdown(MarkdownArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MarkdownArgs {
+    /// The folder of Markdown files.
+    pub dir: PathBuf,
+    /// The site's data folder (contains ferrite.toml).
+    #[arg(long)]
+    pub data: PathBuf,
+    /// The admin who imports (default: the first active admin).
+    #[arg(long = "as")]
+    pub as_login: Option<String>,
+    /// The content type of the pages.
+    #[arg(long = "type", default_value = "page")]
+    pub kind: String,
+    /// Make the folder's root `index.md` (or `README.md`) the site's front page.
+    #[arg(long)]
+    pub front_page: bool,
+    /// Run everything, then roll every write back.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// The import's source name (the run source is `markdown:<NAME>`; default: the
+    /// folder's name). Re-runs of the same name update the pages they imported.
+    #[arg(long)]
+    pub source: Option<String>,
+    /// Take over an import whose process stopped (no heartbeat for 120 s).
+    #[arg(long)]
+    pub takeover: bool,
 }
 
 #[derive(Debug, Args)]
@@ -93,7 +138,13 @@ pub struct WordpressArgs {
 }
 
 pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
-    let ImportCommand::Wordpress(args) = cmd;
+    match cmd {
+        ImportCommand::Wordpress(args) => wordpress(args).await,
+        ImportCommand::Markdown(args) => markdown(args).await,
+    }
+}
+
+async fn wordpress(args: WordpressArgs) -> anyhow::Result<ExitCode> {
     let config = load_config(&args.data)?;
     let store = open_store(&config, OpenMode::MustExist).await?;
     let done = async {
@@ -147,6 +198,143 @@ pub async fn run(cmd: ImportCommand) -> anyhow::Result<ExitCode> {
     .await;
     store.close().await;
     done
+}
+
+/// `ferrite import markdown`: starts a run of `markdown:<NAME>`, imports the folder,
+/// finishes the run (`done`, or `failed` with the error) and prints the report.
+async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
+    if args.front_page && args.kind != "page" {
+        bail!("--front-page needs --type page (the front page must be a page)");
+    }
+    if !args.dir.is_dir() {
+        bail!("{} is not a folder", args.dir.display());
+    }
+    let name = match &args.source {
+        Some(name) => name.trim().to_owned(),
+        None => args
+            .dir
+            .canonicalize()
+            .with_context(|| format!("cannot read {}", args.dir.display()))?
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    if name.is_empty() {
+        bail!("the folder has no name: give one with --source");
+    }
+    let config = load_config(&args.data)?;
+    let store = open_store(&config, OpenMode::MustExist).await?;
+    let done = async {
+        startup_check(
+            store.as_ref(),
+            &binary_version()?,
+            &config.database,
+            &config.data_dir,
+        )
+        .await?;
+        let media = open_media(&config)?;
+        let permalinks = Arc::new(permalink_rules(store.as_ref()).await?);
+        let service = ImportService::new(store.clone(), permalinks);
+        let actor = importer(store.as_ref(), &service, args.as_login.as_deref()).await?;
+        // Scan and check the type before a run starts: a refusal writes nothing.
+        let dir = args.dir.clone();
+        let scanned = tokio::task::spawn_blocking(move || ferrite_import_md::scan(&dir))
+            .await
+            .context("the folder scan stopped")??;
+        check_type(store.as_ref(), &args.kind, &scanned).await?;
+        let handle = match service
+            .start(
+                &actor,
+                &format!("markdown:{name}"),
+                args.dry_run,
+                args.takeover,
+                None,
+            )
+            .await
+        {
+            Ok(handle) => handle,
+            Err(CoreError::Unavailable(why)) => {
+                eprintln!("error: {why}");
+                return Ok(ExitCode::from(BUSY));
+            }
+            Err(e) => return Err(anyhow::Error::new(e).context("the import could not start")),
+        };
+        let opts = MdOptions {
+            kind: args.kind.clone(),
+            front_page: args.front_page,
+            dry_run: args.dry_run,
+            max_upload: config.uploads.max_upload,
+            strip_metadata: config.uploads.strip_metadata,
+            work_dir: args.data.join("import"),
+        };
+        match ferrite_import_md::run(&service, &handle, &media, &args.dir, scanned, &opts).await {
+            Ok(report) => {
+                handle
+                    .finish(&service, ImportRunState::Done, report.stats())
+                    .await
+                    .context("the import finished but its run could not be closed")?;
+                print_md_report(&report, args.dry_run);
+                Ok(ExitCode::from(if report.has_problems() {
+                    DONE_WITH_PROBLEMS
+                } else {
+                    DONE
+                }))
+            }
+            Err(error) => {
+                let stats = serde_json::json!({ "error": error.to_string() });
+                if let Err(f) = handle.finish(&service, ImportRunState::Failed, stats).await {
+                    tracing::warn!(error = %f, "marking the import run failed did not work");
+                }
+                Err(anyhow::Error::new(error).context("the import failed"))
+            }
+        }
+    }
+    .await;
+    store.close().await;
+    done
+}
+
+/// Refuses a `--type` the pages cannot have: unknown, `media` (uploads only), or not
+/// hierarchical while the folder nests pages.
+async fn check_type(
+    store: &dyn Store,
+    kind: &str,
+    scanned: &ferrite_import_md::Scan,
+) -> anyhow::Result<()> {
+    let Some(ty) = store.read().types().get(kind).await? else {
+        bail!("unknown content type {kind:?} (--type)");
+    };
+    if ty.name == ferrite_domain::MEDIA_KIND {
+        bail!("--type media is for uploads; pick a page type");
+    }
+    if !ty.hierarchical && ferrite_import_md::needs_hierarchy(scanned) {
+        bail!(
+            "content type {kind:?} is not hierarchical, but the folder nests pages \
+             (index.md or README.md with files beside it, or subfolders)"
+        );
+    }
+    Ok(())
+}
+
+/// The Markdown report as text (P62): the counts, the front page, then one line per
+/// problem, `<kind>  <file>  <detail>`.
+fn print_md_report(report: &MdReport, dry_run: bool) {
+    if dry_run {
+        println!("dry run: nothing was written");
+    }
+    println!(
+        "created {}, updated {}, unchanged {}, kept (edited here) {}, media {}",
+        report.created, report.updated, report.unchanged, report.kept_edited, report.media
+    );
+    if let Some(file) = &report.front_page {
+        println!("front page: {file}");
+    }
+    for p in &report.problems {
+        println!("{}  {}  {}", p.kind(), p.file(), p.detail());
+    }
+    if report.media > 0 && !dry_run {
+        println!("media variants are made by the next `ferrite serve`");
+    }
 }
 
 /// A failed run: writes its report when it has one (P29), then exit 3 when another

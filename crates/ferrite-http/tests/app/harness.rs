@@ -204,6 +204,21 @@ impl App {
         self
     }
 
+    /// This app with a fresh state (empty cache) serving `theme` instead of the fixture.
+    pub async fn with_theme(mut self, theme: Arc<Theme>) -> Self {
+        let state = Self::build_state(
+            &self.site,
+            self.site.reader.clone(),
+            theme,
+            true,
+            Self::config(),
+        )
+        .await;
+        self.state = Arc::new(state);
+        self.router = build_app(self.state.clone());
+        self
+    }
+
     /// This app with a fresh state built with `config` that serves `admin` under
     /// `/admin/` (the `with_admin_assets` seam).
     pub async fn with_admin(

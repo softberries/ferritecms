@@ -112,7 +112,10 @@ fn serve_seeded_site(p: Profile) {
     }
     let post = server.get(&format!("/{NEWEST_SLUG}/")).text();
     assert!(post.contains(NEWEST_TITLE), "{post}");
-    assert!(post.contains("<pre><code"), "code block rendered: {post}");
+    assert!(
+        post.contains("<pre tabindex=\"0\"><code"),
+        "code block rendered: {post}"
+    );
     let team = server.get("/about/team/").text();
     assert!(team.contains("Team"), "{team}");
 

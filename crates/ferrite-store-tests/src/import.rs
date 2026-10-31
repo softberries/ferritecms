@@ -686,6 +686,76 @@ pub async fn import_map_upsert_and_get(db: &TestDb) {
     ));
 }
 
+/// `map_list` pages one (source, kind) by `wp_id` ascending, after a given `wp_id`.
+pub async fn import_map_list_pages_by_wp_id(db: &TestDb) {
+    let store = db.store();
+    let repos = store.read();
+    let imports = repos.imports();
+    let a = "markdown:docs";
+    for wp_id in [9, 0, 3, i64::MAX, 5] {
+        imports
+            .map_put(&map_row(a, ImportMapKind::Content, wp_id))
+            .await
+            .unwrap();
+    }
+    // Other kinds and sources are left out.
+    imports
+        .map_put(&map_row(a, ImportMapKind::Media, 4))
+        .await
+        .unwrap();
+    imports
+        .map_put(&map_row("markdown:other", ImportMapKind::Content, 4))
+        .await
+        .unwrap();
+    let ids = |rows: Vec<ImportMapRow>| rows.into_iter().map(|r| r.wp_id).collect::<Vec<_>>();
+    let all = imports
+        .map_list(a, ImportMapKind::Content, None, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        Some(&all[0]),
+        imports
+            .map_get(a, ImportMapKind::Content, 0)
+            .await
+            .unwrap()
+            .as_ref()
+    );
+    assert_eq!(ids(all), [0, 3, 5, 9, i64::MAX]);
+    let first = imports
+        .map_list(a, ImportMapKind::Content, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(first), [0, 3]);
+    let next = imports
+        .map_list(a, ImportMapKind::Content, Some(3), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(next), [5, 9]);
+    let last = imports
+        .map_list(a, ImportMapKind::Content, Some(9), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(last), [i64::MAX]);
+    assert!(
+        imports
+            .map_list(a, ImportMapKind::Content, Some(i64::MAX), 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        imports
+            .map_list(a, ImportMapKind::Comment, None, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        imports.map_list(a, ImportMapKind::Content, None, 0).await,
+        Err(StoreError::Invalid(_))
+    ));
+}
+
 /// `NewContent` timestamps set both columns exactly (micros); `None` means now.
 pub async fn content_insert_keeps_explicit_timestamps(db: &TestDb) {
     let store = db.store();

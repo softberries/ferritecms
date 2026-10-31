@@ -1,0 +1,4 @@
+<!doctype html>
+<html><head>{{ head() }}</head>
+<body data-tpl="page">{% set t = page_tree(post) %}<nav class="tree">{% for n in t.items recursive %}[{{ n.title }}{% if n.current %}*{% endif %}{{ loop(n.children) }}]{% endfor %}</nav><p class="pager">{{ t.prev.title }}|{{ t.next.title }}</p><article><h1>{{ page.title }}</h1></article></body>
+</html>

@@ -19,9 +19,14 @@ use crate::{
 
 /// More distinct keys than this make the batch's event `invalidate [all]` (P6, R2).
 const MAX_EVENT_KEYS: usize = 1_000;
-/// The meta key holding an imported item's WP id (a JSON number, P3); the one
-/// `import.` key [`ImportBatch::meta`] accepts.
+/// The meta key holding an imported item's WP id (a JSON number, P3); one of the two
+/// `import.` keys [`ImportBatch::meta`] accepts.
 pub const WP_ID_META: &str = "import.wp.id";
+/// The meta key holding a Markdown-imported item's map id (a JSON number, M4-3b P62);
+/// the other `import.` key [`ImportBatch::meta`] accepts.
+pub const MD_ID_META: &str = "import.md.id";
+/// The keys an [`ImportContent::id_meta`](super::ImportContent::id_meta) may name.
+pub(super) const ID_METAS: [&str; 2] = [WP_ID_META, MD_ID_META];
 /// Meta key prefixes core writes itself.
 const RESERVED_META_PREFIXES: [&str; 2] = ["seo.", "import."];
 /// A schema write on a batch that does not hold the `types` lock.
@@ -144,6 +149,41 @@ impl<'a> ImportBatch<'a> {
         }))
     }
 
+    /// Up to `limit` (1 through 200) map rows of `kind` for this run's source by WP id
+    /// ascending, after WP id `after` when given, with their WP ids, and the `after` of
+    /// the next page (`None` at the end). Rows whose target is gone are left out (they
+    /// are stale, as for [`lookup`](Self::lookup)), so a page may hold fewer rows than
+    /// `limit` before the end. What a run lists as no longer in its source (M4-3b P62).
+    pub async fn mapped(
+        &self,
+        kind: ImportMapKind,
+        after: Option<i64>,
+        limit: u32,
+    ) -> Result<(Vec<(i64, Mapped)>, Option<i64>), CoreError> {
+        let repos = self.tx.as_ref();
+        let rows = repos
+            .imports()
+            .map_list(&self.handle.run.source, kind, after, limit)
+            .await?;
+        let end = (rows.len() == limit as usize)
+            .then(|| rows.last().map(|r| r.wp_id))
+            .flatten();
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            if target_exists(repos, kind, row.ferrite_id).await? {
+                out.push((
+                    row.wp_id,
+                    Mapped {
+                        id: row.ferrite_id,
+                        hash: row.hash,
+                        version: row.version,
+                    },
+                ));
+            }
+        }
+        Ok((out, end))
+    }
+
     /// Item `id` as this batch sees it (any status), for checks before a write that
     /// would refuse it (a menu entry's target must not be trashed).
     pub async fn get_item(&self, id: ContentId) -> Result<Option<ContentItem>, CoreError> {
@@ -251,8 +291,9 @@ impl<'a> ImportBatch<'a> {
     /// Sets one meta value of `item` and adds the item's key to the batch's event.
     ///
     /// The key must not be empty, and must not start with a prefix core owns: `seo.`
-    /// (written through the item's SEO fields) and `import.`, except the exact key
-    /// [`WP_ID_META`] (the item's WP id, P3). Others are `InvalidKey { key, .. }`.
+    /// (written through the item's SEO fields) and `import.`, except the exact keys
+    /// [`WP_ID_META`] (the item's WP id, P3) and [`MD_ID_META`] (a Markdown file's map
+    /// id, P62). Others are `InvalidKey { key, .. }`.
     pub async fn meta(
         &mut self,
         item: ContentId,
@@ -385,7 +426,7 @@ pub(super) fn check_meta_key(key: &str) -> Result<(), CoreError> {
     if key.is_empty() {
         return Err(CoreError::invalid_key(key, "meta key must not be empty"));
     }
-    if key != WP_ID_META
+    if !ID_METAS.contains(&key)
         && let Some(prefix) = RESERVED_META_PREFIXES.iter().find(|p| key.starts_with(*p))
     {
         return Err(CoreError::invalid_key(
@@ -413,8 +454,15 @@ mod tests {
     #[test]
     fn meta_keys() {
         assert!(check_meta_key(WP_ID_META).is_ok());
+        assert!(check_meta_key(MD_ID_META).is_ok());
         assert!(check_meta_key("wp.quotes").is_ok());
-        for bad in ["", "seo.title", "import.wp.idx", "import.other"] {
+        for bad in [
+            "",
+            "seo.title",
+            "import.wp.idx",
+            "import.md.idx",
+            "import.other",
+        ] {
             assert!(
                 matches!(check_meta_key(bad), Err(CoreError::InvalidKey { .. })),
                 "{bad}"

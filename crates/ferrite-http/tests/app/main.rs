@@ -26,3 +26,4 @@ mod preview;
 mod protocol;
 mod reload_race;
 mod served;
+mod tree;

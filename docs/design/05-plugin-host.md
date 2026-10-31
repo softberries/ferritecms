@@ -834,7 +834,13 @@ value is passed on and the call counts as a failure (§8).
   protocol-relative); `cite` on `blockquote`/`q`/`del`/`ins` dropped (ammonia does not check
   it as a URL);
   `rel="noopener noreferrer"` on every link, plus `a[target]`
-  and `code[class]` restricted to `language-*` classes. Each non-raw plugin's whole output is
+  and `code[class]` restricted to `language-*` classes, and `pre[tabindex]` only as `0`
+  (core's code blocks, M4-3b R-b17), and `id` on `h1`–`h6` only as an id core's heading
+  rule can give (`ferrite_domain::html::heading_id_allowed`: non-empty, lowercase Unicode
+  alphanumerics, `-` and `_`, and not reserved: one of `RESERVED_FRAGMENT_IDS`, or a comment
+  anchor `comment-<uuid>` / `reply-<uuid>[-field]`, `is_reserved_fragment_id`; M4-3b P54), so
+  `post.toc` and deep links survive a sanitising `content.body` filter. An `id` on any other
+  element, or one outside that rule, is dropped. Each non-raw plugin's whole output is
   re-sanitised after it runs, so markup a `raw` plugin added earlier in the chain survives
   only if no non-raw plugin runs after it. Raw HTML is meant to be shown as a high-risk
   permission at install (M2 admin).
