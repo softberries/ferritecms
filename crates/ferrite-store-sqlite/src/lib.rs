@@ -11,7 +11,7 @@ mod lock;
 mod migrate;
 mod repos;
 
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use ferrite_store::{
@@ -26,7 +26,7 @@ pub use migrate::{latest_schema_version, status_from, table_exists};
 pub use repos::{FIND_MEDIA_BY_ARTIFACT_SQL, PRUNE_IDEMPOTENCY_SQL, comment_list_sql};
 use repos::{SqliteRepos, SqliteTx};
 
-/// A SQLite-backed [`Store`]. Holds the data-folder lock until dropped.
+/// A SQLite-backed [`Store`]. Holds the data-folder lock until closed or dropped.
 pub struct SqliteStore {
     /// Max one connection; every write and every `Tx` goes through it.
     writer: SqlitePool,
@@ -39,7 +39,8 @@ pub struct SqliteStore {
     keep_snapshot: Option<KeepSnapshot>,
     /// Named locks (`Store::try_lock`).
     locks: lock::Locks,
-    _lock: File,
+    /// `ferrite.lock`, released by `close` or on drop.
+    folder_lock: connect::FolderLock,
 }
 
 #[async_trait]
@@ -130,5 +131,7 @@ impl Store for SqliteStore {
         // Readers first: the writer's close checkpoints the WAL as the last connection.
         self.reader.close().await;
         self.writer.close().await;
+        // Closed for good: the next command on the folder may open it now.
+        self.folder_lock.release();
     }
 }

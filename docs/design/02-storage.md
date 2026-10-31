@@ -540,7 +540,9 @@ insert (useful for imports and the outbox).
   and all mutations use the writer. This makes write contention explicit and avoids
   busy-retry loops.
 - Data folder lock: `ferrite.lock` with an OS advisory lock (`fs4`/`fd-lock`) held for
-  the process lifetime — a second `ferrite serve` on the same folder fails fast.
+  the process lifetime — a second `ferrite serve` on the same folder fails fast. The
+  store unlocks it explicitly on `close` (or drop), so a descriptor a spawning child
+  process briefly inherits cannot keep the folder locked after a command is done (M4-4).
 
 **Postgres** (`ferrite-store-postgres`):
 
