@@ -205,7 +205,7 @@ function TagPicker({
           {chosen.map((term) => (
             <li
               key={term.id}
-              className="inline-flex h-7 items-center gap-0.5 rounded-md border bg-muted/40 pr-0.5 pl-2 text-xs font-medium"
+              className="inline-flex h-7 items-center gap-0.5 rounded-md border bg-muted/40 pr-0.5 pl-2 text-xs font-medium pointer-coarse:h-11.5 pointer-coarse:pr-0"
             >
               {term.name}
               {!disabled ? (

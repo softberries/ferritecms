@@ -5,7 +5,6 @@
 // responses are gaps, not zeros. Two separate charts, never two y-scales.
 
 import { useQuery } from "@tanstack/react-query";
-import { cn } from "cn";
 import { GaugeIcon } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -103,12 +102,7 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
   } else {
     const lookups = totals.hits + totals.misses;
     body = (
-      <div
-        className={cn(
-          "grid gap-6 transition-opacity sm:grid-cols-2 lg:grid-cols-1",
-          series.isPlaceholderData && "opacity-60",
-        )}
-      >
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-1">
         <Metric
           testId="hit-ratio"
           label={t("performance.ratio")}
@@ -170,7 +164,8 @@ export function PerformanceCard({ range, className }: { range: MetricsRange; cla
       title={t("performance.title")}
       description={t("performance.description", { span })}
       scope={<ScopeBadge>{t("metrics.allNodes")}</ScopeBadge>}
-      busy={series.isPending || series.isPlaceholderData}
+      busy={series.isPending}
+      stale={series.isPlaceholderData}
       className={className}
     >
       {body}

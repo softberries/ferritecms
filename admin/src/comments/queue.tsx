@@ -458,7 +458,7 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
             <Button
               variant="ghost"
               size="icon-xs"
-              className="rounded-full pointer-coarse:size-control"
+              className="rounded-full"
               aria-label={t("filter.clear")}
               title={t("filter.clear")}
               onClick={() => setSearch({ item: undefined })}
@@ -492,9 +492,7 @@ export function CommentsQueue({ search, setSearch }: CommentsQueueProps) {
             loading={list.isPending}
             animateRows
             columnClassName={{ comment: "w-full max-w-0 whitespace-normal" }}
-            className={
-              list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-            }
+            stale={list.isPlaceholderData}
             empty={
               <QueueEmpty
                 status={status}

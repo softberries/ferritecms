@@ -29,6 +29,8 @@ export interface MediaTableProps {
   items: MediaDto[];
   label: string;
   loading: boolean;
+  /** The rows are the previous answer while the next loads (`DataTable` `stale`). */
+  stale?: boolean;
   empty: ReactNode;
   footer?: ReactNode;
   selection: { state: RowSelectionState; onChange: (next: RowSelectionState) => void };
@@ -40,6 +42,7 @@ export function MediaTable({
   items,
   label,
   loading,
+  stale = false,
   empty,
   footer,
   selection,
@@ -56,6 +59,7 @@ export function MediaTable({
       selection={selection}
       onRowOpen={onOpen}
       loading={loading}
+      stale={stale}
       empty={empty}
       footer={footer}
       animateRows

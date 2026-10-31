@@ -2,7 +2,8 @@
 // running (`importJobQuery`) and left alone once it is done or dead. Its phase, the step
 // stepper, when it started and its last heartbeat, the counts per kind, the error, and
 // the report: the page in a new tab, the JSON as a download (a failed run's partial
-// report too). Phase changes are announced once, by a live region that mounts empty.
+// report too). Phase changes are announced once, through the screen's live region
+// (`announce`), which is in the page before the panel.
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
@@ -54,11 +55,22 @@ export interface RunPanelProps {
   onDismiss: () => void;
   /** Move focus to the panel's heading once it shows (the start card just went away). */
   focusHeading?: boolean;
+  /**
+   * Says `text` through a polite live region that is already in the page (the screen's,
+   * `data-slot="import-run-live"`): each phase or step change, once.
+   */
+  announce: (text: string) => void;
 }
 
 const TERMINAL: ReadonlySet<ImportPhase> = new Set(["done", "failed"]);
 
-export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: RunPanelProps) {
+export function RunPanel({
+  jobId,
+  onSettled,
+  onDismiss,
+  focusHeading = false,
+  announce,
+}: RunPanelProps) {
   const { t } = useTranslation("import");
   const job = useQuery(importJobQuery(jobId));
   const phase = job.data ? importPhase(job.data) : null;
@@ -71,16 +83,17 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
     onSettled?.(job.data);
   }, [job.data, terminal, jobId, onSettled]);
 
-  // The live region renders empty; its text is written after it is in the page (and on
-  // each phase or step change), so the first phase ("Import queued.") is read too.
-  const live = useRef<HTMLSpanElement>(null);
+  // Each phase or step change is said once, through the screen's live region (it is in
+  // the page before this panel mounts, so even a phase known at mount, from a job the
+  // start put in the cache, is a change it announces).
   useEffect(() => {
-    if (!phase || !live.current) return;
-    live.current.textContent =
+    if (!phase) return;
+    announce(
       phase === "running"
         ? t("run.announce.running", { step: step ? t(`run.step.${step as "parse"}`) : "" })
-        : t(`run.announce.${phase}`);
-  }, [phase, step, t]);
+        : t(`run.announce.${phase}`),
+    );
+  }, [phase, step, t, announce]);
 
   const heading = useRef<HTMLHeadingElement>(null);
   const focused = useRef(false);
@@ -128,13 +141,6 @@ export function RunPanel({ jobId, onSettled, onDismiss, focusHeading = false }: 
       aria-label={t("run.label")}
       className="flex min-w-0 flex-col rounded-xl border bg-card shadow-1"
     >
-      <span
-        ref={live}
-        data-slot="import-run-live"
-        className="sr-only"
-        aria-live="polite"
-        aria-atomic="true"
-      />
       <header className="flex min-w-0 flex-col gap-4 border-b px-5 py-4 md:flex-row md:items-start md:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <PhaseIcon phase={phase} />

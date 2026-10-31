@@ -232,9 +232,7 @@ export function RedirectsScreen({ search, setSearch }: RedirectsScreenProps) {
             last_hit: "hidden whitespace-nowrap lg:table-cell",
             origin: "hidden md:table-cell",
           }}
-          className={
-            list.isPlaceholderData ? "opacity-60 transition-opacity" : "transition-opacity"
-          }
+          stale={list.isPlaceholderData}
           empty={empty}
           footer={
             list.hasNextPage ? (
@@ -390,11 +388,7 @@ function RowActions({ redirect, env }: { redirect: RedirectDto; env: RowEnv }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          className={
-            destructive
-              ? "text-destructive hover:text-destructive pointer-coarse:size-control"
-              : "pointer-coarse:size-control"
-          }
+          className={destructive ? "text-destructive hover:text-destructive" : undefined}
           aria-label={name}
           onClick={onClick}
         >

@@ -105,7 +105,6 @@ export function PluginsScreen() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="pointer-coarse:size-control"
                     aria-label={t("plugins.rowMenu", { name: p.name })}
                   >
                     <MoreHorizontalIcon />

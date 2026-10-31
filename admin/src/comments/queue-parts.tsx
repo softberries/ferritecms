@@ -143,13 +143,7 @@ export function FailurePanel({ report, onDismiss }: { report: Report; onDismiss:
           ))}
         </ul>
       </div>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="pointer-coarse:size-control"
-        aria-label={t("report.dismiss")}
-        onClick={onDismiss}
-      >
+      <Button variant="ghost" size="icon-sm" aria-label={t("report.dismiss")} onClick={onDismiss}>
         <XIcon />
       </Button>
     </section>

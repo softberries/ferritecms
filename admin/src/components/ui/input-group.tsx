@@ -61,13 +61,19 @@ function InputGroupAddon({
   );
 }
 
+// On coarse pointers the icon sizes are 44 px wide and fill the field's inner height
+// (the field is 44 px tall with a 1 px border), and a pseudo-element covers the border
+// rows too: a 44 × 44 hit area that never leaves the field. (A centred pseudo-element
+// on the 24 px button stuck out past the field and a scrolling toolbar cut it off.)
+const COARSE_FIELD_BUTTON =
+  "relative pointer-coarse:w-11 pointer-coarse:h-[calc(var(--control-h)-2px)] pointer-coarse:after:absolute pointer-coarse:after:-inset-x-px pointer-coarse:after:-inset-y-0.5";
 const inputGroupButtonVariants = cva("flex items-center gap-2 text-sm shadow-none", {
   variants: {
     size: {
       xs: "h-6 gap-1 rounded-[calc(var(--radius)-3px)] px-1.5 [&>svg:not([class*='size-'])]:size-3.5",
       sm: "",
-      "icon-xs": "size-6 rounded-[calc(var(--radius)-3px)] p-0 has-[>svg]:p-0",
-      "icon-sm": "size-8 p-0 has-[>svg]:p-0",
+      "icon-xs": `size-6 rounded-[calc(var(--radius)-3px)] p-0 has-[>svg]:p-0 ${COARSE_FIELD_BUTTON}`,
+      "icon-sm": `size-8 p-0 has-[>svg]:p-0 ${COARSE_FIELD_BUTTON}`,
     },
   },
   defaultVariants: {

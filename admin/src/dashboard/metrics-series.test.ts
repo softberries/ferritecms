@@ -159,6 +159,25 @@ describe("metrics-series", () => {
     expect(ticks).toEqual([new Date(2026, 9, 29).getTime(), new Date(2026, 9, 30).getTime()]);
   });
 
+  it("day_ticks_include_the_first_bucket_at_local_midnight", () => {
+    // A window whose first bucket starts exactly at a local midnight: that day has its
+    // tick too, so 7 days give 7 ticks.
+    inZone("UTC");
+    const utc = dayTicks(hourly("2026-10-23T00:00:00Z", 168));
+    expect(utc).toHaveLength(7);
+    expect(utc[0]).toBe(Date.parse("2026-10-23T00:00:00Z"));
+    inZone("Europe/Warsaw");
+    const warsaw = dayTicks(hourly("2026-10-29T23:00:00Z", 168)); // Fri 00:00 CET
+    expect(warsaw).toHaveLength(7);
+    expect(warsaw[0]).toBe(Date.parse("2026-10-29T23:00:00Z"));
+    for (const t of warsaw) expect(new Date(t).getHours()).toBe(0);
+    // A first bucket that only holds part of a day (01:00) is not a tick.
+    inZone("UTC");
+    expect(dayTicks(hourly("2026-10-23T01:00:00Z", 168))[0]).toBe(
+      Date.parse("2026-10-24T00:00:00Z"),
+    );
+  });
+
   it("p95_bounds_read_as_upper_limits", () => {
     expect(p95Parts(25)).toEqual({ kind: "le", value: 25, unit: "ms" });
     expect(p95Parts(1000)).toEqual({ kind: "le", value: 1000, unit: "ms" });
@@ -204,7 +223,8 @@ describe("metrics-series", () => {
     // 2026-10-25 03:00 CEST becomes 02:00 CET: that day has 25 hours.
     const rows = hourly("2026-10-21T22:00:00Z", 168); // Thu 00:00 CEST
     const ticks = dayTicks(rows);
-    expect(ticks).toHaveLength(6);
+    // The first bucket starts at a midnight, so it is the first of the seven ticks.
+    expect(ticks).toHaveLength(7);
     for (const t of ticks) expect(new Date(t).getHours()).toBe(0);
     const days = byLocalDay(rows, Date.parse("2026-11-30T00:00:00Z"));
     const sunday = days.find((d) => new Date(d.day).getDate() === 25);
