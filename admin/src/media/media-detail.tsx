@@ -96,7 +96,7 @@ export function MediaDetail({ id, me, onClose, onAction }: MediaDetailProps) {
       <SheetContent
         side="right"
         data-slot="media-detail"
-        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
+        className="w-full gap-0 overflow-y-auto p-0 [--sheet-title-center:33px] data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >
         {media ? (
           <Detail

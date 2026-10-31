@@ -74,7 +74,7 @@ export function ThemeSettingsSheet({ name, onClose }: ThemeSettingsSheetProps) {
       <SheetContent
         side="right"
         data-slot="theme-settings"
-        className="w-full gap-0 overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
+        className="w-full gap-0 overflow-y-auto p-0 [--sheet-title-center:33px] data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
       >
         <SheetHeader className="border-b p-5 pr-12">
           <SheetTitle className="break-words">{t("themes.settings.title", { name })}</SheetTitle>

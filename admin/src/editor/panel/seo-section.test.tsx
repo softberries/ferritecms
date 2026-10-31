@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 import { type EditorDocument, type SeoDraft, canonicalAccepted, seoOfDraft } from "../editor-state";
 import { SeoSection } from "./seo-section";
@@ -220,6 +221,79 @@ describe("seo_section", () => {
     expect(replace.defaultPrevented).toBe(false);
     fireEvent.change(title, { target: { value: `${"a".repeat(10)}b${"a".repeat(190)}` } });
     expect(setMeta).not.toHaveBeenCalled();
+  });
+
+  /** A cancelable `beforeinput`; `paste` carries its text on a `dataTransfer`. */
+  function beforeInput(inputType: string, data: string | null, paste?: string): InputEvent {
+    const e = new InputEvent("beforeinput", { inputType, data, bubbles: true, cancelable: true });
+    if (paste !== undefined) {
+      Object.defineProperty(e, "dataTransfer", {
+        value: { getData: (type: string) => (type === "text/plain" ? paste : "") },
+      });
+    }
+    return e;
+  }
+
+  test("enter_in_a_full_description_is_refused_before_it_lands", () => {
+    const { doc, setMeta } = docWith({ ...EMPTY, description: "a".repeat(500) });
+    renderSeo(doc);
+    const description = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Meta description",
+    });
+    description.setSelectionRange(10, 10);
+    const enter = beforeInput("insertLineBreak", null);
+    description.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    // Any other insert that would overflow is refused too (a replacement, a drop).
+    for (const type of ["insertParagraph", "insertReplacementText", "insertFromDrop"]) {
+      const e = beforeInput(type, type === "insertReplacementText" ? "xy" : null, "xy");
+      description.dispatchEvent(e);
+      expect(e.defaultPrevented, type).toBe(true);
+    }
+    // The caret stays where it was: the value never changed.
+    expect(description.selectionStart).toBe(10);
+    expect(setMeta).not.toHaveBeenCalled();
+  });
+
+  test("a_paste_into_a_full_field_is_refused_and_one_that_overflows_is_cut", () => {
+    const { doc, setMeta } = docWith({ ...EMPTY, title: "a".repeat(200) });
+    const { rerender } = renderSeo(doc);
+    const title = screen.getByRole<HTMLInputElement>("textbox", { name: "SEO title" });
+    title.setSelectionRange(5, 5);
+    const full = beforeInput("insertFromPaste", null, "pasted");
+    title.dispatchEvent(full);
+    expect(full.defaultPrevented).toBe(true);
+    expect(title.selectionStart).toBe(5);
+    expect(setMeta).not.toHaveBeenCalled();
+
+    // Room for three characters: the paste lands cut to them, at the caret, and the
+    // caret ends after them (as a native `maxLength` does). The draft really changes
+    // here (a stateful document), so the field is not reset to the old value.
+    const seen: SeoDraft[] = [];
+    function Stateful() {
+      const [seo, setSeo] = useState<SeoDraft>({ ...EMPTY, title: "a".repeat(197) });
+      const live = {
+        ...docWith(seo).doc,
+        setMeta: ({ seo: next }: { seo: SeoDraft }) => {
+          seen.push(next);
+          setSeo(next);
+        },
+      } as unknown as EditorDocument;
+      return (
+        <SeoSection doc={live} siteUrl="https://example.com" siteName="Example" disabled={false} />
+      );
+    }
+    rerender(<Stateful />);
+    const field = screen.getByRole<HTMLInputElement>("textbox", { name: "SEO title" });
+    field.setSelectionRange(5, 5);
+    const cut = beforeInput("insertFromPaste", null, "\u{1F30A}bcdef");
+    act(() => {
+      field.dispatchEvent(cut);
+    });
+    expect(cut.defaultPrevented).toBe(true);
+    expect(seen.at(-1)).toEqual({ ...EMPTY, title: `aaaaa\u{1F30A}bc${"a".repeat(192)}` });
+    expect(field.value).toBe(`aaaaa\u{1F30A}bc${"a".repeat(192)}`);
+    expect(field.selectionStart).toBe(5 + "\u{1F30A}bc".length);
   });
 
   test("the preview trims like the server, keeping a BOM", () => {

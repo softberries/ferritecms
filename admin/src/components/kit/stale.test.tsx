@@ -101,21 +101,73 @@ describe("stale_states", () => {
     expect(dimmed(screen.getByRole("option", { name: "Harbour" }))).toBe(false);
   });
 
+  test("the_dim_scan_sees_through_a_stale_variable", () => {
+    // The shapes a dim tied to stale data can take, and one it must leave alone.
+    const cases: [string, boolean][] = [
+      [`className={list.isPlaceholderData ? "opacity-60" : ""}`, true],
+      [`cn("grid", series.isPlaceholderData && "opacity-60")`, true],
+      // An indirection (as `media/library.tsx` holds `const stale = …`).
+      [
+        `const stale = list.isPlaceholderData;\n<Grid className={cn(stale && "opacity-60")} />`,
+        true,
+      ],
+      [`const dim = q.isPlaceholderData;\nconst cls = dim ? "opacity-50" : "";`, true],
+      // A chain of variables.
+      [
+        `const waiting = q.isPlaceholderData;\nconst busy = waiting || x;\ncn(busy && "opacity-40")`,
+        true,
+      ],
+      // A `stale` prop or flag next to an opacity.
+      [`<Row stale={stale} className={stale ? "opacity-70" : undefined} />`, true],
+      // Disabled controls may dim.
+      [`cn("px-2", disabled && "opacity-50")`, false],
+      [`const stale = list.isPlaceholderData;\n<Grid stale={stale} />`, false],
+    ];
+    for (const [source, dims] of cases) {
+      expect(staleDims(source).length > 0, source).toBe(dims);
+    }
+  });
+
   test("no_loading_state_dims_its_content", () => {
     // Every screen keeps the previous answer at full colour while the next one loads
-    // (TanStack Query's `isPlaceholderData`): no opacity utility tied to it.
+    // (TanStack Query's `isPlaceholderData`): no opacity utility tied to it, directly
+    // or through a variable derived from it, nor next to any `stale` flag.
     const files = import.meta.glob<string>("/src/**/*.tsx", {
       query: "?raw",
       import: "default",
       eager: true,
     });
-    const tied =
-      /isPlaceholderData[^;]{0,120}?\bopacity-\d|\bopacity-\d+[^;]{0,120}?isPlaceholderData/g;
     const found: string[] = [];
     for (const [path, source] of Object.entries(files)) {
       if (path.endsWith(".test.tsx")) continue;
-      for (const m of source.matchAll(tied)) found.push(`${path}: ${m[0].replace(/\s+/g, " ")}`);
+      for (const hit of staleDims(source)) found.push(`${path}: ${hit}`);
     }
     expect(found).toEqual([]);
   });
 });
+
+/**
+ * Opacity utilities in `source` tied to stale data: within one statement (no `;`) of
+ * `isPlaceholderData`, of a `stale` identifier, or of any variable assigned (directly
+ * or through others) from one of those.
+ */
+function staleDims(source: string): string[] {
+  const names = new Set(["isPlaceholderData", "stale"]);
+  const assign = /\b(?:const|let|var)\s+(\w+)\s*=\s*([^;]*)/g;
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [, name, value] of source.matchAll(assign)) {
+      if (!name || names.has(name)) continue;
+      if ([...names].some((n) => new RegExp(`\\b${n}\\b`).test(value ?? ""))) {
+        names.add(name);
+        grew = true;
+      }
+    }
+  }
+  const flag = `\\b(?:${[...names].join("|")})\\b`;
+  const tied = new RegExp(
+    `${flag}[^;]{0,160}?\\bopacity-\\d|\\bopacity-\\d+[^;]{0,160}?${flag}`,
+    "g",
+  );
+  return [...source.matchAll(tied)].map((m) => m[0].replace(/\s+/g, " "));
+}

@@ -169,20 +169,42 @@ export function limitSeoEdit(prev: string, next: string, max: number): string {
   return clampSeo(next, max);
 }
 
+/** The text an `insert*` input event puts in (a line break as `"\n"`). */
+function insertedText(e: InputEvent): string {
+  if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") return "\n";
+  return e.data ?? e.dataTransfer?.getData("text/plain") ?? "";
+}
+
 /**
- * A `beforeinput` listener that refuses typed text (`insertText`) which would take the
- * field past `max` (as {@link seoLength} counts), so the caret stays where it is; a
- * paste goes through and is cut by {@link limitSeoEdit}.
+ * A `beforeinput` listener that keeps the field within `max` (as {@link seoLength}
+ * counts) before anything lands, so the caret never jumps, as a native `maxLength`:
+ * any insert (typing, Enter, a replacement, a paste, a drop) that would pass the limit
+ * is refused; a paste or drop is cut to what fits (at a code-point boundary) and put in
+ * at the caret. Composition (IME) cannot be cancelled; {@link limitSeoEdit} still holds
+ * the limit then.
  */
 export function refuseSeoOverflow(max: number): (e: Event) => void {
   return (e) => {
     const input = e as InputEvent;
+    if (!input.inputType.startsWith("insert") || input.inputType === "insertCompositionText") {
+      return;
+    }
     const el = e.target as HTMLInputElement | HTMLTextAreaElement;
-    if (input.inputType !== "insertText" || !input.data) return;
     const start = el.selectionStart ?? el.value.length;
     const end = el.selectionEnd ?? start;
-    const after = el.value.slice(0, start) + input.data + el.value.slice(end);
-    if (seoLength(after) > max) e.preventDefault();
+    const before = el.value.slice(0, start);
+    const rest = el.value.slice(end);
+    const text = insertedText(input);
+    if (seoLength(before + text + rest) <= max) return;
+    e.preventDefault();
+    if (input.inputType !== "insertFromPaste" && input.inputType !== "insertFromDrop") return;
+    // The longest start of the pasted text that still fits.
+    const chars = [...text];
+    let fit = chars.length - 1;
+    while (fit > 0 && seoLength(before + chars.slice(0, fit).join("") + rest) > max) fit--;
+    if (fit <= 0) return;
+    el.setRangeText(chars.slice(0, fit).join(""), start, end, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
   };
 }
 

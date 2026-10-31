@@ -247,7 +247,12 @@ contrast pair unchanged.
   with `elementFromPoint`.) A container shorter than 44 px grows with its button
   on touch screens (term chips: `pointer-coarse:h-11.5`, so the button stays inside the
   chip's border instead of overlapping the next row); dialog and sheet headers keep
-  their text clear of the 44 px close button (`pointer-coarse:pr-10` / `pr-15`).
+  their text clear of the 44 px close button (`pointer-coarse:pr-10` / `pr-15`), and
+  that button is centred on the title's line: a dialog's at `pointer-coarse:top-px`
+  (16 px padding plus half a 14 px line), a sheet's at `--sheet-title-center` − 22 px
+  (28 px by default: a 16 px-padded `SheetHeader` or a 56 px bar; the sheets whose
+  header is padded 20 px, user, media detail, term and theme settings, set 33 px on
+  `SheetContent`).
   **Known gap:** `Button`'s `xs` / `sm` text sizes (24 / 28 px, about 65 call sites)
   stay below 44 px on touch screens, against the §8 item; a follow-up, not yet done.
 - `--sticky-top` (default `0px`, `tokens.css`): the height of whatever sticks to the

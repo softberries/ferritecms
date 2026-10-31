@@ -2,12 +2,12 @@
 // small icon sizes included. jsdom has no layout, so the class is what is checked; the
 // E2E `styleguide_touch_targets` measures the boxes in a touch browser.
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { Button } from "./button";
-import { DialogHeader } from "./dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton } from "./input-group";
-import { SheetHeader } from "./sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./sheet";
 
 describe("touch_targets", () => {
   test("dialog_and_sheet_titles_keep_clear_of_the_44px_close_button", () => {
@@ -21,6 +21,34 @@ describe("touch_targets", () => {
     );
     expect(screen.getByTestId("dialog-header")).toHaveClass("pointer-coarse:pr-10");
     expect(screen.getByTestId("sheet-header")).toHaveClass("pointer-coarse:pr-15");
+  });
+
+  test("close_buttons_centre_on_the_title_line_on_touch", () => {
+    // Dialog: 16 px padding + half a 14 px title line = 23 px; a 44 px button at 1 px.
+    // Sheet: `--sheet-title-center` (28 px by default) − 22 px.
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Dialog</DialogTitle>
+          <DialogDescription>Body</DialogDescription>
+        </DialogContent>
+      </Dialog>,
+    );
+    const dialogClose = screen.getByRole("button", { name: "Close" });
+    expect(dialogClose).toHaveClass("top-2", "pointer-coarse:top-px");
+    cleanup();
+    render(
+      <Sheet open>
+        <SheetContent>
+          <SheetTitle>Sheet</SheetTitle>
+          <SheetDescription>Body</SheetDescription>
+        </SheetContent>
+      </Sheet>,
+    );
+    expect(screen.getByRole("button", { name: "Close" })).toHaveClass(
+      "top-3",
+      "pointer-coarse:top-[calc(var(--sheet-title-center,28px)-22px)]",
+    );
   });
 
   test.each(["icon-xs", "icon-sm"] as const)("button_%s_is_44px_under_a_coarse_pointer", (size) => {
