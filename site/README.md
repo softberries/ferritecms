@@ -21,7 +21,9 @@ The script:
    `serve` stopped);
 3. runs `ferrite import markdown site/content --front-page --source ferrite-docs`;
 4. activates the `docs` theme;
-5. prints the command that serves the site.
+5. prints the command that serves the site; for a loopback URL (`localhost`,
+   `127.0.0.1` or `[::1]`) it starts with the `FERRITE_SERVER__LISTEN` the URL's port
+   needs (none for the default `127.0.0.1:8080`).
 
 It stops with a non-zero exit code when any step fails. An import that exits 2 (a file
 skipped for bad front matter, a missing image or a broken link) fails the build too. A

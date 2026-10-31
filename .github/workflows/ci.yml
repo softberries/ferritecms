@@ -58,6 +58,11 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - run: cargo build --manifest-path plugins/Cargo.toml --release --target wasm32-wasip2
       - run: cargo clippy --manifest-path plugins/Cargo.toml --target wasm32-wasip2 -- -D warnings
+      # The plugins' own unit tests run on the host (M4-4 P84; `plugins/.cargo/config.toml`
+      # picks wasm32-wasip2 only inside `plugins/`): the shipped examples' (analytics,
+      # contact-form), and every member must compile for the host to get there.
+      - name: plugin unit tests (host)
+        run: cargo test --manifest-path plugins/Cargo.toml --workspace --locked
       - run: cargo test --workspace --no-fail-fast
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test
