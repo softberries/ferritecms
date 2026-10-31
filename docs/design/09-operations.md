@@ -883,7 +883,7 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   built once (`pnpm -C admin build`, job `admin`), checks that `--version` prints
   `ferrite <version>`, and packs `ferrite-<version>-<target>.tar.gz`
   (`.github/scripts/package.sh`: a folder `ferrite-<version>-<target>/` with `ferrite`
-  0755, `README.md` and any `LICENSE*`). The crypto is ring only (P28: no cmake or clang);
+  0755, `README.md` and any `LICENSE*`; the archive is reproducible, see below). The crypto is ring only (P28: no cmake or clang);
   the musl builds compile the bundled C code (SQLite, zstd) with `musl-gcc` and need the
   host's CA certificates at run time (`packaging/systemd/README.md`). The release profile
   is `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"` (P27); the
@@ -916,6 +916,21 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     because every plugin install needs an approval (05 §2). `ferrite self-update` is
     unaffected: it picks `ferrite-<version>-<target>.tar.gz` by exact name, and the other
     assets only take lines in `SHA256SUMS`.
+  - **Reproducible archives** (M4-4 P83): `package.sh` and `package-plugins.sh` pack through
+    `.github/scripts/repro-tar.sh`, so the same files give the same bytes whatever the
+    runner, the stage folder, the umask or the copy times: modes normalised (folders and
+    `ferrite` 0755, other files 0644), every mtime 1970-01-01 00:00 UTC, an explicit
+    `LC_ALL=C`-sorted member list without `./` (`--no-recursion`), `ustar` (no pax headers),
+    owner and group 0 without names, and `gzip -n -9` (never `tar -z`, whose bsdtar variant
+    writes a gzip timestamp). The two tars take different owner flags, so the script
+    branches on `tar --version` (GNU tar `--owner=0 --group=0 --numeric-owner`, bsdtar
+    `--uid 0 --gid 0 --uname '' --gname ''`). GNU tar and bsdtar do not give identical bytes
+    to each other, and need not: each asset is built by one kind of runner (the four Linux
+    targets and the plugins asset by GNU tar, the two macOS targets by bsdtar). Only the
+    archive is claimed reproducible: `cargo build --release --locked` is not checked for
+    bit-identical binaries, and the admin SPA is embedded from a separate build. `ferrite
+    self-update` reads regular files by path and skips the folder entries, so it is
+    unaffected (`self_update_installs_an_archive_made_by_package_sh`).
   - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the seven assets
     (`.github/scripts/sums.sh` refuses any other count), signed with minisign
     (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and
@@ -945,7 +960,11 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
   `.github/scripts/*.sh`; since M4-3a it also checks that the `version` of the three
   shipped plugins' manifests equals the workspace version, builds the three plugins and runs
   `package-plugins.sh` on the result (the asset must unpack to folders holding the manifest
-  and exactly one `.wasm`); job `compat` is the backward-compatibility check (02 §8).
+  and exactly one `.wasm`); since M4-4 it runs `.github/scripts/test-repro.sh` (both assets
+  packed twice from fake inputs, other mtimes and umask: identical sha256, and the members
+  read back for order, owner, mtime, modes and ustar) and packs the real plugins asset a
+  second time and compares it byte for byte; job `compat` is the backward-compatibility
+  check (02 §8).
 - **Docker image (as built, M1.5; admin stage M2b-1; digests M4-2):** `Dockerfile` at the
   repository root, multi-stage: `node:24-bookworm-slim` (stage `admin`: `npm install -g
   pnpm@10.28.2`, `pnpm install --frozen-lockfile`, `pnpm build`) builds the admin SPA;
