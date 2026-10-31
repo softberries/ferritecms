@@ -265,24 +265,28 @@ impl ImportService {
     /// Whether job `job` could start a run now (P27 as built): no run is `running`, or
     /// the running one is stale and has no job, is `job`'s own, or its job is not live:
     /// `running` with a lease that has not expired (M4-4 P80; a job whose runner died
-    /// keeps `running` until the reaper reclaims it). A pre-check on this node's clock, so
-    /// a busy job fetches nothing; [`start`](Self::start) decides for real, in the store
-    /// statement, on the lease's own clock (the database's on Postgres).
+    /// keeps `running` until the reaper reclaims it). A pre-check, so a busy job fetches
+    /// nothing; the lease is judged on the database clock (`nodes().db_now()`, the clock
+    /// Postgres writes it with), the run's heartbeat on this node's, which wrote it.
+    /// [`start`](Self::start) decides for real, in the store statement.
     pub async fn job_may_start(&self, job: JobId) -> Result<bool, CoreError> {
         let repos = self.store.read();
         let Some(run) = repos.imports().running().await? else {
             return Ok(true);
         };
-        let now = Timestamp::now();
-        if run.heartbeat_at >= stale_before(now) {
+        if run.heartbeat_at >= stale_before(Timestamp::now()) {
             return Ok(false);
         }
         Ok(match run.job_id {
             None => true,
             Some(other) if other == job => true,
-            Some(other) => repos.jobs().get(other).await?.is_none_or(|j| {
-                j.status != JobStatus::Running || j.locked_until.is_some_and(|until| until < now)
-            }),
+            Some(other) => {
+                let db_now = repos.nodes().db_now().await?;
+                repos.jobs().get(other).await?.is_none_or(|j| {
+                    j.status != JobStatus::Running
+                        || j.locked_until.is_some_and(|until| until < db_now)
+                })
+            }
         })
     }
 }
