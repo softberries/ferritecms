@@ -219,9 +219,11 @@ holds `secret.key`), `ferrite import-site ARCHIVE|- --data DIR [--with-media]` (
 [--to-schema S]` (`postgres://…` or `sqlite:<path>`; 0, 3, 1; copies no media), `ferrite
 backup --data DIR --to FILE.tar.zst|-|DIR|s3://… [--no-media] [--no-secret-key] [--keep N]`
 (SQLite only; 0, 2 artifacts missing, 3 newer repository, 1), `ferrite restore SOURCE --data
-DIR [--snapshot NAME] [--force]` (0, 3, 1), `ferrite media sync --to STORE (--from STORE |
+DIR [--snapshot NAME] [--force]` (0, 2 restored but the check afterwards failed, 3, 1),
+`ferrite media sync --to STORE (--from STORE |
 --data DIR)` (`local:PATH` or `s3://bucket[/prefix]`, `AWS_*` env; 0, 2 some failed, 1),
-`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 3 lock held, 1),
+`ferrite media gc --data DIR [--dry-run] [--grace-days N] [--claim]` (0, 2 store refused or a
+delete failed, 3 lock held, 1),
 `ferrite media regenerate --data DIR [--all] [--item ID]` (0, 2 some failed, 1). A running
 SQLite site is backed up by `[backup] schedule = "daily"|"weekly"`, `to` (a folder outside
 the data folder, or `s3://`), `keep`, `with_media` (the `site.backup` job; on Postgres it
@@ -231,7 +233,7 @@ each database has an install id (`schema_meta.install_id`; `restore`, `import-si
 copy` give the copy its own), and the GC deletes only from a store whose
 `ferrite-owner.json` names it (`media gc --claim` after a restore in place).
 Update and roll back (09 §1–§2, runbook `docs/operations/solo-upgrade.md`): `ferrite
-self-update [--version X] [--check] [--yes] [--data DIR]` (0 updated or up to date, 2 newer
+self-update [--version X] [--check] [--yes] [--data DIR [--skip-config-check]]` (0 updated or up to date, 2 newer
 release with `--check`, 1 error; clap usage errors are 2 too; a repository build has no
 release key and refuses), `ferrite rollback [--data DIR] [--schema] [--allow-lossy]
 [--restore-snapshot] [--yes]` (0, 3 the kept binary cannot open the schema, 1; `--schema`
