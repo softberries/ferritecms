@@ -301,7 +301,7 @@ mod tests {
             "<p>",
             "<h2 id=",
             "<ul>",
-            "<pre><code",
+            "<pre tabindex=\"0\"><code",
             "<blockquote>",
             "<a href",
         ] {

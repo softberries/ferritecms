@@ -124,7 +124,9 @@ fn render_object(
         "listItem" => wrap("li", "", map, depth, ctx, walk, out),
         "blockquote" => wrap("blockquote", "", map, depth, ctx, walk, out),
         "codeBlock" => {
-            out.push_str("<pre><code");
+            // A focus stop, so a block that scrolls sideways can be scrolled from the
+            // keyboard (WCAG 2.1.1; axe `scrollable-region-focusable`; M4-3b R-b17).
+            out.push_str("<pre tabindex=\"0\"><code");
             if let Some(lang) = attr_str(map, "language").filter(|l| valid_language(l)) {
                 out.push_str(&format!(" class=\"language-{lang}\""));
             }
@@ -574,7 +576,7 @@ mod tests {
         };
         assert_eq!(
             r(mk(json!("c++"))),
-            "<pre><code class=\"language-c++\">&lt;b&gt;x&lt;/b&gt;</code></pre>"
+            "<pre tabindex=\"0\"><code class=\"language-c++\">&lt;b&gt;x&lt;/b&gt;</code></pre>"
         );
         for bad in [
             json!("\"><script>"),
@@ -583,7 +585,10 @@ mod tests {
             json!("a".repeat(33)),
             json!(5),
         ] {
-            assert_eq!(r(mk(bad)), "<pre><code>&lt;b&gt;x&lt;/b&gt;</code></pre>");
+            assert_eq!(
+                r(mk(bad)),
+                "<pre tabindex=\"0\"><code>&lt;b&gt;x&lt;/b&gt;</code></pre>"
+            );
         }
         assert!(r(mk(json!("a".repeat(32)))).contains("language-aaaa"));
     }

@@ -81,7 +81,7 @@ fn page(id: ContentId, title: &str) -> PageItem {
         },
         url: format!("/{}/", title.to_lowercase().replace(' ', "-")),
         html: "<h2 id=\"install-step\">Install step</h2><p>Body <em>html</em></p>\
-               <pre><code>cargo run</code></pre>"
+               <pre tabindex=\"0\"><code>cargo run</code></pre>"
             .into(),
         toc: vec![
             toc(1, "big-title", "Big title"),
