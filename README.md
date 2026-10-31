@@ -22,8 +22,9 @@ $ ferrite import wordpress export.xml --uploads ./wp-content/uploads --data ./si
 > built-in HTTPS (ACME) for solo sites, Prometheus metrics, the release packaging, three
 > example plugins (SEO, analytics, a contact form; [`plugins/examples/`](plugins/examples/)),
 > `ferrite doctor`, three starter themes (`blog`, `docs`, `business`; [`themes/`](themes/))
-> and `ferrite import markdown` are built. See [`docs/BRIEF.md`](docs/BRIEF.md) and
-> [`docs/ROADMAP.md`](docs/ROADMAP.md).
+> and `ferrite import markdown` are built; the milestones up to M4 are done, and what the
+> first release still needs is the roadmap's "Before v0.1.0" list. See
+> [`docs/BRIEF.md`](docs/BRIEF.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Documentation for site owners, operators and developers is written as Markdown in
 [`site/`](site/) and built with FerriteCMS itself: `site/build.sh OUT_DIR` imports it into a
