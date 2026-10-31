@@ -17,7 +17,7 @@ import { keptState } from "./support/app-state";
 import { ContentApi } from "./support/content-api";
 import { expect, test, type Guard } from "./support/fixtures";
 import { authFile, type SiteInfo } from "./support/server";
-import { mailbox } from "./support/smtp-sink";
+import { resetLink } from "./support/smtp-sink";
 import { VIEWPORTS } from "./support/snap";
 import { nextFreshStep, stepAt, totpCode } from "./support/totp";
 import { uid } from "./support/uid";
@@ -113,14 +113,6 @@ async function createMustResetUser(site: SiteInfo, siteKey: string) {
   } finally {
     await ctx.dispose();
   }
-}
-
-/** The token of the newest reset mail to `email` received at or after `after`. */
-async function resetLink(site: SiteInfo, email: string, after: number) {
-  const mail = await mailbox(site.mailDir).waitFor(email, { after });
-  const m = /(\S+\/admin\/reset-password)#token=([A-Za-z0-9._~-]+)/.exec(mail.text);
-  if (!m?.[1] || !m[2]) throw new Error(`no reset link in:\n${mail.text}`);
-  return { url: `${m[1]}#token=${m[2]}`, token: m[2] };
 }
 
 test("login_password_and_logout", async ({ browser, site, guard }) => {

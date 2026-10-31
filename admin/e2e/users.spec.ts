@@ -1,5 +1,6 @@
 // The Users screen under the real server (M2b-3 Task 7; 07 §3 Users): search and the role
-// chip, a new user with a password who must change it at their first sign-in, one's own
+// chip, a new user with a password who must change it at their first sign-in, a new user
+// sent a reset e-mail (through the SMTP sink) who sets a password from its link, one's own
 // row without role, status or delete (Review Focus 1), deleting a user who owns content
 // asks for a reassignment (Review Focus 4), an admin turning off another user's TOTP, and
 // the review screens. Every test makes its own users (`uid()`); the one sign-in context
@@ -15,6 +16,7 @@ import type {
 } from "@playwright/test";
 import { expect, test } from "./support/fixtures";
 import type { SiteInfo } from "./support/server";
+import { resetLink } from "./support/smtp-sink";
 import { VIEWPORTS } from "./support/snap";
 import { stepAt, totpCode } from "./support/totp";
 import { uid } from "./support/uid";
@@ -181,6 +183,57 @@ test("create_user_with_password_must_change", async ({ as, browser, site, guard 
   await expect(
     them.getByRole("heading", { level: 1, name: "Choose a new password" }),
   ).toBeVisible();
+});
+
+test("users_reset_email_reaches_the_sink", async ({ as, browser, site, guard }) => {
+  const page = await as("admin");
+  await open(page);
+  const name = login("mail");
+  const email = `${name}@example.test`;
+  await page.getByRole("button", { name: "New user" }).click();
+  const dialog = page.getByRole("dialog", { name: "New user" });
+  await dialog.getByLabel("Login").fill(name);
+  await dialog.getByLabel("E-mail", { exact: true }).fill(email);
+  await dialog.getByLabel("Display name").fill("Mailed Author");
+  await dialog.getByRole("radio", { name: "Send a reset e-mail" }).click();
+  await expect(dialog.getByLabel("Password", { exact: true })).toHaveCount(0);
+  const after = Date.now();
+  await dialog.getByRole("button", { name: "Create user" }).click();
+  await expect(toast(page, `A reset link was sent to ${email}`)).toBeVisible();
+  await expect(dialog).toBeHidden();
+  await page.getByRole("searchbox", { name: "Search users" }).fill(name);
+  await expect(row(page, name)).toContainText("Must change password");
+
+  // The mail the server sent through the SMTP sink holds a working link.
+  const link = await resetLink(site, email, after);
+  const ctx = await browser.newContext({
+    baseURL: site.url,
+    viewport: VIEWPORTS.desktop,
+    colorScheme: "light",
+    extraHTTPHeaders: { "X-Forwarded-For": forwardedFor(SPEC, 2) },
+  });
+  contexts.push(ctx);
+  await guard.watch(ctx);
+  // Signed out, the admin asks who is signed in first (a `401` the page handles).
+  guard.allowFailedResource(/\/api\/v1\/auth\/me$/);
+  const them = await ctx.newPage();
+  await them.goto(link.url);
+  await expect(
+    them.getByRole("heading", { level: 1, name: "Choose a new password" }),
+  ).toBeVisible();
+  const password = `e2e-mailed-${randomBytes(6).toString("hex")}`;
+  await them.getByLabel("New password", { exact: true }).fill(password);
+  await them.getByLabel("Repeat the new password").fill(password);
+  await them.getByRole("button", { name: "Set password" }).click();
+  await expect(them.getByRole("heading", { level: 1, name: "Password changed" })).toBeVisible();
+  await them.getByRole("link", { name: "Sign in" }).click();
+  await expect(them).toHaveURL(`${site.url}/admin/login`);
+  await them.getByLabel("Login or e-mail").fill(name);
+  await them.getByLabel("Password", { exact: true }).fill(password);
+  await them.getByRole("button", { name: "Sign in" }).click();
+  // The reset was the forced change: straight to the dashboard.
+  await expect(them).toHaveURL(`${site.url}/admin/`);
+  await expect(them.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 });
 
 test("own_row_has_no_role_status_or_delete", async ({ as }) => {
