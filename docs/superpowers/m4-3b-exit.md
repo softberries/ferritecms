@@ -400,3 +400,45 @@ Claims in this file:
 | No migration, no WIT change, no REST change (What shipped) | no new file under `crates/ferrite-store-*/migrations/` or `wit/` from `041b94c` to `ba6d738`; `openapi_snapshot_is_current` passes (§2) | verified |
 | `pulldown-cmark` is the only new direct external dependency; `Cargo.lock` gains it and its `pulldown-cmark-escape` (01) | `git diff 7c24df6 ba6d738 -- Cargo.toml Cargo.lock` | verified |
 | 29 commits, 174 files, +17 033 / −296 (What shipped) | `git log --no-merges 041b94c..ba6d738 \| wc -l`; `git diff --shortstat 041b94c ba6d738` | verified |
+
+## 9. Final review
+
+The whole-branch review (`10b71fe..5aea604`) was done in three parts: A (core and rendering),
+B (the Markdown importer) and C (themes, E2E, CI). One fix round on branch
+`m4-3b-final-fix` from `m4-3` at `5aea604`; each code fix had its failing test first.
+
+**Fixed:**
+
+| Finding | Change |
+|---|---|
+| A-I1: the plugin sanitiser stripped heading ids, so any non-raw `content.body` filter broke `post.toc` and deep links | `id` on `h1`–`h6` kept when `ferrite_domain::html::heading_id_allowed` accepts it (non-empty; lowercase Unicode alphanumerics, `-`, `_`; not reserved), dropped on every other element (`crates/ferrite-plugin-host/src/validate.rs`); tests `a_core_rendered_body_survives`, `hostile_heading_ids_are_dropped`, `every_given_id_survives_the_plugin_sanitiser` (anchor), `heading_ids` (domain), and `sanitised_content_filters` (`ferrite-http` `tests/plugins`, html-inject over a core body with headings and a code block, both profiles); 05 §7, 06 §4/§5 |
+| A-M1: the themes' other fixed ids were not reserved | `RESERVED_FRAGMENT_IDS` (still in `ferrite-domain`, used by both crates) gains every fixed id of the three themes (30 in all); test `fixed_ids` (`ferrite-theme`) reads the templates, including `form_id`-derived ids; 06 §4 |
+| A-M2: `query(order="menu")` picks rows by `(menu_order, id)` | recorded: 06 §4 and §4 above (accepted limit); the exact store order stays in §7 |
+| B-I1: one front matter `description` (multi-line, over 500 characters) or a NUL in `title` failed the whole run | `front::parse` collapses whitespace/control runs to one space, trims, cuts to 500 characters on a char boundary (notice `description-cut`), checks the result with `SeoPatch::check` (a refusal skips the file as `bad-front-matter`), strips NUL from `title`; tests in `front.rs` and `front_matter_core_would_refuse_is_cleaned` (both backends); 08 §8, 09 §8, the Markdown guide |
+| B-I2: no `--takeover` for `import markdown` | added, passed through `import_cmd.rs`; test `a_stale_run_is_taken_over` (exit 3, then 0 with the flag; both backends) and `exit_codes_documented`; 09 §8, the CLI reference, the guide, CLAUDE.md |
+| B-M1: `front page: index.md` printed when the site's choice was kept | `FrontPage::Kept` sets no `front_page`; test `a_kept_front_page_is_not_reported_as_set` |
+| B-M5: a link to a non-Markdown file in the folder was neither imported nor reported | reported `broken-link` (it would 404); test `unimported_links_and_protocol_relative_images_are_reported` |
+| B-M6: a protocol-relative image was dropped silently | reported `outside`; same test |
+| C-M1: the public-themes CI step ran after a setup failure | the admin step has `id: admin-e2e`; the step runs only when its outcome is `success` or `failure` |
+| C-M2: the spec's `afterAll` put `blog` back for nothing | removed, header comment updated (06 §8 did not mention it) |
+| C-M4: business menus without `role="list"` | added on `menu` and `menu__sub`; `business.rs` asserts both (fixture menu gains a child) |
+| C-M5: the docs "Pages" disclosure was not linked to its nav | `aria-controls="nav"` on the summary; `docs.rs`; 06 §8 |
+| C-M6: every heading anchor was "Link to this section" | `Link to section: <heading text>`; `docs.rs` and a new E2E check `docs_heading_anchors_have_distinct_names`; 06 §8 |
+
+**Deferred** (§7 and ROADMAP "Deferred from M4-3b"): A-M3 the tree's full-row read, A-M4 tree
+excerpts bypass `content.excerpt`, A-M5 card `image()` calls spend the bridge budget, A-M6 the
+`page_tree()` memo past 16 pairs, A-M7 `menu_order_cmp` allocations, B-M2 the ~5 GB worst case,
+B-M3 asset folders count toward the folder limit, B-M4 a WXR sharing a Markdown source, C-M3
+the stale-binary poll message, C-M7 `build.sh` and IPv6 loopback URLs, C-M8 the inline styles a
+future public CSP must allow.
+
+**Gates (macOS, Postgres 17 at port 54329):** `cargo fmt --all --check`, `cargo clippy
+--workspace --all-targets -D warnings`, `cargo doc --workspace --no-deps` with `-D warnings`:
+clean. `cargo test -p ferrite-plugin-host -p ferrite-core -p ferrite-domain -p ferrite-theme
+-p ferrite-import-md -p ferrite-import-wp`: 60 binaries, 1407 passed, 0 failed, no `SKIP`;
+`-p ferrite --test import_md --test docs_site --test serve`: 71 passed; `-p ferrite-http --test
+plugins`: 255 passed. `pnpm -C admin exec playwright test --project public-themes-chromium`
+(after `pnpm -C admin build` and `cargo build --release -p ferrite`): 18 passed. `pnpm -C admin
+typecheck` and `lint`: clean. `actionlint` and `shellcheck site/build.sh`: clean. `site/build.sh`
+into a fresh folder with the release binary: `created 26`, `front page: index.md`, no problem
+lines. Not re-run: the full workspace tests, the other admin E2E projects, Linux.
