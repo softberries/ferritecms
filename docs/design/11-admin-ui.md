@@ -125,6 +125,14 @@ Derived tokens (`var()` in `tokens.css`, so they follow the mode):
 - `overlay` (the scrim behind dialogs, sheets and alert dialogs; decoration, no
   contrast pair): 0.21 0.012 260 / 0.24 light, 0.1 0.005 260 / 0.6 dark (Task 8,
   replacing the generated `bg-black/10`).
+- `popover-edge` (M4-4): the 1 px ring (`ring-1 ring-popover-edge`) of dropdown menus
+  (and their sub-menus), selects, popovers and hover cards. Light: = `border` (those
+  popups also cast `--shadow-2`); dark: 0.36 0.01 260, about 1.77:1 on `background`
+  and 1.68:1 on `card`, because dark popups cast no shadow and the generated
+  `ring-foreground/10` (about 1.26:1) left a menu nearly edgeless over a card.
+  Decoration, so no WCAG minimum; `popup_edge_stands_out_in_dark` keeps it above
+  `border` and at ≥ 1.7:1 / 1.6:1. Dialogs, alert dialogs, sheets and cards keep their
+  rings: they sit on the scrim or are not popups.
 - Sidebar: `sidebar` = `card`, `sidebar-accent` = `muted`, `sidebar-foreground` and
   `sidebar-accent-foreground` = `foreground`, `sidebar-primary(-foreground)` =
   `primary(-foreground)`, `sidebar-border` = `border`, `sidebar-ring` = `ring`.
@@ -223,7 +231,12 @@ contrast pair unchanged.
   screens targets stay ≥ 44 px whatever the density (§8): under `@media (pointer:
   coarse)` `tokens.css` sets `--control-h` 44 px and `--row-h` 48 px for both densities
   (`:root:root, :root[data-density]`, so it outranks the compact rule; Task 8, E2E
-  `styleguide_touch_targets`).
+  `styleguide_touch_targets`). The fixed small icon sizes follow too (M4-4): `Button`'s
+  `icon-xs` (24 px) and `icon-sm` (28 px) carry `pointer-coarse:size-11`, a real 44 px
+  box; `InputGroupButton`'s `icon-xs` / `icon-sm` (24 / 32 px), which sit inside a field
+  that is itself 44 px tall, keep their look and widen the hit area with a pseudo-element
+  (`relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5` /
+  `-inset-1.5`), as `Switch` does. `xs` / `sm` text buttons are unchanged.
 - `--sticky-top` (default `0px`, `tokens.css`): the height of whatever sticks to the
   top of the viewport above page content. The shell sets it to its top bar's height
   (`3.5rem`, on the `SidebarProvider` wrapper in `routes/_app.tsx`); the
@@ -537,6 +550,9 @@ Rules for generated files:
 | `toggle.tsx` | removed `outline-none` and ring classes; `default` size `h-8 min-w-8` → `h-control min-w-control`; pressed `bg-muted` → `border-primary/50 bg-primary/10 text-foreground` with an ember icon | focus ring; density; `bg-muted` was nearly invisible on `card` (0.965 on 1), and ember text on the tint gave 4.42:1 |
 | `tabs.tsx` | trigger: removed the `focus-visible:*` ring/outline classes, `text-foreground/60` → `text-muted-foreground`; content: removed `outline-none` | focus ring (panels are focusable); inactive tabs were 4.48:1 on `muted` |
 | `dropdown-menu.tsx` | item, checkbox item, radio item, sub-trigger: `outline-hidden` → `-outline-offset-2` | focus ring, inset inside the menu |
+| `button.tsx` (M4-4) | `icon-xs`, `icon-sm`: added `pointer-coarse:size-11` | 44 px touch targets (§4, §8) |
+| `input-group.tsx` (M4-4) | button `icon-xs`, `icon-sm`: added `relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5` / `-inset-1.5` | 44 px hit area inside a 44 px field (§4) |
+| `dropdown-menu.tsx`, `select.tsx`, `popover.tsx`, `hover-card.tsx` (M4-4) | content (and sub-content): `ring-foreground/10` → `ring-popover-edge` | the edge nearly vanished in dark mode (§3) |
 | `scroll-area.tsx` | viewport: removed `outline-none` and ring classes, added `-outline-offset-2` and `tabIndex={0}` | a scrollable region must be keyboard-reachable (axe `scrollable-region-focusable`) |
 | `sidebar.tsx` | group label, group action, menu button, menu action, sub button: removed `outline-hidden focus-visible:ring-2`; strings through `t()` | focus ring; F31 |
 | `sidebar.tsx` (Task 10) | removed the `sidebar_state` cookie write and the global `mod+b` `keydown` listener | the shell stores the state per viewer (`ferrite.admin.sidebar` in `localStorage`, `preferences.ts`) and binds `mod+b` through `shortcuts.ts`, which leaves text fields and the editor alone (TipTap's bold is `mod+b`) |
@@ -709,9 +725,14 @@ bar's trigger (`aria-haspopup="dialog"`, `aria-keyshortcuts`).
   `PaletteHit` has no permalink (F6): a hit shows title, slug (mono), status dot with
   its label, and the type. Opening a hit goes to `/content/<type>/<id>`.
 - Loading without flicker: nothing changes for the first 250 ms of a search; after
-  that, a first search shows three skeleton rows under "Content" and a later one dims
-  the previous hits to 60 %. The footer's `role="status"` says "Searching content…" or
-  "N content results" (it is visually hidden on phones, still read).
+  that, a first search shows three skeleton rows under "Content", and a later one keeps
+  the previous hits up at full colour (P81: dimmed to 60 %, muted text fell to about
+  2:1 in light mode, and no opacity below about 0.96 keeps 4.5:1). Either way the
+  field's search icon turns into a spinner (`data-slot="palette-spinner"`, standing
+  still under reduced motion; its shape still differs) and the listbox is
+  `aria-busy="true"`; the rows stay selectable. The footer's `role="status"` says
+  "Searching content…" or "N content results" (it is visually hidden on phones, still
+  read).
 - Empty: a centred icon, "No results for “…”" and a hint, drawn over the list, not
   inside it (`useCommandState`): a listbox holding text but no option fails axe
   `aria-required-children`, so `CommandEmpty` is not used.
