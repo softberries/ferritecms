@@ -32,12 +32,15 @@ function syncActiveDescendant(root: HTMLElement): void {
   }
 }
 
-function useActiveDescendantSync(): React.RefCallback<HTMLDivElement> {
-  return React.useCallback((root: HTMLDivElement | null) => {
-    if (!root) return;
-    syncActiveDescendant(root);
-    const observer = new MutationObserver(() => syncActiveDescendant(root));
-    observer.observe(root, {
+function Command({ className, ref, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+  const root = React.useRef<HTMLDivElement>(null);
+  React.useImperativeHandle(ref, () => root.current as HTMLDivElement, []);
+  React.useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    syncActiveDescendant(el);
+    const observer = new MutationObserver(() => syncActiveDescendant(el));
+    observer.observe(el, {
       subtree: true,
       childList: true,
       attributes: true,
@@ -45,26 +48,9 @@ function useActiveDescendantSync(): React.RefCallback<HTMLDivElement> {
     });
     return () => observer.disconnect();
   }, []);
-}
-
-function Command({ className, ref, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
-  const sync = useActiveDescendantSync();
-  const refs = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      const cleanup = sync(node);
-      if (typeof ref === "function") ref(node);
-      else if (ref) ref.current = node;
-      return () => {
-        if (typeof cleanup === "function") cleanup();
-        if (typeof ref === "function") ref(null);
-        else if (ref) ref.current = null;
-      };
-    },
-    [sync, ref],
-  );
   return (
     <CommandPrimitive
-      ref={refs}
+      ref={root}
       data-slot="command"
       className={cn(
         "flex size-full flex-col overflow-hidden rounded-xl! bg-popover p-1 text-popover-foreground",
