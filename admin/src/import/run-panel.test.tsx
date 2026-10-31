@@ -154,6 +154,31 @@ test("the live region mounts empty, then says the phase", async () => {
   expect(title).toHaveAttribute("tabindex", "-1");
 });
 
+test("the run's live region is in the page before its first text", async () => {
+  let answer = () => {};
+  const held = new Promise<void>((resolve) => {
+    answer = resolve;
+  });
+  stubRoutes({
+    [`/api/v1/import/jobs/${JOB}`]: async () => {
+      await held;
+      return json(job());
+    },
+  });
+  renderWithRouter(<RunPanel jobId={JOB} onDismiss={vi.fn()} />);
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-slot=import-run-loading]")).not.toBeNull(),
+  );
+  // While the job loads the region is already there, empty.
+  const live = document.querySelector<HTMLElement>("[data-slot=import-run-live]");
+  expect(live).not.toBeNull();
+  expect(live).toHaveAttribute("aria-live", "polite");
+  expect(live).toBeEmptyDOMElement();
+  answer();
+  await vi.waitFor(() => expect(live).toHaveTextContent("Import queued."));
+  expect(document.querySelector("[data-slot=import-run-live]")).toBe(live);
+});
+
 test("failed run shows error and partial report link", async () => {
   const onDismiss = vi.fn();
   stubRoutes({
