@@ -62,8 +62,8 @@ pub use redirects::{
 };
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapPage, TermPublic,
-    UserPublic,
+    PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapFile, SitemapPage,
+    TermPublic, UserPublic,
 };
 pub use system::{MetricsSeries, SystemService};
 pub use taxonomy::TaxonomyService;

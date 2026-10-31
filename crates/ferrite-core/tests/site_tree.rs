@@ -175,6 +175,20 @@ pub async fn tree_matches_the_sitemap(db: &TestDb) {
     assert_eq!(node(a1).title, "Title a1");
     assert_eq!(node(a1).url, "/a/a1/");
     assert_eq!(node(a2).menu_order, 3);
+
+    // With `a` as the static front page both name it `/` (M4-4 P67), its children
+    // keep their paths, and the sitemap depends on the option.
+    set_front_page(store, json!(a.to_string())).await;
+    let tree = r.tree("page").await.unwrap().value.expect("a page tree");
+    let read = r.sitemap("page", None).await.unwrap();
+    assert!(read.deps.contains(&option_key(FRONT_PAGE_OPTION)));
+    let want: BTreeSet<String> = read.value.entries.iter().map(|e| e.url.clone()).collect();
+    let got: BTreeSet<String> = tree.nodes.iter().map(|n| n.url.clone()).collect();
+    assert_eq!(got, want);
+    assert!(want.contains("/") && !want.contains("/a/"), "{want:?}");
+    assert!(want.contains("/a/a1/"), "{want:?}");
+    let posts = r.sitemap("post", None).await.unwrap().value;
+    assert!(posts.entries.iter().all(|e| e.url != "/"), "{posts:?}");
 }
 
 /// R-b1: a node carries the stored excerpt and the featured media id, the id only

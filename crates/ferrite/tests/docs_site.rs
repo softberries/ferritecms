@@ -15,6 +15,9 @@ use std::time::Duration;
 
 /// Paths the link check leaves out: theme assets, media files and the admin SPA.
 const SKIPPED_PREFIXES: [&str; 3] = ["/_theme/", "/_media/", "/admin/"];
+/// The permalink of the front page `import markdown --front-page` makes of
+/// `site/content/index.md` (slug `home`); it answers 301 to `/` (M4-4 P67).
+const FRONT_PERMALINK: &str = "/home/";
 
 fn ferrite() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ferrite"));
@@ -521,28 +524,29 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
     let mut checked: HashMap<String, Result<(), String>> = HashMap::new();
     let mut problems = Vec::new();
     let mut with_toc = 0;
-    let root_listed = urls
+    // M4-4 P67: the sitemap names the static front page `/`, never its own permalink
+    // `/home/` (which answers 301 to `/`).
+    let paths: BTreeSet<String> = urls
         .iter()
-        .any(|u| resolve(u, "/", &origin).as_deref() == Some("/"));
-    let mut front_permalink = None;
-    // Each page's sidebar links, checked against the front page's permalink after the
-    // loop (pages before the permalink in sitemap order too).
-    let mut sidebars: Vec<(String, Vec<String>)> = Vec::new();
+        .filter_map(|u| resolve(u, "/", &origin))
+        .collect();
+    assert!(
+        paths.contains("/"),
+        "the sitemap does not list `/`: {paths:?}"
+    );
+    assert!(
+        !paths.contains(FRONT_PERMALINK),
+        "the sitemap lists {FRONT_PERMALINK}: {paths:?}"
+    );
+    let moved = get(port, FRONT_PERMALINK);
+    assert_eq!(
+        (moved.status, moved.location.as_deref()),
+        (301, Some("/")),
+        "{FRONT_PERMALINK}"
+    );
     for url in &urls {
-        let mut path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
-        let mut page = get(port, &path);
-        // M4-4 P67: the front page's own permalink answers 301 to `/`. Until the sitemap
-        // names the front page `/` itself (M4-4 Task 3), it lists that permalink: then,
-        // and only for a redirect to `/`, `/` is checked in its place.
-        if page.status == 301
-            && page.location.as_deref() == Some("/")
-            && !root_listed
-            && front_permalink.is_none()
-        {
-            front_permalink = Some(path);
-            path = "/".to_owned();
-            page = get(port, &path);
-        }
+        let path = resolve(url, "/", &origin).unwrap_or_else(|| panic!("sitemap URL {url}"));
+        let page = get(port, &path);
         if page.status != 200 {
             problems.push(format!("{path}: answers {}", page.status));
             continue;
@@ -557,7 +561,11 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         if !tree_links.iter().any(|l| l == "/") {
             problems.push(format!("{path}: the sidebar does not link `/`"));
         }
-        sidebars.push((path.clone(), tree_links));
+        if tree_links.iter().any(|l| l == FRONT_PERMALINK) {
+            problems.push(format!(
+                "{path}: the sidebar links the front page as {FRONT_PERMALINK}"
+            ));
+        }
         let scan = scan(&page.body);
         if scan.h1 != 1 {
             problems.push(format!("{path}: {} <h1> elements", scan.h1));
@@ -605,13 +613,6 @@ fn every_docs_page_answers_with_one_h1_and_working_links() {
         urls.len(),
         checked.keys().collect::<BTreeSet<_>>()
     );
-    if let Some(p) = &front_permalink {
-        for (path, links) in &sidebars {
-            if links.contains(p) {
-                problems.push(format!("{path}: the sidebar links the front page as {p}"));
-            }
-        }
-    }
     // The TOC check above must not pass because no page had a TOC.
     assert!(with_toc >= 1, "no page has a <nav class=\"docs-toc\">");
     assert!(

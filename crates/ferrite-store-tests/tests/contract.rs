@@ -116,6 +116,7 @@ backend_tests!(
     list_readable_by,
     list_readable_by_hides_future_dated,
     count_matches_list,
+    sitemap_file_bounds,
     get_many_order_and_missing,
     slugs_with_prefix_matches,
     slugs_with_prefix_limit_1000,

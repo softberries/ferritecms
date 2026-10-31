@@ -1563,9 +1563,10 @@ pub async fn media_file_is_published_only(db: &TestDb) {
     assert_eq!(f.item, public);
 }
 
-/// `sitemap_files`: `ceil(public items / file length)` from one count; with a short
-/// file length the files split at that size (`with_sitemap_file_len`).
-pub async fn sitemap_files_count_and_split(db: &TestDb) {
+/// `sitemap_files`: one bound per file of the file length (`with_sitemap_file_len`),
+/// from one store call: file `n` starts at its bound's cursor, where file `n - 1`
+/// stops, and its `lastmod` is the newest `updated_at` of its entries.
+pub async fn sitemap_files_bounds_and_split(db: &TestDb) {
     let store = db.shared_store();
     let r = reader(store.clone()).with_sitemap_file_len(2);
     let author = user(store.as_ref(), "smw", Role::Author).await;
@@ -1590,26 +1591,35 @@ pub async fn sitemap_files_count_and_split(db: &TestDb) {
     )
     .await;
     let files = r.sitemap_files("post").await.unwrap();
-    assert_eq!(files.value, 2);
+    assert_eq!(files.value.len(), 2);
     assert!(files.deps.contains(&archive_key("post")));
-    assert_eq!(r.sitemap_files("page").await.unwrap().value, 0);
-    assert_eq!(r.sitemap_files("media").await.unwrap().value, 0);
+    assert!(r.sitemap_files("page").await.unwrap().value.is_empty());
+    assert!(r.sitemap_files("media").await.unwrap().value.is_empty());
+    assert_eq!(files.value[0].after, None);
     let first = r.sitemap("post", None).await.unwrap().value;
     assert_eq!(first.entries.len(), 2);
+    assert_eq!(files.value[1].after, first.next_cursor);
     let second = r
-        .sitemap("post", first.next_cursor.as_deref())
+        .sitemap("post", files.value[1].after.as_deref())
         .await
         .unwrap()
         .value;
     assert_eq!(second.entries.len(), 1);
     assert!(second.next_cursor.is_none());
+    for (file, page) in files.value.iter().zip([&first, &second]) {
+        assert_eq!(
+            Some(file.lastmod),
+            page.entries.iter().map(|e| e.lastmod).max()
+        );
+    }
     // The default length: one file.
     assert_eq!(
         reader(store.clone())
             .sitemap_files("post")
             .await
             .unwrap()
-            .value,
+            .value
+            .len(),
         1
     );
 }
@@ -2038,7 +2048,7 @@ backend_tests!(
     inline_image_narrower_than_theme,
     inline_svg_has_no_srcset,
     media_is_published_only,
-    sitemap_files_count_and_split,
+    sitemap_files_bounds_and_split,
     media_file_is_published_only,
     no_leak_single,
     no_leak_by_id_and_latest,

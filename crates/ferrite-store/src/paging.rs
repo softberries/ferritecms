@@ -10,7 +10,7 @@ use ferrite_domain::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{StoreError, validate_json, validate_text};
+use crate::{FileBound, StoreError, validate_json, validate_text};
 
 /// The sort-key part of a content cursor, typed by [`ContentOrder`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,6 +707,47 @@ pub fn content_cursor(order: ContentOrder, cursor: &str) -> Result<(SortKey, Uui
         _ => return Err(bad()),
     };
     Ok((key, id))
+}
+
+/// Validates a [`ContentRepo::file_bounds`](crate::ContentRepo::file_bounds) call
+/// before any SQL: `list`'s filter checks, the [`ContentOrder::PublishedDesc`] order
+/// and a `file_len` of at least 1.
+pub fn check_file_bounds(query: &ContentQuery, file_len: u32) -> Result<(), StoreError> {
+    check_content_filters(query)?;
+    if query.order != ContentOrder::PublishedDesc {
+        return Err(StoreError::Invalid(
+            "file bounds need the published_desc order".into(),
+        ));
+    }
+    if file_len == 0 {
+        return Err(StoreError::Invalid("file length must be at least 1".into()));
+    }
+    Ok(())
+}
+
+/// The [`FileBound`]s from the rows of a backend's file-bounds query: one row per
+/// file, in order, holding the file's last row `(published_at, id)` and the file's
+/// newest `updated_at` (micros). A file's `after` is the cursor of the previous
+/// file's last row, exactly as `list` encodes it.
+pub fn file_bounds_from_rows(
+    rows: impl IntoIterator<Item = (i64, Uuid, i64)>,
+) -> Result<Vec<FileBound>, StoreError> {
+    let mut after = None;
+    let mut out = Vec::new();
+    for (published_at, id, updated_at) in rows {
+        let lastmod = Timestamp::from_micros(updated_at)
+            .map_err(|e| StoreError::Database(format!("corrupt updated_at: {e}")))?;
+        out.push(FileBound {
+            after: after.take(),
+            lastmod,
+        });
+        after = Some(Cursor::encode(
+            content_tag(ContentOrder::PublishedDesc),
+            &json!(published_at),
+            id,
+        ));
+    }
+    Ok(out)
 }
 
 /// One index-friendly part of a content listing (I3). A listing runs its parts in order,
