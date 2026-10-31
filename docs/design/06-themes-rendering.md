@@ -261,6 +261,12 @@ from items, plugin `Post.url`, the API's `url`) and redirect rows that point at 
 still name it and take one hop. Making hydration name it `/` would also break this check:
 `content()` matches `item.url` against the request path, so `/home/` would become a 404.
 
+**Cache cost of P67.** Every single-item page, and every page whose menu has a public item,
+now depends on `option:reading.front_page` (the hit asks `is_front_page`, the menu asks
+`links`), and each content cache miss spends one more option read. Changing the front page
+therefore flushes most of the page cache, not only the redirect entry and the menus. That
+is accepted for a rare admin action.
+
 **Term archives** (P25). `/{taxonomy}/{slug}/` lists the public items of every public type the
 taxonomy applies to (its `content_types` but media, at most 20, through `ContentQuery.kinds`),
 newest first, so a taxonomy used only by `book` has archives too. The read records `term:<id>`

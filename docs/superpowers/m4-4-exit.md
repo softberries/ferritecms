@@ -82,7 +82,8 @@ the controller's ledger):
 5. **Import robustness** (merge `8920c33`; P78–P80): the Markdown scan caps the total at
    256 MiB (`MdError::TooMuchText`), counts only folders that hold a page toward 5000 and caps
    the walk at 50 000 folders; uploads-zip entries that collide after NFC (readable or not)
-   are all reported as missing media; an import run's owner job is live only while `running`
+   are all reported as missing media (so are entries that collide only after the folders
+   above `uploads/` are dropped, which the first entry used to win; see §4); an import run's owner job is live only while `running`
    with an unexpired lease (Postgres with `now()`), in both stores and `job_may_start`; the
    `job` span names the node, `import.wordpress` logs `started`/`done`, a database error
    deleting an input row is a `warn`; the truncated-zip regression test.
@@ -318,6 +319,14 @@ M4-4 lists and of the M0/M1 lists under Later with its pointer); CLAUDE.md and R
   feeds, plugin `Post.url`, the API's `url` and redirect rows still name the front page's
   permalink (`/home/`) and reach `/` through the 301; only the tree, the sitemap and menus
   name it `/` (06 §3). The 301 drops every query parameter but `cpage` (the cache key).
+- **The front page option in the page cache:** single-item pages and pages with a menu
+  depend on `option:reading.front_page` (P67), so changing the front page flushes most of
+  the page cache, and each content cache miss reads one more option (06 §3).
+- **Colliding upload entries block each other:** in an uploads zip, entries whose keys
+  collide only after the folders above `uploads/` are dropped (`wp-content/uploads/2024/a.png`
+  beside `2024/a.png`) are ambiguous now, like NFC collisions, so none is read and each is
+  reported as missing media; before M4-4 the first entry won. A zip with two copies of the
+  uploads tree imports none of the duplicated files (08 §1; P79).
 - **Accepting an unreadable relation:** `check_relations` accepts a relation to an item the
   writer cannot read (it counts as missing); a later save of that item by someone who can read
   the target is `422` at that path until the value is changed (07 §1).
@@ -374,6 +383,9 @@ M4-4 lists and of the M0/M1 lists under Later with its pointer); CLAUDE.md and R
   - The daily `artifacts.gc` runs at 03:00 UTC (it was 00:00 with the backup).
   - The front page's permalink (`/home/`) now answers `301` to `/`; browsers keep it for up
     to an hour after the front page changes.
+  - Changing the front page flushes most of the page cache (single items and pages with a
+    menu depend on the option), and a zip with two copies of the uploads tree now imports
+    none of the duplicated files (§4).
   - Authors and contributors can no longer pick another user's draft, pending, private or
     scheduled page as a parent (existing parents stay).
   - A blank `q` lists everything on `GET /users` (it was `422`).
