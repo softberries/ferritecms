@@ -138,7 +138,15 @@ export const MAX_CANONICAL = 2048;
  * White_Space). Unlike JS `trim()` it keeps U+FEFF (a BOM is not White_Space).
  */
 export function trimSeo(text: string): string {
-  return text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  // A scan from each end, not `\p{White_Space}+$`: that regex retries from every
+  // position of a long inner whitespace run, quadratic in its length.
+  // (No White_Space code point is astral, so code units are safe to test.)
+  const ws = /\p{White_Space}/u;
+  let start = 0;
+  let end = text.length;
+  while (start < end && ws.test(text.charAt(start))) start++;
+  while (end > start && ws.test(text.charAt(end - 1))) end--;
+  return text.slice(start, end);
 }
 
 /**

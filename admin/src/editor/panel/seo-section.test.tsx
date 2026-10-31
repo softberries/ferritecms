@@ -331,6 +331,27 @@ describe("seo_section", () => {
     expect(took).toBeLessThan(250);
   });
 
+  test("a_huge_whitespace_paste_is_cut_at_once", () => {
+    // A long inner whitespace run made the trim's `\s+$` regex quadratic, once per
+    // bisection step.
+    const { doc, setMeta } = docWith({ ...EMPTY, description: "xyz" });
+    renderSeo(doc);
+    const description = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Meta description",
+    });
+    description.setSelectionRange(2, 2);
+    const paste = beforeInput("insertFromPaste", null, `${" ".repeat(49_999)}b`);
+    const started = performance.now();
+    act(() => {
+      description.dispatchEvent(paste);
+    });
+    const took = performance.now() - started;
+    expect(paste.defaultPrevented).toBe(true);
+    const next = setMeta.mock.calls[0]?.[0] as { seo: SeoDraft };
+    expect(next.seo.description).toBe(`xy${" ".repeat(497)}z`);
+    expect(took).toBeLessThan(250);
+  });
+
   test("the preview trims like the server, keeping a BOM", () => {
     const { doc } = docWith({ ...EMPTY, title: "﻿" });
     const { container } = renderSeo(doc);
