@@ -60,8 +60,10 @@ pub enum MediaCommand {
     /// happen; `, failed F` is appended when some deletes failed, retried by the next pass;
     /// `; claimed the media store from …` after a claim; `; deletes skipped: …` with the
     /// reason when steps 2 and 3 did not run).
-    /// Exit code: 0, or 3 when another GC or a backup's blob copy holds the GC lock, or 1 on
-    /// an error, or 2 for a usage error (clap).
+    /// Exit code: 0 (also for the first pass that only writes the owner marker), 2 when the
+    /// store was refused (another site's marker, an unreadable one, a claim that did not
+    /// hold) or a delete failed (and for a usage error, clap), 3 when another GC or a
+    /// backup's blob copy holds the GC lock, 1 on an error.
     Gc(GcArgs),
     /// Make the image size variants again, in process (after a theme adds sizes).
     ///
@@ -153,15 +155,21 @@ async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
     }
     .await;
     store.close().await;
-    match done? {
-        Some(report) if args.dry_run => println!("dry run: {report}"),
-        Some(report) => println!("{report}"),
-        None => {
-            eprintln!("another artifacts GC (or a backup copying artifacts) is running");
-            return Ok(ExitCode::from(3));
-        }
+    let Some(report) = done? else {
+        eprintln!("another artifacts GC (or a backup copying artifacts) is running");
+        return Ok(ExitCode::from(3));
+    };
+    if args.dry_run {
+        println!("dry run: {report}");
+    } else {
+        println!("{report}");
     }
-    Ok(ExitCode::SUCCESS)
+    // M4-4 P74: the pass did less than asked.
+    Ok(if report.owner_refused || report.failed > 0 {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// How one object fared.

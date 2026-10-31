@@ -40,9 +40,14 @@ pub struct SelfUpdateArgs {
     /// Do not ask for confirmation (required when stdin is not a terminal).
     #[arg(long)]
     pub yes: bool,
-    /// The site's data folder: also run the new binary's `migrate status` for it.
+    /// The site's data folder: also run the new binary's `config check` and `migrate
+    /// status` for it (a configuration the new binary refuses refuses the update).
     #[arg(long)]
     pub data: Option<PathBuf>,
+    /// With --data: do not refuse the update when the new binary's `config check` fails
+    /// (for example when this shell lacks the service's environment).
+    #[arg(long, requires = "data")]
+    pub skip_config_check: bool,
     /// Test seam: the GitHub API root to use instead of https://api.github.com (plain
     /// HTTP allowed).
     #[cfg(feature = "test-seams")]
@@ -171,6 +176,7 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
     println!("new binary: {reported}");
 
     if let Some(data) = &args.data {
+        check_config(&new, data, args.skip_config_check).await?;
         let mut probe_args = ["migrate", "status", "--data"].map(OsStr::new).to_vec();
         probe_args.push(data.as_os_str());
         let (code, out) = probe(&new, &probe_args).await?;
@@ -206,6 +212,42 @@ pub async fn run(args: SelfUpdateArgs) -> Result<ExitCode> {
          start `ferrite serve`"
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// P71: the new binary's `config check --data DIR` (the configuration and environment as
+/// its `serve` would load them, no database). Exit 1 refuses the update with its output,
+/// unless `skip`; any other failure to run it only warns (`migrate status` runs next).
+async fn check_config(new: &Path, data: &Path, skip: bool) -> Result<()> {
+    let mut probe_args = ["config", "check", "--data"].map(OsStr::new).to_vec();
+    probe_args.push(data.as_os_str());
+    let (code, out) = probe(new, &probe_args).await?;
+    println!("config check of the new binary for {}:", data.display());
+    print!("{out}");
+    match code {
+        Some(0) => Ok(()),
+        Some(1) if skip => {
+            eprintln!(
+                "warning: the new binary refuses this site's configuration (see its output \
+                 above); going on because of --skip-config-check"
+            );
+            Ok(())
+        }
+        Some(1) => bail!(
+            "the new binary refuses this site's configuration (config check exit 1, its \
+             output above): fix ferrite.toml or the environment first; nothing was changed. \
+             The check runs with this shell's environment: run self-update with the \
+             service's environment (for systemd, the Environment= and EnvironmentFile= of \
+             the unit), or pass --skip-config-check if only the service has what the check \
+             lacks"
+        ),
+        other => {
+            eprintln!(
+                "warning: could not run the new binary's config check (exit {other:?}): see \
+                 its output above"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// The running binary (symlinks resolved), or the test seam's path.

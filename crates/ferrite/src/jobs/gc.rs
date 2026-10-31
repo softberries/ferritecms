@@ -17,6 +17,9 @@ use crate::gc::{self, GcOptions};
 pub const ARTIFACTS_GC_KIND: &str = "artifacts.gc";
 /// How often the pass is scheduled.
 pub const ARTIFACTS_GC_EVERY: Duration = Duration::from_secs(86_400);
+/// When in the (UTC) day the pass is due: 03:00, apart from a daily `site.backup` at 00:00,
+/// which waits for the GC lock when the two meet (M4-4 P75).
+pub const ARTIFACTS_GC_OFFSET: Duration = Duration::from_secs(3 * 3_600);
 /// Longest one pass may take; a pass cut short continues the next day.
 pub const ARTIFACTS_GC_TIMEOUT: Duration = Duration::from_secs(3_600);
 
@@ -66,12 +69,14 @@ impl JobHandler for ArtifactsGcHandler {
     }
 }
 
-/// The [`ARTIFACTS_GC_KIND`] periodic, every [`ARTIFACTS_GC_EVERY`].
+/// The [`ARTIFACTS_GC_KIND`] periodic, every [`ARTIFACTS_GC_EVERY`], due
+/// [`ARTIFACTS_GC_OFFSET`] into the day.
 pub fn artifacts_gc_periodic() -> Periodic {
     Periodic {
         kind: ARTIFACTS_GC_KIND,
         every: ARTIFACTS_GC_EVERY,
         payload: json!({"v": 1}),
         max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
+        offset: ARTIFACTS_GC_OFFSET,
     }
 }

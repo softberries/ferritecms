@@ -228,6 +228,7 @@ async fn scheduled_backup_while_serving_restores() {
             every: Duration::from_secs(2),
             payload: json!({"v": 1}),
             max_attempts: SITE_BACKUP_MAX_ATTEMPTS,
+            offset: Duration::ZERO,
         }]),
         scheduler_tick: Some(Duration::from_millis(100)),
         runner: RunnerOverrides {
@@ -330,6 +331,24 @@ async fn scheduled_backup_while_serving_restores() {
         "{}",
         text(&out)
     );
+
+    // M4-4 P69: the snapshot held the job's own row as `running`; the restored copy has it
+    // `done`, so its reaper never runs that backup again.
+    let (running, done): (i64, i64) = {
+        let mut conn = sqlite(&target).await;
+        let row = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM jobs WHERE kind = 'site.backup' \
+                     AND status = 'running'), \
+                    (SELECT count(*) FROM jobs WHERE kind = 'site.backup' AND status = 'done')",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        let _ = conn.close().await;
+        row
+    };
+    assert_eq!(running, 0);
+    assert!(done >= 1, "{done}");
 
     // It holds the content written before and during the backups.
     let (has_marker, during): (i64, i64) = {

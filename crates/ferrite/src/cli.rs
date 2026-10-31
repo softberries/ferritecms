@@ -92,10 +92,12 @@ pub enum Command {
     /// (those present are skipped). The database is not migrated: the command prints the
     /// migration status and `serve` migrates under `database.auto_migrate`. A failed restore
     /// leaves the data folder as it was. An empty folder (a mount point too) is restored into
-    /// in place; `--force` refuses a mount point.
+    /// in place; `--force` refuses a mount point. A restored `[media] root` that is absolute
+    /// and inside a folder `--force` moves aside (or an absent one) is refused.
     ///
-    /// Exit code: 0 ok, 3 when the backup's schema is newer than this binary (nothing is
-    /// written), 1 on any other error.
+    /// Exit code: 0 ok, 2 restored but the check afterwards failed (the site is in place:
+    /// look at it before serving), 3 when the backup's schema is newer than this binary
+    /// (nothing is written), 1 on any other error (nothing was put in place).
     Restore(backup::RestoreArgs),
     /// Database tools.
     #[command(subcommand)]
@@ -118,7 +120,8 @@ pub enum Command {
     /// GitHub, downloads this target's asset with `SHA256SUMS` and `SHA256SUMS.minisig`,
     /// checks the minisign signature with the key built into this binary, then the asset's
     /// sha256, unpacks it beside the binary and runs the new binary's `--version` (with
-    /// `--data`, also its `migrate status`). After confirmation (`--yes` without a
+    /// `--data`, also its `config check`, which refuses the update when it fails unless
+    /// `--skip-config-check`, and its `migrate status`). After confirmation (`--yes` without a
     /// terminal) the running binary is copied to `ferrite.prev` and the new one is renamed
     /// over it. Restart the service afterwards. Any refusal leaves the binary untouched; a
     /// build without a release key refuses.
@@ -136,8 +139,10 @@ pub enum Command {
     /// `--schema` (needs `--data`) reverts to the `schema_from` of `<data>/upgrade.json` and
     /// must run as the binary the record names as `to` (after a binary rollback that is
     /// `ferrite.prev`). It runs the down migrations under the migrate lock (with SQLite
-    /// `serve` must be stopped); a lossy step needs `--allow-lossy`. With
-    /// `--restore-snapshot` (SQLite only) the recorded pre-upgrade snapshot replaces the
+    /// `serve` must be stopped; on Postgres it refuses while the node registry shows a live
+    /// node); a lossy step needs `--allow-lossy`. With
+    /// `--restore-snapshot` (SQLite only) the recorded pre-upgrade snapshot (which must be at
+    /// the record's `schema_from`) replaces the
     /// database instead: everything written since the upgrade is lost, so it asks first
     /// (`--yes` without a terminal), and the current database with its `-wal`/`-shm` is
     /// moved to `backups/rolled-back-<ts>.db`, never deleted. Then it swaps the binaries

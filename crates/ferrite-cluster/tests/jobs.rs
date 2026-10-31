@@ -930,6 +930,7 @@ pub async fn scheduler_inserts_one_job_per_period(db: Arc<TestDb>) {
         payload: json!({"v": 1}),
         // Not the default (5): the inserted jobs must carry the periodic's own value.
         max_attempts: 3,
+        offset: Duration::ZERO,
     };
     let stop = CancellationToken::new();
     let start_now = first.read().nodes().db_now().await.unwrap();

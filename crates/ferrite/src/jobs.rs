@@ -38,8 +38,8 @@ pub use backup::{
     SITE_BACKUP_KIND, SITE_BACKUP_MAX_ATTEMPTS, SITE_BACKUP_TIMEOUT, SiteBackupHandler, site_backup,
 };
 pub use gc::{
-    ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_TIMEOUT, ArtifactsGcHandler,
-    artifacts_gc_periodic,
+    ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_OFFSET, ARTIFACTS_GC_TIMEOUT,
+    ArtifactsGcHandler, artifacts_gc_periodic,
 };
 pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
@@ -366,6 +366,7 @@ pub fn publish_due_periodic() -> Periodic {
         every: PUBLISH_DUE_EVERY,
         payload: json!({"v": 1}),
         max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
+        offset: Duration::ZERO,
     }
 }
 
@@ -376,6 +377,7 @@ pub fn plugin_purge_sweep_periodic() -> Periodic {
         every: PLUGIN_PURGE_SWEEP_EVERY,
         payload: json!({"v": 1}),
         max_attempts: ferrite_domain::DEFAULT_MAX_ATTEMPTS,
+        offset: Duration::ZERO,
     }
 }
 

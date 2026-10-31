@@ -38,11 +38,18 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    binary, older than a day) is removed; `rollback` does the same before its swap. Only the archive's `ferrite` file (top
    level or one folder down; `./` components are ignored, so `tar -C dir .` archives work;
    at most 512 MiB) is extracted, mode 0755. The new binary's `--version` must
-   report the release's version. With `--data DIR` its `migrate status --data DIR` runs too
-   and its output is shown: exit 0 or 2 (pending migrations) go on, 3 (the schema is
-   incompatible with the new binary) refuses, any other result is a warning (with SQLite the
-   status cannot be read while `serve` holds the data folder lock, and the warning points at
-   the output shown).
+   report the release's version. With `--data DIR` its `config check --data DIR` runs first
+   and its output is shown (M4-4 P71): exit 1 (a key the new binary refuses, such as a
+   `site.timezone` an older release accepted, or an environment it cannot read) refuses the
+   update with that output and the hint that the check runs with the shell's environment,
+   so run self-update with the service's environment (for systemd the unit's
+   `Environment=`/`EnvironmentFile=`); `--skip-config-check` (needs `--data`) goes on
+   with a warning instead, for when only the service has what the check lacks. Any other
+   result of the check only warns. Then its `migrate status --data DIR` runs and its output
+   is shown: exit 0 or 2 (pending migrations) go on, 3 (the schema is incompatible with the
+   new binary) refuses, any other result is a warning (with SQLite the status cannot be
+   read while `serve` holds the data folder lock, and the warning points at the output
+   shown).
 4. **Confirm.** `Replace … ? [y/N]` on a terminal; without one, `--yes` is required.
 5. **Swap.** The running binary (symlinks resolved) is copied to `<name>.prev` beside it
    (`ferrite.prev`, replacing an older one), then the new binary, given the running binary's
@@ -259,7 +266,11 @@ not hold here.
    on `--version`; otherwise it refuses before any change (a record with `from: null`
    is not checked).
 2. **Down migrations** (the default): it opens the store (with SQLite this takes the
-   data-folder lock, so `serve` must be stopped) and, under the migrate lock, runs
+   data-folder lock, so `serve` must be stopped; on Postgres, where no folder lock keeps a
+   node out, it refuses while the node registry shows a node whose heartbeat is fresher
+   than 30 s by the database clock, naming each one, M4-4 P72: stop every node first; a
+   clean stop leaves the registry at once, after a crash wait 30 s; a cluster with every
+   node stopped is fine) and, under the migrate lock, runs
    `migrate_down(schema_from, allow_lossy)`. A schema already at or below `schema_from`
    has nothing to revert. A lossy step without `--allow-lossy` refuses before any step
    runs, names `--allow-lossy` and `--restore-snapshot` (on Postgres: PITR), and changes
@@ -278,22 +289,51 @@ not hold here.
      `snapshot: null` (nothing migrated, an unfinished upgrade, always on Postgres)
      refuses. On Postgres it refuses with a pointer to the provider's point-in-time
      recovery (PITR).
-   - The snapshot must be a SQLite file. The tool shows the upgrade time (`at`) and the
-     snapshot's modification time, and says that everything written since is lost.
+   - The snapshot must be a SQLite file at the record's `schema_from`: it is opened
+     read-only (nothing is created beside it) and a snapshot at another schema (a stale
+     file named by a record finalised late, or carried forward) refuses before anything
+     changes (M4-4 P73). The tool shows the upgrade time (`at`) and the snapshot's
+     modification time, and says that everything written since is lost.
    - It takes `ferrite.lock` (refused while `serve` runs), then asks (`Type 'yes'`);
      without a terminal `--yes` is required.
    - It copies the snapshot beside the database first and, on unix, gives the copy the
      current database's owner, group and mode (M4-2 R11: a root-run rollback leaves a
-     database the service user can open). A `chown` it may not make refuses before
-     anything moves. That includes one rare case: run as a non-root owner whose
-     `ferrite.db` has a group they are not a member of, the copy gets their own group and
-     cannot be given the database's; run it as root or fix the group first. Then it moves
+     database the service user can open). A `chown` it may not make (another owner, which
+     needs root) refuses before anything moves. When only the group differs and the
+     owner may not give it (run as a non-root owner whose `ferrite.db` has a group they
+     are not a member of), the copy keeps the owner's own group and a warning names the
+     `chgrp` to run as root afterwards (M4-4 P73). Then it moves
      `ferrite.db-wal`, `ferrite.db-shm` and
      `ferrite.db` to `backups/rolled-back-<ts>.db[-wal|-shm]` (the WAL first, so it never
      sits beside another database file). Then it renames the copy into place. Each move is
      a hard link plus an unlink, so an existing file is never replaced. A failed move puts
-     the moved files back; when that fails too, the error names where the database is.
-     Nothing is deleted; the snapshot itself stays. The folders are synced afterwards.
+     the moved files back, the last moved first; when one of those fails too, it stops there
+     (no `-wal` goes back beside a database that stayed in `backups/`), the error names
+     where the database is, and the staged copy `ferrite.db.restore-<ts>.tmp` is kept, so
+     the store's open refuses with the moves that recover the files (below). Nothing is
+     deleted; the snapshot itself stays. The folders are synced afterwards. The leftover
+     checks below (the open's and a new run's) look under the data folder's lock, so a run
+     still moving its files reads as "in use", never as leftovers.
+   - **An interrupted run** (killed between moving `ferrite.db` aside and renaming the
+     copy into place) leaves no `ferrite.db` and the copy
+     `ferrite.db.restore-<ts>.tmp`. Every command that opens the SQLite store (`serve`,
+     `migrate`, `init`, …) then refuses instead of creating an empty database, naming the
+     file and the `mv` that finishes the restore (`mv ferrite.db.restore-<ts>.tmp
+     ferrite.db`) or the one that puts the database that was current back
+     (`backups/rolled-back-<ts>.db`). A run killed after it moved `ferrite.db-wal` or
+     `-shm` but before `ferrite.db` (or inside that move, when `rolled-back-<ts>.db` is a
+     second name of `ferrite.db`) leaves the database in place without its WAL, and
+     opening it would lose the transactions committed there (a crashed `serve` leaves such
+     a WAL, and `init` leaves its whole schema in one): that refuses too, naming `mv
+     backups/rolled-back-<ts>.db-wal ferrite.db-wal` (and `-shm`, plus `rm
+     backups/rolled-back-<ts>.db` for the second name) and then the copy's deletion. Only
+     a leftover copy beside a `ferrite.db` from which nothing moved (a run killed during
+     the copy, or inside a move, which leaves a second name in `backups/` that the warning
+     says to `rm`) just warns (M4-4 P70, amended by R-c2). `--restore-snapshot` itself
+     does not start again over any of these, nor over a `backups/rolled-back-<ts>.db-wal`
+     or `-shm` without its `rolled-back-<ts>.db` (a failed undo): it names the recovery
+     first and changes nothing, since a second run would put the snapshot beside the first
+     run's moved WAL, which the recovery advice would then replay into it.
    - A `ferrite.db-journal` beside the database (a hot rollback journal) refuses, since
      SQLite would roll it back into the snapshot.
    - The database must be on the data folder's filesystem (the moves into `backups/` are
@@ -341,7 +381,8 @@ nothing. A usage error (clap: `--schema` without `--data`, `--restore-snapshot` 
 - `data/upgrade.json` (§1) is informational on a cluster: only the first node of a new
   version writes one, into its own folder, and Postgres takes no snapshot. Roll the schema
   back with an explicit `ferrite migrate down --to <N>` (N from `migrate status` before the
-  deploy), not from that file.
+  deploy), not from that file. `rollback --schema` with a record refuses while any node's
+  heartbeat is fresh (§2b step 2), so stop every node before either.
 
 **Rolling deploy, as built (M1.5;
 [04 §9](04-cluster.md#9-rolling-deploys)):**
@@ -453,9 +494,11 @@ holds the store lock `site.backup` (a second is `Busy` and tried again a few sec
 later). Its timeout is 6 hours, and a failure is retried up to 3 attempts in all, then the
 job is `dead` (System → Jobs; the next period starts again). Periods are aligned to the Unix
 epoch on the database clock: a daily backup is due at 00:00 UTC, a weekly one on Thursday
-00:00 UTC (1970-01-01 was a Thursday). The first `serve` in a period inserts that period's
-job due at the period's start, which has passed, so it runs right away; a node restarted
-later in the same period does not run it again. `to` is a folder or
+00:00 UTC (1970-01-01 was a Thursday); the daily `artifacts.gc` is due at 03:00 UTC (its
+periodic's offset, M4-4 P75), so the two do not start together. The first `serve` in a period
+inserts that period's job due at the period's start (plus the offset), which has usually
+passed, so it runs right away; a node restarted later in the same period does not run it
+again. `to` is a folder or
 `s3://bucket[/prefix]` (`AWS_*` credentials, as above), never an archive path; a relative
 path is relative to the data folder (made absolute first, so `--data .` works) and must lie
 outside it (`"../backups"`). `config check` and `serve` run the same location check (the
@@ -514,7 +557,11 @@ written. The files go to a staging folder, `.<name>.restoring-<ts>-<pid>` next t
 occupied `DIR` (for an absent one inside `DIR`, then created, when its parent refuses the sibling),
 or `DIR/.restoring-<ts>-<pid>` inside an empty `DIR`; the blobs go through the media store the
 **restored** `ferrite.toml` names (local or S3; blobs already there are skipped, trusted by their
-content hash); the restored configuration must keep the database at `DIR/ferrite.db`. Only then is
+content hash); the restored configuration must keep the database at `DIR/ferrite.db`, and a local
+media root that is absolute and inside an absent or occupied `DIR` is refused before any blob is
+stored (M4-4 P68: the blobs would go into the folder `--force` moves aside, or make the absent
+`DIR` appear, and the restored site would have none; restore into an empty `DIR` instead, which
+stays where it is, or point `FERRITE_MEDIA__ROOT` elsewhere). Only then is
 the sibling staging folder renamed to the absent `DIR`, or the staged entries moved into the empty
 `DIR` with `ferrite.db` last (a folder holding the database is complete; a name that appeared there
 meanwhile is refused, never replaced), or the old folder moved aside and the staging folder renamed
@@ -523,12 +570,20 @@ an S3 media root stay (content-addressed; the store's owner GC collects them aft
 if nothing references them). Staging folders older than a day with exactly those names, left by
 killed runs, are removed at the start. A bind mount on the same device as its parent is not detected
 up front: `--force` then fails at the final rename and changes nothing. It then prints `migrate
-status`; it does not migrate (`serve` does, under `database.auto_migrate`). A backup without
-`secret.key` restores with a note on TOTP (below).
+status`; it does not migrate (`serve` does, under `database.auto_migrate`). When that last check
+fails (the folder lock taken meanwhile, a migration the backup's database records as failed), the
+site is already in place: `restore` says "the site was restored into DIR, but restore could not
+check it" with the error and exits 2 (M4-4 P68). A blob a repository snapshot lists but no longer
+holds is named as a damaged repository or a `--keep` prune that removed the snapshot during the
+restore (run it again). A backup without `secret.key` restores with a note on TOTP (below).
 
 **A restored site is a new install (R16, R19).** A backup snapshot carries no
 `schema_meta.install_id`; before the restored site is put in place it gets a fresh one and
-every `artifacts.orphaned_at` mark is cleared. Its media GC deletes only on a pass that reads
+every `artifacts.orphaned_at` mark is cleared. A snapshot the `site.backup` job wrote holds that
+job's own row as `running`: it is set `done` (lease cleared), so the restored site does not run
+that backup again, and its period's key stays taken; other `running` rows are left to lease
+reclaim, as after a crash (M4-4 P69; `import-site` loads no `jobs`). Its media GC deletes only on
+a pass that reads
 an owner marker (`ferrite-owner.json`) naming its install
 ([03 §6](03-media.md#6-garbage-collection)), so a copy restored next to the live site onto
 the same S3 bucket or absolute media root never deletes from it. The live site, which owns
@@ -1062,7 +1117,7 @@ ferrite import wordpress FILE --data DIR [--uploads DIR|ZIP] [--fetch-media] [--
     [--tag-base B] [--as LOGIN] [--takeover]                                      # M3-1
 ferrite import markdown DIR --data DATA [--as LOGIN] [--type page] [--front-page]
     [--dry-run] [--source NAME] [--takeover]                                      # M4-3b
-ferrite self-update    [--version X] [--check] [--yes] [--data DIR]              # M4-2
+ferrite self-update    [--version X] [--check] [--yes] [--data DIR [--skip-config-check]]  # M4-2
 ferrite rollback       [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [--yes]  # M4-2
 ferrite doctor         --data DIR [--offline]                                    # M4-3a
 ```
@@ -1140,7 +1195,7 @@ container's environment.
 | `fs.data_dir` | The data folder exists, is a folder, is readable and writable by this user (`error` otherwise); a mode with world bits is a `warn` (`ferrite init` creates a new folder 0750; the systemd README and the Docker image use 0750 too). |
 | `fs.config_file` | `ferrite.toml` has no group or other bits (`warn`): it can hold the database URL, S3 secret and SMTP credentials. |
 | `fs.secret_key` | With `auth.secret_key[_file]` the key comes from the configuration (`ok`). Otherwise `secret.key` must exist and hold 64 hex characters (`error`; `serve` would create a new key, and data sealed with the old one could not be read) with no group or other bits (`warn`). |
-| `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`. Postgres: `info`. |
+| `fs.database_files` | SQLite: the database, `-wal`, `-shm` and `ferrite.lock` that exist are readable and writable by this user (`error`) and owned by the data folder's owner (`warn`: a root-run command leaves root-owned files); a missing database is an `error`; so is what an interrupted `rollback --restore-snapshot` left that makes the store refuse to open (§2 b), and a `ferrite.db.restore-<ts>.tmp` beside an intact database is a `warn` (M4-4). Postgres: `info`. |
 | `fs.backups_dir` | SQLite: `<data>/backups/`, if it exists, is writable (`warn`), and its `pre-*.db` files are counted. |
 | `fs.themes_dir` | Solo: `<data>/themes/`, if it exists, is readable (`warn`). Cluster: `info` that theme folders are ignored. |
 | `db.lock_state` | `info`: whether `<data>/ferrite.lock` is held, by a running node or by another command that opens the database (`backup`, `migrate`, `user`, …), or that doctor cannot tell (a lock file this user cannot open). Tried without waiting and released at once; a missing lock file is not created. |
@@ -1172,10 +1227,12 @@ Test seam (`test-seams` builds only): a hidden `--base-url` replaces the GitHub 
 with a newer signed release of this target, keeping the old one as `ferrite.prev`, and
 prints the restart command (it restarts nothing). `--version X` picks a release (older or
 equal is refused: use `rollback`); `--check` only reports; `--yes` skips the confirmation
-(required without a terminal); `--data DIR` also shows the new binary's `migrate status`.
-Exit 0 updated or up to date, 2 a newer release exists (`--check`), 1 on any error (a bad
-signature or sha256, no asset for this target, a new binary that does not report the
-release's version, an unwritable binary folder, a build without a release key); every
+(required without a terminal); `--data DIR` also runs the new binary's `config check` (a
+failure refuses the update unless `--skip-config-check`, M4-4 P71) and shows its `migrate
+status`. Exit 0 updated or up to date, 2 a newer release exists (`--check`), 1 on any error (a
+bad signature or sha256, no asset for this target, a new binary that does not report the
+release's version, a configuration the new binary refuses, an unwritable binary folder, a
+build without a release key); every
 refusal leaves the binary untouched. A usage error (clap: an unknown flag, a missing
 value) exits 2 too, before anything runs, so a wrapper around `--check` must not read 2
 alone as "an update is available" (check for the `a newer release is available` line).
@@ -1189,14 +1246,21 @@ swaps `ferrite` and `ferrite.prev` (either binary may run it; again re-upgrades)
 DIR` first runs the kept binary's `migrate status` and refuses with exit 3 when it cannot
 open the schema. `--schema` (needs `--data`, runs only as the binary `upgrade.json` names as
 `to`) runs the down migrations to the record's `schema_from` under the migrate lock (SQLite:
-`serve` stopped); `--allow-lossy` allows lossy steps. `--restore-snapshot` (with `--schema`,
-SQLite only, not with `--allow-lossy`) restores the snapshot the record names, after
-confirmation (`--yes` without a terminal), moving `ferrite.db[-wal|-shm]` to
-`backups/rolled-back-<ts>.db[-wal|-shm]`. A rollback that used the record renames it to
+`serve` stopped; Postgres: no node with a heartbeat fresher than 30 s, M4-4 P72);
+`--allow-lossy` allows lossy steps. `--restore-snapshot` (with `--schema`, SQLite only, not
+with `--allow-lossy`) restores the snapshot the record names, which must be at the record's
+`schema_from` (M4-4 P73), after confirmation (`--yes` without a terminal), moving
+`ferrite.db[-wal|-shm]` to `backups/rolled-back-<ts>.db[-wal|-shm]`; a group it may not give
+the copy is kept with a warning. A rollback that used the record renames it to
 `upgrade-rolled-back-<ts>.json`. Exit 0 rolled back, 3 the previous binary cannot open this
 schema, 1 any other error (no `ferrite.prev`, no or unreadable `upgrade.json`, the wrong
-binary, a lossy step without `--allow-lossy`, Postgres or no recorded snapshot with
-`--restore-snapshot`, no confirmation, the folder locked); a usage error (clap) exits 2.
+binary, a lossy step without `--allow-lossy`, a live Postgres node, Postgres, no recorded
+snapshot or a snapshot at another schema with `--restore-snapshot`, no confirmation, the folder
+locked); a usage error (clap) exits 2. An interrupted `--restore-snapshot` that left only
+`ferrite.db.restore-<ts>.tmp` makes every command that opens the store refuse until it is
+moved into place, and so does one that left `ferrite.db` in place after moving its
+`-wal`/`-shm` into `backups/`, until those are moved back (§2 b, M4-4 P70, R-c2); a new
+`--restore-snapshot` refuses over such leftovers too, naming the recovery first.
 After a schema rollback `schema_meta.last_binary_version` names the older binary (§2 b).
 Test seam (`test-seams` builds only): a hidden `--test-current-exe PATH`.
 
@@ -1361,11 +1425,14 @@ a `--keep` prune failing after the snapshot was written keeps the snapshot.
 counts, notes on missing artifacts and a missing `secret.key`, the folder moved aside, a warning
 when the restored media store is outside `DIR` (the restored database is a new install, R16:
 `ferrite media gc --claim` only for a restore in place), then the `migrate status` report.
-Exit 0 done; 3 when the backup's schema or the repository's format is newer than the binary
-(nothing written); 1 on any other error: a non-empty folder without `--force` (`lost+found`
-alone does not count), a folder in use, an export archive, a repository with only export
-archives (use `import-site`), an unknown snapshot, a damaged archive or repository (sha256,
-size), a restored configuration whose database is not `DIR/ferrite.db`.
+Exit 0 done; 2 restored, but that last check failed (the site is in place; the message says
+so, M4-4 P68), and also a usage error (clap); 3 when the backup's schema or the repository's
+format is newer than the binary (nothing written); 1 on any other error, with nothing put in
+place: a non-empty folder without `--force` (`lost+found` alone does not count), a folder in
+use, an export archive, a repository with only export archives (use `import-site`), an unknown
+snapshot, a damaged archive or repository (sha256, size; a blob missing from a repository may
+also be a `--keep` prune racing the restore), a restored configuration whose database is not
+`DIR/ferrite.db`, or whose absolute local media root is inside an absent or occupied `DIR`.
 
 **`ferrite media gc`** (`crates/ferrite/src/media_cmd.rs`, `crates/ferrite/src/gc.rs`; design 03
 §6): one pass of the artifacts GC in process, the same `gc::run` the daily `artifacts.gc` job runs.
@@ -1379,15 +1446,19 @@ the owner marker nor a missing install id). Deletes happen only on a pass that r
 store's owner marker `ferrite-owner.json` naming this database's install id (R16, R19, 03 §6): a
 pass that finds no marker writes it and deletes nothing yet; on a store another site owns, or whose
 marker cannot be read, the pass marks and cleans `tmp/` only and logs an error. Either way it
-appends `; deletes skipped: <reason>` to its line (exit 0). `--claim` rewrites the marker for this
+appends `; deletes skipped: <reason>` to its line: the first pass that only wrote the marker
+exits 0, a refused store (another site's marker, an unreadable one, a claim that did not hold)
+exits 2, a dry run too (M4-4 P74). `--claim` rewrites the marker for this
 site first, for a site that replaced the store's owner (a restore in place, a moved database), and
 appends `; claimed the media store from install <id> (site …, claimed …)`; with `--dry-run` it names
 that owner and writes nothing. Prints `marked N, unmarked M, deleted rows R (B bytes), deleted
 unrecorded blobs U (B bytes), deleted tmp T` on stdout (after `dry run: ` for a dry run; `, failed
 F` is appended when some blob or `tmp/` deletes failed, which are logged and retried by the next
-pass, the exit code staying 0). Exit 0 done, 3 the `artifacts.gc` lock is held (a cluster node's
-job, another `media gc`, or a backup copying blobs, R17), 1 on an error; a bad flag (`--grace-days
-0`) exits 2 as clap does.
+pass). Exit 0 done, 2 the store was refused or a delete failed (the pass did less than asked; a
+bad flag such as `--grace-days 0` exits 2 too, as clap does), 3 the `artifacts.gc` lock is held
+(a cluster node's job, another `media gc`, or a backup copying blobs, R17), 1 on an error. The
+daily `artifacts.gc` job is due at 03:00 UTC (P75) and succeeds in both cases (retrying cannot
+change the owner; a failed delete is retried by the next pass).
 
 **`ferrite media regenerate`** (`crates/ferrite/src/media_cmd.rs`): makes image size variants again
 in process, like `seed demo` (no jobs, so no unique-key clash). The sizes are the core sizes plus

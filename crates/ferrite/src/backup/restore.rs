@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, bail};
 use clap::Args;
-use ferrite_config::{Config, DbKind};
+use ferrite_config::{Config, DbKind, MediaSection};
 use ferrite_media::{MediaError, MediaStore};
 use ferrite_store::SCHEMA_META_INSTALL_ID;
 use sqlx::Connection;
@@ -352,6 +352,43 @@ fn staged_config(staging: &Path) -> anyhow::Result<Config> {
     }
 }
 
+/// M4-4 P68: refuses a restored local media root that is absolute and inside `dir` when
+/// `dir` is replaced (an occupied target, moved aside) or created by renaming the staging
+/// folder (an absent one): the blobs would go into the old folder (or make the target
+/// appear), and the restored site would have none. Staged inside the target (an empty
+/// one), the target stays, and so does a root inside it.
+fn check_media_root(config: &Config, staging: &Staging, dir: &Path) -> anyhow::Result<()> {
+    if staging.inside {
+        return Ok(());
+    }
+    let MediaSection::Local { root, .. } = &config.media else {
+        return Ok(());
+    };
+    let (Ok(resolved), Ok(target)) = (super::resolve(root), super::resolve(dir)) else {
+        return Ok(());
+    };
+    if !resolved.starts_with(&target) {
+        return Ok(());
+    }
+    let (what, first) = if occupied(dir) {
+        (
+            "which --force moves aside",
+            format!("move {} aside yourself, then ", dir.display()),
+        )
+    } else {
+        ("which does not exist yet", String::new())
+    };
+    bail!(
+        "the restored configuration keeps the media at {}, inside {}, {what}: the restored \
+         site would be left without its media. Restore into an empty folder instead ({first}\
+         create {} empty and run the restore again), or point [media] root \
+         (FERRITE_MEDIA__ROOT) elsewhere; nothing was changed",
+        root.display(),
+        dir.display(),
+        dir.display()
+    )
+}
+
 /// Restores `source` into `dir` (P14). Prints nothing.
 pub async fn restore(
     source: &Target,
@@ -372,7 +409,7 @@ pub async fn restore(
             let from = format!("snapshot {name} of {}", repo.display());
             check_manifest(&manifest, &from)?;
             let staging = Staging::create(dir, state.shape(), &ts)?;
-            let stats = restore_repo(&repo, &name, &manifest, &staging.path).await?;
+            let stats = restore_repo(&repo, &name, &manifest, &staging, dir).await?;
             (from, manifest, staging, stats)
         }
         Target::File(_) | Target::Stdout => {
@@ -406,8 +443,9 @@ pub async fn restore(
 }
 
 /// Makes the staged database a new install (R16): a fresh `schema_meta.install_id`, so the
-/// restored site's media GC never deletes from a store the original site owns, and no
-/// artifact keeps a GC mark of the original's (the grace period starts over here).
+/// restored site's media GC never deletes from a store the original site owns, no
+/// artifact keeps a GC mark of the original's (the grace period starts over here), and the
+/// snapshot's own running `site.backup` row is done (M4-4 P69).
 async fn new_install(db: &Path) -> anyhow::Result<()> {
     let opts = SqliteConnectOptions::new()
         .filename(db)
@@ -435,6 +473,21 @@ async fn new_install(db: &Path) -> anyhow::Result<()> {
             sqlx::query("UPDATE artifacts SET orphaned_at = NULL WHERE orphaned_at IS NOT NULL")
                 .execute(&mut *tx)
                 .await?;
+        }
+        // M4-4 P69: a snapshot the `site.backup` job wrote holds that job's own row as
+        // `running`; it is done (it made this snapshot), and its lease must not run the
+        // backup again here. Its key stays taken, so the period gets no second backup.
+        // Other running rows are left to lease reclaim, as after a crash. A backup older
+        // than migration 0004 has no `jobs`.
+        if ferrite_store_sqlite::table_exists(&mut tx, "jobs").await? {
+            sqlx::query(
+                "UPDATE jobs SET status = 'done', locked_by = NULL, locked_until = NULL, \
+                 finished_at = ? WHERE kind = ? AND status = 'running'",
+            )
+            .bind(ferrite_domain::Timestamp::now().as_micros())
+            .bind(crate::jobs::SITE_BACKUP_KIND)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         anyhow::Ok(())
@@ -474,15 +527,17 @@ async fn restore_repo(
     repo: &Repo,
     name: &str,
     manifest: &Manifest,
-    staging: &Path,
+    staging: &Staging,
+    dir: &Path,
 ) -> anyhow::Result<LoadStats> {
     for entry in manifest.files.iter().flatten() {
         if entry.path != ARTIFACT_LIST {
-            repo.fetch_file(name, entry, &staging.join(&entry.path))
+            repo.fetch_file(name, entry, &staging.path.join(&entry.path))
                 .await?;
         }
     }
-    let config = staged_config(staging)?;
+    let config = staged_config(&staging.path)?;
+    check_media_root(&config, staging, dir)?;
     let mut stats = LoadStats::default();
     let scratch = tempfile::Builder::new()
         .prefix("ferrite-restore-")
@@ -505,7 +560,9 @@ async fn restore_repo(
         match repo.blobs().copy_to(&media, &hash).await {
             Ok(_) => stats.blobs_stored += 1,
             Err(MediaError::NotFound) => bail!(
-                "{} lacks artifact {hash}, which snapshot {name} lists; the repository is damaged",
+                "{} lacks artifact {hash}, which snapshot {name} lists: the repository is \
+                 damaged, or a backup with --keep pruned this snapshot while it was being \
+                 restored (then restore again, picking a snapshot that is still there)",
                 repo.display()
             ),
             Err(e) => return Err(e).with_context(|| format!("cannot restore artifact {hash}")),
@@ -563,6 +620,7 @@ fn restore_archive(
         }
         if seen == files {
             let config = staged_config(&staging.path)?;
+            check_media_root(&config, &staging, dir)?;
             if manifest.artifacts.is_some() {
                 media = Some(Arc::new(open_media(&config)?));
             }
@@ -676,8 +734,9 @@ fn put_in_place(
     Ok(Some(aside))
 }
 
-/// `ferrite restore`: exit 0, 3 when the backup is newer than this binary, 1 on any other
-/// error.
+/// `ferrite restore`: exit 0, 2 when the site is restored but the check afterwards failed
+/// (M4-4 P68), 3 when the backup is newer than this binary, 1 on any other error (nothing
+/// was put in place).
 pub async fn run_restore(args: RestoreArgs) -> anyhow::Result<ExitCode> {
     match restore_cmd(args).await {
         Ok(code) => Ok(code),
@@ -735,7 +794,28 @@ async fn restore_cmd(args: RestoreArgs) -> anyhow::Result<ExitCode> {
             args.data.display()
         );
     }
-    let config = load_config(&args.data)?;
+    // M4-4 P68: the site is in place now (the old folder moved aside); a failure from here
+    // on is "done, with something to look at", not "nothing happened".
+    match after_restore(&args.data).await {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(e) => {
+            eprintln!(
+                "error: the site was restored into {}, but restore could not check it \
+                 afterwards: {e:#}. Look at it with `ferrite migrate status --data {}` and \
+                 `ferrite doctor --data {}` before serving it.",
+                args.data.display(),
+                args.data.display(),
+                args.data.display()
+            );
+            Ok(ExitCode::from(2))
+        }
+    }
+}
+
+/// What `restore` prints about the restored folder: config warnings and the migration
+/// status of the restored database.
+async fn after_restore(data: &Path) -> anyhow::Result<()> {
+    let config = load_config(data)?;
     if let Some(warning) = super::shared_media_warning(&config) {
         eprintln!("{warning}");
     }
@@ -780,5 +860,5 @@ async fn restore_cmd(args: RestoreArgs) -> anyhow::Result<ExitCode> {
              otherwise run `ferrite migrate up`."
         );
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }

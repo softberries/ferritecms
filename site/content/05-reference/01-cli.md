@@ -204,8 +204,12 @@ the repository's format is newer than this binary; 1 an error.
 ferrite restore SOURCE --data DIR [--snapshot NAME] [--force]
 ```
 
-`SOURCE` is a backup `.tar.zst`, `-` for standard input, or a repository. Exit 0 done; 3
-the backup's schema is newer than this binary (nothing written); 1 an error.
+`SOURCE` is a backup `.tar.zst`, `-` for standard input, or a repository. A restored
+`ferrite.toml` whose media folder is an absolute path inside a folder `--force` moves
+aside (or inside an absent one) is refused. Exit 0 done; 2 restored, but the check of
+the restored folder afterwards failed (the site is in place: look at it before serving);
+3 the backup's schema is newer than this binary (nothing written); 1 an error (nothing
+put in place).
 
 ### export
 
@@ -250,7 +254,10 @@ ferrite media regenerate --data DIR [--all] [--item ID]
   copies failed, 1 an error.
 - `gc` deletes stored files nothing refers to, after the grace period (`--grace-days`,
   default `media.gc_grace_days`, 7). `--claim` makes this site the owner of its media
-  store first. Exit 0, 3 when another clean-up or a backup holds the lock, 1 an error.
+  store first. Exit 0 (also for the first run on a store, which only writes
+  `ferrite-owner.json`); 2 when the store belongs to another site (or its marker cannot
+  be read) or a delete failed; 3 when another clean-up or a backup holds the lock; 1 an
+  error.
 - `regenerate` makes missing image sizes; `--all` redoes every image, `--item` one.
   Prints `regenerated N, skipped S, failed F`. Exit 0, 2 when some items failed, 1 an
   error.
@@ -262,12 +269,14 @@ See [Backups and moves](../04-operations/02-backups.md).
 ### self-update
 
 ```text
-ferrite self-update [--version X.Y.Z] [--check] [--yes] [--data DIR]
+ferrite self-update [--version X.Y.Z] [--check] [--yes] [--data DIR [--skip-config-check]]
 ```
 
-Updates this binary to a newer signed release. Exit 0 updated or already up to date; 2 a
-newer release exists (with `--check`); 1 an error (an older or equal `--version` too:
-use `rollback`). A build from source has no release key and refuses.
+Updates this binary to a newer signed release. With `--data` the new binary's `config
+check` and `migrate status` run for the site first; a configuration it refuses stops the
+update, unless `--skip-config-check`. Exit 0 updated or already up to date; 2 a newer
+release exists (with `--check`); 1 an error (an older or equal `--version` too: use
+`rollback`). A build from source has no release key and refuses.
 
 ### rollback
 
@@ -276,6 +285,8 @@ ferrite rollback [--data DIR] [--schema] [--allow-lossy] [--restore-snapshot] [-
 ```
 
 Goes back to `ferrite.prev`; with `--schema` the schema too, and with
-`--restore-snapshot` (SQLite) the pre-upgrade snapshot instead of down migrations. Exit
-0 rolled back; 3 the previous binary cannot open this schema; 1 an error.
+`--restore-snapshot` (SQLite) the pre-upgrade snapshot instead of down migrations. On
+Postgres `--schema` refuses while a node is running; `--restore-snapshot` refuses a
+snapshot at another schema than the upgrade started from. Exit 0 rolled back; 3 the
+previous binary cannot open this schema; 1 an error.
 See [Upgrades and rollback](../04-operations/03-upgrades.md).

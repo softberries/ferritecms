@@ -89,6 +89,10 @@ pub struct GcReport {
     /// Why steps 2 and 3 were skipped (R16, R19): the store belongs to another install, its
     /// marker cannot be read, or there was none (this pass wrote it). `None`: they ran.
     pub deletes_skipped: Option<String>,
+    /// Whether that skip was a refusal (M4-4 P74): the marker names another install or
+    /// cannot be read, or a claim did not hold. `false` for a store no pass has claimed
+    /// yet (this pass wrote the marker, or a dry run would): deletes start with the next.
+    pub owner_refused: bool,
     /// With `claim`: the owner this pass replaced (or would, in a dry run), described.
     pub claimed_from: Option<String>,
 }
@@ -170,6 +174,7 @@ async fn pass(
     let cutoff = before(opts.now, opts.grace)?;
     let owner = ownership(store, media, opts).await?;
     report.deletes_skipped = owner.skipped;
+    report.owner_refused = owner.refused;
     report.claimed_from = owner.claimed_from;
     let delete = report.deletes_skipped.is_none();
 
@@ -220,6 +225,8 @@ pub async fn install_id(store: &dyn Store) -> anyhow::Result<String> {
 /// The outcome of the ownership check.
 struct Ownership {
     skipped: Option<String>,
+    /// The skip is a refusal ([`GcReport::owner_refused`]).
+    refused: bool,
     claimed_from: Option<String>,
 }
 
@@ -270,11 +277,19 @@ async fn ownership(
     let current = media.read_owner().await;
     let ok = |claimed_from| Ownership {
         skipped: None,
+        refused: false,
         claimed_from,
     };
+    // Not a refusal: no pass has claimed the store yet.
     let skip = |why: String| Ownership {
         skipped: Some(why),
+        refused: false,
         claimed_from: None,
+    };
+    let failed_claim = |why: String, from: String| Ownership {
+        skipped: Some(why),
+        refused: true,
+        claimed_from: Some(from),
     };
     if let Ok(Some(marker)) = &current
         && marker.install_id == install
@@ -294,23 +309,15 @@ async fn ownership(
         tracing::warn!(install_id = %install, previous = %from, "claimed the media store for this site (ferrite-owner.json rewritten)");
         return Ok(match media.read_owner().await {
             Ok(Some(marker)) if marker.install_id == install => ok(Some(from)),
-            Ok(Some(marker)) => Ownership {
-                skipped: Some(format!(
-                    "the claim was overwritten at once by {}",
-                    describe(&marker)
-                )),
-                claimed_from: Some(from),
-            },
-            Ok(None) => Ownership {
-                skipped: Some("the claimed ferrite-owner.json vanished".to_owned()),
-                claimed_from: Some(from),
-            },
-            Err(e) => Ownership {
-                skipped: Some(format!(
-                    "the claimed ferrite-owner.json cannot be read: {e}"
-                )),
-                claimed_from: Some(from),
-            },
+            Ok(Some(marker)) => failed_claim(
+                format!("the claim was overwritten at once by {}", describe(&marker)),
+                from,
+            ),
+            Ok(None) => failed_claim("the claimed ferrite-owner.json vanished".to_owned(), from),
+            Err(e) => failed_claim(
+                format!("the claimed ferrite-owner.json cannot be read: {e}"),
+                from,
+            ),
         });
     }
     let skipped = match current {
@@ -358,7 +365,11 @@ async fn ownership(
          place, a moved database), run `ferrite media gc --claim`; otherwise give each site \
          its own media store"
     );
-    Ok(skip(skipped))
+    Ok(Ownership {
+        skipped: Some(skipped),
+        refused: true,
+        claimed_from: None,
+    })
 }
 
 /// A grace period of `days` days (`media.gc_grace_days`, `--grace-days`).
@@ -743,6 +754,7 @@ mod tests {
             deleted_tmp: 7,
             failed: 0,
             deletes_skipped: None,
+            owner_refused: false,
             claimed_from: None,
         };
         assert_eq!(
