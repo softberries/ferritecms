@@ -30,7 +30,14 @@ interface Check {
   name: string;
   path: string;
   status: 200 | 404;
+  /** A search: at least one result is listed, so axe sees the results, not "No results". */
+  results?: true;
 }
+
+/** `activate`'s two polls, and the hooks' budget, which holds both with room to spare. */
+const NODE_LOADS_MS = 25_000;
+const PAGE_DRAWN_MS = 10_000;
+const HOOK_TIMEOUT_MS = 60_000;
 
 /** The pages P64 lists, per theme. */
 const PAGES: Record<PublicTheme, Check[]> = {
@@ -39,20 +46,20 @@ const PAGES: Record<PublicTheme, Check[]> = {
     { name: "single_post", path: "/welcome-to-ferritecms/", status: 200 },
     { name: "page", path: "/about/", status: 200 },
     { name: "category_archive", path: "/category/news/", status: 200 },
-    { name: "search", path: "/?s=plugin", status: 200 },
+    { name: "search", path: "/?s=plugin", status: 200, results: true },
     { name: "not_found", path: MISSING, status: 404 },
   ],
   business: [
     { name: "front_page", path: "/", status: 200 },
     { name: "child_page", path: "/home/garden-design/", status: 200 },
     { name: "contact", path: "/contact/", status: 200 },
-    { name: "search", path: "/?s=garden", status: 200 },
+    { name: "search", path: "/?s=garden", status: 200, results: true },
     { name: "not_found", path: MISSING, status: 404 },
   ],
   docs: [
     { name: "front_page", path: "/", status: 200 },
     { name: "nested_page", path: "/getting-started/install/", status: 200 },
-    { name: "search", path: "/?s=theme", status: 200 },
+    { name: "search", path: "/?s=theme", status: 200, results: true },
     { name: "not_found", path: MISSING, status: 404 },
   ],
 };
@@ -77,7 +84,7 @@ async function activate(siteKey: string, theme: PublicTheme): Promise<void> {
             entry.nodes.every((n) => n.name === theme && !n.fallback)
           );
         },
-        { message: `the node loads ${theme}`, timeout: 25_000 },
+        { message: `the node loads ${theme}`, timeout: NODE_LOADS_MS },
       )
       .toBe(true);
     const css = readFileSync(resolve(REPO, "themes", theme, "assets", "style.css"), "utf8");
@@ -90,7 +97,7 @@ async function activate(siteKey: string, theme: PublicTheme): Promise<void> {
           const res = await anon.get(href.replaceAll("&#x2f;", "/"));
           return res.ok() && (await res.text()) === css;
         },
-        { message: `the front page is drawn by ${theme}`, timeout: 10_000 },
+        { message: `the front page is drawn by ${theme}`, timeout: PAGE_DRAWN_MS },
       )
       .toBe(true);
   } finally {
@@ -110,10 +117,14 @@ for (const { theme } of PUBLIC_THEMES) {
 
   test.describe(theme, () => {
     test.use({ siteKey });
+    // The project's 30 s would end a slow activation as a hook timeout, before either
+    // poll could say which wait it was.
     test.beforeAll(async () => {
+      test.setTimeout(HOOK_TIMEOUT_MS);
       await activate(siteKey, theme);
     });
     test.afterAll(async () => {
+      test.setTimeout(HOOK_TIMEOUT_MS);
       await activate(siteKey, "blog");
     });
 
@@ -124,6 +135,10 @@ for (const { theme } of PUBLIC_THEMES) {
           guard.allowFailedResource(new RegExp(`${check.path.replaceAll("/", "\\/")}$`));
         }
         await visit(page, check.path, check.status);
+        if (check.results) {
+          // Every theme's search page says "<n> result(s)" (`.search-count`).
+          await expect(page.locator(".search-count")).toHaveText(/^[1-9]\d* results?$/);
+        }
         await expectAccessible(page);
       });
     }
@@ -160,6 +175,17 @@ for (const { theme } of PUBLIC_THEMES) {
         await page.keyboard.press("Enter");
         await expect(page.locator("main#content")).toBeFocused();
         await expect(page).toHaveURL(/#content$/);
+        // A code block is a focus stop (core's `tabindex="0"`, R-b17) with a visible ring;
+        // after keyboard use, a scripted focus matches `:focus-visible` too.
+        const pre = page.locator("main pre").first();
+        await expect(pre).toHaveAttribute("tabindex", "0");
+        await pre.focus();
+        expect(
+          await pre.evaluate(
+            (el) => el.matches(":focus-visible") && getComputedStyle(el).outlineStyle !== "none",
+          ),
+          "the focused code block shows a focus ring",
+        ).toBe(true);
       });
     }
   });

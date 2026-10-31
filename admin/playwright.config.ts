@@ -6,7 +6,7 @@
 // through `pnpm e2e` (Chromium) or `pnpm e2e:all` (all four), whose wrapper
 // (`scripts/e2e.mjs`) picks the projects and keeps single-file runs to that file. Beside
 // the matrix, `public-themes-chromium` runs axe on the public starter themes (M4-3b P64):
-// `pnpm e2e --project public-themes-chromium` (`pnpm e2e:all` includes it).
+// `pnpm e2e --project public-themes-chromium` (an unfiltered `pnpm e2e:all` includes it).
 
 import { defineConfig, devices } from "@playwright/test";
 import type { Options } from "./e2e/support/fixtures";

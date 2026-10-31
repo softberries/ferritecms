@@ -50,7 +50,8 @@ guard that fails a test on a CSP violation, a page error or a `console.error`. S
 
 The public starter themes have a project of their own, `public-themes-chromium` (M4-3b
 P64): `pnpm e2e --project public-themes-chromium` runs `e2e/public-themes.spec.ts`, axe on
-the `blog`, `business` and `docs` themes, and nothing else (`pnpm e2e:all` includes it).
+the `blog`, `business` and `docs` themes, and nothing else. `pnpm e2e:all` without a filter
+includes it; with a filter (a file, `-g`) it does not, so name the project then.
 Its global setup starts one SQLite site per theme: `blog` on `seed demo`, `business` on
 `seed demo --profile business`, and `docs` on `../site/content` imported with
 `import markdown --front-page`. Each site has the same harness accounts. A broken link in

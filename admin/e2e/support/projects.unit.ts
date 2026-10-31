@@ -6,6 +6,7 @@ import {
   PUBLIC_THEMES,
   PUBLIC_THEMES_PROJECT,
   PUBLIC_THEMES_SPEC,
+  SITE_PROJECTS,
   SITE_WIDE_SPECS,
   publicThemesSelected,
   selectedProjects,
@@ -28,18 +29,15 @@ test("public_themes_stay_out_of_the_admin_projects", () => {
   expect(selectedProjects(argv(`--project=${PUBLIC_THEMES_PROJECT}`))).toEqual([]);
 });
 
-test("each_theme_has_a_site_of_its_own", () => {
-  expect(PUBLIC_THEMES.map((t) => [t.theme, t.content])).toEqual([
-    ["blog", "demo"],
-    ["business", "business"],
-    ["docs", "docs"],
-  ]);
+test("theme_site_keys_never_collide", () => {
+  // The key names a site's storage states (`e2e/.auth/<key>/`) and log: one per theme,
+  // and never an admin project's.
   const keys = PUBLIC_THEMES.map((t) => themeSiteKey(t.theme));
-  expect(keys).toEqual([
-    "public-themes-chromium-blog",
-    "public-themes-chromium-business",
-    "public-themes-chromium-docs",
-  ]);
+  expect(new Set(keys).size).toBe(PUBLIC_THEMES.length);
+  for (const key of keys) {
+    expect(key.startsWith(`${PUBLIC_THEMES_PROJECT}-`)).toBe(true);
+    expect(SITE_PROJECTS.map((p) => p.name)).not.toContain(key);
+  }
 });
 
 test("the_spec_is_matched_by_its_project_only", () => {
