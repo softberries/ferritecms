@@ -3,7 +3,8 @@
 //
 // - `pnpm e2e`: `chromium-sqlite`, and `chromium-pg` with FERRITE_TEST_PG_URL.
 // - `pnpm e2e:all`: all four projects.
-// - `--project <name>` picks projects instead (each brings its `-site-wide` teardown).
+// - `--project <name>` picks projects instead (each brings its `-site-wide` teardown;
+//   `public-themes-chromium`, the starter themes' axe checks, has none).
 // - With a filter (a file, `-g`, `--last-failed`, …), each picked project is named with its
 //   `-site-wide` twin and `--no-deps` is passed: Playwright otherwise runs the whole of a
 //   project or teardown the filter leaves empty. Filtered runs therefore skip the ordering
@@ -13,6 +14,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SITE_WIDE_SUFFIX = "-site-wide";
+/** The one project without a `-site-wide` twin (`PUBLIC_THEMES_PROJECT` in projects.ts). */
+const NO_TWIN = new Set(["public-themes-chromium"]);
 
 /** Options of `playwright test` that take a value (`playwright test --help`, 1.64). */
 const VALUE_OPTIONS = new Set([
@@ -104,7 +107,9 @@ export function playwrightArgs(args, { all, pg }) {
       if (pg) out.push("chromium-pg");
     }
     for (const p of [...out]) {
-      if (!p.endsWith(SITE_WIDE_SUFFIX) && !p.endsWith("*")) out.push(`${p}${SITE_WIDE_SUFFIX}`);
+      if (!p.endsWith(SITE_WIDE_SUFFIX) && !p.endsWith("*") && !NO_TWIN.has(p)) {
+        out.push(`${p}${SITE_WIDE_SUFFIX}`);
+      }
     }
   }
   return ["test", ...out.map((p) => `--project=${p}`), ...(filtered ? ["--no-deps"] : []), ...rest];

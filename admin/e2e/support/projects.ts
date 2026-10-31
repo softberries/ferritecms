@@ -81,3 +81,41 @@ export function selectedProjects(argv: readonly string[] = process.argv): SitePr
     patterns.some((re) => re.test(p.name) || re.test(`${p.name}${SITE_WIDE_SUFFIX}`)),
   );
 }
+
+// The public starter themes' accessibility checks (M4-3b P64, ruling R-b16): one more
+// Playwright project, Chromium on SQLite, that runs `public-themes.spec.ts` and nothing
+// else (the admin projects ignore that spec). It has no `-site-wide` twin and none of the
+// admin projects' sites: global setup starts one site per theme, each with the content
+// its theme is checked on, so no theme's content or front page leaks into another's.
+
+/** What a site holds besides the harness accounts. */
+export type SiteContent =
+  /** `seed demo`. */
+  | "demo"
+  /** `seed demo --profile business`: a static front page, its children, a contact page. */
+  | "business"
+  /** The docs site: `import markdown <repo>/site/content --front-page` (`site/build.sh`). */
+  | "docs";
+
+export const PUBLIC_THEMES_PROJECT = "public-themes-chromium";
+export const PUBLIC_THEMES_SPEC = /(?:^|[/\\])public-themes\.spec\.ts$/;
+
+/** The starter themes and the content each is checked on (P64). */
+export const PUBLIC_THEMES = [
+  { theme: "blog", content: "demo" },
+  { theme: "business", content: "business" },
+  { theme: "docs", content: "docs" },
+] as const satisfies readonly { theme: string; content: SiteContent }[];
+
+export type PublicTheme = (typeof PUBLIC_THEMES)[number]["theme"];
+
+/** The key of a theme's site, storage states and log. */
+export function themeSiteKey(theme: PublicTheme): string {
+  return `${PUBLIC_THEMES_PROJECT}-${theme}`;
+}
+
+/** Whether a run selects the public-themes project (it does when no project is named). */
+export function publicThemesSelected(argv: readonly string[] = process.argv): boolean {
+  const args = projectArgs(argv);
+  return args.length === 0 || args.map(glob).some((re) => re.test(PUBLIC_THEMES_PROJECT));
+}

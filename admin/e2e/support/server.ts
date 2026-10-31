@@ -1,5 +1,7 @@
-// Starts a real `ferrite serve` for the E2E run: a fresh data folder, `seed demo`, the
-// harness accounts (`users.ts`), an SMTP sink, then `serve` on a free loopback port.
+// Starts a real `ferrite serve` for the E2E run: a fresh data folder, its content (`seed
+// demo`, or what a public-themes site is checked on, `projects.ts`), the harness accounts
+// (`users.ts`), an SMTP sink, then `serve` on a free loopback port. With SQLite the CLI
+// cannot write while `serve` holds the data folder, so everything is written first.
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -8,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { childEnv } from "./child-env";
-import type { Backend } from "./projects";
+import type { Backend, SiteContent } from "./projects";
 import { ACCOUNTS } from "./users";
 import { startSmtpSink } from "./smtp-sink";
 
@@ -31,10 +33,16 @@ export interface Site {
   stop(): Promise<void>;
 }
 
+/** The repository's documentation: the `docs` content (`site/build.sh` imports it too). */
+const DOCS_CONTENT = resolve(adminDir, "../site/content");
+
 export async function startSite(opts: {
   name: string;
   db?: { url: string; schema: string };
+  /** Default `demo`. */
+  content?: SiteContent;
 }): Promise<Site> {
+  const content = opts.content ?? "demo";
   if (!existsSync(FERRITE_BIN)) {
     throw new Error(
       `ferrite binary not found at ${FERRITE_BIN}; build it with ` +
@@ -54,11 +62,16 @@ export async function startSite(opts: {
   let child: ChildProcess | undefined;
   try {
     const db = opts.db ? ["--db", opts.db.url, "--schema", opts.db.schema] : [];
-    await run(["init", "--data", data, "--url", url, ...db]);
-    await run(["seed", "demo", "--data", data]);
+    // The docs site's title, as `site/build.sh` gives it.
+    const title = content === "docs" ? ["--title", "FerriteCMS"] : [];
+    await run(["init", "--data", data, "--url", url, ...db, ...title]);
+    if (content === "demo") await run(["seed", "demo", "--data", data]);
+    if (content === "business") {
+      await run(["seed", "demo", "--data", data, "--profile", "business"]);
+    }
     let resetmePassword = "";
     for (const a of ACCOUNTS) {
-      if (a.login === "admin") {
+      if (a.login === "admin" && content !== "docs") {
         // `seed demo` made `admin` without a password.
         await run(
           ["user", "reset-password", "--data", data, "--login", "admin", "--password-stdin"],
@@ -86,6 +99,22 @@ export async function startSite(opts: {
       } else {
         await run([...create, "--password-stdin"], `${a.password}\n`);
       }
+    }
+    if (content === "docs") {
+      // After the accounts (`--as admin`). Exit 2 (a skipped file, a missing image, a
+      // broken link) fails the start, as it fails `site/build.sh`.
+      await run([
+        "import",
+        "markdown",
+        DOCS_CONTENT,
+        "--data",
+        data,
+        "--front-page",
+        "--as",
+        "admin",
+        "--source",
+        "ferrite-docs",
+      ]);
     }
 
     child = spawn(FERRITE_BIN, ["serve", "--data", data], {

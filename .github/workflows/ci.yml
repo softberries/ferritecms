@@ -123,7 +123,8 @@ jobs:
   # Postgres, Firefox and WebKit on SQLite, against the binary and plugin `admin` built.
   # Only `chromium-pg` starts the Postgres service (an empty `image` starts none; GitHub's
   # workflow syntax, `services.<id>.image`) and gets FERRITE_TEST_PG_URL (its global setup
-  # fails without it). Design screenshots come from `chromium-sqlite` only.
+  # fails without it). Design screenshots come from `chromium-sqlite` only, and so does the
+# public themes' axe step (`public-themes-chromium`).
   admin-e2e:
     needs: admin
     runs-on: ubuntu-latest
@@ -184,6 +185,12 @@ jobs:
       - run: pnpm -C admin e2e --project ${{ matrix.project }}
         env:
           FERRITE_TEST_PG_URL: ${{ matrix.pg_url }}
+      # The public starter themes under axe (M4-3b P64, ruling R-b16): Chromium on SQLite,
+      # one site per theme (`blog` on `seed demo`, `business` on its seed profile, `docs` on
+      # `site/content`), in its own Playwright run.
+      - name: public themes (axe)
+        if: matrix.project == 'chromium-sqlite'
+        run: pnpm -C admin e2e --project public-themes-chromium
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

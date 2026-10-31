@@ -720,5 +720,29 @@ or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/busi
   links keep their own focus ring where `:has()` is missing.
 - Contrast, computed for the default accent with the WCAG formula, is listed at the top
   of its `style.css` (every text pair at least 4.5:1 in both schemes). `ferrite seed demo
-  --profile business` writes content shaped for it (09 §8). WCAG 2.2 AA is a goal; automated checks (axe) in CI for the starter
-themes are not set up yet.
+  --profile business` writes content shaped for it (09 §8).
+
+**Accessibility checks** (M4-3b P64). WCAG 2.2 AA is the goal for every starter theme.
+`admin/e2e/public-themes.spec.ts` runs axe with the admin's tags (`wcag2a`, `wcag2aa`,
+`wcag21a`, `wcag21aa`, `wcag22aa`) in the light and the dark scheme, in Chromium at the
+desktop viewport, in the Playwright project `public-themes-chromium`. Global setup gives
+each theme a SQLite site of its own with the content it is checked on, written before
+`serve` starts. Each theme is activated through the API, and the spec waits until the node
+serves it. CI runs the project as its own step in the `admin-e2e` job (the
+`chromium-sqlite` leg).
+
+- `blog` on `seed demo`: the front page, a post, a page, a category archive, a search
+  and a 404.
+- `business` on `seed demo --profile business`: the front page, a child page, the
+  contact page, a search and a 404. The contact page is checked twice: as it renders by
+  default, and with `contact_form` on (the theme's form markup, without the plugin).
+- `docs` on the repository's `site/content` (`import markdown --front-page`): the front
+  page, a nested page, a search and a 404. A keyboard check runs too: the first Tab
+  reaches the skip link, and Enter moves focus to `<main>`.
+
+Long lines in `<pre>` wrap in all three themes (`white-space: pre-wrap`). Core renders
+`<pre>` without a focus stop, so a block that scrolled sideways could not be scrolled from
+the keyboard (axe `scrollable-region-focusable`, WCAG 2.1.1). Not checked: Firefox and
+WebKit, the phone layout, a comment thread with comments in it (the demo seed writes
+none, so the post shows the empty thread and the comment form, which are checked), and
+the contact-form plugin's own pages.

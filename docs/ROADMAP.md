@@ -562,7 +562,7 @@ The open follow-up lists carried into M4 (from M1b to M4-2), worked top-down.
   - [ ] Small in-memory LRU for hot small `/_media` files (03 §5).
   - [ ] Atom feeds next to RSS 2.0 (06 §3).
   - [ ] `Cache-Control: public, max-age=0, s-maxage=<cfg>` on HTML for CDNs (06 §6; HTML pages send no `Cache-Control` today).
-  - [ ] Automated accessibility checks (axe) in CI for the starter themes (06 §8).
+  - [x] Automated accessibility checks (axe) in CI for the starter themes (06 §8). Done in M4-3b (P64): `admin/e2e/public-themes.spec.ts` in the `public-themes-chromium` project, its own step in the `admin-e2e` job.
   - [ ] Signed or scoped direct media: with `[media.s3] public_base_url` (Direct mode) the published-only check and the attachment/`nosniff`/CSP headers do not apply, and unpublished media and plugin artifacts stay readable by hash (03 §5). Short-lived signed URLs, or a published-only bucket path.
 - [ ] Deferred from M2a-2a:
   - [ ] Per-node option cache, reintroduced only with a measured need (M2a-2 P14; theme settings and `site.*` are read per cache miss, plugin settings per call, each one primary-key read). It needs R13's refresh on `options.changed` on every node ([rulings/m2a.md](superpowers/rulings/m2a.md)).
