@@ -6,9 +6,13 @@
 #
 #   .github/scripts/package.sh VERSION TARGET BINARY OUT_DIR
 #
-# Run from the repository root. Used by .github/workflows/release.yml; runs on Linux and
-# macOS (bsdtar).
+# Run from the repository root. Used by .github/workflows/release.yml; runs on Linux (GNU
+# tar) and macOS (bsdtar). The archive is reproducible (M4-4 P83, repro-tar.sh): the same
+# files give the same bytes. The binary itself is not claimed to be.
 set -euo pipefail
+
+# shellcheck source=repro-tar.sh source-path=SCRIPTDIR
+source "$(dirname "${BASH_SOURCE[0]}")/repro-tar.sh"
 
 if [ "$#" -ne 4 ]; then
   echo "usage: $0 VERSION TARGET BINARY OUT_DIR" >&2
@@ -29,9 +33,10 @@ cp README.md "$stage/$name/"
 for f in LICENSE*; do
   if [ -f "$f" ]; then cp "$f" "$stage/$name/"; fi
 done
+# Modes do not depend on the source files' or the umask.
+find "$stage/$name" -type f ! -name ferrite -exec chmod 0644 {} +
 
 mkdir -p "$out"
-# COPYFILE_DISABLE keeps macOS tar from adding `._*` AppleDouble entries.
-COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
+repro_pack "$stage" "$out/$name.tar.gz" "$name"
 echo "packed $out/$name.tar.gz:"
 tar -tzvf "$out/$name.tar.gz"

@@ -337,6 +337,65 @@ fn self_update_installs_and_keeps_prev() {
     assert_eq!(install.entries(), vec!["ferrite", "ferrite.prev"]);
 }
 
+/// The asset `package.sh` makes (M4-4 P83: ustar, sorted members with a folder entry, owner
+/// 0, mtime 0, `gzip -n`) is what the reader unpacks: the folder entry is skipped and the
+/// binary installed with mode 0755.
+#[test]
+fn self_update_installs_an_archive_made_by_package_sh() {
+    let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let work = tempfile::tempdir().unwrap();
+    let binary = work.path().join("fake-ferrite");
+    std::fs::write(&binary, script(NEW)).unwrap();
+    let out_dir = work.path().join("dist");
+    let packed = std::process::Command::new("bash")
+        .current_dir(&root)
+        .arg(".github/scripts/package.sh")
+        .arg(NEW)
+        .arg(ferrite::binary_target())
+        .arg(&binary)
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    assert!(
+        packed.status.success(),
+        "package.sh failed:\n{}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let name = asset_name(NEW);
+    let archive = std::fs::read(out_dir.join(&name)).unwrap();
+
+    // The archive really has the new layout: a folder entry first, then the files.
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive.as_slice()));
+    let kinds: Vec<_> = tar
+        .entries()
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.path().unwrap().to_string_lossy().into_owned(),
+                e.header().entry_type(),
+            )
+        })
+        .collect();
+    let dir = format!("ferrite-{NEW}-{}", ferrite::binary_target());
+    assert_eq!(kinds[0], (format!("{dir}/"), tar::EntryType::Directory));
+    assert!(kinds.iter().any(|(p, _)| p == &format!("{dir}/ferrite")));
+
+    server.publish(NEW, &signed(&keys, (name, archive)));
+    let mut cmd = self_update(&server, &keys, &install);
+    cmd.arg("--yes");
+    let out = run(cmd);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(std::fs::read(&install.exe).unwrap(), script(NEW));
+    let mode = std::fs::metadata(&install.exe)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755);
+    assert_eq!(install.entries(), vec!["ferrite", "ferrite.prev"]);
+}
+
 #[test]
 fn self_update_refuses_bad_signature() {
     let (server, keys, install) = (Server::start(), Keys::new(), Install::new());
