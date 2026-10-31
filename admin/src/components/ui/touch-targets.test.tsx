@@ -32,26 +32,29 @@ describe("touch_targets", () => {
     expect(screen.getByRole("button", { name: "Close" })).toHaveClass("pointer-coarse:size-11");
   });
 
-  // Inside a field (itself 44 px tall on touch screens) the button keeps its look; a
-  // pseudo-element widens what a finger hits to 44 px, staying inside the field on the
-  // right (3 px): 24 + 2 × 10 tall and 24 + 17 + 3 wide; 32 + 2 × 6 and 32 + 9 + 3.
-  test.each([
-    ["icon-xs", ["-inset-y-2.5", "-right-0.75", "-left-4.25"]],
-    ["icon-sm", ["-inset-y-1.5", "-right-0.75", "-left-2.25"]],
-  ] as const)("input_group_button_%s_hits_44px_under_a_coarse_pointer", (size, insets) => {
-    render(
-      <InputGroup>
-        <InputGroupAddon align="inline-end">
-          <InputGroupButton size={size} aria-label="Clear">
-            x
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>,
-    );
-    expect(screen.getByRole("button", { name: "Clear" })).toHaveClass(
-      "relative",
-      "pointer-coarse:after:absolute",
-      ...insets.map((inset) => `pointer-coarse:after:${inset}`),
-    );
-  });
+  // Inside a field (itself 44 px tall on touch screens, 1 px border) the button is 44 px
+  // wide and fills the inner height; a pseudo-element covers the border rows, so the hit
+  // area is 44 × 44 and stays inside the field.
+  test.each(["icon-xs", "icon-sm"] as const)(
+    "input_group_button_%s_hits_44px_under_a_coarse_pointer",
+    (size) => {
+      render(
+        <InputGroup>
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton size={size} aria-label="Clear">
+              x
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>,
+      );
+      expect(screen.getByRole("button", { name: "Clear" })).toHaveClass(
+        "relative",
+        "pointer-coarse:w-11",
+        "pointer-coarse:h-[calc(var(--control-h)-2px)]",
+        "pointer-coarse:after:absolute",
+        "pointer-coarse:after:-inset-x-px",
+        "pointer-coarse:after:-inset-y-0.5",
+      );
+    },
+  );
 });

@@ -239,9 +239,12 @@ contrast pair unchanged.
   `styleguide_touch_targets`). The fixed small icon sizes follow too (M4-4): `Button`'s
   `icon-xs` (24 px) and `icon-sm` (28 px) carry `pointer-coarse:size-11`, a real 44 px
   box; `InputGroupButton`'s `icon-xs` / `icon-sm` (24 / 32 px), which sit inside a field
-  that is itself 44 px tall, keep their look and widen the hit area with a pseudo-element
-  (`relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5` /
-  `-inset-1.5`), as `Switch` does. A container shorter than 44 px grows with its button
+  that is itself 44 px tall with a 1 px border, become 44 px wide and the field's inner
+  height (`pointer-coarse:w-11 pointer-coarse:h-[calc(var(--control-h)-2px)]`) with a
+  pseudo-element over its own 1 px border and the field's border rows (`after:-inset-x-px after:-inset-y-0.5`, offsets from the padding box): 44 × 44 inside the field.
+  (A centred pseudo-element on the 24 px button, tried first, stuck out past the field
+  and a scrolling toolbar cut it off; E2E `styleguide_touch_targets` probes the corners
+  with `elementFromPoint`.) A container shorter than 44 px grows with its button
   on touch screens (term chips: `pointer-coarse:h-11.5`, so the button stays inside the
   chip's border instead of overlapping the next row); dialog and sheet headers keep
   their text clear of the 44 px close button (`pointer-coarse:pr-10` / `pr-15`).
@@ -563,7 +566,7 @@ Rules for generated files:
 | `tabs.tsx` | trigger: removed the `focus-visible:*` ring/outline classes, `text-foreground/60` → `text-muted-foreground`; content: removed `outline-none` | focus ring (panels are focusable); inactive tabs were 4.48:1 on `muted` |
 | `dropdown-menu.tsx` | item, checkbox item, radio item, sub-trigger: `outline-hidden` → `-outline-offset-2` | focus ring, inset inside the menu |
 | `button.tsx` (M4-4) | `icon-xs`, `icon-sm`: added `pointer-coarse:size-11` | 44 px touch targets (§4, §8) |
-| `input-group.tsx` (M4-4) | button `icon-xs`, `icon-sm`: added `relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5` / `-inset-1.5` | 44 px hit area inside a 44 px field (§4) |
+| `input-group.tsx` (M4-4) | button `icon-xs`, `icon-sm`: added `relative pointer-coarse:w-11 pointer-coarse:h-[calc(var(--control-h)-2px)] pointer-coarse:after:absolute pointer-coarse:after:-inset-x-px pointer-coarse:after:-inset-y-0.5` | 44 px hit area inside a 44 px field (§4) |
 | `dropdown-menu.tsx`, `select.tsx`, `popover.tsx`, `hover-card.tsx` (M4-4) | content (and sub-content): `ring-foreground/10` → `ring-popover-edge` | the edge nearly vanished in dark mode (§3) |
 | `scroll-area.tsx` | viewport: removed `outline-none` and ring classes, added `-outline-offset-2` and `tabIndex={0}` | a scrollable region must be keyboard-reachable (axe `scrollable-region-focusable`) |
 | `sidebar.tsx` | group label, group action, menu button, menu action, sub button: removed `outline-hidden focus-visible:ring-2`; strings through `t()` | focus ring; F31 |

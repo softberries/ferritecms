@@ -61,20 +61,19 @@ function InputGroupAddon({
   );
 }
 
-// The icon sizes widen what a finger hits to 44 × 44 on coarse pointers with a
-// pseudo-element (the field is itself 44 px tall). An inline-end addon pulls its button
-// to about 3 px from the field's right border, so the area reaches only 3 px right of
-// the button and the rest to the left, over the input's end: 24 + 17 + 3, 32 + 9 + 3.
-// Centred, it stuck out past the field and was cut off by a scrolling toolbar.
+// On coarse pointers the icon sizes are 44 px wide and fill the field's inner height
+// (the field is 44 px tall with a 1 px border), and a pseudo-element covers the border
+// rows too: a 44 × 44 hit area that never leaves the field. (A centred pseudo-element
+// on the 24 px button stuck out past the field and a scrolling toolbar cut it off.)
+const COARSE_FIELD_BUTTON =
+  "relative pointer-coarse:w-11 pointer-coarse:h-[calc(var(--control-h)-2px)] pointer-coarse:after:absolute pointer-coarse:after:-inset-x-px pointer-coarse:after:-inset-y-0.5";
 const inputGroupButtonVariants = cva("flex items-center gap-2 text-sm shadow-none", {
   variants: {
     size: {
       xs: "h-6 gap-1 rounded-[calc(var(--radius)-3px)] px-1.5 [&>svg:not([class*='size-'])]:size-3.5",
       sm: "",
-      "icon-xs":
-        "relative size-6 rounded-[calc(var(--radius)-3px)] p-0 has-[>svg]:p-0 pointer-coarse:after:absolute pointer-coarse:after:-inset-y-2.5 pointer-coarse:after:-right-0.75 pointer-coarse:after:-left-4.25",
-      "icon-sm":
-        "relative size-8 p-0 has-[>svg]:p-0 pointer-coarse:after:absolute pointer-coarse:after:-inset-y-1.5 pointer-coarse:after:-right-0.75 pointer-coarse:after:-left-2.25",
+      "icon-xs": `size-6 rounded-[calc(var(--radius)-3px)] p-0 has-[>svg]:p-0 ${COARSE_FIELD_BUTTON}`,
+      "icon-sm": `size-8 p-0 has-[>svg]:p-0 ${COARSE_FIELD_BUTTON}`,
     },
   },
   defaultVariants: {
