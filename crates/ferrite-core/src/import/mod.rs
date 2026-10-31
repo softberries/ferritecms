@@ -265,8 +265,9 @@ impl ImportService {
     /// Whether job `job` could start a run now (P27 as built): no run is `running`, or
     /// the running one is stale and has no job, is `job`'s own, or its job is not live:
     /// `running` with a lease that has not expired (M4-4 P80; a job whose runner died
-    /// keeps `running` until the reaper reclaims it). A pre-check, so a busy job fetches
-    /// nothing; [`start`](Self::start) decides for real.
+    /// keeps `running` until the reaper reclaims it). A pre-check on this node's clock, so
+    /// a busy job fetches nothing; [`start`](Self::start) decides for real, in the store
+    /// statement, on the lease's own clock (the database's on Postgres).
     pub async fn job_may_start(&self, job: JobId) -> Result<bool, CoreError> {
         let repos = self.store.read();
         let Some(run) = repos.imports().running().await? else {

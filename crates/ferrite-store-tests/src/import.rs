@@ -480,8 +480,10 @@ pub async fn abandon_stale_for_job_spares_live_jobs(db: &TestDb) {
 /// P80 (real clock): the owner job of a stale run counts as live only while it is
 /// `running` and its lease has not expired. A job whose runner died keeps `running` with
 /// a lease in the past until the reaper reclaims it; its stale run is abandoned at once.
-/// The leases come from the store's clock (Postgres `now()`), so `now` here is the real
-/// clock plus a margin, not the fixed epoch of the other tests.
+/// The leases come from the store's clock (Postgres `now()`, which also judges them
+/// there), so the test waits out a 1 s lease on the real clock instead of using the fixed
+/// epoch of the other tests. On Postgres an app `now` far ahead does not expire a lease
+/// early.
 pub async fn an_expired_lease_does_not_keep_a_run_live(db: &TestDb) {
     let store = db.store();
     let repos = store.read();
@@ -500,21 +502,37 @@ pub async fn an_expired_lease_does_not_keep_a_run_live(db: &TestDb) {
             .unwrap();
         assert_eq!(claimed.len(), 1, "{kind}");
     }
+    let run_of = |owner| ImportRun {
+        job_id: Some(owner),
+        ..new_run(admin.id, "https://wp.example")
+    };
+    if store.backend() == Backend::Postgres {
+        // The 1 s lease is still running on the database clock: an app clock a minute
+        // ahead does not make it expired (P80 on the reaper's clock, P6).
+        let run = run_of(expired);
+        imports.create_run(&run).await.unwrap();
+        let ahead = Timestamp::from_micros(Timestamp::now().as_micros() + 60_000_000).unwrap();
+        assert!(
+            !imports
+                .abandon_stale_for_job(run.id, ahead, ahead, me)
+                .await
+                .unwrap()
+        );
+        assert!(imports.abandon_stale(run.id, ahead, ahead).await.unwrap());
+    }
+    // Wait out the 1 s lease (with room for skew between the clocks).
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let now = Timestamp::now();
-    let soon = Timestamp::from_micros(now.as_micros() + 60_000_000).unwrap();
     for (owner, abandoned) in [(expired, true), (live, false)] {
         assert_eq!(
             jobs.get(owner).await.unwrap().unwrap().status,
             ferrite_domain::JobStatus::Running
         );
-        let run = ImportRun {
-            job_id: Some(owner),
-            ..new_run(admin.id, "https://wp.example")
-        };
+        let run = run_of(owner);
         imports.create_run(&run).await.unwrap();
         assert_eq!(
             imports
-                .abandon_stale_for_job(run.id, now, soon, me)
+                .abandon_stale_for_job(run.id, now, now, me)
                 .await
                 .unwrap(),
             abandoned,
@@ -525,7 +543,7 @@ pub async fn an_expired_lease_does_not_keep_a_run_live(db: &TestDb) {
             assert_eq!(state, ImportRunState::Abandoned);
         } else {
             assert_eq!(state, ImportRunState::Running);
-            assert!(imports.abandon_stale(run.id, now, soon).await.unwrap());
+            assert!(imports.abandon_stale(run.id, now, now).await.unwrap());
         }
     }
 }

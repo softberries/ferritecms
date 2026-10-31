@@ -4,9 +4,9 @@
 //! its path below the first `uploads/` segment, or else by its full path. Both an entry's
 //! name and the path looked up are compared in Unicode NFC, so an archive made on macOS
 //! (NFD names) matches the paths WordPress stored. Entries whose names match the same
-//! path that way (or after the part above `uploads/` is dropped) are ambiguous: none of
-//! them is read, and an attachment naming that path is missing, its note naming the
-//! reason (P79). An entry is read on a blocking thread, streamed out in chunks, and never
+//! path that way (or after the part above `uploads/` is dropped) are ambiguous, an
+//! encrypted or unsupported one among them included: none of them is read, and an
+//! attachment naming that path is missing, its note naming the reason (P79). An entry is read on a blocking thread, streamed out in chunks, and never
 //! extracted to disk.
 //!
 //! Limits: before the central directory is parsed, the archive's end records (zip64 ones
@@ -130,6 +130,8 @@ impl ZipSource {
         })?;
         let mut entries = HashMap::new();
         let mut ambiguous = HashSet::new();
+        // Every key an entry had so far, readable or not.
+        let mut seen = HashSet::new();
         let mut declared: u64 = 0;
         for index in 0..archive.len() {
             let data = archive
@@ -152,6 +154,17 @@ impl ZipSource {
                 );
                 continue;
             };
+            // Names collide whether or not the entries could be read (P79): a second
+            // entry with a key seen before makes it ambiguous, and none is read.
+            if ambiguous.contains(&key) {
+                continue;
+            }
+            if !seen.insert(key.clone()) {
+                tracing::warn!(entry = %key, "uploads archive entries share a name after Unicode normalisation; none of them is read");
+                entries.remove(&key);
+                ambiguous.insert(key);
+                continue;
+            }
             let readable = !data.encrypted()
                 && matches!(
                     data.compression(),
@@ -159,14 +172,6 @@ impl ZipSource {
                 );
             if !readable {
                 tracing::warn!(entry = %key, "an encrypted or unsupported uploads archive entry is left out");
-                continue;
-            }
-            if ambiguous.contains(&key) {
-                continue;
-            }
-            if entries.remove(&key).is_some() {
-                tracing::warn!(entry = %key, "uploads archive entries share a name after Unicode normalisation; none of them is read");
-                ambiguous.insert(key);
                 continue;
             }
             entries.insert(
@@ -691,6 +696,28 @@ mod tests {
         }
         assert_eq!(read(&src, "ok.png", 10).await.unwrap().unwrap(), b"ok");
         assert_eq!(src.entries.len(), 1, "{:?}", src.entries);
+
+        // An entry that could not be read itself (here packed with bzip2) still
+        // collides: the readable one beside it is not read either.
+        let archive = dir.path().join("mixed.zip");
+        write_zip(
+            &archive,
+            &[
+                ("uploads/m\u{e9}.png", b"readable"),
+                ("uploads/me\u{301}.png", b"unsupported"),
+            ],
+        );
+        patch(
+            &archive,
+            "uploads/me\u{301}.png",
+            10,
+            8,
+            &12u16.to_le_bytes(),
+        );
+        let src = ZipSource::open(&archive).unwrap();
+        let err = read(&src, "m\u{e9}.png", 100).await.unwrap_err();
+        assert!(err.contains("more than one entry"), "{err}");
+        assert!(src.entries.is_empty(), "{:?}", src.entries);
     }
 
     /// A zip cut short anywhere, or with a stretch cut out of its middle, is refused as

@@ -133,12 +133,14 @@ impl ImportRepo for PgRepos {
         now: Timestamp,
         job: JobId,
     ) -> Result<bool, StoreError> {
+        // The lease is compared with the database clock, as the reaper and the claim do
+        // (P6): `locked_until` was written with `now()`.
         let done = run!(&self.exec, |e| sqlx::query(
             "UPDATE import_runs SET state = 'abandoned', finished_at = $1 \
              WHERE id = $2 AND state = 'running' AND heartbeat_at < $3 \
              AND (job_id IS NULL OR job_id = $4 OR NOT EXISTS \
              (SELECT 1 FROM jobs WHERE jobs.id = import_runs.job_id AND jobs.status = 'running' \
-             AND (jobs.locked_until IS NULL OR jobs.locked_until >= $1)))"
+             AND (jobs.locked_until IS NULL OR jobs.locked_until >= now())))"
         )
         .bind(dt(now))
         .bind(id.as_uuid())

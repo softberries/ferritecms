@@ -22,7 +22,8 @@ failed after it started still writes its partial report (M3-2 P29). `--uploads` 
 uploads folder or a `.zip` of it, read in place (`ZipSource`, P24). Zip entries are
 matched by their path below the first `uploads/` segment in Unicode NFC; entries that
 match the same path (an NFC and an NFD spelling, or `uploads/2024/a.png` beside
-`2024/a.png`) are ambiguous: none of them is read, and an attachment naming that path is
+`2024/a.png`; an encrypted or unsupported entry counts too) are ambiguous: none of them
+is read, and an attachment naming that path is
 missing media, its note saying why (M4-4 P79). A zip that is cut short or otherwise not
 a zip is refused (`Archive`): the CLI exits 1, and the job fails for good, not retried.
 
@@ -308,8 +309,8 @@ pipeline above, but it shares the run and map rules:
   the run starts, so a limit that aborts writes nothing (exit 1, the message naming the
   limit): more than 5000 Markdown files; more than 5000 folders that hold a page (an
   index, a file, or a page further down; asset trees and `node_modules` do not count);
-  more than 50 000 folders seen in all, with pages or without ("point the import at the
-  folder of Markdown files"); more than 256 MiB of Markdown read in all (every file read
+  more than 50 000 folders found in all, with pages or without, those too deep to walk
+  included ("point the import at the folder of Markdown files"); more than 256 MiB of Markdown read in all (every file read
   within the per-file limit counts: the kept sources stay in memory for the whole run). A
   file over 1 MiB (`too-large`) and a folder deeper than 64 (`too-deep`) are skipped and
   reported (exit 2).

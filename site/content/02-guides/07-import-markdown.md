@@ -115,7 +115,7 @@ If an import was stopped (killed, or the machine went down), the next one exits 
 ## Limits
 
 One import reads at most 5000 Markdown files, 5000 folders that hold pages and 256 MiB of
-Markdown in all, and looks into at most 50 000 folders (folders without Markdown, such as
+Markdown in all, and finds at most 50 000 folders in all (folders without Markdown, such as
 image folders or `node_modules`, count only toward this last limit). A larger folder is an
 error that names the limit, and nothing is written: point the import at the folder that
 holds the Markdown files. A file over 1 MiB, and anything in a folder nested deeper than 64

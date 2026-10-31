@@ -1242,7 +1242,9 @@ pub trait ImportRepo: Send + Sync {
     /// [`abandon_stale`](Self::abandon_stale) for a start by job `job` (M3-2 P27 as
     /// built): also only when the run has no job, is `job`'s own, or its job is not
     /// live (no such job included): live is `running` with a lease that has not expired
-    /// at `now` (M4-4 P80). One statement, like `abandon_stale`.
+    /// (M4-4 P80), judged by the clock the lease was written with: `now` on SQLite, the
+    /// database's `now()` on Postgres (where `now` is only `finished_at`). One
+    /// statement, like `abandon_stale`.
     async fn abandon_stale_for_job(
         &self,
         id: ImportRunId,
