@@ -332,7 +332,7 @@ describe("seo_section", () => {
   });
 
   test("a_huge_whitespace_paste_is_cut_at_once", () => {
-    // A long inner whitespace run made the trim's `\s+$` regex quadratic, once per
+    // A long inner whitespace run made the trim's `\p{White_Space}+$` regex quadratic, once per
     // bisection step.
     const { doc, setMeta } = docWith({ ...EMPTY, description: "xyz" });
     renderSeo(doc);

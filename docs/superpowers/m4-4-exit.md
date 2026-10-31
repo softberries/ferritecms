@@ -83,7 +83,8 @@ the controller's ledger):
    256 MiB (`MdError::TooMuchText`), counts only folders that hold a page toward 5000 and caps
    the walk at 50 000 folders; uploads-zip entries that collide after NFC (readable or not)
    are all reported as missing media (so are entries that collide only after the folders
-   above `uploads/` are dropped, which the first entry used to win; see §4); an import run's owner job is live only while `running`
+   above `uploads/` are dropped, which the first entry used to win; see §4); an import
+   run's owner job is live only while `running`
    with an unexpired lease (Postgres with `now()`), in both stores and `job_may_start`; the
    `job` span names the node, `import.wordpress` logs `started`/`done`, a database error
    deleting an input row is a `warn`; the truncated-zip regression test.
