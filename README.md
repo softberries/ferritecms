@@ -18,7 +18,7 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
 - **Brings your WordPress content**: posts, pages, media, taxonomies, users, comments,
   menus and 301 redirects from a WXR export.
 
-**Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)**
+**Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)** · Built by [SOFTBERRIES](https://softberries.dev)
 
 ## Quickstart
 
@@ -123,16 +123,28 @@ It is an early release: expect changes before 1.0. Plans and open items are in
 
 ## Contributing
 
-Issues are welcome. FerriteCMS has a single copyright holder, so that it can also be
-offered under other terms later; a pull request therefore needs a contributor license
-agreement, which is not set up yet. Open an issue first.
+Issues and pull requests are welcome; before a larger change, open an issue to discuss it.
+The build and test commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Because FerriteCMS is offered under the AGPLv3 and under a commercial license, contributors
+sign a Contributor License Agreement on their first pull request (CLA assistant asks for
+it). See [CONTRIBUTING.md](CONTRIBUTING.md) and [LICENSING.md](LICENSING.md).
+
+## Commercial license
+
+FerriteCMS is built by [SOFTBERRIES](https://softberries.dev). A commercial license, which
+removes the AGPL obligations, is available on request. Contact
+**[hello@softberries.dev](mailto:hello@softberries.dev)** or visit
+**[softberries.dev](https://softberries.dev)**.
 
 ## License
 
 FerriteCMS is licensed under the [GNU Affero General Public License v3.0 only](LICENSE)
 (`AGPL-3.0-only`). If you run a modified version for other people over a network, you must
-offer them its source.
+offer them its source. A commercial license is available as well; see
+[LICENSING.md](LICENSING.md).
 
 Plugins and themes are separate: an [additional permission](LICENSE-EXCEPTION.md) lets
 you license a plugin or theme you write under any terms you like, including one built with
-the plugin SDK or copied from the example plugins or starter themes.
+the plugin SDK or copied from the example plugins or starter themes. This summary is not
+legal advice.

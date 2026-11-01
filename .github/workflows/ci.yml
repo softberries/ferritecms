@@ -259,8 +259,8 @@ jobs:
           systemd-analyze --version | head -1
           systemd-analyze verify packaging/systemd/ferrite.service
           systemd-analyze security --offline=true packaging/systemd/ferrite.service || true
-      - name: shell scripts (release, docs site build)
-        run: shellcheck -x .github/scripts/*.sh site/build.sh
+      - name: shell scripts (release, docs site build and export)
+        run: shellcheck -x .github/scripts/*.sh site/build.sh site/export-static.sh
       # The release packs the example plugins at the workspace version (M4-3a P47), and
       # package-plugins.sh refuses a manifest with another one: a version bump has to move
       # the three manifests with the workspace version (09 §7). Caught here, not at the tag.

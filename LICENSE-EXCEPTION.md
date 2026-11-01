@@ -1,8 +1,9 @@
 # Additional permission for plugins and themes
 
 FerriteCMS is licensed under the GNU Affero General Public License, version 3 only
-(`AGPL-3.0-only`; the text is in [`LICENSE`](LICENSE)). Its copyright holder, Krzysztof
-Grajek, grants the following additional permission under section 7 of that license.
+(`AGPL-3.0-only`; the text is in [`LICENSE`](LICENSE)). Its copyright holder, SOFTBERRIES
+Krzysztof Grajek, grants the following additional permission under section 7 of that
+license.
 
 1. A plugin (a WebAssembly component that FerriteCMS loads) or a theme (the templates,
    styles and assets that FerriteCMS renders) is not a work based on FerriteCMS merely

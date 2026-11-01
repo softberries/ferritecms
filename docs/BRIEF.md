@@ -267,8 +267,9 @@ ferritecms/
 
 - Open-source core, licensed `AGPL-3.0-only` with an additional permission for plugins and themes
   (`LICENSE-EXCEPTION.md`); decided 2026-11-01, before the first release, replacing a brief
-  `MIT OR Apache-2.0` that was never released. The copyright holder keeps commercial licensing
-  open, so outside contributions need a contributor licence agreement first.
+  `MIT OR Apache-2.0` that was never released. A commercial license is offered by the
+  copyright holder, SOFTBERRIES Krzysztof Grajek (softberries.dev; `LICENSING.md`), so
+  contributors sign a CLA through CLA assistant (`CONTRIBUTING.md`).
 - Managed hosting: tiny per-site footprint → high density, good margins.
 - Plugin registry with signing + verified publishers (paid publisher accounts / revenue share).
 - Paid WordPress → FerriteCMS migrations for agencies.
