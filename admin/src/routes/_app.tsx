@@ -12,7 +12,7 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { commentCountsQuery } from "@/api/comments";
 import { metaQuery } from "@/api/meta";
@@ -238,7 +238,7 @@ function ShellShortcuts({
   });
 
   // `c p` / `c g`: a new post / page in the editor (only with `edit_own`).
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!canCreate) return;
     const offs = (
       [
@@ -260,8 +260,10 @@ function ShellShortcuts({
     return () => offs.forEach((off) => off());
   }, [canCreate, general, t, navigate, closeOverlays]);
 
-  // `g <key>` for every nav item that has one.
-  useEffect(() => {
+  // `g <key>` for every nav item that has one. Registered in the commit that renders
+  // the nav (a layout effect), so a key pressed once a link shows finds its binding: the
+  // `keydown` listener is outside React, which runs passive effects after paint.
+  useLayoutEffect(() => {
     const offs = sections
       .flatMap((s) => s.items)
       .flatMap((item) =>

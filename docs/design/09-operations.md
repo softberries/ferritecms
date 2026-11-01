@@ -20,8 +20,10 @@ As built in M4-2 (`crates/ferrite/src/update/`; rulings P25, P26, P31):
    refused. The minisign signature over `SHA256SUMS` is checked first with the public key
    embedded at build time from `crates/ferrite/release.pub` (pure-Rust `minisign-verify`;
    only prehashed signatures, minisign's default), then the asset's sha256 against the line
-   `SHA256SUMS` lists for it. The repository's `release.pub` is a comment-only placeholder:
-   a binary built from it refuses with "this build has no release key". Downloads are
+   `SHA256SUMS` lists for it. The repository's `release.pub` holds the release key since
+   the release gate (2026-11-01, key id `432051207B9BA065`); before that it was a
+   comment-only placeholder, and a binary built from one refuses with "this build has no
+   release key". Downloads are
    HTTPS-only (redirects included), capped (1 MiB for the two small files, 1 GiB for the
    asset) and bounded: 30 s to connect, 60 s per read and 10 minutes for the whole download.
    **What the signature binds:** the version and the target, through the asset name that
@@ -949,8 +951,8 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
 - **The release workflow** (`release.yml`, every action pinned by commit SHA): a `v*` tag
   push publishes; `workflow_dispatch` is a dry run by default (the same builds, signed
   with a throwaway key made in the job, uploaded as workflow artifacts only; its binaries
-  embed the placeholder key, so they can only be self-update-tested with a `test-seams`
-  build). Jobs:
+  embed the release key, which does not verify the throwaway signature, so they can only
+  be self-update-tested with a `test-seams` build). Jobs:
   - `meta`: the version from `Cargo.toml` (the tag must be `v<version>`), whether it is
     a prerelease (`X.Y.Z-…`), whether this run publishes, and from
     `.github/scripts/newest.sh` whether it is the newest stable version overall

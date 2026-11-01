@@ -286,6 +286,16 @@ describe("autosave", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  // The final flush on leaving the editor can outlast a test's jsdom, whose closed
+  // window and document have lost their methods by the time `dispose` runs.
+  test("dispose_after_the_window_is_closed_does_not_throw", () => {
+    const { a, win, doc } = setup(() => Promise.resolve());
+    Object.defineProperty(win, "removeEventListener", { value: undefined });
+    Object.defineProperty(doc, "removeEventListener", { value: undefined });
+    expect(() => a.dispose()).not.toThrow();
+    expect(a.disposed()).toBe(true);
+  });
+
   test("pending_drafts_belong_to_their_account", () => {
     const entry = { userId: "u1", draft: draft("kept"), at: "2026-10-26T10:00:00Z" };
     pendingDrafts.set("item-1", entry);

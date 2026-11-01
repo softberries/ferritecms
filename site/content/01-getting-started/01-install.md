@@ -68,9 +68,8 @@ On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS` instead of `sh
 The archive unpacks to a folder `ferrite-<version>-<target>/` that holds the `ferrite`
 binary and a `README.md`.
 
-Today the repository's `release.pub` is a placeholder without a key. A binary built from
-source therefore cannot use `ferrite self-update`; that command works only for release
-builds.
+The binary embeds `release.pub` when it is built, so a binary built from source holds
+the same key as a release binary and `ferrite self-update` checks releases with it too.
 
 ## Docker image (not published yet)
 

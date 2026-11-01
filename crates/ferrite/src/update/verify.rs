@@ -5,10 +5,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use minisign_verify::{PublicKey, Signature};
 
-/// The embedded release key file. The repository's copy is a comment-only placeholder.
+/// The embedded release key file: minisign's two lines since the release gate (key id
+/// 432051207B9BA065); before it, a comment-only placeholder.
 const RELEASE_PUB: &str = include_str!("../../release.pub");
 
-/// The release key this binary trusts; `None` for a build without one (the placeholder).
+/// The release key this binary trusts; `None` for a build without one (a placeholder file).
 /// Under `test-seams`, `FERRITE_TEST_RELEASE_PUBKEY` replaces the embedded file.
 pub(super) fn release_key() -> Result<Option<PublicKey>> {
     #[cfg(feature = "test-seams")]
@@ -77,17 +78,16 @@ pub(super) fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// The placeholder's text, as the repository holds it before the release key is added.
+    /// The placeholder's text, as the repository held it before the release key was added.
     const PLACEHOLDER: &str = "\
 # FerriteCMS release public key (minisign), embedded by `ferrite self-update` (M4-2 P26).
 # This is a placeholder and holds no key: a binary built from it refuses to self-update.
 ";
 
-    /// The embedded file parses, whether it is still the placeholder or holds the real
-    /// key (the release gate adds it; this test must stay green either way).
+    /// The embedded file holds the release key (added by the release gate).
     #[test]
-    fn embedded_key_file_parses() {
-        parse_key(RELEASE_PUB).unwrap();
+    fn embedded_key_file_holds_the_release_key() {
+        assert!(parse_key(RELEASE_PUB).unwrap().is_some());
     }
 
     #[test]

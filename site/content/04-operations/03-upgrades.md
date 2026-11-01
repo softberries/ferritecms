@@ -4,9 +4,9 @@ description = "Update a solo FerriteCMS site with self-update, check migrations,
 
 # Upgrades and rollback
 
-> **Status:** no version has been released yet, so there is nothing to update to. A
-> binary built from source has no release key, and `self-update` refuses with "this
-> build has no release key". This page describes how updates work once releases exist.
+> **Status:** no version has been released yet, so there is nothing to update to:
+> `self-update` exits 1 with "no release found at …". This page describes how updates
+> work once releases exist.
 
 This page is about a solo site: one `ferrite serve` with its binary on the host. A
 cluster is upgraded by deploying a new image node by node instead ([Cluster](06-cluster.md)).

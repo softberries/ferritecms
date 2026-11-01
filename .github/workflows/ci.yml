@@ -63,6 +63,9 @@ jobs:
       # contact-form), and every member must compile for the host to get there.
       - name: plugin unit tests (host)
         run: cargo test --manifest-path plugins/Cargo.toml --workspace --locked
+      # Every platform's packages, not only the host's: `tests/seams.rs` runs `cargo tree
+      # --offline --target all`, which needs them in the cache.
+      - run: cargo fetch --locked
       - run: cargo test --workspace --no-fail-fast
         env:
           FERRITE_TEST_PG_URL: postgres://ferrite@localhost:5432/ferrite_test

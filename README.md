@@ -41,3 +41,11 @@ deploys of a Postgres + S3 cluster); the design is in
 The admin is a React app in `admin/` that the binary embeds: build it with
 `pnpm -C admin install && pnpm -C admin build` before `cargo build` (without it `/admin/`
 shows a placeholder page; see [`admin/README.md`](admin/README.md)).
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option. Unless you explicitly state otherwise, any
+contribution intentionally submitted for inclusion in FerriteCMS by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any additional terms or
+conditions.

@@ -8,9 +8,9 @@ owned by the `ferrite` user, and the commands below run as root. The design is i
 [cluster-runbook.md](cluster-runbook.md) instead.
 
 Nothing has been released yet: until the first tag (the release gate in
-`docs/superpowers/m4-2-exit.md`) there is no release to update to, and a binary built from
-the repository has no release key, so `self-update` refuses with "this build has no release
-key".
+`docs/superpowers/m4-2-exit.md`) there is no release to update to. A binary built from
+the repository before the release key was committed (2026-11-01) has no key, so its
+`self-update` refuses with "this build has no release key"; install a release build.
 
 ## 1. Before an update
 

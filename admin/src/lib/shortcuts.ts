@@ -5,7 +5,7 @@
 // `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput` bindings
 // fire, so typing (and the editor's own `mod+b`) is never taken over.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 export interface Shortcut {
   /** Unique; registering the same id again replaces the earlier binding. */
@@ -214,7 +214,8 @@ export function useShortcut(s: Shortcut): void {
     latest.current = s;
   });
   const { id, keys, label, group, allowInInput } = s;
-  useEffect(
+  // A layout effect: bound in the commit that shows the control, not after paint.
+  useLayoutEffect(
     () =>
       registerShortcut({
         id,

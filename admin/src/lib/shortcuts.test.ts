@@ -1,4 +1,5 @@
-import { renderHook } from "@testing-library/react";
+import { render, renderHook } from "@testing-library/react";
+import { createElement, useLayoutEffect } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   CHORD_TIMEOUT_MS,
@@ -192,6 +193,28 @@ test("use_shortcut_registers_while_mounted_and_reads_the_latest_run", () => {
   expect(a).toHaveBeenCalledOnce();
   unmount();
   expect(listShortcuts()).toEqual([]);
+});
+
+// The `keydown` listener is outside React, which runs passive effects after paint: a key
+// pressed once the control shows must find its binding, so it is bound in the commit.
+test("use_shortcut_binds_in_the_commit_that_renders_it", () => {
+  let seen: string[] | undefined;
+  function Bound() {
+    useShortcut({ id: "c", keys: "c", label: "C", group: "T", run: () => {} });
+    return null;
+  }
+  // A later sibling's layout effect runs in the same commit, before any passive effect.
+  function Probe() {
+    useLayoutEffect(() => {
+      seen = listShortcuts().map((s) => s.id);
+    }, []);
+    return null;
+  }
+  const { unmount } = render(
+    createElement("div", null, createElement(Bound), createElement(Probe)),
+  );
+  expect(seen).toEqual(["c"]);
+  unmount();
 });
 
 test("alt_combinations_match_the_physical_key", () => {
