@@ -60,7 +60,9 @@ use ferrite_store::{Repos, Store};
 use serde_json::json;
 use url::Url;
 
-pub use metadata::{ClientMetadataFetcher, FetchError, MAX_METADATA_DOCUMENT, metadata_url};
+pub use metadata::{
+    ClientMetadataFetcher, FetchError, MAX_METADATA_DOCUMENT, is_format, metadata_url,
+};
 
 use crate::auth::{
     AuthService, MAX_TOKEN_NAME, mint_bearer, older_than, plus, random_bytes, sha256_hex,

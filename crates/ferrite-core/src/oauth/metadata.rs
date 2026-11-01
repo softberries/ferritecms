@@ -87,8 +87,9 @@ pub fn metadata_url(client_id: &str) -> Option<Url> {
 
 /// Whether `c` is a Unicode format character (general category `Cf`, Unicode 16): bidi
 /// overrides and isolates, zero-width characters, soft hyphen, tags and the like, which
-/// could make a client name read as something else on the consent screen.
-fn is_format(c: char) -> bool {
+/// could make a client name read as something else on the consent screen (also used to
+/// clean the site title the MCP server's instructions quote).
+pub fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{AD}'

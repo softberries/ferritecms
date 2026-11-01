@@ -33,6 +33,8 @@ api_tests!(
     site_search_finds_only_readable_content,
     get_is_405,
     oversized_body_is_413,
+    just_under_the_body_limit_is_accepted,
+    answers_are_no_store,
     rate_limit_returns_tool_error,
     bad_arguments_are_tool_errors,
     oauth_and_personal_tokens_both_work,
@@ -348,6 +350,71 @@ async fn oversized_body_is_413(api: Api) -> Api {
     api
 }
 
+async fn just_under_the_body_limit_is_accepted(api: Api) -> Api {
+    let (_, t) = editor(&api, &["*"]).await;
+    // A tool call whose argument fills the body to just under the limit reaches the
+    // tool (an unusable cursor: a tool error, not a 413).
+    let envelope = rpc(
+        Some(&t.0),
+        V_CURRENT,
+        "tools/call",
+        json!({"name": "site_search", "arguments": {"q": "x", "cursor": ""}}),
+    );
+    let (parts, body) = envelope.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    let pad = ferrite_http::mcp::MAX_MCP_BODY - bytes.len() - 16;
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap();
+    value["params"]["arguments"]["cursor"] = json!("c".repeat(pad));
+    let body = value.to_string();
+    assert!(
+        body.len() < ferrite_http::mcp::MAX_MCP_BODY,
+        "{}",
+        body.len()
+    );
+    assert!(
+        body.len() > ferrite_http::mcp::MAX_MCP_BODY - 64,
+        "{}",
+        body.len()
+    );
+    let r = api.send(Request::from_parts(parts, Body::from(body))).await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "{}",
+        &r.body[..r.body.len().min(300)]
+    );
+    let result = &r.json()["result"];
+    assert_eq!(result["isError"], true, "{result}");
+    api
+}
+
+async fn answers_are_no_store(api: Api) -> Api {
+    let (_, t) = editor(&api, &["*"]).await;
+    let ok = api
+        .send(rpc(Some(&t.0), V_CURRENT, "tools/list", json!({})))
+        .await;
+    assert_eq!(ok.status, StatusCode::OK, "{ok:?}");
+    assert_eq!(ok.header("cache-control"), Some("no-store"), "{ok:?}");
+    let call = api
+        .send(rpc(
+            Some(&t.0),
+            V_LEGACY,
+            "tools/call",
+            json!({"name": "site_overview", "arguments": {}}),
+        ))
+        .await;
+    assert_eq!(call.status, StatusCode::OK, "{call:?}");
+    assert_eq!(call.header("cache-control"), Some("no-store"), "{call:?}");
+    for r in [
+        api.send(rpc(None, V_LEGACY, "tools/list", json!({}))).await,
+        api.send(builder(Method::GET, "/mcp").body(Body::empty()).unwrap())
+            .await,
+    ] {
+        assert_eq!(r.header("cache-control"), Some("no-store"), "{r:?}");
+    }
+    api
+}
+
 // ---- server info -------------------------------------------------------------------------
 
 async fn initialize_reports_ferritecms_and_instructions(api: Api) -> Api {
@@ -618,6 +685,32 @@ async fn rate_limit_returns_tool_error(api: Api) -> Api {
             // Listing is not a tool call.
             let (status, _) = mcp_call(api, &t.0, "tools/list", json!({})).await;
             assert_eq!(status, StatusCode::OK);
+            // Reading a resource and getting a prompt count too: their results have no
+            // isError, so they are JSON-RPC errors.
+            for (method, params) in [
+                ("resources/read", json!({"uri": "ferrite://site"})),
+                (
+                    "prompts/get",
+                    json!({"name": "site_health", "arguments": {}}),
+                ),
+            ] {
+                for version in [V_LEGACY, V_CURRENT] {
+                    let (status, body) =
+                        mcp_call_v(api, &t.0, version, method, params.clone()).await;
+                    assert_eq!(status, StatusCode::OK, "{method} {body}");
+                    let e = &body["error"];
+                    assert_eq!(e["code"], -32029, "{method} {body}");
+                    assert_eq!(e["data"]["status"], 429, "{method} {body}");
+                    assert!(e["data"]["retry_after_secs"].is_u64(), "{method} {body}");
+                    assert!(
+                        e["message"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("Too many requests"),
+                        "{body}"
+                    );
+                }
+            }
         }
     })
     .await;
@@ -797,8 +890,12 @@ async fn audit_helper_names_the_client(api: Api) -> Api {
             Some("x1".into()),
             json!({"type": "post"}),
         )
-        .await
-        .unwrap();
+        .await;
+    // A failing append (here core refuses the action name) is logged, never returned:
+    // the helper has nothing to return, and nothing is written.
+    server
+        .audit(&caller, "Not.A.Tool", "content", None, json!({}))
+        .await;
     let rows = api
         .store
         .read()
@@ -816,6 +913,10 @@ async fn audit_helper_names_the_client(api: Api) -> Api {
     assert_eq!(
         row.details,
         json!({"type": "post", "client": "API token test"})
+    );
+    assert_eq!(
+        rows.iter().filter(|r| r.action.starts_with("mcp.")).count(),
+        1
     );
     api
 }

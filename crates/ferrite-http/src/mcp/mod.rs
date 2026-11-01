@@ -24,6 +24,7 @@
 //!   the user's limit (120 a minute, `AuthService::hit_mcp_limit`) before it runs; over
 //!   it the call is an `isError` result. Results and errors are built by [`results`];
 //!   successful writes are audited with [`FerriteMcp::audit`].
+//! * Every answer is `Cache-Control: no-store`.
 //! * **Shutdown.** The SDK's cancellation token is not wired to the node's shutdown:
 //!   answers are plain JSON (no streams to end), and axum's graceful shutdown already
 //!   lets the open requests finish.
@@ -37,10 +38,15 @@ pub mod tools;
 
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{
+    Router,
+    http::{HeaderValue, header},
+};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
 };
+
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::api::ApiState;
 
@@ -77,5 +83,10 @@ pub fn router(api: Arc<ApiState>) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             api,
             crate::oauth::gate,
+        ))
+        // Answers are per user (and tokens are in the requests): never stored by a cache.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
         ))
 }

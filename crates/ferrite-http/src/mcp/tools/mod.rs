@@ -11,7 +11,6 @@
 
 pub mod site;
 
-use ferrite_core::CoreError;
 use serde_json::Value;
 
 use super::{Caller, FerriteMcp};
@@ -22,9 +21,11 @@ pub const PER_PAGE: u32 = 20;
 pub const MAX_PER_PAGE: u32 = 100;
 
 impl FerriteMcp {
-    /// The audit row of a successful write by tool `tool` (design 12 §5.1): action
-    /// `mcp.<tool>`, the target, `details` plus `client`. A failure to write it is
-    /// returned: the change is made, but say so rather than claim an audited write.
+    /// Appends the audit row of a successful write by tool `tool` (design 12 §5.1):
+    /// action `mcp.<tool>`, the target, `details` plus `client`. Call it after the write
+    /// succeeded and return the tool's success either way: the change is committed, so a
+    /// failed append never turns it into an error result (the model would retry a done
+    /// write). The failure is logged (`warn`) with the tool and the target.
     pub async fn audit(
         &self,
         caller: &Caller,
@@ -32,8 +33,10 @@ impl FerriteMcp {
         target_kind: &str,
         target_id: Option<String>,
         details: Value,
-    ) -> Result<(), CoreError> {
-        self.api
+    ) {
+        let logged_id = target_id.clone();
+        if let Err(e) = self
+            .api
             .system
             .audit_mcp(
                 caller.actor(),
@@ -43,6 +46,16 @@ impl FerriteMcp {
                 details,
             )
             .await
+        {
+            tracing::warn!(
+                error = %e,
+                tool,
+                target_kind,
+                target_id = logged_id.as_deref().unwrap_or(""),
+                user = %caller.who.user.id,
+                "MCP audit row not written; the write itself succeeded"
+            );
+        }
     }
 }
 
