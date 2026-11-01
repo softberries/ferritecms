@@ -1,0 +1,63 @@
+name: Pages
+
+# Publishes the documentation site (`site/content`) on GitHub Pages as static files:
+# `site/export-static.sh` builds it with FerriteCMS itself (site/build.sh), serves it on
+# loopback, mirrors it and rewrites its links for the Pages URL. Every push to `main`
+# publishes, and a manual run does too. Repository setup (once): Settings -> Pages ->
+# Source "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits instead of cancelling a deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The docs site needs no admin build: without admin/dist the binary embeds a
+      # placeholder page, and the export never visits /admin/.
+      - run: cargo build --locked -p ferrite
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: export
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+          FERRITE: target/debug/ferrite
+        run: site/export-static.sh "$RUNNER_TEMP/site" "$BASE_URL"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
