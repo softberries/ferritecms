@@ -58,10 +58,10 @@ pub fn templates() -> Vec<ResourceTemplate> {
         ResourceTemplate::new(CONTENT_TEMPLATE, "content-item")
             .with_title("Content item")
             .with_description(
-                "One post, page or other content item as Markdown with a front matter \
-                 block (id, type, title, slug, status, version, urls, dates) and the \
-                 body. {type} is the content type name, {id} the item's id. Drafts and \
-                 other items are readable as the tools allow.",
+                "One post, page or other content item as Markdown with a TOML front \
+                 matter block between +++ lines (id, type, title, slug, status, version, \
+                 urls, dates) and the body. {type} is the content type name, {id} the \
+                 item's id. Drafts and other items are readable as the tools allow.",
             )
             .with_mime_type(MARKDOWN),
     ]

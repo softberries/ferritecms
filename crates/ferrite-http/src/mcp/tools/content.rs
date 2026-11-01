@@ -285,7 +285,8 @@ pub struct CreateInput {
     /// control. Cannot be sent together with body_markdown.
     #[serde(default)]
     pub body_blocks: Option<Value>,
-    /// Custom field values as an object, as the content type defines them.
+    /// Custom field values as an object, as the content type defines them. The
+    /// featured image can also be sent as `featured_image` inside it.
     #[serde(default)]
     pub fields: Option<Map<String, Value>>,
     /// Term ids (categories, tags) in order; find them with terms_list.
@@ -339,7 +340,7 @@ pub struct UpdateInput {
     #[serde(default)]
     pub body_blocks: Option<Value>,
     /// Custom field values: the members you send replace the same members, the others
-    /// are kept.
+    /// are kept, and a member sent as `null` is cleared (removed).
     #[serde(default)]
     pub fields: Option<Map<String, Value>>,
     /// Replaces the item's terms with these ids (`[]` removes them all); leave out to
@@ -350,7 +351,7 @@ pub struct UpdateInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Uuid>")]
     pub parent: Option<Option<Uuid>>,
-    /// The featured image (a media id); `null` removes it.
+    /// The featured image (a media id); `null` clears it.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Uuid>")]
     pub featured_image: Option<Option<Uuid>>,
@@ -557,7 +558,7 @@ impl FerriteMcp {
                     ),
                     &out.notes,
                 );
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -593,7 +594,7 @@ impl FerriteMcp {
                     ),
                     &out.notes,
                 );
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -694,7 +695,7 @@ impl FerriteMcp {
             Ok(out) => {
                 let when = out.scheduled_at.map(|t| t.to_rfc3339()).unwrap_or_default();
                 let summary = format!("Scheduled {:?} for {when}.", out.title);
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -800,7 +801,7 @@ impl FerriteMcp {
                     "Restored a revision of {:?} (now version {}).",
                     out.title, out.version
                 );
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -831,6 +832,19 @@ enum Either {
     One(RevisionOut),
 }
 
+/// The result of a write that is done: the full item, or (when building it fails) a
+/// minimal record, never an error (the model would retry a committed write).
+struct Written {
+    value: Value,
+    id: Uuid,
+    kind: String,
+    title: String,
+    status: String,
+    version: i64,
+    scheduled_at: Option<DateTime<Utc>>,
+    notes: Vec<String>,
+}
+
 // ---- the work ----------------------------------------------------------------------------
 
 /// `summary` with what the Markdown converter changed, if anything.
@@ -852,6 +866,8 @@ fn bad(field: Option<&str>, detail: impl Into<String>) -> Problem {
 struct Body {
     /// The new body; `None` when the call sends none.
     body: Option<Value>,
+    /// The argument it came from (`body_markdown` or `body_blocks`), for errors.
+    field: &'static str,
     /// The title lifted from a leading `# H1` (only when the call gave no title).
     title: Option<String>,
     notes: Vec<String>,
@@ -870,6 +886,7 @@ fn resolve_body(
         )),
         (None, None) => Ok(Body {
             body: None,
+            field: "body_markdown",
             title: None,
             notes: Vec::new(),
         }),
@@ -882,6 +899,7 @@ fn resolve_body(
             }
             Ok(Body {
                 body: Some(doc),
+                field: "body_blocks",
                 title: None,
                 notes: Vec::new(),
             })
@@ -916,6 +934,7 @@ fn resolve_body(
             };
             Ok(Body {
                 body: Some(converted.body),
+                field: "body_markdown",
                 title: lifted,
                 notes: converted.notes,
             })
@@ -923,9 +942,14 @@ fn resolve_body(
     }
 }
 
+/// How deep [`media_in_body`] looks: objects and arrays both count a level, and a block
+/// tree nests an object and an array per block level, so this covers the renderer's
+/// [`blocks::MAX_DEPTH`] block levels.
+const MEDIA_WALK_DEPTH: usize = 2 * blocks::MAX_DEPTH + 1;
+
 /// The media ids that `body`'s image blocks name.
 fn media_in_body(v: &Value, out: &mut BTreeSet<Uuid>, depth: usize) {
-    if depth > blocks::MAX_DEPTH {
+    if depth > MEDIA_WALK_DEPTH {
         return;
     }
     match v {
@@ -1037,6 +1061,48 @@ impl FerriteMcp {
         })
     }
 
+    /// The answer of a write that is committed: the item as the tools return it, or, if
+    /// that cannot be built, a minimal record (id, version, status, admin URL) with a
+    /// pointer to content_get. Never an error.
+    async fn written(&self, actor: &Actor, item: ContentItem, notes: Vec<String>) -> Written {
+        let (id, kind, title, status, version) = (
+            item.id.as_uuid(),
+            item.kind.clone(),
+            item.title.clone(),
+            item.status.as_str().to_owned(),
+            item.version,
+        );
+        let scheduled_at = item.scheduled_at.map(|t| t.as_datetime());
+        let admin_url = self.admin_url(&kind, id);
+        let full = match self.item_out(actor, item, notes.clone()).await {
+            Ok(out) => serde_json::to_value(out).map_err(|e| e.to_string()),
+            Err(p) => Err(p.document().detail),
+        };
+        let value = full.unwrap_or_else(|reason| {
+            tracing::warn!(%reason, item = %id, "item not built after a done write");
+            let mut v = json!({
+                "id": id, "type": kind, "title": title, "status": status,
+                "version": version, "admin_url": admin_url,
+                "note": "The change was saved, but the full item could not be built; \
+                         call content_get for it.",
+            });
+            if !notes.is_empty() {
+                v["notes"] = json!(notes);
+            }
+            v
+        });
+        Written {
+            value,
+            id,
+            kind,
+            title,
+            status,
+            version,
+            scheduled_at,
+            notes,
+        }
+    }
+
     /// The problem of a failed write to item `id`: a stale version carries the item as
     /// stored now (shaped like a read) in `current`.
     async fn write_problem(&self, actor: &Actor, id: ContentId, e: CoreError) -> Problem {
@@ -1097,20 +1163,28 @@ impl FerriteMcp {
         ))
     }
 
-    /// `check_media` for a body and an optional featured image.
+    /// `check_media` for the images of a body (named by `field` in the error) and for
+    /// the final `fields.featured_image`, however it was sent (the argument or inside
+    /// `fields`), when it is a new value: `stored` is the value the item already has,
+    /// which is not checked again.
     async fn check_body_media(
         &self,
         actor: &Actor,
-        body: Option<&Value>,
-        field: &str,
-        featured: Option<Uuid>,
+        body: Option<(&Value, &str)>,
+        fields: Option<&Map<String, Value>>,
+        stored: Option<&Value>,
     ) -> Result<(), Problem> {
-        if let Some(body) = body {
+        if let Some((body, field)) = body {
             let mut ids = BTreeSet::new();
             media_in_body(body, &mut ids, 0);
             self.check_media(actor, field, &ids).await?;
         }
-        if let Some(id) = featured {
+        let featured = fields.and_then(|f| f.get("featured_image"));
+        if let Some(Value::String(s)) = featured
+            && featured != stored
+            // A malformed id is core's to refuse (it checks the shape).
+            && let Ok(id) = Uuid::parse_str(s)
+        {
             self.check_media(actor, "featured_image", &BTreeSet::from([id]))
                 .await?;
         }
@@ -1174,7 +1248,7 @@ impl FerriteMcp {
         Ok((out, input.kind))
     }
 
-    async fn create_item(&self, caller: &Caller, input: CreateInput) -> Result<ItemOut, Problem> {
+    async fn create_item(&self, caller: &Caller, input: CreateInput) -> Result<Written, Problem> {
         let api = &self.api;
         let actor = caller.actor();
         known_type(api, actor, &input.kind).await?;
@@ -1195,9 +1269,9 @@ impl FerriteMcp {
         }
         self.check_body_media(
             actor,
-            converted.body.as_ref(),
-            "body_markdown",
-            input.featured_image,
+            converted.body.as_ref().map(|b| (b, converted.field)),
+            Some(&fields),
+            None,
         )
         .await?;
         let draft = ContentDraft {
@@ -1228,10 +1302,10 @@ impl FerriteMcp {
             json!({"type": item.kind, "version": item.version}),
         )
         .await;
-        self.item_out(actor, item, converted.notes).await
+        Ok(self.written(actor, item, converted.notes).await)
     }
 
-    async fn update_item(&self, caller: &Caller, input: UpdateInput) -> Result<ItemOut, Problem> {
+    async fn update_item(&self, caller: &Caller, input: UpdateInput) -> Result<Written, Problem> {
         let api = &self.api;
         let actor = caller.actor();
         let current = load(api, actor, &input.kind, input.id).await?;
@@ -1258,20 +1332,27 @@ impl FerriteMcp {
             input.body_blocks,
             input.title.as_deref(),
         )?;
-        let featured = input.featured_image.flatten();
-        self.check_body_media(actor, converted.body.as_ref(), "body_markdown", featured)
-            .await?;
-        // The members sent replace the same members of the stored fields.
+        // The members sent replace the same members of the stored fields; `null` clears
+        // a member.
         let fields = if input.fields.is_some() || input.featured_image.is_some() {
             let mut merged = current.fields.as_object().cloned().unwrap_or_default();
             merged.extend(input.fields.unwrap_or_default());
             if let Some(image) = input.featured_image {
                 merged.insert("featured_image".into(), json!(image));
             }
-            Some(Value::Object(merged))
+            merged.retain(|_, v| !v.is_null());
+            Some(merged)
         } else {
             None
         };
+        self.check_body_media(
+            actor,
+            converted.body.as_ref().map(|b| (b, converted.field)),
+            fields.as_ref(),
+            current.fields.get("featured_image"),
+        )
+        .await?;
+        let fields = fields.map(Value::Object);
         let patch = crate::api::dto::content::ContentPatch {
             title: converted.title.or(input.title),
             slug: input.slug,
@@ -1296,7 +1377,7 @@ impl FerriteMcp {
                     json!({"type": item.kind, "version": item.version}),
                 )
                 .await;
-                self.item_out(actor, item, converted.notes).await
+                Ok(self.written(actor, item, converted.notes).await)
             }
             Err(e) => Err(self.write_problem(actor, id, e).await),
         }
@@ -1325,7 +1406,7 @@ impl FerriteMcp {
                             "version": item.version}),
                     )
                     .await;
-                    self.item_out(actor, item, Vec::new()).await
+                    Ok(self.written(actor, item, Vec::new()).await)
                 }
                 Err(e) => Err(self.write_problem(actor, id, e).await),
             }
@@ -1336,7 +1417,7 @@ impl FerriteMcp {
                     "{verb} {:?} (now {}, version {}).",
                     out.title, out.status, out.version
                 );
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -1357,7 +1438,7 @@ impl FerriteMcp {
                             "version": item.version}),
                     )
                     .await;
-                    self.item_out(actor, item, Vec::new()).await
+                    Ok(self.written(actor, item, Vec::new()).await)
                 }
                 Err(e) => Err(self.write_problem(actor, id, e).await),
             }
@@ -1368,7 +1449,7 @@ impl FerriteMcp {
                     "Moved {:?} to the trash (version {}); content_restore brings it back.",
                     out.title, out.version
                 );
-                results::ok(out, summary)
+                results::ok(out.value, summary)
             }
             Err(p) => results::from_problem(p),
         }
@@ -1378,7 +1459,7 @@ impl FerriteMcp {
         &self,
         caller: &Caller,
         input: ScheduleInput,
-    ) -> Result<ItemOut, Problem> {
+    ) -> Result<Written, Problem> {
         let actor = caller.actor();
         let at = DateTime::parse_from_rfc3339(input.at.trim())
             .map(|t| t.with_timezone(&Utc))
@@ -1404,7 +1485,7 @@ impl FerriteMcp {
                     json!({"type": item.kind, "at": at.to_rfc3339(), "version": item.version}),
                 )
                 .await;
-                self.item_out(actor, item, Vec::new()).await
+                Ok(self.written(actor, item, Vec::new()).await)
             }
             Err(e) => Err(self.write_problem(actor, id, e).await),
         }
@@ -1456,7 +1537,7 @@ impl FerriteMcp {
         &self,
         caller: &Caller,
         input: RestoreRevisionInput,
-    ) -> Result<ItemOut, Problem> {
+    ) -> Result<Written, Problem> {
         let actor = caller.actor();
         let id = load(&self.api, actor, &input.kind, input.id).await?.id;
         let rid = RevisionId::from_uuid(input.revision);
@@ -1476,7 +1557,7 @@ impl FerriteMcp {
                         "version": item.version}),
                 )
                 .await;
-                self.item_out(actor, item, Vec::new()).await
+                Ok(self.written(actor, item, Vec::new()).await)
             }
             Err(e) => Err(self.write_problem(actor, id, e).await),
         }
@@ -1517,35 +1598,36 @@ impl FerriteMcp {
     }
 }
 
-/// `out` as Markdown with a front matter block (values are JSON strings, which are
-/// valid YAML).
+/// `out` as Markdown with a TOML front matter block between `+++` lines (the Markdown
+/// importer's format). Strings are written as JSON strings, which are valid TOML basic
+/// strings.
 fn front_matter(out: &ItemOut) -> String {
     let q = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     let mut head = vec![
-        format!("id: {}", q(&out.id.to_string())),
-        format!("type: {}", q(&out.kind)),
-        format!("title: {}", q(&out.title)),
-        format!("slug: {}", q(&out.slug)),
-        format!("status: {}", q(&out.status)),
-        format!("version: {}", out.version),
-        format!("excerpt: {}", q(&out.excerpt)),
-        format!("author: {}", q(&out.author.login)),
-        format!("created_at: {}", q(&out.created_at.to_rfc3339())),
-        format!("updated_at: {}", q(&out.updated_at.to_rfc3339())),
+        format!("id = {}", q(&out.id.to_string())),
+        format!("type = {}", q(&out.kind)),
+        format!("title = {}", q(&out.title)),
+        format!("slug = {}", q(&out.slug)),
+        format!("status = {}", q(&out.status)),
+        format!("version = {}", out.version),
+        format!("excerpt = {}", q(&out.excerpt)),
+        format!("author = {}", q(&out.author.login)),
+        format!("created_at = {}", q(&out.created_at.to_rfc3339())),
+        format!("updated_at = {}", q(&out.updated_at.to_rfc3339())),
     ];
     if let Some(t) = out.published_at {
-        head.push(format!("published_at: {}", q(&t.to_rfc3339())));
+        head.push(format!("published_at = {}", q(&t.to_rfc3339())));
     }
     if let Some(t) = out.scheduled_at {
-        head.push(format!("scheduled_at: {}", q(&t.to_rfc3339())));
+        head.push(format!("scheduled_at = {}", q(&t.to_rfc3339())));
     }
     if let Some(url) = &out.url {
-        head.push(format!("url: {}", q(url)));
-        head.push(format!("public: {}", out.public));
+        head.push(format!("url = {}", q(url)));
+        head.push(format!("public = {}", out.public));
     }
-    head.push(format!("admin_url: {}", q(&out.admin_url)));
+    head.push(format!("admin_url = {}", q(&out.admin_url)));
     if let Some(image) = &out.featured_image {
-        head.push(format!("featured_image: {}", q(image)));
+        head.push(format!("featured_image = {}", q(image)));
     }
-    format!("---\n{}\n---\n\n{}", head.join("\n"), out.body_markdown)
+    format!("+++\n{}\n+++\n\n{}", head.join("\n"), out.body_markdown)
 }

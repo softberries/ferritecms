@@ -368,6 +368,37 @@ async fn markdown_limits_and_media_checks(api: Api) -> Api {
     assert_eq!(it["featured_image"], media, "{it}");
     assert_eq!(it["fields"]["featured_image"], media, "{it}");
 
+    // `fields.featured_image` is checked like the argument, on create and on update.
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Ghost field", "fields": {"featured_image": ghost}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "featured_image", "{r}");
+    assert!(text(&r).contains(&ghost.to_string()), "{}", text(&r));
+    let r = tool(
+        &api,
+        &t.0,
+        "content_update",
+        json!({"type": "post", "id": post["id"], "version": 1,
+            "fields": {"featured_image": ghost}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "featured_image", "{r}");
+    assert!(text(&r).contains(&ghost.to_string()), "{}", text(&r));
+    // Real media inside `fields` is accepted and shows as the featured image.
+    let r = tool(
+        &api,
+        &t.0,
+        "content_update",
+        json!({"type": "post", "id": post["id"], "version": 1,
+            "fields": {"featured_image": media}}),
+    )
+    .await;
+    assert_eq!(item(&r)["featured_image"], media, "{r}");
+
     // A caller who cannot read media cannot use it either.
     let ed = api.user("narrow", Role::Editor, false).await;
     let narrow = api.bearer(&ed, &["content:read", "content:write"]).await;
@@ -385,6 +416,57 @@ async fn markdown_limits_and_media_checks(api: Api) -> Api {
 
 async fn blocks_in_blocks_out(api: Api) -> Api {
     let (_, t) = editor(&api).await;
+    let ghost = Uuid::now_v7();
+    let image =
+        json!({"type": "image", "attrs": {"src": format!("ferrite:media/{ghost}"), "alt": "x"}});
+    // A missing image in body_blocks is refused, naming the id and the argument sent.
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Ghost blocks",
+            "body_blocks": {"type": "doc", "content": [image.clone()]}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "body_blocks", "{r}");
+    assert!(text(&r).contains(&ghost.to_string()), "{}", text(&r));
+    // ...also 40 block levels down (deeper than the walk once looked).
+    let mut nested = image.clone();
+    for _ in 0..40 {
+        nested = json!({"type": "blockquote", "content": [nested]});
+    }
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Deep ghost",
+            "body_blocks": {"type": "doc", "content": [nested]}}),
+    )
+    .await;
+    problem(&r);
+    assert!(text(&r).contains(&ghost.to_string()), "{}", text(&r));
+    // The same for an image inside a ferrite-block fence of body_markdown.
+    let fence = format!("```ferrite-block\n{image}\n```\n");
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Ghost fence", "body_markdown": fence}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "body_markdown", "{r}");
+    assert!(text(&r).contains(&ghost.to_string()), "{}", text(&r));
+    // And on update.
+    let made = create(&api, &t, json!({"type": "post", "title": "Update ghost"})).await;
+    let r = tool(
+        &api,
+        &t.0,
+        "content_update",
+        json!({"type": "post", "id": made["id"], "version": 1,
+            "body_blocks": {"type": "doc", "content": [image]}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "body_blocks", "{r}");
     let blocks = json!({"type": "doc", "content": [
         {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Exact"}]},
         {"type": "paragraph", "content": [{"type": "text", "text": "Control."}]}
@@ -520,7 +602,12 @@ async fn contributor_submits_but_cannot_publish(api: Api) -> Api {
     )
     .await;
     assert_eq!(problem(&r)["status"], 403, "{r}");
-    assert!(text(&r).starts_with("Forbidden"), "{}", text(&r));
+    // It names the capability that is missing.
+    assert!(
+        text(&r).starts_with("Forbidden: missing publish"),
+        "{}",
+        text(&r)
+    );
 
     let r = tool(
         &api,
@@ -1063,6 +1150,17 @@ async fn update_merges_fields_and_sets_terms(api: Api) -> Api {
     assert_eq!(it["excerpt"], "Derived excerpt text.", "{it}");
     assert_eq!(it["fields"]["b"], 2, "{it}");
 
+    // A member sent as null is cleared.
+    let r = tool(
+        &api,
+        &t.0,
+        "content_update",
+        json!({"type": "post", "id": id, "version": 3, "fields": {"b": null}}),
+    )
+    .await;
+    let it = item(&r);
+    assert_eq!(it["fields"], json!({"a": 1}), "{it}");
+
     // Pages take a parent; null moves back to the top level.
     let parent = create(&api, &t, json!({"type": "page", "title": "Parent"})).await;
     let child = create(
@@ -1085,7 +1183,7 @@ async fn update_merges_fields_and_sets_terms(api: Api) -> Api {
         &api,
         &t.0,
         "content_update",
-        json!({"type": "post", "id": id, "version": 3, "status": "published"}),
+        json!({"type": "post", "id": id, "version": 4, "status": "published"}),
     )
     .await;
     problem(&r);
@@ -1181,19 +1279,22 @@ async fn content_resource_reads_an_item(api: Api) -> Api {
         assert_eq!(c["uri"], uri, "{body}");
         assert_eq!(c["mimeType"], "text/markdown", "{body}");
         let md = c["text"].as_str().unwrap();
-        assert!(md.starts_with("---\n"), "{md}");
+        // TOML front matter between `+++` lines, as the Markdown importer reads it.
+        assert!(md.starts_with("+++\n"), "{md}");
         let (front, rest) = md[4..]
-            .split_once("\n---\n")
+            .split_once("\n+++\n")
             .unwrap_or_else(|| panic!("{md}"));
-        for needle in [
-            format!("id: \"{id}\""),
-            "type: \"post\"".into(),
-            "title: \"Resource \\\"quoted\\\"\"".into(),
-            "status: \"draft\"".into(),
-            "version: 1".into(),
-        ] {
-            assert!(front.contains(&needle), "{needle}: {front}");
-        }
+        let meta: toml::Table = front.parse().unwrap_or_else(|e| panic!("{e}: {front}"));
+        assert_eq!(meta["id"].as_str(), Some(id), "{front}");
+        assert_eq!(meta["type"].as_str(), Some("post"), "{front}");
+        assert_eq!(
+            meta["title"].as_str(),
+            Some("Resource \"quoted\""),
+            "{front}"
+        );
+        assert_eq!(meta["status"].as_str(), Some("draft"), "{front}");
+        assert_eq!(meta["version"].as_integer(), Some(1), "{front}");
+        assert_eq!(meta["public"].as_bool(), Some(false), "{front}");
         assert_eq!(rest.trim(), "Body **text**.", "{md}");
     }
 
