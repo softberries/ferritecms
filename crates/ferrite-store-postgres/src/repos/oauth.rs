@@ -239,6 +239,15 @@ impl OAuthRepo for PgRepos {
         Ok(())
     }
 
+    async fn get_grant(&self, id: OAuthGrantId) -> Result<Option<OAuthGrant>, StoreError> {
+        let row = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {OAUTH_GRANT_COLUMNS} FROM oauth_grants WHERE id = $1"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        row.as_ref().map(codec::oauth_grant).transpose()
+    }
+
     async fn grant_by_refresh(&self, hash: &str) -> Result<Option<OAuthGrant>, StoreError> {
         validate_text("oauth refresh hash", hash)?;
         let row = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(

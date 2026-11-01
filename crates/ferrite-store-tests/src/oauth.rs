@@ -310,6 +310,8 @@ pub async fn grant_rotation_keeps_previous_hash(db: &TestDb) {
     );
     assert_eq!(oauth.grant_by_previous("refresh-1").await.unwrap(), None);
     assert_eq!(oauth.grant_by_refresh("nope").await.unwrap(), None);
+    assert_eq!(oauth.get_grant(g.id).await.unwrap(), Some(g.clone()));
+    assert_eq!(oauth.get_grant(OAuthGrantId::new()).await.unwrap(), None);
 
     let later = plus(now, 5 * MINUTE);
     let expires = plus(later, 30 * DAY);

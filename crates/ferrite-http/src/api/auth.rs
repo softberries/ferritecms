@@ -310,6 +310,7 @@ async fn logged_in(api: &ApiState, headers: &HeaderMap, issued: IssuedSession) -
         actor: ferrite_core::Actor::new(issued.user.id, issued.user.role),
         user: issued.user,
         via: Via::Session(issued.session),
+        oauth: None,
     };
     let user = MeDto::of(&api.auth, &who, api.mail.is_some());
     let csrf_token = user.csrf_token.clone().unwrap_or_default();

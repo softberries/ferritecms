@@ -179,6 +179,35 @@ impl Scopes {
         }
     }
 
+    /// The scopes held, in a fixed (area, read-then-write) order.
+    pub fn iter(self) -> impl Iterator<Item = Scope> {
+        Area::ALL
+            .into_iter()
+            .flat_map(|area| [Scope::read(area), Scope::write(area)])
+            .filter(move |s| self.0 & (1 << s.bit()) != 0)
+    }
+
+    /// Whether every scope of `other` is allowed by this set (a held `Write` covers the
+    /// `Read` of its area).
+    pub fn covers(self, other: Scopes) -> bool {
+        other.iter().all(|s| self.allows(s))
+    }
+
+    /// Per area, the strongest access both this set and `limit` allow: `Write` when both
+    /// allow it, else `Read` when both allow that, else nothing. A requested
+    /// `<area>:write` that `limit` only allows reading becomes `<area>:read`.
+    pub fn within(self, limit: Scopes) -> Scopes {
+        Area::ALL.iter().fold(Scopes::NONE, |acc, &area| {
+            match [Scope::write(area), Scope::read(area)]
+                .into_iter()
+                .find(|&s| self.allows(s) && limit.allows(s))
+            {
+                Some(s) => Scopes(acc.0 | Scopes::only(s).0),
+                None => acc,
+            }
+        })
+    }
+
     /// The names of the scopes held, in a fixed (area, read-then-write) order.
     pub fn to_strings(self) -> Vec<String> {
         SCOPE_NAMES
@@ -291,6 +320,35 @@ pub fn can(role: Role, cap: Capability) -> bool {
         ManageUsers | ManageSettings | ManageThemes | ManagePlugins | Import | ManageRedirects
         | ManageSystem => role == Role::Admin,
     }
+}
+
+/// The scopes `role` can use (design 12 §3.3, the grantable scopes of an OAuth consent):
+/// `<area>:write` when the role holds a capability that needs it ([`Capability::scope`]),
+/// and `<area>:read` when it can write the area or when the area's reads need only
+/// `read_admin` ([`require_read`]: content, media, terms, menus, users, settings and
+/// redirects). Comments, extensions, import and system are read through
+/// [`require_reader`], so their reads need the role's capability. Every role gets
+/// `content:write` (`edit_own`); `users:write` needs `manage_users`, so only an
+/// administrator can grant the account-management scope.
+pub fn role_scopes(role: Role) -> Scopes {
+    const READ_FOR_EVERY_ROLE: [Area; 7] = [
+        Area::Content,
+        Area::Media,
+        Area::Terms,
+        Area::Menus,
+        Area::Users,
+        Area::Settings,
+        Area::Redirects,
+    ];
+    let writes = Capability::ALL
+        .iter()
+        .filter(|&&cap| can(role, cap))
+        .filter_map(|cap| cap.scope())
+        .flat_map(|s| [Scope::read(s.area), s]);
+    let reads = READ_FOR_EVERY_ROLE.into_iter().map(Scope::read);
+    writes
+        .chain(reads)
+        .fold(Scopes::NONE, |acc, s| Scopes(acc.0 | Scopes::only(s).0))
 }
 
 /// `Ok` if `actor`'s role holds `cap` (else `Forbidden(cap name)`) and its scopes allow
@@ -461,6 +519,53 @@ mod tests {
             ["read_admin", "edit_own", "publish_own", "upload_media"]
         );
         assert_eq!(granted(Role::Contributor), ["read_admin", "edit_own"]);
+    }
+
+    #[test]
+    fn role_scopes_follow_the_capability_table() {
+        let names = |role| role_scopes(role).to_strings();
+        assert_eq!(role_scopes(Role::Admin), Scopes::ALL);
+        assert_eq!(
+            names(Role::Contributor),
+            [
+                "content:read",
+                "content:write",
+                "media:read",
+                "terms:read",
+                "menus:read",
+                "users:read",
+                "settings:read",
+                "redirects:read"
+            ]
+        );
+        let author = role_scopes(Role::Author);
+        assert!(author.allows(Scope::write(Area::Media)));
+        assert!(!author.allows(Scope::read(Area::Comments)));
+        let editor = role_scopes(Role::Editor);
+        for area in [Area::Terms, Area::Menus, Area::Comments] {
+            assert!(editor.allows(Scope::write(area)), "{area:?}");
+        }
+        for area in [Area::Extensions, Area::Import, Area::System] {
+            assert!(!editor.allows(Scope::read(area)), "{area:?}");
+        }
+        assert!(!editor.allows(Scope::write(Area::Users)));
+    }
+
+    #[test]
+    fn within_keeps_the_strongest_common_access() {
+        let set = |names: &[&str]| {
+            Scopes::from_strs(&names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>()).unwrap()
+        };
+        let asked = set(&["content:write", "system:write", "media:read"]);
+        let limit = set(&["content:write", "system:read", "terms:write"]);
+        assert_eq!(
+            asked.within(limit).to_strings(),
+            ["content:write", "system:read"]
+        );
+        assert!(set(&["content:write"]).covers(set(&["content:read"])));
+        assert!(!set(&["content:read"]).covers(set(&["content:write"])));
+        assert!(Scopes::ALL.covers(Scopes::ALL));
+        assert_eq!(Scopes::ALL.iter().count(), 22);
     }
 
     #[test]

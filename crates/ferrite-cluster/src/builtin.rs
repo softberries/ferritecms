@@ -42,9 +42,9 @@ pub const RATE_LIMIT_RETENTION: Duration = Duration::from_secs(3600);
 /// timeout (300 s), so a large backlog ends the run cleanly and the next hour goes on.
 pub const PRUNE_BUDGET: Duration = Duration::from_secs(240);
 
-/// The share of [`PRUNE_BUDGET`] each of the four tables of `sessions.prune` gets, so a
+/// The share of [`PRUNE_BUDGET`] each of the five tables of `sessions.prune` gets, so a
 /// backlog in one never starves the others.
-pub const SESSIONS_PRUNE_SLICE: Duration = Duration::from_secs(60);
+pub const SESSIONS_PRUNE_SLICE: Duration = Duration::from_secs(48);
 
 /// Calls `batch` until it deletes fewer than [`MAX_PRUNE_BATCH`] rows or `budget` (from
 /// the first call) is used up; returns the total. A call always runs at least one batch.
@@ -197,11 +197,13 @@ impl JobHandler for PluginFailuresPrune {
 }
 
 /// `sessions.prune` (P23): deletes sessions past their absolute end or idle longer than
-/// [`SESSION_IDLE`], API tokens past their `expires_at`, and rate-limit rows whose window
-/// started more than [`RATE_LIMIT_RETENTION`] ago, and `Idempotency-Key` rows (finished
-/// or pending) created more than [`IDEMPOTENCY_RETENTION`] ago (M2a-2b P10) — all against
-/// one reading of the database clock, each table within [`SESSIONS_PRUNE_SLICE`] (four
-/// slices fit in [`PRUNE_BUDGET`]).
+/// [`SESSION_IDLE`], API tokens past their `expires_at` (OAuth access tokens included),
+/// expired OAuth requests, codes and grants (design 12 §4; a grant takes its access tokens
+/// with it), rate-limit rows whose window started more than [`RATE_LIMIT_RETENTION`] ago,
+/// and `Idempotency-Key` rows (finished or pending) created more than
+/// [`IDEMPOTENCY_RETENTION`] ago (M2a-2b P10) — all against one reading of the database
+/// clock, each table within [`SESSIONS_PRUNE_SLICE`] (five slices fit in
+/// [`PRUNE_BUDGET`]).
 pub struct SessionsPrune(pub Arc<dyn Store>);
 
 #[async_trait]
@@ -216,9 +218,10 @@ impl JobHandler for SessionsPrune {
         let idle_before = minus(now, SESSION_IDLE)?;
         let window_before = minus(now, RATE_LIMIT_RETENTION)?;
         let keys_before = minus(now, IDEMPOTENCY_RETENTION)?;
-        let (sessions, tokens, limits, keys) = (
+        let (sessions, tokens, oauth, limits, keys) = (
             repos.sessions(),
             repos.api_tokens(),
+            repos.oauth(),
             repos.rate_limits(),
             repos.idempotency(),
         );
@@ -230,6 +233,16 @@ impl JobHandler for SessionsPrune {
             (
                 "api_tokens",
                 Box::new(move || tokens.prune(now, MAX_PRUNE_BATCH)),
+            ),
+            (
+                "oauth",
+                // Three tables per batch: the largest count decides whether to go on.
+                Box::new(move || {
+                    Box::pin(async move {
+                        let p = oauth.prune_expired(now, MAX_PRUNE_BATCH).await?;
+                        Ok(p.requests.max(p.codes).max(p.grants))
+                    })
+                }),
             ),
             (
                 "rate_limits",

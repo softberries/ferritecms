@@ -25,8 +25,8 @@ use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ferrite_domain::{
-    ApiToken, ApiTokenId, NewAudit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY, Secret,
-    Session, Timestamp, User, UserId, UserStatus,
+    ApiToken, ApiTokenId, NewAudit, OAuthGrantId, SESSION_ABSOLUTE, SESSION_IDLE,
+    SESSION_TOUCH_EVERY, Secret, Session, Timestamp, User, UserId, UserStatus,
 };
 use ferrite_store::{Repos, Store, session_public_id};
 use hmac::Mac;
@@ -63,8 +63,9 @@ const SESSION_TOKEN_LEN: usize = 43;
 const MAX_USER_AGENT: usize = 256;
 /// API tokens per user.
 const MAX_TOKENS: u64 = 50;
-/// Longest API token name, in characters.
-const MAX_TOKEN_NAME: usize = 100;
+/// Longest API token name, in characters (OAuth access tokens are named after their
+/// client, cut to this).
+pub(crate) const MAX_TOKEN_NAME: usize = 100;
 /// Bearer token prefix.
 const TOKEN_PREFIX: &str = "fer_";
 /// A login challenge (password checked, TOTP pending) is valid this long.
@@ -138,6 +139,9 @@ pub struct Authenticated {
     pub actor: Actor,
     pub user: User,
     pub via: Via,
+    /// The OAuth grant the bearer token was issued for (design 12 §3.1): such a token is
+    /// for `/mcp` only. `None` for sessions and personal API tokens.
+    pub oauth: Option<OAuthGrantId>,
 }
 
 /// The credential a request used.
@@ -279,6 +283,42 @@ impl AuthService {
     ) -> Result<(), CoreError> {
         let bucket = limits::scoped(&self.key, scope, ip);
         limits::hit(self.store.as_ref(), &bucket, max, window).await
+    }
+
+    /// Counts one dynamic client registration from `ip` (outside any `Tx`) on
+    /// `oauth-register:ip:<hash>`: 10 an hour (design 12 §3.2); over it → `RateLimited`.
+    pub(crate) async fn hit_oauth_register(&self, ip: Option<IpAddr>) -> Result<(), CoreError> {
+        limits::hit(
+            self.store.as_ref(),
+            &limits::oauth_register_ip(&self.key, ip),
+            limits::OAUTH_REGISTER_PER_IP,
+            limits::OAUTH_REGISTER_WINDOW,
+        )
+        .await
+    }
+
+    /// Counts one token endpoint request from `ip` (outside any `Tx`) on
+    /// `oauth-token:ip:<hash>`: 30 a minute (design 12 §3.2); over it → `RateLimited`.
+    pub(crate) async fn hit_oauth_token(&self, ip: Option<IpAddr>) -> Result<(), CoreError> {
+        limits::hit(
+            self.store.as_ref(),
+            &limits::oauth_token_ip(&self.key, ip),
+            limits::OAUTH_TOKEN_PER_IP,
+            limits::WINDOW,
+        )
+        .await
+    }
+
+    /// Counts one MCP tool call of `user` (outside any `Tx`) on `mcp:user:<id>`: 120 a
+    /// minute shared by every node (design 12 §5.1); over it → `RateLimited`.
+    pub async fn hit_mcp_limit(&self, user: UserId) -> Result<(), CoreError> {
+        limits::hit(
+            self.store.as_ref(),
+            &limits::mcp_user(user),
+            limits::MCP_PER_USER,
+            limits::WINDOW,
+        )
+        .await
     }
 
     // ---- login ---------------------------------------------------------------------
@@ -491,6 +531,7 @@ impl AuthService {
             actor: Actor::new(user.id, user.role),
             user,
             via: Via::Session(session),
+            oauth: None,
         }))
     }
 
@@ -718,15 +759,12 @@ impl AuthService {
                 "expires_at must be in the future".into(),
             ));
         }
-        let bearer = format!(
-            "{TOKEN_PREFIX}{}",
-            URL_SAFE_NO_PAD.encode(random_bytes::<32>()?)
-        );
+        let (bearer, token_hash) = mint_bearer()?;
         let token = ApiToken {
             id: ApiTokenId::new(),
             user_id: user,
             name: name.to_owned(),
-            token_hash: sha256_hex(bearer.as_bytes()),
+            token_hash,
             scopes: scopes.to_strings(),
             created_at: now,
             last_used_at: None,
@@ -755,7 +793,7 @@ impl AuthService {
         }
         .await;
         finish(tx, done).await?;
-        Ok((Secret::new(bearer), token))
+        Ok((bearer, token))
     }
 
     /// The user's API tokens, oldest first: oneself with `users:read`, others with
@@ -848,6 +886,7 @@ impl AuthService {
             actor: Actor::new(user.id, user.role).with_scopes(scopes),
             user,
             via: Via::Token(token.id),
+            oauth: token.oauth_grant_id,
         }))
     }
 
@@ -1031,7 +1070,7 @@ impl AuthService {
         .await
     }
 
-    pub(super) fn now(&self) -> Timestamp {
+    pub(crate) fn now(&self) -> Timestamp {
         (self.clock)()
     }
 
@@ -1121,6 +1160,17 @@ impl AuthService {
     }
 }
 
+/// A new bearer value (`fer_` + 32 random bytes as base64url) and the SHA-256 hex stored
+/// for it: personal API tokens and OAuth access tokens alike.
+pub(crate) fn mint_bearer() -> Result<(Secret, String), CoreError> {
+    let bearer = format!(
+        "{TOKEN_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(random_bytes::<32>()?)
+    );
+    let hash = sha256_hex(bearer.as_bytes());
+    Ok((Secret::new(bearer), hash))
+}
+
 /// Self with the `users:write` scope, others with `manage_users`.
 fn require_token_write(actor: &Actor, user: UserId) -> Result<(), CoreError> {
     if user == actor.user {
@@ -1161,13 +1211,13 @@ fn micros(d: Duration) -> i64 {
     i64::try_from(d.as_micros()).unwrap_or(i64::MAX)
 }
 
-pub(super) fn plus(at: Timestamp, d: Duration) -> Result<Timestamp, CoreError> {
+pub(crate) fn plus(at: Timestamp, d: Duration) -> Result<Timestamp, CoreError> {
     Timestamp::from_micros(at.as_micros().saturating_add(micros(d)))
         .map_err(|_| CoreError::Invalid("timestamp out of range".into()))
 }
 
 /// Whether more than `d` passed from `then` to `now`.
-fn older_than(then: Timestamp, now: Timestamp, d: Duration) -> bool {
+pub(crate) fn older_than(then: Timestamp, now: Timestamp, d: Duration) -> bool {
     now.as_micros().saturating_sub(then.as_micros()) > micros(d)
 }
 

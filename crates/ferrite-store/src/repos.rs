@@ -1115,6 +1115,8 @@ pub trait OAuthRepo: Send + Sync {
     /// Stores a grant with its current refresh token hash; a stored hash is
     /// `UniqueViolation`, an unknown client or user `ForeignKey`.
     async fn insert_grant(&self, grant: &OAuthGrant, refresh_hash: &str) -> Result<(), StoreError>;
+    /// The grant with this id.
+    async fn get_grant(&self, id: OAuthGrantId) -> Result<Option<OAuthGrant>, StoreError>;
     /// The grant whose current refresh token has this hash.
     async fn grant_by_refresh(&self, hash: &str) -> Result<Option<OAuthGrant>, StoreError>;
     /// The grant whose refresh token this hash was rotated away from (replay detection).
