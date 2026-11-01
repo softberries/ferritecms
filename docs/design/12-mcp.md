@@ -190,7 +190,8 @@ deletes expired requests, codes, grants and OAuth access tokens.
   delete, unpublish and settings writes, `idempotentHint` where it holds,
   `openWorldHint` only for `media_upload` from a URL.
 - Results are **structured content** (JSON) plus a short text summary; lists are paged
-  (`page`, `per_page` ≤ 100) and say the total.
+  (`page`/`per_page` ≤ 100 with the total, or a `cursor`/`next_cursor` where core pages
+  by cursor).
 - **Bodies are Markdown.** Reads return `body_markdown` (CommonMark plus tables, from the
   item's blocks, §5.3) and the rendered page URL; writes accept `body_markdown` (converted
   with the Markdown importer's converter) or, for exact control, `body_blocks` (the
