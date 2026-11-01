@@ -220,8 +220,10 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       pending = null;
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      win?.removeEventListener("online", onOnline);
-      doc?.removeEventListener("visibilitychange", onVisibility);
+      // `?.()`: the final flush on leaving the editor can outlast a test's jsdom, whose
+      // closed window has no methods left; nothing is subscribed to by then.
+      win?.removeEventListener?.("online", onOnline);
+      doc?.removeEventListener?.("visibilitychange", onVisibility);
     },
     disposed: () => disposed,
     state,
