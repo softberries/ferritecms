@@ -230,8 +230,10 @@ deletes expired requests, codes, grants and OAuth access tokens.
 A new `ferrite_core::blocks::markdown` serializer turns a body's blocks into CommonMark:
 headings, paragraphs with marks (bold, italic, code, strike, links), lists (nested),
 quotes, code blocks with language, horizontal rules, tables, images
-(`![alt](ferrite:media/<id> "caption")`) and embeds (a link). Anything else becomes a
-fenced ```` ```ferrite-block ```` JSON block, so nothing is lost on a round trip.
+(`![alt](ferrite:media/<id> "caption")`). Embeds, raw HTML, merged-cell tables and
+anything else become a fenced ```` ```ferrite-block ```` JSON block, so nothing is lost on a
+round trip. A leading `# H1` in `body_markdown` is the title when the call gives none; equal
+to the given title it is dropped; different, the tool asks the model to move it.
 
 ### 5.4 What stays human
 
