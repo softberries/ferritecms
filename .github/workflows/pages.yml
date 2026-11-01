@@ -2,7 +2,8 @@ name: Pages
 
 # Publishes the documentation site (`site/content`) on GitHub Pages as static files:
 # `site/export-static.sh` builds it with FerriteCMS itself (site/build.sh), serves it on
-# loopback, mirrors it and rewrites its links for the Pages URL. Every push to `main`
+# loopback, mirrors it, rewrites its links for the Pages URL, adds the brand layer
+# (site/brand/) and builds the Pagefind search index (npx; the runner has Node.js). Every push to `main`
 # publishes, and a manual run does too. Repository setup (once): Settings -> Pages ->
 # Source "GitHub Actions".
 
