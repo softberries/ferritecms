@@ -50,11 +50,18 @@ enum Kind {
 struct Block {
     text: String,
     kind: Kind,
+    /// A list written with its second marker (`*`, `)`), so the list after it can use
+    /// the first again: two lists in a row with the same marker would be one.
+    alt: bool,
 }
 
 impl Block {
     fn new(text: String, kind: Kind) -> Self {
-        Self { text, kind }
+        Self {
+            text,
+            kind,
+            alt: false,
+        }
     }
 }
 
@@ -113,18 +120,20 @@ fn render_blocks(nodes: &[Value], depth: usize) -> Vec<Block> {
             continue;
         }
         flush_stray(&mut stray, &mut out);
-        let prev = out.last().map(|b| b.kind);
+        // A list straight after a list of its kind takes the other marker.
+        let alt_after = |kind: Kind| out.last().is_some_and(|b| b.kind == kind && !b.alt);
+        let (alt_bullet, alt_ordered) = (alt_after(Kind::Bullet), alt_after(Kind::Ordered));
         let block = match ty {
             "paragraph" => paragraph(content(map)),
             "heading" => heading(map),
-            "bulletList" => Some(Block::new(
-                list(map, false, prev == Some(Kind::Bullet), depth),
-                Kind::Bullet,
-            )),
-            "orderedList" => Some(Block::new(
-                list(map, true, prev == Some(Kind::Ordered), depth),
-                Kind::Ordered,
-            )),
+            "bulletList" => Some(Block {
+                alt: alt_bullet,
+                ..Block::new(list(map, false, alt_bullet, depth), Kind::Bullet)
+            }),
+            "orderedList" => Some(Block {
+                alt: alt_ordered,
+                ..Block::new(list(map, true, alt_ordered, depth), Kind::Ordered)
+            }),
             "blockquote" => Some(Block::new(blockquote(map, depth), Kind::Other)),
             "codeBlock" => Some(Block::new(code_block(map, node), Kind::Other)),
             "horizontalRule" => Some(Block::new("---".to_owned(), Kind::Other)),
@@ -581,7 +590,7 @@ fn entity_follows(rest: &[char]) -> bool {
 fn escape_line_starts(s: &str) -> String {
     s.split('\n')
         .map(|line| {
-            let line = line.trim_start_matches(' ');
+            let line = line.trim_start_matches([' ', '\t']);
             let mut chars = line.chars();
             match chars.next() {
                 Some('#' | '>' | '-' | '+' | '=') => format!("\\{line}"),
@@ -751,6 +760,36 @@ mod tests {
             md(vec![list("orderedList"), list("orderedList")]),
             "1. a\n\n1) a\n"
         );
+    }
+
+    #[test]
+    fn any_number_of_adjacent_lists_stay_that_many_lists() {
+        let list = |ty: &str| json!({"type":ty,"content":[{"type":"listItem","content":[p(vec![t("a")])]}]});
+        assert_eq!(
+            md(vec![
+                list("bulletList"),
+                list("bulletList"),
+                list("bulletList")
+            ]),
+            "- a\n\n* a\n\n- a\n"
+        );
+        assert_eq!(
+            md(vec![
+                list("orderedList"),
+                list("orderedList"),
+                list("orderedList")
+            ]),
+            "1. a\n\n1) a\n\n1. a\n"
+        );
+    }
+
+    #[test]
+    fn a_line_starting_with_a_tab_does_not_become_code() {
+        let out = md(vec![
+            p(vec![t("\tindented")]),
+            p(vec![t("a"), json!({"type":"hardBreak"}), t(" \t- x")]),
+        ]);
+        assert_eq!(out, "indented\n\na\\\n\\- x\n");
     }
 
     #[test]

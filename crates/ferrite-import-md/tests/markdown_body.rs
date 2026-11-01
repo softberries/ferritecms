@@ -168,3 +168,85 @@ fn a_tool_written_body_comes_back_equal() {
     let md = to_markdown(&body);
     assert_eq!(markdown_to_body(&md).body, body);
 }
+
+#[test]
+fn a_fence_holding_a_doc_or_a_non_object_stays_a_code_block() {
+    for text in [
+        r#"{"type":"doc","content":[]}"#,
+        r#"[{"type":"paragraph"}]"#,
+        r#""paragraph""#,
+        "42",
+        r#"{"type":3}"#,
+        r#"{"type":""}"#,
+        r#"{"content":[]}"#,
+    ] {
+        let b = markdown_to_body(&format!("```ferrite-block\n{text}\n```\n"));
+        assert_eq!(b.body["content"].as_array().unwrap().len(), 1, "{text}");
+        let block = &b.body["content"][0];
+        assert_eq!(block["type"], "codeBlock", "{text}");
+        assert_eq!(block["attrs"]["language"], "ferrite-block", "{text}");
+        assert_eq!(block["content"][0]["text"], format!("{text}\n"), "{text}");
+        assert_eq!(b.notes.len(), 1, "{text}: {:?}", b.notes);
+    }
+}
+
+/// The deepest `content` nesting in a tree, counted in nodes (iterative).
+fn depth_of(root: &Value) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(root, 1)];
+    while let Some((node, depth)) = stack.pop() {
+        deepest = deepest.max(depth);
+        for child in node["content"].as_array().into_iter().flatten() {
+            stack.push((child, depth + 1));
+        }
+    }
+    deepest
+}
+
+fn text_of(root: &Value) -> String {
+    let mut out = String::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if let Some(t) = node["text"].as_str() {
+            out.push_str(t);
+        }
+        stack.extend(node["content"].as_array().into_iter().flatten().rev());
+    }
+    out
+}
+
+#[test]
+fn pathological_nesting_converts_in_bounded_time_and_depth() {
+    let quotes = format!("{} deep\n", ">".repeat(500));
+    let mut lists = String::new();
+    for i in 0..500 {
+        lists.push_str(&format!("{}- level {i}\n", "  ".repeat(i)));
+    }
+    let brackets = format!("{} end\n", "[".repeat(100_000));
+    // The converter caps nesting at 48 blocks; deeper input is flattened to text.
+    for (name, md, word) in [
+        ("quotes", &quotes, "deep"),
+        ("lists", &lists, "level 499"),
+        ("brackets", &brackets, "end"),
+    ] {
+        let start = std::time::Instant::now();
+        let b = markdown_to_body(md);
+        let out = to_markdown(&b.body);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "{name}: {:?}",
+            start.elapsed()
+        );
+        let depth = depth_of(&b.body);
+        assert!(depth <= 60, "{name}: depth {depth}");
+        // The words survive, flattened to plain text beyond the cap.
+        assert!(text_of(&b.body).contains(word), "{name}");
+        assert!(out.contains(word), "{name}");
+        // And the Markdown written back converts to a body with the same text.
+        assert_eq!(
+            text_of(&markdown_to_body(&out).body).replace(' ', ""),
+            text_of(&b.body).replace(' ', ""),
+            "{name}"
+        );
+    }
+}
