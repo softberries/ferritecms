@@ -67,6 +67,8 @@ You approve that list when you install it. See [Plugins](../02-guides/05-plugins
 
 Every account has one role:
 
+<figure><img src="../images/admin-users.webp" alt="The Users screen: a table of accounts with their roles and last sign-in"><figcaption>Users and their roles, under <strong>Users</strong>.</figcaption></figure>
+
 | Role | Can |
 |---|---|
 | contributor | write their own items while they are drafts or pending, and submit them for review |

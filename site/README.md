@@ -57,8 +57,33 @@ kept.
   the build, so refer to repository files by path in code font instead.
 - Commands must be copy-pasteable, and every claim must be checked: add a row for it to
   [`VERIFIED.md`](VERIFIED.md).
+- Screenshots live in `content/images/` as WebP (taken at 1440 × 900, device scale 2).
+  Show one with a figure, so it gets a caption; the import uploads the file and points the
+  page at it:
+
+  ```html
+  <figure><img src="../images/admin-media.webp" alt="What the screen shows"><figcaption>The media library.</figcaption></figure>
+  ```
 
 ## Hosting
 
-The site is not hosted anywhere yet. Where it is published, and under which domain, is
-still to be decided.
+The site is published on GitHub Pages at
+<https://softberries.github.io/ferritecms/> by `.github/workflows/pages.yml` on every push
+to `main`. `export-static.sh OUT_DIR BASE_URL` builds the site, mirrors it as static files
+and rewrites its links for `BASE_URL`; run it locally the same way, then serve `OUT_DIR`
+under the base path (with a path such as `/ferritecms`, serve the folder above it).
+
+The hosted copy wears a brand layer that a site built with `build.sh` does not:
+`rewrite-static.py` takes the files in `brand/` and
+
+- replaces the `docs` theme's stylesheet with `brand/brand.css` (Inter and JetBrains Mono,
+  self-hosted under `brand/fonts/`, both SIL OFL 1.1), adds `brand/brand.js` and Prism
+  (`brand/vendor/`, MIT) for code highlighting, the favicon and the social image
+  (`head.html`);
+- replaces the header and footer (`header.html`, `footer.html`) and puts the landing page
+  (`landing.html`, screenshots in `brand/shots/`) above the front page;
+- marks each article for search. The export then runs Pagefind
+  (`npx pagefind@1.5.2`, so it needs Node.js) to build the index under `pagefind/` that the
+  header's search (`⌘K`, `Ctrl K` or `/`) reads.
+
+The logo files are in `docs/brand/`.

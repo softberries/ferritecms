@@ -153,7 +153,9 @@ each), the rest test fixtures. Admin SPA: `admin/` (pnpm, Vite + React + TS; `pn
 `admin/dist/`, which `ferrite-http`'s `admin` module embeds; without it the binary serves a
 placeholder page; Vitest + Playwright E2E, see `admin/README.md`; the axe checks of the
 public themes in the `public-themes-chromium` project). Docs site: `site/` (`content/`
-Markdown, `build.sh`, `README.md`, `VERIFIED.md`). Not built yet: `ferrite plugin new`
+Markdown with screenshots in `content/images/`, `build.sh`, `README.md`, `VERIFIED.md`;
+`export-static.sh` + `rewrite-static.py` publish it on GitHub Pages with the brand layer
+`brand/` and a Pagefind index). Logo files: `docs/brand/`. Not built yet: `ferrite plugin new`
 (later, 09 §8) (`docs/design/01-architecture.md` §1; API status
 per endpoint in 07 §1, admin status per screen in 07 §3).
 

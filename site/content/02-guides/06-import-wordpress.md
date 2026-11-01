@@ -73,6 +73,8 @@ With the server running, an admin can open **Import** (`g i`), drop the export f
 optionally, a `.zip` of the uploads, choose the options and start. The import runs in the
 background; the screen shows its progress, and the report opens from the list of runs.
 
+<figure><img src="../images/admin-import.webp" alt="The Import screen: a field for the WXR export file, an optional uploads zip and the import options"><figcaption>The Import screen.</figcaption></figure>
+
 ## The report
 
 Each run writes `report.json` and `report.html` to

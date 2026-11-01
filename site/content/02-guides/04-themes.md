@@ -37,6 +37,8 @@ In the admin, open **Appearance**, find the theme's card and choose **Activate**
 running node loads the new theme and flushes its page cache; the admin waits until every
 node reports it.
 
+<figure><img src="../images/admin-themes.webp" alt="The Themes screen under Appearance: the three built-in themes, with the business theme active"><figcaption><strong>Appearance → Themes</strong> lists the installed themes.</figcaption></figure>
+
 Or from the command line (with SQLite, stop `serve` first):
 
 ```sh

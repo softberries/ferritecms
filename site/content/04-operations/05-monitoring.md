@@ -69,6 +69,8 @@ failures, finished and failed jobs, and the 95th percentile page time. `GET
 Logs go to standard error. `FERRITE_LOG` sets the level (`error`, `warn`, `info` (the
 default), `debug`, `trace`) or a filter such as `FERRITE_LOG=info,ferrite_http=debug`.
 
+<figure><img src="../images/admin-system.webp" alt="The Status tab of the System screen: the version, database schema, background jobs, nodes, active theme and mail set-up"><figcaption><strong>System</strong> in the admin shows the nodes, background jobs and the audit log.</figcaption></figure>
+
 ## ferrite doctor
 
 `ferrite doctor` checks a site and reports what is wrong, changing nothing: it creates

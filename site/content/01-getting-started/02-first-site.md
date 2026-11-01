@@ -58,6 +58,17 @@ ferrite seed demo --data ./mysite
 This adds 12 posts, three pages, categories, tags, two menus and a sample image. It also
 creates a user `admin` that has no password; you do not need it.
 
+`--profile business` writes a small business site instead: a front page with three
+service pages, About and Contact pages, three news posts, two menus and four images. It
+is made for the `business` theme, so activate that too:
+
+```sh
+ferrite seed demo --data ./mysite --profile business
+ferrite theme activate business --data ./mysite
+```
+
+<figure><img src="../images/site-front.webp" alt="The front page of the business demo site: a hero with the headline Gardens that grow with you and a Get in touch button"><figcaption>The business demo site in the <code>business</code> theme.</figcaption></figure>
+
 ## Start the server
 
 ```sh
@@ -77,6 +88,12 @@ Open [http://localhost:8080/admin/](http://localhost:8080/admin/) and sign in wi
 login (or e-mail) and the one-time password. The admin asks for a new password first, then
 opens the dashboard. Press `⌘K` (`Ctrl+K` on Linux and Windows) for the command palette: it searches
 content, jumps to a screen, creates something or changes a preference.
+
+<figure><img src="../images/admin-signin.webp" alt="The sign-in screen with the FerriteCMS mark, the site's host and the login and password fields"><figcaption>The sign-in screen.</figcaption></figure>
+
+<figure><img src="../images/admin-dashboard.webp" alt="The dashboard: publishing counts, a publishing activity chart, recent drafts, items that need attention and site health"><figcaption>The dashboard of a site made with <code>seed demo --profile business</code>.</figcaption></figure>
+
+<figure><img src="../images/admin-palette.webp" alt="The command palette open over the dashboard, listing screens and actions that match the typed text"><figcaption>The command palette: type to find a screen, an action or content.</figcaption></figure>
 
 ## Stop the server for maintenance commands
 

@@ -13,9 +13,13 @@ Open **Posts** (or **Pages**, or your type) in the sidebar and choose **New post
 a tab per status, a search, a **Mine** filter for your own items and a filter per
 taxonomy.
 
+<figure><img src="../images/admin-pages.webp" alt="The Pages list: titles, status, author and dates, with a search field and filters"><figcaption>A content list. Each content type has one, under <strong>Content</strong>.</figcaption></figure>
+
 ## The editor
 
 The editor shows the title and the body. In the body, type `/` to insert a block:
+
+<figure><img src="../images/admin-editor.webp" alt="The editor with a page open: the title and body on the left, the settings panel with status, slug, excerpt and featured image on the right"><figcaption>The editor and its settings panel.</figcaption></figure>
 
 - headings (levels 2 to 4), bulleted and numbered lists, quotes, code blocks, tables and
   dividers;
