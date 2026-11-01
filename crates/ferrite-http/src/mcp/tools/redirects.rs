@@ -64,13 +64,13 @@ pub struct CreateInput {
 pub struct UpdateInput {
     /// The redirect's id.
     pub id: Uuid,
-    /// A new source path. Leave out to keep it.
+    /// A new source path. Leave out (or `null`) to keep it.
     #[serde(default)]
     pub source: Option<String>,
-    /// A new target. Leave out to keep it.
+    /// A new target. Leave out (or `null`) to keep it.
     #[serde(default)]
     pub target: Option<String>,
-    /// A new status code (301, 302, 307, 308 or 410). Leave out to keep it.
+    /// A new status code (301, 302, 307, 308 or 410). Leave out (or `null`) to keep it.
     #[serde(default)]
     pub code: Option<u16>,
 }
@@ -191,7 +191,8 @@ impl FerriteMcp {
         }
     }
 
-    /// Changes a redirect's source, target or status code; what you leave out is kept.
+    /// Changes a redirect's source, target or status code; what you leave out, or send as
+    /// `null`, is kept.
     /// Find the id with redirects_list. Returns the redirect.
     #[tool(annotations(
         title = "Update redirect",

@@ -54,8 +54,9 @@ pub use server::{Caller, FerriteMcp};
 
 /// Where the endpoint is mounted.
 pub const PATH: &str = "/mcp";
-/// The largest request body: base64 media uploads of up to 6 MiB (design 12 §2, §5.2).
-pub const MAX_MCP_BODY: usize = 8 << 20;
+/// The largest request body: a 6 MiB media upload as base64 (8 MiB) plus the JSON
+/// envelope (design 12 §2, §5.2).
+pub const MAX_MCP_BODY: usize = 9 << 20;
 
 /// `POST /mcp` with the guards of the module docs.
 pub fn router(api: Arc<ApiState>) -> Router {

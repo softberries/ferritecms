@@ -24,6 +24,7 @@ use crate::{
 api_tests!(
     upload_base64_png_records_media,
     upload_from_url_uses_egress_rules,
+    url_fetches_are_limited_and_hold_no_upload_slot,
     oversize_upload_refused,
     upload_takes_one_source_and_authorizes_first,
     alt_text_update,
@@ -286,7 +287,7 @@ async fn upload_from_url_uses_egress_rules(api: Api) -> Api {
         )
         .await;
         assert_eq!(problem(&r)["status"], 413, "{path}: {r}");
-        assert_eq!(problem(&r)["errors"][0]["field"], "file", "{path}: {r}");
+        assert_eq!(problem(&r)["errors"][0]["field"], "url", "{path}: {r}");
     }
     // A 404 is a fetch failure.
     let r = tool_on(
@@ -307,6 +308,60 @@ async fn upload_from_url_uses_egress_rules(api: Api) -> Api {
     api
 }
 
+async fn url_fetches_are_limited_and_hold_no_upload_slot(api: Api) -> Api {
+    let (_, t) = admin(&api).await;
+    let app = Router::new().route(
+        "/slow.png",
+        get(|| async {
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            png("slow", 300)
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (router, uploader) = api.router_with_uploader(
+        Uploader::new(api.api.media.clone(), MAX_UPLOAD).with_private_fetch(),
+    );
+    let url = format!("http://127.0.0.1:{port}/slow.png");
+    let slow = |name: &'static str| {
+        let (router, token, url) = (router.clone(), t.0.clone(), url.clone());
+        tokio::spawn(async move {
+            tool_on(
+                &router,
+                &token,
+                "media_upload",
+                json!({"url": url, "filename": name}),
+            )
+            .await
+        })
+    };
+    let (a, b) = (slow("a.png"), slow("b.png"));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Two downloads are under way and hold no upload slot.
+    assert_eq!(uploader.in_flight(), 0);
+    // A third finds no fetch slot and gives up after the short wait: 503, nothing stored.
+    let r = tool_on(&router, &t.0, "media_upload", json!({"url": url})).await;
+    assert_eq!(problem(&r)["status"], 503, "{r}");
+    assert_eq!(uploader.in_flight(), 0);
+    // The two that held the fetch slots finish and are recorded.
+    for h in [a, b] {
+        let r = h.await.unwrap();
+        assert_eq!(ok(&r)["bytes"], 300, "{r}");
+    }
+    assert_eq!(media_count(&api, &t).await, 2);
+    // Only the fetch slots were limited: a download can start again.
+    let r = tool_on(
+        &router,
+        &t.0,
+        "media_upload",
+        json!({"url": format!("http://127.0.0.1:{port}/gone")}),
+    )
+    .await;
+    assert_eq!(problem(&r)["status"], 422, "{r}");
+    api
+}
+
 async fn oversize_upload_refused(api: Api) -> Api {
     let (_, t) = admin(&api).await;
     // `media.max_upload` (1 MiB in the harness) applies under the tool's own 6 MiB.
@@ -320,7 +375,7 @@ async fn oversize_upload_refused(api: Api) -> Api {
     .await;
     let p = problem(&r);
     assert_eq!(p["status"], 413, "{r}");
-    assert_eq!(p["errors"][0]["field"], "file", "{r}");
+    assert_eq!(p["errors"][0]["field"], "data_base64", "{r}");
     assert_eq!(media_count(&api, &t).await, 0);
     assert!(api.stored_files().is_empty(), "{:?}", api.stored_files());
 
@@ -334,10 +389,11 @@ async fn oversize_upload_refused(api: Api) -> Api {
     .await;
     ok(&r);
 
-    // With a larger `media.max_upload` the tool's own 6 MiB cap is the limit: a file
-    // just under it is taken (the request body stays under the endpoint's 8 MiB).
+    // With a larger `media.max_upload` the tool's own 6 MiB cap is the limit: a file of
+    // exactly 6 MiB (8 MiB as base64, inside the endpoint's 9 MiB body) is taken end to
+    // end, one byte more is refused by the tool.
     let (router, _) = api.router_with_max_upload(16 << 20);
-    let big = png("big", (6 << 20) - 4096);
+    let big = png("big", 6 << 20);
     let r = tool_on(
         &router,
         &t.0,
@@ -346,6 +402,16 @@ async fn oversize_upload_refused(api: Api) -> Api {
     )
     .await;
     assert_eq!(ok(&r)["bytes"], big.len(), "{r}");
+    let over = png("over", (6 << 20) + 1);
+    let r = tool_on(
+        &router,
+        &t.0,
+        "media_upload",
+        json!({"data_base64": b64(&over), "filename": "over.png"}),
+    )
+    .await;
+    assert_eq!(problem(&r)["status"], 413, "{r}");
+    assert_eq!(problem(&r)["errors"][0]["field"], "data_base64", "{r}");
     api
 }
 
@@ -365,7 +431,11 @@ async fn upload_takes_one_source_and_authorizes_first(api: Api) -> Api {
         ),
         (
             json!({"data_base64": data, "filename": "../"}),
-            Some("file"),
+            Some("filename"),
+        ),
+        (
+            json!({"url": "https://example.org/a.png", "filename": "../"}),
+            Some("filename"),
         ),
         (
             json!({"data_base64": data, "filename": "a.png", "title": "x".repeat(201)}),

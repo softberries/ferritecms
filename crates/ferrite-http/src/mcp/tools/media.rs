@@ -142,11 +142,11 @@ pub struct UpdateInput {
     /// written and the current item is returned so you can re-apply your change.
     #[schemars(range(min = 1))]
     pub version: i64,
-    /// A new title (at most 200 characters). Leave out to keep it.
+    /// A new title (at most 200 characters). Leave out (or `null`) to keep it.
     #[serde(default)]
     pub title: Option<String>,
-    /// New alternative text (at most 1 000 characters); `""` clears it. Leave out to
-    /// keep it.
+    /// New alternative text (at most 1 000 characters); `""` clears it. Leave out (or
+    /// `null`) to keep it.
     #[serde(default)]
     pub alt: Option<String>,
 }
@@ -169,7 +169,8 @@ pub struct VersionedInput {
 pub struct MediaOut {
     #[serde(flatten)]
     pub media: MediaDto,
-    /// What to put in Markdown: `![alt](ferrite:media/<id>)` (images only).
+    /// The media reference `ferrite:media/<id>`, for every item. For an image, put it in
+    /// Markdown as `![alt](ferrite:media/<id>)`; a non-image is linked by its `url`.
     pub reference: String,
     /// The Markdown image for this item, `![alt](ferrite:media/<id>)`; empty for files
     /// that are not images (link to `url` instead).
@@ -263,9 +264,9 @@ impl FerriteMcp {
 
     /// Adds a file to the media library from base64 `data_base64` (with `filename`) or
     /// from a public `https` `url`, at most 6 MiB. It is published at once (media have
-    /// no draft). Returns the item with its `id`, `url` and `markdown`: put
-    /// `![describe the picture](ferrite:media/<id>)` in a post body or use the id as a
-    /// featured image. Always give `alt` for pictures. The type is decided from the file
+    /// no draft). Returns the item with its `id`, `url` and, for an image, `markdown`: put
+    /// `![describe the picture](ferrite:media/<id>)` in a post body, or use the id as a
+    /// featured image; link a non-image by its `url`. Always give `alt` for pictures. The type is decided from the file
     /// content: SVGs are sanitised, types the site does not accept are refused. Sizes
     /// and resized copies appear a moment later. The URL is fetched from the site's
     /// server, never from private networks.
@@ -283,9 +284,13 @@ impl FerriteMcp {
     ) -> CallToolResult {
         match self.upload_media(&caller, input).await {
             Ok((out, source)) => {
+                let how = if out.image {
+                    format!("In Markdown: ![alt](ferrite:media/{}).", out.id)
+                } else {
+                    "Not an image: link to its `url` instead.".to_owned()
+                };
                 let summary = format!(
-                    "Uploaded {} from {source}. Reference it in Markdown as \
-                     ferrite:media/{}.",
+                    "Uploaded {} from {source} (media id {}). {how}",
                     out.label, out.id
                 );
                 results::ok(out.value, summary)
@@ -295,6 +300,7 @@ impl FerriteMcp {
     }
 
     /// Changes a media item's title or alternative text (the file itself cannot change).
+    /// A member left out or sent as `null` keeps its stored value; `""` clears the alt text.
     /// Send the `version` from your last read: if someone saved since, nothing is
     /// written and the error carries the current item (`current`). Alt text is what
     /// screen readers and search engines use, so describe what the picture shows.
@@ -428,6 +434,8 @@ struct Written {
     /// `"title" (status, version n)` for the summary.
     label: String,
     id: Uuid,
+    /// An image: it can go in Markdown as `![alt](ferrite:media/<id>)`.
+    image: bool,
 }
 
 impl FerriteMcp {
@@ -474,6 +482,7 @@ impl FerriteMcp {
             m.item.status.as_str().to_owned(),
             m.item.version,
         );
+        let image = m.media.mime.starts_with("image/");
         let label = format!("{title:?} ({status}, version {version})");
         let built = async {
             let m = dto(&self.api, actor, m)
@@ -491,7 +500,12 @@ impl FerriteMcp {
                          call media_get for it.",
             })
         });
-        Written { value, label, id }
+        Written {
+            value,
+            label,
+            id,
+            image,
+        }
     }
 
     /// The problem of a failed write to item `id`: a stale version carries the item as
@@ -520,6 +534,30 @@ impl FerriteMcp {
         caller: &Caller,
         input: UploadInput,
     ) -> Result<(Written, &'static str), Problem> {
+        // The staging errors name the REST multipart part `file`; here the file is
+        // whichever of the two sources the call sent.
+        let source_field = match (&input.data_base64, &input.url) {
+            (Some(_), None) => Some("data_base64"),
+            (None, Some(_)) => Some("url"),
+            _ => None,
+        };
+        self.upload_from(caller, input).await.map_err(|mut p| {
+            if let Some(field) = source_field {
+                for e in &mut p.errors {
+                    if e.field.as_deref() == Some("file") {
+                        e.field = Some(field.to_owned());
+                    }
+                }
+            }
+            p
+        })
+    }
+
+    async fn upload_from(
+        &self,
+        caller: &Caller,
+        input: UploadInput,
+    ) -> Result<(Written, &'static str), Problem> {
         let api = &self.api;
         let actor = caller.actor();
         // Before anything is decoded or fetched.
@@ -540,9 +578,13 @@ impl FerriteMcp {
                 let name = filename.ok_or_else(|| {
                     bad(Some("filename"), "filename is required with data_base64")
                 })?;
-                check_file_name(&name)?;
-                let bytes = decode_base64(&data, cap)?;
-                let staged = api.uploader.stage_bytes(bytes, &name, cap).await?;
+                check_file_name(&name).map_err(|_| bad_filename())?;
+                // Decoded only once an upload slot is taken: a busy node answers without
+                // allocating the file.
+                let staged = api
+                    .uploader
+                    .stage_decoded(&name, cap, || decode_base64(&data, cap))
+                    .await?;
                 (staged, "base64 data", None)
             }
             (None, Some(raw)) => {
@@ -551,15 +593,21 @@ impl FerriteMcp {
                     .check_fetch_url(&raw)
                     .map_err(|why| bad(Some("url"), why))?;
                 let name = match filename {
-                    Some(n) => n,
-                    None => name_from_url(&parsed),
+                    Some(n) => {
+                        check_file_name(&n).map_err(|_| bad_filename())?;
+                        n
+                    }
+                    None => {
+                        let n = name_from_url(&parsed);
+                        check_file_name(&n).map_err(|_| {
+                            bad(
+                                Some("filename"),
+                                "the URL gives no usable file name; send filename",
+                            )
+                        })?;
+                        n
+                    }
                 };
-                check_file_name(&name).map_err(|_| {
-                    bad(
-                        Some("filename"),
-                        "the URL gives no usable file name; send filename",
-                    )
-                })?;
                 let host = parsed.host_str().map(str::to_owned);
                 let staged = api.uploader.stage_url(parsed.as_str(), &name, cap).await?;
                 (staged, "the URL", host)
@@ -597,6 +645,14 @@ impl FerriteMcp {
         .await;
         Ok((self.media_written(actor, item).await, source))
     }
+}
+
+/// The refusal of a `filename` that core's file name rules reject.
+fn bad_filename() -> Problem {
+    bad(
+        Some("filename"),
+        "filename is invalid: it needs 1 to 255 bytes, no control characters, and is not . or ..",
+    )
 }
 
 /// `422 validation` naming `field` (when known).

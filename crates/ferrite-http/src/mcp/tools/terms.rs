@@ -79,19 +79,19 @@ pub struct CreateInput {
 pub struct UpdateInput {
     /// The term's id.
     pub id: Uuid,
-    /// A new name. Leave out to keep it.
+    /// A new name. Leave out (or `null`) to keep it.
     #[serde(default)]
     pub name: Option<String>,
     /// A new slug (changing it of a term with a public archive adds a redirect from the
-    /// old address). Leave out to keep it.
+    /// old address). Leave out (or `null`) to keep it.
     #[serde(default)]
     pub slug: Option<String>,
-    /// A new parent term id; `null` moves the term to the top level. Leave out to keep
-    /// it.
+    /// A new parent term id; `null` moves the term to the top level (unlike the other
+    /// members, where `null` keeps the value). Leave out to keep it.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Uuid>")]
     pub parent: Option<Option<Uuid>>,
-    /// A new description; `""` clears it. Leave out to keep it.
+    /// A new description; `""` clears it. Leave out (or `null`) to keep it.
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -281,7 +281,9 @@ impl FerriteMcp {
         }
     }
 
-    /// Changes a term's name, slug, parent or description; what you leave out is kept.
+    /// Changes a term's name, slug, parent or description; what you leave out is kept, and
+    /// so is a name, slug or description sent as `null`. Only `parent: null` has a meaning of
+    /// its own: it moves the term to the top level.
     /// Changing the slug of a term with a public archive adds a redirect from the old
     /// address. Returns the updated term.
     #[tool(annotations(

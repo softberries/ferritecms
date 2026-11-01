@@ -43,6 +43,9 @@ pub struct HttpSource {
     https_only: bool,
     /// `ferrite/<version> import`.
     agent: String,
+    /// Log lines name the host only, never the URL (uploads by URL: a URL given by an
+    /// assistant may carry a token in its path or query). The import logs full URLs.
+    host_only_logs: bool,
 }
 
 impl HttpSource {
@@ -73,7 +76,33 @@ impl HttpSource {
             allow_ip,
             https_only,
             agent: format!("ferrite/{version} import"),
+            host_only_logs: https_only,
         })
+    }
+
+    /// Log lines name the host only (see the field). `for_upload` sources already do.
+    #[cfg(feature = "test-seams")]
+    pub fn with_host_only_logs(mut self) -> Self {
+        self.host_only_logs = true;
+        self
+    }
+
+    /// What log lines say about `url`: the URL, or only its host.
+    fn shown(&self, url: &Url) -> String {
+        if self.host_only_logs {
+            url.host_str().unwrap_or("?").to_owned()
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// `e` for a log line: reqwest errors carry the URL, which host-only logs drop.
+    fn shown_error(&self, e: reqwest::Error) -> String {
+        if self.host_only_logs {
+            e.without_url().to_string()
+        } else {
+            e.to_string()
+        }
     }
 
     /// Whether `url` may be requested: `http(s)`, no credentials, a host, and an IP
@@ -120,7 +149,7 @@ impl MediaSource for HttpSource {
         let deadline = Instant::now() + MEDIA_TIMEOUT;
         for _ in 0..=MAX_REDIRECTS {
             if !self.allowed(&url) {
-                tracing::warn!(url = %url, "attachment URL refused (address or scheme rule)");
+                tracing::warn!(url = %self.shown(&url), "attachment URL refused (address or scheme rule)");
                 return Ok(None);
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -137,14 +166,14 @@ impl MediaSource for HttpSource {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!(url = %url, error = %e, "attachment fetch failed");
+                    tracing::debug!(url = %self.shown(&url), error = %self.shown_error(e), "attachment fetch failed");
                     return Ok(None);
                 }
             };
             if let Some(peer) = response.remote_addr()
                 && !(self.allow_ip)(peer.ip())
             {
-                tracing::warn!(url = %url, "attachment fetch connected to a refused address");
+                tracing::warn!(url = %self.shown(&url), "attachment fetch connected to a refused address");
                 return Ok(None);
             }
             let status = response.status();
@@ -160,13 +189,13 @@ impl MediaSource for HttpSource {
                         continue;
                     }
                     _ => {
-                        tracing::warn!(url = %url, "attachment redirect refused");
+                        tracing::warn!(url = %self.shown(&url), "attachment redirect refused");
                         return Ok(None);
                     }
                 }
             }
             if !status.is_success() {
-                tracing::debug!(url = %url, %status, "attachment not fetched");
+                tracing::debug!(url = %self.shown(&url), %status, "attachment not fetched");
                 return Ok(None);
             }
             if response.content_length().is_some_and(|n| n > max) {
@@ -182,7 +211,7 @@ impl MediaSource for HttpSource {
             });
             return Ok(Some(Box::pin(body)));
         }
-        tracing::debug!(url = %url, "attachment fetch: too many redirects");
+        tracing::debug!(url = %self.shown(&url), "attachment fetch: too many redirects");
         Ok(None)
     }
 }
@@ -192,6 +221,16 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// Upload sources log the host only; the import's source logs full URLs.
+    #[test]
+    fn upload_logs_name_the_host_only() {
+        let u = Url::parse("https://cdn.example.org/a/b.png?token=secret").unwrap();
+        let upload = HttpSource::for_upload("0.0.0").unwrap();
+        assert_eq!(upload.shown(&u), "cdn.example.org");
+        let import = HttpSource::new("0.0.0").unwrap();
+        assert_eq!(import.shown(&u), u.as_str());
+    }
 
     /// An upload source refuses plain `http` as well; the import's source does not.
     #[test]

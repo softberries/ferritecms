@@ -61,11 +61,12 @@ pub struct CreateInput {
 pub struct UpdateInput {
     /// The content type's name. The name and `hierarchical` cannot be changed.
     pub name: String,
-    /// A new label, 1 to 100 characters. Leave out to keep it.
+    /// A new label, 1 to 100 characters. Leave out to keep it; `null` is refused.
     #[serde(default, deserialize_with = "present")]
     #[schemars(with = "Option<String>")]
     pub label: Option<String>,
-    /// Whether `/{name}/` lists the published items. Leave out to keep it.
+    /// Whether `/{name}/` lists the published items. Leave out to keep it; `null` is
+    /// refused.
     #[serde(default, deserialize_with = "present")]
     #[schemars(with = "Option<bool>")]
     pub has_archive: Option<bool>,
@@ -187,7 +188,8 @@ impl FerriteMcp {
     }
 
     /// Changes a content type's label, archive flag or field schema; what you leave out
-    /// is kept. `fields` replaces the whole list, so start from content_type_get and
+    /// is kept. `null` is refused for `label` and `has_archive`; `fields: null` removes the
+    /// schema (items then take any fields object). `fields` replaces the whole list, so start from content_type_get and
     /// send the full new list. Stored items are checked against the new schema on their
     /// next save. This changes the site's structure: confirm with the user. Returns the
     /// type.
