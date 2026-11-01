@@ -46,6 +46,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
+use ferrite_core::Actor;
 use ferrite_domain::{InstalledPlugin, Node, Timestamp};
 use ferrite_plugin_host::MAX_MANIFEST_BYTES;
 use serde::Deserialize;
@@ -98,12 +99,18 @@ pub async fn list_plugins(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
 ) -> Result<Json<PluginList>, Problem> {
-    let rows = api.extensions.list_plugins(&who.actor).await?;
-    let nodes = live_nodes(&api).await?;
-    Ok(Json(PluginList {
-        items: rows.into_iter().map(|r| dto(&api, r, &nodes)).collect(),
+    Ok(Json(plugin_list(&api, &who.actor).await?))
+}
+
+/// Every installed plugin with what each node says about it. Shared with the MCP
+/// `plugins_list` tool.
+pub(crate) async fn plugin_list(api: &ApiState, actor: &Actor) -> Result<PluginList, Problem> {
+    let rows = api.extensions.list_plugins(actor).await?;
+    let nodes = live_nodes(api).await?;
+    Ok(PluginList {
+        items: rows.into_iter().map(|r| dto(api, r, &nodes)).collect(),
         next_cursor: None,
-    }))
+    })
 }
 
 #[utoipa::path(
@@ -257,7 +264,7 @@ pub async fn enable_plugin(
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<PluginDto>, Problem> {
-    set_enabled(&api, &who.actor, &name, true).await
+    Ok(Json(set_enabled(&api, &who.actor, &name, true).await?))
 }
 
 #[utoipa::path(
@@ -280,7 +287,7 @@ pub async fn disable_plugin(
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<PluginDto>, Problem> {
-    set_enabled(&api, &who.actor, &name, false).await
+    Ok(Json(set_enabled(&api, &who.actor, &name, false).await?))
 }
 
 /// `DELETE /plugins/{name}` query.
@@ -389,8 +396,17 @@ pub async fn get_plugin_settings(
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<PluginSettingsDto>, Problem> {
-    let view = api.extensions.plugin_settings(&who.actor, &name).await?;
-    Ok(Json(view.into()))
+    Ok(Json(plugin_settings(&api, &who.actor, &name).await?))
+}
+
+/// A plugin's settings schema, its non-secret values and whether each secret is set
+/// (never a secret's value). Shared with the MCP `plugin_settings_get` tool.
+pub(crate) async fn plugin_settings(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+) -> Result<PluginSettingsDto, Problem> {
+    Ok(api.extensions.plugin_settings(actor, name).await?.into())
 }
 
 #[utoipa::path(
@@ -417,11 +433,25 @@ pub async fn update_plugin_settings(
     ApiPath(name): ApiPath<String>,
     ApiJson(patch): ApiJson<Map<String, Value>>,
 ) -> Result<Json<PluginSettingsDto>, Problem> {
-    let view = api
+    Ok(Json(
+        set_plugin_settings(&api, &who.actor, &name, patch).await?,
+    ))
+}
+
+/// Writes the declared keys of `patch` (`null` deletes one; a secret is sealed and never
+/// returned) and answers with the same view as the read. Shared with the MCP
+/// `plugin_settings_update` tool.
+pub(crate) async fn set_plugin_settings(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+    patch: Map<String, Value>,
+) -> Result<PluginSettingsDto, Problem> {
+    Ok(api
         .extensions
-        .set_plugin_settings(&who.actor, &name, patch)
-        .await?;
-    Ok(Json(view.into()))
+        .set_plugin_settings(actor, name, patch)
+        .await?
+        .into())
 }
 
 #[utoipa::path(
@@ -470,17 +500,19 @@ pub async fn plugin_metrics(
     }))
 }
 
-async fn set_enabled(
+/// Enables or disables an installed plugin and answers with its entry. Shared with the
+/// MCP `plugin_enable` and `plugin_disable` tools.
+pub(crate) async fn set_enabled(
     api: &ApiState,
-    actor: &ferrite_core::Actor,
+    actor: &Actor,
     name: &str,
     enabled: bool,
-) -> Result<Json<PluginDto>, Problem> {
+) -> Result<PluginDto, Problem> {
     api.extensions
         .set_plugin_enabled(actor, name, enabled)
         .await?;
     let row = api.extensions.get_plugin(actor, name).await?;
-    Ok(Json(dto(api, row, &live_nodes(api).await?)))
+    Ok(dto(api, row, &live_nodes(api).await?))
 }
 
 /// One of the node's upload slots (shared by plugin and theme uploads), or `503 busy`

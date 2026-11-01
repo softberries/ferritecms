@@ -880,6 +880,7 @@ async fn audit_helper_names_the_client(api: Api) -> Api {
     let caller = Caller {
         who,
         client: "API token test".into(),
+        ip: None,
     };
     let server = FerriteMcp::new(api.api.clone(), Arc::new(FerriteMcp::routers()));
     server

@@ -9,13 +9,19 @@
 //! counted before the tool runs (`call_tool`). A successful write ends with
 //! [`FerriteMcp::audit`]; reads are not audited.
 
+pub mod appearance;
+pub mod comments;
 pub mod content;
 pub mod media;
 pub mod menus;
+pub mod plugins;
 pub mod redirects;
+pub mod settings;
 pub mod site;
+pub mod system;
 pub mod terms;
 pub mod types;
+pub mod users;
 
 use serde_json::Value;
 

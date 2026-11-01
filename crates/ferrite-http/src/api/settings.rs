@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
-use ferrite_core::settings;
+use ferrite_core::{Actor, settings};
 use serde_json::{Map, Value};
 
 use super::{
@@ -38,8 +38,13 @@ pub async fn get_settings(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
 ) -> Result<Json<SettingsDto>, Problem> {
-    let all = settings::read_all(api.store.as_ref(), &who.actor).await?;
-    Ok(Json(SettingsDto::from_map(all)))
+    Ok(Json(read(&api, &who.actor).await?))
+}
+
+/// Every setting as stored (`settings:read`). Shared with the MCP `settings_get` tool.
+pub(crate) async fn read(api: &ApiState, actor: &Actor) -> Result<SettingsDto, Problem> {
+    let all = settings::read_all(api.store.as_ref(), actor).await?;
+    Ok(SettingsDto::from_map(all))
 }
 
 #[utoipa::path(
@@ -63,6 +68,16 @@ pub async fn update_settings(
     Authed(who): Authed,
     ApiJson(body): ApiJson<Map<String, Value>>,
 ) -> Result<Json<SettingsDto>, Problem> {
+    Ok(Json(write(&api, &who.actor, body).await?))
+}
+
+/// Writes the keys of `body` in one transaction (`null` resets a key) and answers with
+/// every setting as stored. Shared with the MCP `settings_update` tool.
+pub(crate) async fn write(
+    api: &ApiState,
+    actor: &Actor,
+    body: Map<String, Value>,
+) -> Result<SettingsDto, Problem> {
     let changes: Vec<(String, Option<Value>)> = body
         .into_iter()
         .map(|(key, value)| {
@@ -70,8 +85,6 @@ pub async fn update_settings(
             (key, value)
         })
         .collect();
-    let actor = &who.actor;
     api.options.set_many(actor, &changes).await?;
-    let all = settings::read_all(api.store.as_ref(), actor).await?;
-    Ok(Json(SettingsDto::from_map(all)))
+    read(api, actor).await
 }

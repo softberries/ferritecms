@@ -62,7 +62,7 @@ use tower::ServiceExt;
 #[path = "../../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;
 
-pub use test_support::plugin_wasm;
+pub use test_support::{plugin_wasm, repo_root};
 
 pub const SITE_URL: &str = "https://example.com";
 pub const SITE_TITLE: &str = "Test Site";

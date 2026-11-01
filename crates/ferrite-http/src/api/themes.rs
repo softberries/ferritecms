@@ -162,12 +162,21 @@ pub async fn activate_theme(
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<ThemeDto>, Problem> {
-    let actor = &who.actor;
+    Ok(Json(activate(&api, &who.actor, &name).await?))
+}
+
+/// Makes theme `name` the active one (an embedded theme without a row is installed
+/// first) and answers with its list entry. Shared with the MCP `theme_activate` tool.
+pub(crate) async fn activate(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+) -> Result<ThemeDto, Problem> {
     api.extensions.authorize_themes(actor)?;
-    if !valid_name(&name) {
+    if !valid_name(name) {
         return Err(CoreError::NotFound.into());
     }
-    let row = match api.extensions.get_theme(actor, &name).await? {
+    let row = match api.extensions.get_theme(actor, name).await? {
         Some(row) => {
             // P12: the row changes only once its files load, and only if it still names
             // the bundle just loaded (R10: a row replaced in between is `409 conflict`).
@@ -176,22 +185,22 @@ pub async fn activate_theme(
                 .await
                 .map_err(does_not_load)?;
             api.extensions
-                .activate_theme(actor, &name, &row.artifact_hash)
+                .activate_theme(actor, name, &row.artifact_hash)
                 .await?;
             row
         }
-        None if embedded().contains_key(name.as_str()) => {
+        None if embedded().contains_key(name) => {
             let (artifact, row) = api
                 .installer
-                .stage_embedded(&name)
+                .stage_embedded(name)
                 .await
                 .map_err(does_not_load)?;
-            record(&api, actor, &artifact, &row, true).await?;
+            record(api, actor, &artifact, &row, true).await?;
             row
         }
         None => return Err(CoreError::NotFound.into()),
     };
-    Ok(Json(written(&api, actor, &row, true).await))
+    Ok(written(api, actor, &row, true).await)
 }
 
 #[utoipa::path(
@@ -214,10 +223,19 @@ pub async fn get_theme_settings(
     Authed(who): Authed,
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<ThemeSettingsDto>, Problem> {
-    let actor = &who.actor;
-    let schema = theme_settings_schema(&api, actor, &name).await?;
-    let values = api.extensions.theme_settings(actor, &name, &schema).await?;
-    Ok(Json(ThemeSettingsDto::new(&schema, values)))
+    Ok(Json(theme_settings(&api, &who.actor, &name).await?))
+}
+
+/// Theme `name`'s settings schema and every value as its templates see it. Shared with
+/// the MCP `theme_settings_get` tool.
+pub(crate) async fn theme_settings(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+) -> Result<ThemeSettingsDto, Problem> {
+    let schema = theme_settings_schema(api, actor, name).await?;
+    let values = api.extensions.theme_settings(actor, name, &schema).await?;
+    Ok(ThemeSettingsDto::new(&schema, values))
 }
 
 #[utoipa::path(
@@ -244,14 +262,26 @@ pub async fn update_theme_settings(
     ApiPath(name): ApiPath<String>,
     ApiJson(patch): ApiJson<Map<String, Value>>,
 ) -> Result<Json<ThemeSettingsDto>, Problem> {
-    let actor = &who.actor;
+    Ok(Json(
+        set_theme_settings(&api, &who.actor, &name, patch).await?,
+    ))
+}
+
+/// Writes the declared keys of `patch` (`null` resets one) and answers with the schema
+/// and every value. Shared with the MCP `theme_settings_update` tool.
+pub(crate) async fn set_theme_settings(
+    api: &ApiState,
+    actor: &Actor,
+    name: &str,
+    patch: Map<String, Value>,
+) -> Result<ThemeSettingsDto, Problem> {
     api.extensions.authorize_themes(actor)?;
-    let schema = theme_settings_schema(&api, actor, &name).await?;
+    let schema = theme_settings_schema(api, actor, name).await?;
     let values = api
         .extensions
-        .set_theme_settings(actor, &name, &schema, patch)
+        .set_theme_settings(actor, name, &schema, patch)
         .await?;
-    Ok(Json(ThemeSettingsDto::new(&schema, values)))
+    Ok(ThemeSettingsDto::new(&schema, values))
 }
 
 /// The settings schema of theme `name` (pre-flight F22): the row's (stored, else from
@@ -404,7 +434,7 @@ async fn written(api: &ApiState, actor: &Actor, row: &InstalledTheme, active: bo
     dto
 }
 
-async fn entries(api: &ApiState, actor: &Actor) -> Result<Vec<ThemeDto>, Problem> {
+pub(crate) async fn entries(api: &ApiState, actor: &Actor) -> Result<Vec<ThemeDto>, Problem> {
     let rows = api.extensions.list_themes(actor).await?;
     let nodes = live_nodes(api).await?;
     Ok(list(&rows, embedded(), &nodes))

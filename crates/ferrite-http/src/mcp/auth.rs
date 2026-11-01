@@ -67,7 +67,7 @@ pub async fn guard(State(api): State<Arc<ApiState>>, mut req: Request, next: Nex
         Err(e) => return Problem::from(e).into_response(),
     };
     let client = client_name(&who);
-    req.extensions_mut().insert(Caller { who, client });
+    req.extensions_mut().insert(Caller { who, client, ip });
     next.run(req).await
 }
 

@@ -16,7 +16,7 @@
 //!
 //! [`AuthService::hit_mcp_limit`]: ferrite_core::AuthService::hit_mcp_limit
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use ferrite_core::{
     Actor, Authenticated, CoreError, oauth::is_format, settings::site_title_or_configured,
@@ -55,6 +55,9 @@ pub const MAX_INSTRUCTIONS_TITLE: usize = 200;
 pub struct Caller {
     pub who: Authenticated,
     pub client: String,
+    /// The client address the request came from (`None` in-process without connect
+    /// info); a tool that core limits per address (`comment_reply`) needs it.
+    pub ip: Option<IpAddr>,
 }
 
 impl Caller {
@@ -113,7 +116,13 @@ impl FerriteMcp {
                 + Self::term_tools()
                 + Self::menu_tools()
                 + Self::type_tools()
-                + Self::redirect_tools(),
+                + Self::redirect_tools()
+                + Self::comment_tools()
+                + Self::settings_tools()
+                + Self::appearance_tools()
+                + Self::plugin_tools()
+                + Self::user_tools()
+                + Self::system_tools(),
             prompts: Self::prompt_router(),
         }
     }

@@ -20,7 +20,7 @@
 //!   `DELETE` takes only spam or trashed comments. No `If-Match` (P11): last write
 //!   wins. Moderation is not audited (P14).
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     Json,
@@ -28,7 +28,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ferrite_core::comments::{CommentInput, Commenter, Submitted};
+use ferrite_core::{
+    Actor,
+    comments::{CommentInput, Commenter, Submitted},
+};
 use ferrite_domain::{CommentId, CommentQuery, CommentStatus, ContentId, MAX_PAGE};
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -83,6 +86,17 @@ pub async fn list_comments(
     ApiQuery(params): ApiQuery<CommentListParams>,
 ) -> Result<Json<CommentList>, Problem> {
     let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    Ok(Json(comment_page(&api, &who.actor, params, limit).await?))
+}
+
+/// One page of the moderation queue for `params` (`status` and `cursor` checked here;
+/// `limit` is already checked). Shared with the MCP `comments_list` tool.
+pub(crate) async fn comment_page(
+    api: &ApiState,
+    actor: &Actor,
+    params: CommentListParams,
+    limit: u32,
+) -> Result<CommentList, Problem> {
     let status = params
         .status
         .as_deref()
@@ -104,7 +118,7 @@ pub async fn list_comments(
     let page = api
         .comments
         .list(
-            &who.actor,
+            actor,
             CommentQuery {
                 status,
                 item: params.item.map(ContentId::from_uuid),
@@ -113,10 +127,10 @@ pub async fn list_comments(
             },
         )
         .await?;
-    Ok(Json(CommentList {
+    Ok(CommentList {
         items: page.items.into_iter().map(CommentDto::from).collect(),
         next_cursor: page.next_cursor,
-    }))
+    })
 }
 
 /// The query of `GET /comments/counts`.
@@ -176,15 +190,26 @@ pub async fn moderate_comment(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(req): ApiJson<CommentModeration>,
 ) -> Result<Json<CommentDto>, Problem> {
-    let status = req.status.parse::<CommentStatus>().map_err(|_| {
-        Problem::validation(format!("unknown comment status {:?}", req.status))
+    Ok(Json(moderate(&api, &who.actor, id, &req.status).await?))
+}
+
+/// Sets comment `id` to `status` (`pending`, `approved`, `spam` or `trash`). Shared with
+/// the MCP `comment_moderate` tool.
+pub(crate) async fn moderate(
+    api: &ApiState,
+    actor: &Actor,
+    id: Uuid,
+    status: &str,
+) -> Result<CommentDto, Problem> {
+    let status = status.parse::<CommentStatus>().map_err(|_| {
+        Problem::validation(format!("unknown comment status {status:?}"))
             .with_error(Some("status"), "must be pending, approved, spam or trash")
     })?;
     let comment = api
         .comments
-        .moderate(&who.actor, CommentId::from_uuid(id), status)
+        .moderate(actor, CommentId::from_uuid(id), status)
         .await?;
-    Ok(Json(CommentDto::from(comment)))
+    Ok(CommentDto::from(comment))
 }
 
 #[utoipa::path(
@@ -241,12 +266,27 @@ pub async fn submit_comment(
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
     ApiJson(req): ApiJson<CommentSubmit>,
 ) -> Result<Response, Problem> {
-    let Some(ip) = client.ip else {
-        return Err(Problem::busy());
-    };
     let commenter = match &who {
         MaybeAuthed::Anonymous => Commenter::Anonymous,
         MaybeAuthed::Authed(a) => Commenter::User(a.actor),
+    };
+    let (status, comment) = submit(&api, commenter, client.ip, kind, id, req).await?;
+    Ok((status, Json(comment)).into_response())
+}
+
+/// Submits a comment on item `id` of type `kind` from `ip` and says how it was taken:
+/// `201` approved, `202` held (or discarded by the honeypot). Without a client address
+/// the per-IP limit cannot apply: `503 busy`. Shared with the MCP `comment_reply` tool.
+pub(crate) async fn submit(
+    api: &ApiState,
+    commenter: Commenter,
+    ip: Option<IpAddr>,
+    kind: String,
+    id: Uuid,
+    req: CommentSubmit,
+) -> Result<(StatusCode, CommentPublicDto), Problem> {
+    let Some(ip) = ip else {
+        return Err(Problem::busy());
     };
     let input = CommentInput {
         item: ContentId::from_uuid(id),
@@ -268,5 +308,5 @@ pub async fn submit_comment(
     } else {
         StatusCode::ACCEPTED
     };
-    Ok((status, Json(CommentPublicDto::of(&c))).into_response())
+    Ok((status, CommentPublicDto::of(&c)))
 }

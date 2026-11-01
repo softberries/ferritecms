@@ -7,6 +7,7 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{ApiToken, Role, User, UserStatus};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -15,7 +16,7 @@ use super::Password;
 use super::content::present;
 
 /// A user's role (07 §1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RoleDto {
     Admin,
@@ -47,7 +48,7 @@ impl From<RoleDto> for Role {
 }
 
 /// Whether the account can log in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UserStatusDto {
     Active,

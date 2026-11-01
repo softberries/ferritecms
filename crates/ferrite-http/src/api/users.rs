@@ -39,8 +39,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ferrite_core::{NewAccount, Scopes, UserPatch};
-use ferrite_domain::{ApiTokenId, MAX_PAGE, Timestamp, UserId, UserQuery};
+use ferrite_core::{Actor, NewAccount, Scopes, UserPatch};
+use ferrite_domain::{ApiTokenId, MAX_PAGE, Page, Timestamp, User, UserId, UserQuery};
 use ferrite_store::USER_CURSOR_TAG;
 use uuid::Uuid;
 
@@ -77,15 +77,28 @@ pub async fn list_users(
     ApiQuery(params): ApiQuery<UserListParams>,
 ) -> Result<Json<UserList>, Problem> {
     let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    let found = find_users(&api, &who.actor, params, limit).await?;
+    let (items, next_cursor) = list::items(found, UserDto::from);
+    Ok(Json(UserList { items, next_cursor }))
+}
+
+/// One page of users for `params` (`cursor` checked here; `limit` is already checked).
+/// Shared with the MCP `users_list` tool.
+pub(crate) async fn find_users(
+    api: &ApiState,
+    actor: &Actor,
+    params: UserListParams,
+    limit: u32,
+) -> Result<Page<User>, Problem> {
     if let Some(c) = &params.cursor
         && ferrite_store::text_cursor(USER_CURSOR_TAG, c).is_err()
     {
         return Err(invalid_cursor());
     }
-    let found = api
+    Ok(api
         .users
         .list(
-            &who.actor,
+            actor,
             UserQuery {
                 q: params.q,
                 role: params.role.map(Into::into),
@@ -94,9 +107,7 @@ pub async fn list_users(
                 cursor: params.cursor,
             },
         )
-        .await?;
-    let (items, next_cursor) = list::items(found, UserDto::from);
-    Ok(Json(UserList { items, next_cursor }))
+        .await?)
 }
 
 #[utoipa::path(
