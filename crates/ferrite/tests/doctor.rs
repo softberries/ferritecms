@@ -1032,6 +1032,8 @@ fn doctor_changes_nothing_under_the_data_folder() {
 
     // A `-wal` without its `-shm` (a copy that dropped it): not opened, since a read-only
     // open would create the index. Nothing at all may change, `-shm` mtime included.
+    // (SQLite on Linux may have removed both when the last connection closed.)
+    ensure_side_files(tmp.path());
     std::fs::remove_file(&shm).unwrap();
     let before = snapshot(tmp.path());
     std::thread::sleep(std::time::Duration::from_millis(50));

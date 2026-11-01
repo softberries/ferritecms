@@ -96,6 +96,19 @@ test("chord_timeout", () => {
   expect(dash).toHaveBeenCalledOnce();
 });
 
+// The gap is measured between the key presses, so a page too busy to handle the next key
+// within the timeout (its timer would have fired first) still completes the sequence.
+test("chord_survives_a_late_handled_second_step", () => {
+  const plugins = bind("g l");
+  const g = new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true });
+  const l = new KeyboardEvent("keydown", { key: "l", bubbles: true, cancelable: true });
+  document.body.dispatchEvent(g);
+  // Both keys were pressed within the timeout; the second is handled long after it.
+  vi.advanceTimersByTime(CHORD_TIMEOUT_MS * 3);
+  document.body.dispatchEvent(l);
+  expect(plugins).toHaveBeenCalledOnce();
+});
+
 test("ignored_in_inputs", () => {
   const help = bind("?");
   const dash = bind("g d");

@@ -1,7 +1,8 @@
 // Keyboard shortcuts (docs/design/11-admin-ui.md §6): one `keydown` listener on the
 // window for every registered binding. `keys` is a combination (`mod+k`, `mod+shift+p`,
 // `?`) or a sequence of steps separated by spaces (`g d`); a sequence times out after
-// 1 000 ms between steps. `mod` is ⌘ on Apple platforms and Ctrl elsewhere. Inside
+// 1 000 ms between steps, measured between the key presses (`timeStamp`), not by a timer,
+// so a busy page that handles the next key late still completes it. `mod` is ⌘ on Apple platforms and Ctrl elsewhere. Inside
 // `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput` bindings
 // fire, so typing (and the editor's own `mod+b`) is never taken over.
 
@@ -39,7 +40,6 @@ const registry = new Map<string, Shortcut>();
  */
 let pending: {
   pressed: KeyboardEvent[];
-  timer: ReturnType<typeof setTimeout>;
 } | null = null;
 let listening = false;
 
@@ -119,8 +119,13 @@ function inTextField(target: EventTarget | null): boolean {
 }
 
 function clearPending(): void {
-  if (pending) clearTimeout(pending.timer);
   pending = null;
+}
+
+/** Whether `e` came too long after the last step pressed so far. */
+function timedOut(e: KeyboardEvent): boolean {
+  const last = pending?.pressed[pending.pressed.length - 1];
+  return last === undefined || e.timeStamp - last.timeStamp >= CHORD_TIMEOUT_MS;
 }
 
 function eligible(s: Shortcut, inInput: boolean): boolean {
@@ -139,6 +144,7 @@ function onKeyDown(e: KeyboardEvent): void {
   if (["shift", "control", "meta", "alt"].includes(e.key.toLowerCase())) return;
   const inInput = inTextField(e.target);
 
+  if (pending && timedOut(e)) clearPending();
   if (pending) {
     const pressed = [...pending.pressed, e];
     const next = [...registry.values()].filter((s) => {
@@ -177,8 +183,7 @@ function onKeyDown(e: KeyboardEvent): void {
 }
 
 function startPending(pressed: KeyboardEvent[]): void {
-  clearPending();
-  pending = { pressed, timer: setTimeout(clearPending, CHORD_TIMEOUT_MS) };
+  pending = { pressed };
 }
 
 /** Registers a binding; the returned function removes it. */
