@@ -11,7 +11,7 @@
 import type { Page, Request } from "@playwright/test";
 import { ContentApi, type Item, type Redirect } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
-import { mod } from "./support/keys";
+import { chord, mod } from "./support/keys";
 import { mailbox } from "./support/smtp-sink";
 import { uid } from "./support/uid";
 
@@ -271,8 +271,7 @@ test("settings_screens", async ({ as, snap, expectAccessible, site }) => {
   await expect(
     page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings" }),
   ).toBeVisible();
-  await page.keyboard.press("g");
-  await page.keyboard.press("s");
+  await chord(page, "g", "s");
   await expect(page).toHaveURL(/\/admin\/settings\/general$/);
   await page.goto("/admin/settings");
   await expect(page).toHaveURL(/\/admin\/settings\/general$/);

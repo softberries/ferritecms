@@ -342,7 +342,7 @@ contrast pair unchanged.
 inputs or the editor.
 
 Bindings go through `@/lib/shortcuts` (`registerShortcut`, `useShortcut`,
-`listShortcuts`; one window `keydown` listener; sequences time out after 1 000 ms between two key presses (their `timeStamp`, so a busy page that handles a key late still completes the sequence);
+`listShortcuts`; one window `keydown` listener; sequences time out after 1 000 ms between two steps, once a timer that long has fired and the key events' `timeStamp`s are that far apart too (Chromium and Firefox stamp a key when it is pressed, so a busy page still completes the sequence there; WebKit stamps it when it is handled);
 inside `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput`
 bindings fire; a key a component already handled — `defaultPrevented` — is left
 alone). Local keys (the `DataTable` row keys, the editor's) stay in their components.

@@ -5,7 +5,7 @@
 
 import type { Page, Route } from "@playwright/test";
 import { expect, test } from "./support/fixtures";
-import { mod } from "./support/keys";
+import { chord, mod } from "./support/keys";
 import { authFile } from "./support/server";
 import { SNAP_PROJECT } from "./support/projects";
 import { screenFile, settle, VIEWPORTS } from "./support/snap";
@@ -136,8 +136,7 @@ test("g_chords_navigate", async ({ as, site }) => {
   const page = await as("author");
   await page.goto("/admin/no/such/screen");
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await page.keyboard.press("g");
-  await page.keyboard.press("d");
+  await chord(page, "g", "d");
   await expect(page).toHaveURL(`${site.url}/admin/`);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 

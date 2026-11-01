@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { ContentApi, type Redirect } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { chord } from "./support/keys";
 import { E2E_STATE_DIR } from "./support/server";
 import { zipFolder } from "./support/zip";
 
@@ -106,8 +107,7 @@ test("import_export_a_through_the_screen", async ({
     const at = names.findIndex((n) => n.includes("Import"));
     expect(at).toBeGreaterThan(names.findIndex((n) => n.includes("Plugins")));
     expect(at).toBeLessThan(names.findIndex((n) => n.includes("Settings")));
-    await page.keyboard.press("g");
-    await page.keyboard.press("i");
+    await chord(page, "g", "i");
     await expect(page).toHaveURL(/\/admin\/import$/);
     await open(page);
     const start = screen(page).getByRole("button", { name: "Start import" });
