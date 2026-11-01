@@ -3,8 +3,9 @@
 //! merged by [`build_site`]), the pure URL
 //! router ([`route`]), plugin wiring ([`plugins`]), the install pipeline
 //! ([`extensions`]), media upload staging ([`media`]), the page `<head>` ([`head`]) and
-//! the metrics registry with its `/metrics` app ([`metrics`]), and HSTS plus the https
-//! redirect app for the built-in TLS ([`tls`]).
+//! the metrics registry with its `/metrics` app ([`metrics`]), the OAuth authorization
+//! server's endpoints ([`oauth`]) and its metadata-document fetcher ([`oauth_fetch`]),
+//! and HSTS plus the https redirect app for the built-in TLS ([`tls`]).
 
 pub mod admin;
 pub mod api;
@@ -16,6 +17,8 @@ pub mod import_fetch;
 pub mod mail;
 pub mod media;
 pub mod metrics;
+pub mod oauth;
+pub mod oauth_fetch;
 pub mod plugins;
 pub mod route;
 pub mod tls;

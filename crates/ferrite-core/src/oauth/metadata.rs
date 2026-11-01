@@ -85,7 +85,38 @@ pub fn metadata_url(client_id: &str) -> Option<Url> {
     ok.then_some(url)
 }
 
-/// Checks the shared client fields: a name (trimmed, control characters removed, cut to
+/// Whether `c` is a Unicode format character (general category `Cf`, Unicode 16): bidi
+/// overrides and isolates, zero-width characters, soft hyphen, tags and the like, which
+/// could make a client name read as something else on the consent screen.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61C}'
+            | '\u{6DD}'
+            | '\u{70F}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
+/// Checks the shared client fields: a name (trimmed, control and format characters
+/// removed, cut to
 /// [`MAX_CLIENT_NAME`]), 1 to [`MAX_REDIRECT_URIS`] redirect URIs
 /// ([`redirect::check_registered`]), and optional `http(s)` `client_uri` and `logo_uri`
 /// (a logo is kept only when `https`, design 12 §7).
@@ -98,7 +129,7 @@ pub(crate) fn client_fields(
     let name: String = name
         .unwrap_or_default()
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|&c| !c.is_control() && !is_format(c))
         .collect();
     let name: String = name.trim().chars().take(MAX_CLIENT_NAME).collect();
     if name.trim().is_empty() {
@@ -256,6 +287,11 @@ mod tests {
         let fields = client_fields(Some(&long), &uris, None, None).unwrap();
         assert_eq!(fields.name.chars().count(), MAX_CLIENT_NAME);
         assert!(client_fields(Some(" \t "), &uris, None, None).is_err());
+        // Bidi overrides, isolates and zero-width characters go too.
+        let tricky = "Good\u{202E}gnp.exe\u{2066}\u{200B} App\u{FEFF}\u{E0041}";
+        let fields = client_fields(Some(tricky), &uris, None, None).unwrap();
+        assert_eq!(fields.name, "Goodgnp.exe App");
+        assert!(client_fields(Some("\u{200B}\u{202A}"), &uris, None, None).is_err());
         assert!(client_fields(None, &uris, None, None).is_err());
         assert!(matches!(
             client_fields(Some("A"), &[], None, None),

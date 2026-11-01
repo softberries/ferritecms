@@ -103,6 +103,7 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             "comments.enabled",
             "comments.moderation",
             "comments.per_page",
+            "mcp.enabled",
         ]
     );
 

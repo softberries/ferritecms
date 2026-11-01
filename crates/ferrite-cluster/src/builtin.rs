@@ -34,8 +34,10 @@ pub fn failure_retention(window: Duration) -> Duration {
     MIN_FAILURE_RETENTION.max(window.saturating_mul(2))
 }
 
-/// Rate-limit rows whose window started longer ago than this are deleted. Every limit
-/// core sets uses a one-minute window, so no current window is cut short.
+/// Rate-limit rows whose window started longer ago than this are deleted. No limit has a
+/// window longer than this (most are a minute or ten; the hourly password-reset and
+/// client-registration limits and plugin routes' `N/h` are an hour), so a current window
+/// is never cut short.
 pub const RATE_LIMIT_RETENTION: Duration = Duration::from_secs(3600);
 
 /// How long one prune run keeps deleting batches; well inside the default handler

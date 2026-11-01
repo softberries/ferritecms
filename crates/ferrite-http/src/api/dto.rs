@@ -15,6 +15,7 @@ pub mod content;
 pub mod extensions;
 pub mod import;
 pub mod media;
+pub mod oauth;
 pub mod site;
 pub mod system;
 pub mod types;

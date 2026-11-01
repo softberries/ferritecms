@@ -40,6 +40,7 @@ pub const HOST_SESSION_COOKIE: &str = "__Host-ferrite_session";
         (name = "themes", description = "Themes: list, upload, activation"),
         (name = "system", description = "System status, nodes and the audit log (admins)"),
         (name = "import", description = "WordPress imports: start from an upload, poll the job, read runs and reports"),
+        (name = "oauth", description = "AI assistants: the consent screen's pending authorization requests and the connected apps (OAuth grants)"),
     ),
 )]
 pub struct ApiDoc;

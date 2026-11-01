@@ -6,7 +6,8 @@
 //! `app/comment_form.rs`: same-origin, anonymous, never cached) and the admin SPA under
 //! `/admin` (see [`crate::admin`]: own headers, never cached or redirected), mounted in
 //! front of it. [`build_site`] (what `serve` runs) puts the API's `/api/v1` routes
-//! ([`crate::api`]) in front of the same fallback, inside the same layers:
+//! ([`crate::api`]) and the OAuth endpoints ([`crate::oauth`]) in front of the same
+//! fallback, inside the same layers:
 //!
 //! 1. Methods other than GET and HEAD: `405` with `Allow: GET, HEAD`. HEAD is answered
 //!    like GET (same status and headers, compression included); axum's `Route` drops
@@ -130,13 +131,15 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     shared_layers(&state, public(&state))
 }
 
-/// The whole site: `/api/v1` ([`api::router`](crate::api::router)) in front of the
-/// public fallback, both inside the shared layers (catch-panic, compression, security
+/// The whole site: `/api/v1` ([`api::router`](crate::api::router)) and the OAuth
+/// endpoints ([`oauth::router`](crate::oauth::router): `/.well-known/oauth-*`,
+/// `/oauth/*`) in front of the public fallback, all inside the shared layers (catch-panic, compression, security
 /// headers, request span, client address). API responses also get `no-store`, and a
 /// panic in an API handler is a problem document (the API's own layers).
 pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
+    let oauth = crate::oauth::router(api.clone());
     let (api, _) = crate::api::router(api);
-    shared_layers(&state, api.merge(public(&state)))
+    shared_layers(&state, api.merge(oauth).merge(public(&state)))
 }
 
 /// Plugin routes ([`plugin_route`]; `/_p/{plugin}/` too, since the wildcard does not

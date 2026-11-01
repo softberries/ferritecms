@@ -682,6 +682,13 @@ async fn contributor_cannot_grant_beyond_role(db: &TestDb) {
             .await,
         Err(CoreError::NotFound)
     ));
+    // Deny needs what approval needs (`users:write`); a refused deny keeps the request.
+    let mut read_only = actor;
+    read_only.scopes = Scopes::from_strs(&["users:read".to_owned()]).unwrap();
+    assert!(matches!(
+        e.oauth.deny(&read_only, narrow).await,
+        Err(CoreError::Forbidden(_))
+    ));
     // Deny answers access_denied with the state.
     let denied = e.oauth.deny(&actor, narrow).await.unwrap();
     assert_eq!(query(&denied, "error").as_deref(), Some("access_denied"));

@@ -172,7 +172,9 @@ pub struct ConsentView {
     pub client: OAuthClient,
     /// Known by a metadata document (not self-registered).
     pub verified: bool,
-    /// The redirect URI's host (its scheme followed by `:` when it has none).
+    /// Where the browser goes back to: the host of an `http(s)` redirect URI,
+    /// `scheme://host` for another scheme with a host, the whole URI without one (so
+    /// `cursor://example.com/…` cannot pass for `example.com`).
     pub redirect_host: String,
     /// The requested scopes (all 22 when the client sent no `scope`).
     pub requested: Vec<String>,
@@ -598,12 +600,7 @@ impl OAuthService {
             .await?
             .ok_or(CoreError::NotFound)?;
         let requested = Scopes::from_strs(&request.scopes)?;
-        let redirect_host = match Url::parse(&request.redirect_uri) {
-            Ok(u) => u
-                .host_str()
-                .map_or_else(|| format!("{}:", u.scheme()), str::to_owned),
-            Err(_) => return Err(CoreError::Internal("stored redirect URI does not parse")),
-        };
+        let redirect_host = redirect_host(&parse_stored(&request.redirect_uri)?);
         Ok(ConsentView {
             verified: client.kind == ClientKind::Metadata,
             client,
@@ -686,9 +683,11 @@ impl OAuthService {
         Ok(self.location(&base, &params))
     }
 
-    /// Denies a pending request (takes it); returns `redirect_uri` with
+    /// Denies a pending request (takes it) with the same authorization as
+    /// [`approve`](Self::approve) (`users:write`); returns `redirect_uri` with
     /// `error=access_denied`, `state` and `iss`. Unknown or expired: `NotFound`.
-    pub async fn deny(&self, _actor: &Actor, id: OAuthRequestId) -> Result<Url, CoreError> {
+    pub async fn deny(&self, actor: &Actor, id: OAuthRequestId) -> Result<Url, CoreError> {
+        require_scope(actor, Some(Scope::write(Area::Users)))?;
         let request = self
             .store
             .read()
@@ -1156,6 +1155,15 @@ async fn active(repos: &dyn Repos, user: UserId) -> Result<bool, CoreError> {
         .is_some_and(|u| u.status == UserStatus::Active))
 }
 
+/// The consent screen's redirect host ([`ConsentView::redirect_host`]).
+fn redirect_host(uri: &Url) -> String {
+    match (uri.scheme(), uri.host_str()) {
+        ("http" | "https", Some(host)) => host.to_owned(),
+        (scheme, Some(host)) => format!("{scheme}://{host}"),
+        (_, None) => uri.as_str().to_owned(),
+    }
+}
+
 fn parse_stored(uri: &str) -> Result<Url, CoreError> {
     Url::parse(uri).map_err(|_| CoreError::Internal("stored redirect URI does not parse"))
 }
@@ -1176,6 +1184,15 @@ mod tests {
             ]))
         );
         assert!(parse_scope("content:read nope").is_err());
+    }
+
+    #[test]
+    fn redirect_hosts_show_custom_schemes() {
+        let host = |u: &str| redirect_host(&Url::parse(u).unwrap());
+        assert_eq!(host("https://app.example/cb"), "app.example");
+        assert_eq!(host("http://127.0.0.1:5000/cb"), "127.0.0.1");
+        assert_eq!(host("cursor://app.example/cb"), "cursor://app.example");
+        assert_eq!(host("com.example.app:/oauth"), "com.example.app:/oauth");
     }
 
     #[test]

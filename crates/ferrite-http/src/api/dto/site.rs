@@ -326,6 +326,11 @@ pub struct SettingsDto {
     #[serde(rename = "comments.per_page")]
     #[schema(value_type = Option<i64>)]
     pub comments_per_page: Value,
+    /// Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer
+    /// (default `true`); when off they answer `404` and existing connections stay.
+    #[serde(rename = "mcp.enabled")]
+    #[schema(value_type = Option<bool>)]
+    pub mcp_enabled: Value,
 }
 
 impl SettingsDto {
@@ -344,6 +349,7 @@ impl SettingsDto {
             comments_enabled: take("comments.enabled"),
             comments_moderation: take("comments.moderation"),
             comments_per_page: take("comments.per_page"),
+            mcp_enabled: take("mcp.enabled"),
         }
     }
 }

@@ -15,8 +15,9 @@
 //!   route-level limit: plugins [`plugins::MAX_UPLOAD_BODY`], themes
 //!   [`themes::MAX_THEME_UPLOAD_BODY`], media [`media::MEDIA_ROUTE_LIMIT`] (the
 //!   handler enforces `media.max_upload` itself, F12), WordPress imports
-//!   [`import::IMPORT_ROUTE_LIMIT`]; and the public comment submit,
-//!   whose limit is smaller ([`comments::MAX_COMMENT_REQUEST`]).
+//!   [`import::IMPORT_ROUTE_LIMIT`]; and the public comment submit and the consent API,
+//!   whose limits are smaller ([`comments::MAX_COMMENT_REQUEST`],
+//!   [`oauth::MAX_OAUTH_BODY`]).
 //!
 //! The API never touches the page cache. [`build_site`](crate::build_site) merges this
 //! router in front of the public fallback, inside the shared layers (security headers,
@@ -39,6 +40,7 @@ pub mod media;
 pub mod menus;
 pub mod meta;
 pub mod multipart;
+pub mod oauth;
 pub mod openapi;
 pub mod plugins;
 pub mod problem;
@@ -231,10 +233,30 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(import::get_import_run))
         .routes(routes!(import::get_import_report_json))
         .routes(routes!(import::get_import_report_html))
+        .merge(uploads(
+            routes!(oauth::get_oauth_request),
+            oauth::MAX_OAUTH_BODY,
+        ))
+        .merge(uploads(
+            routes!(oauth::approve_oauth_request),
+            oauth::MAX_OAUTH_BODY,
+        ))
+        .merge(uploads(
+            routes!(oauth::deny_oauth_request),
+            oauth::MAX_OAUTH_BODY,
+        ))
+        .merge(uploads(
+            routes!(oauth::list_oauth_grants),
+            oauth::MAX_OAUTH_BODY,
+        ))
+        .merge(uploads(
+            routes!(oauth::delete_oauth_grant),
+            oauth::MAX_OAUTH_BODY,
+        ))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,
-/// smaller for the public comment submit): the route's `DefaultBodyLimit` wins over the
+/// smaller for the public comment submit and the consent API): the route's `DefaultBodyLimit` wins over the
 /// router's.
 fn uploads(
     routes: utoipa_axum::router::UtoipaMethodRouter<Arc<ApiState>>,

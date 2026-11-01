@@ -4720,6 +4720,368 @@
         }
       }
     },
+    "/api/v1/oauth/grants": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "list_oauth_grants",
+        "parameters": [
+          {
+            "name": "user",
+            "in": "query",
+            "description": "Another user's id (needs `manage_users`); default: the request's own user.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's connected apps (unexpired grants), newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-query`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (another user: `manage_users`; `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oauth/grants/{id}": {
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "delete_oauth_grant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "A grant's `id` from `GET /oauth/grants`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected: the grant and its access tokens are gone; audited `oauth.disconnect`"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`users:write`; another user's: `manage_users`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such grant, or another user's without `manage_users`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oauth/requests/{id}": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "get_oauth_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The `request` query parameter of `/admin/connect`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pending authorization request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (an API token, or `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: unknown, expired or already decided; or `mcp.enabled` is off",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oauth/requests/{id}/approve": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "approve_oauth_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Approved: the request is used up and a 60-second code was made; audited `oauth.connect`. Send the browser to `redirect_to`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (an API token, `users:write`, or a scope that is not grantable; the request stays), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: unknown, expired or already decided; or `mcp.enabled` is off",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: no scope chosen, or an unknown one (`errors[0].field` = `scopes`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oauth/requests/{id}/deny": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "deny_oauth_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Denied: the request is used up. Send the browser to `redirect_to` (`error=access_denied`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedirectDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (an API token, `users:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: unknown, expired or already decided; or `mcp.enabled` is off",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "tags": [
@@ -9562,6 +9924,23 @@
           }
         }
       },
+      "ApproveInput": {
+        "type": "object",
+        "description": "`POST /oauth/requests/{id}/approve`.",
+        "required": [
+          "scopes"
+        ],
+        "properties": {
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "At least one, each in the request's `grantable`."
+          }
+        },
+        "additionalProperties": false
+      },
       "AuditActorDto": {
         "type": "object",
         "description": "Who wrote an audit row.",
@@ -9865,6 +10244,14 @@
           }
         }
       },
+      "ClientKindDto": {
+        "type": "string",
+        "description": "How a client is known.",
+        "enum": [
+          "metadata",
+          "registered"
+        ]
+      },
       "CommentCountsDto": {
         "type": "object",
         "description": "`GET /comments/counts`: comments per status.",
@@ -10136,6 +10523,50 @@
               "null"
             ],
             "description": "Leave empty (a field people never see; anything in it drops the comment)."
+          }
+        }
+      },
+      "ConsentDto": {
+        "type": "object",
+        "description": "`GET /oauth/requests/{id}`: a pending authorization request (10 minutes) as the\nconsent screen shows it.",
+        "required": [
+          "id",
+          "client",
+          "verified",
+          "redirect_host",
+          "requested",
+          "grantable"
+        ],
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/OAuthClientDto"
+          },
+          "grantable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requested scopes this user can grant (preselect these); `<area>:write`\nimplies `<area>:read`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The request's id (the `request` query parameter of `/admin/connect`)."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "Where the browser goes back to: the host of an `http(s)` redirect URI,\n`scheme://host` for another scheme, the whole URI when it has no host."
+          },
+          "requested": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requested scopes (all 22 when the client named none)."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "`true` when the client is known by a metadata document, `false` when it\nregistered itself."
           }
         }
       },
@@ -10843,6 +11274,69 @@
           "media",
           "repeater"
         ]
+      },
+      "GrantDto": {
+        "type": "object",
+        "description": "A connected app: one grant of a user to a client.",
+        "required": [
+          "id",
+          "user_id",
+          "client",
+          "scopes",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/OAuthClientDto"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the user connected the app."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the connection ends unless used again (30 days after its last use)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the app last refreshed its access (about hourly while in use)."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The granted area scopes."
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "GrantList": {
+        "type": "object",
+        "description": "`GET /oauth/grants`: a user's connected apps, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantDto"
+            }
+          }
+        }
       },
       "GrantReportDto": {
         "type": "object",
@@ -12348,6 +12842,42 @@
         ],
         "description": "Where a node's theme came from: `\"embedded\"`, `\"folder\"` or `{\"artifact\": <hash>}`."
       },
+      "OAuthClientDto": {
+        "type": "object",
+        "description": "An OAuth client as the consent screen and the connected apps show it (no redirect\nURIs).",
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's home page (`http(s)`), as it declared."
+          },
+          "id": {
+            "type": "string",
+            "description": "The `client_id`: `ferc_…`, or the metadata document's URL."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKindDto"
+          },
+          "logo_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's logo; only ever an `https` URL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Control and format characters removed, at most 100 characters; written by the\nclient, so show it as text."
+          }
+        }
+      },
       "PasswordChange": {
         "type": "object",
         "description": "`POST /auth/password`.",
@@ -13463,6 +13993,13 @@
             "format": "int64",
             "description": "1..=100 (default 50): top-level comment threads per public comment page\n(`?cpage=N`); each thread shows with all its approved replies."
           },
+          "mcp.enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer\n(default `true`); when off they answer `404` and existing connections stay."
+          },
           "permalink.page": {
             "type": [
               "string",
@@ -14491,6 +15028,10 @@
     {
       "name": "import",
       "description": "WordPress imports: start from an upload, poll the job, read runs and reports"
+    },
+    {
+      "name": "oauth",
+      "description": "AI assistants: the consent screen's pending authorization requests and the connected apps (OAuth grants)"
     }
   ]
 }

@@ -20,6 +20,7 @@ mod media;
 mod media_filters;
 mod menu_locations;
 mod metrics_series;
+mod oauth;
 mod plugins;
 mod redirect_search;
 mod reset;

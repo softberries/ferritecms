@@ -357,10 +357,10 @@ async fn requests_counted_by_class_and_status(app: App) -> App {
         .iter()
         .filter(|s| s.name == "ferrite_http_requests_total")
         .count();
-    assert_eq!(series, 7 * 4);
+    assert_eq!(series, 8 * 4);
     // Each class's latency count equals its requests.
     for class in [
-        "page", "api", "admin", "media", "plugin", "preview", "other",
+        "page", "api", "admin", "media", "plugin", "preview", "oauth", "other",
     ] {
         let requests: f64 = samples
             .iter()

@@ -26,6 +26,11 @@
 //!
 //! Bearer requests skip both: a browser never attaches a bearer token by itself.
 //!
+//! **Audience binding** (design 12 §3.1): a bearer token that belongs to an OAuth grant
+//! (an AI assistant's access token, [`Authenticated::oauth`]) is refused by every
+//! extractor here with `401` and `Bearer error="invalid_token"`; those tokens are for
+//! `/mcp` only. Personal API tokens work as before.
+//!
 //! [`Authed`] then refuses session requests of accounts with `must_reset` (`403
 //! password-reset-required`); only `GET /auth/me`, `POST /auth/logout` and `POST
 //! /auth/password` use [`AuthedAllowReset`]. Bearer requests are not refused: a reset
@@ -235,6 +240,15 @@ async fn bearer(parts: &Parts, api: &ApiState) -> Option<Result<Authenticated, P
     };
     let ip = client_info(parts).ip;
     Some(match api.auth.resolve_token(token, ip).await {
+        // Audience binding (design 12 §3.1, RFC 8707): an OAuth access token is for
+        // `/mcp` only, never the REST API.
+        Ok(Some(who)) if who.oauth.is_some() => Err(Problem::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "Not authenticated",
+            "this token was issued to an AI assistant for the MCP endpoint (/mcp) only",
+        )
+        .with_challenge(Challenge::InvalidToken)),
         Ok(Some(who)) => Ok(who),
         Ok(None) => Err(unauthenticated(Challenge::InvalidToken)),
         Err(e) => Err(e.into()),
