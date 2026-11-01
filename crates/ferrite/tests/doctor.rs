@@ -31,6 +31,20 @@ fn init_sqlite(dir: &Path) {
     chmod(dir, 0o750);
 }
 
+/// Gives `dir`'s database its `-wal` and `-shm` side files. Whether `init` leaves them
+/// depends on the platform (SQLite removes both when the last connection closes cleanly,
+/// as it does on Linux); the restore-tmp checks look only at which files exist, and SQLite
+/// takes an empty `-wal` or `-shm` as a valid, empty one.
+fn ensure_side_files(dir: &Path) {
+    for side in ["ferrite.db-wal", "ferrite.db-shm"] {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(side))
+            .expect("side file");
+    }
+}
+
 /// One output line of `doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Line {
@@ -497,6 +511,7 @@ fn database_files_report_a_restore_tmp() {
         "{}",
         out.stdout
     );
+    ensure_side_files(tmp.path());
     let wal = tmp.path().join("ferrite.db-wal");
     let aside = tmp
         .path()

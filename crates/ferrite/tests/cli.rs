@@ -29,6 +29,20 @@ fn init_sqlite(dir: &Path) {
         .success();
 }
 
+/// Gives `dir`'s database its `-wal` and `-shm` side files. Whether `init` leaves them
+/// depends on the platform (SQLite removes both when the last connection closes cleanly,
+/// as it does on Linux); the restore-tmp checks look only at which files exist, and SQLite
+/// takes an empty `-wal` or `-shm` as a valid, empty one.
+fn ensure_side_files(dir: &Path) {
+    for side in ["ferrite.db-wal", "ferrite.db-shm"] {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(side))
+            .expect("side file");
+    }
+}
+
 fn stdout(mut cmd: Command) -> String {
     let out = cmd.assert().success().get_output().stdout.clone();
     String::from_utf8(out).expect("utf-8 stdout")
@@ -383,10 +397,10 @@ fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
     let backups = data.join("backups");
     let wal = backups.join("rolled-back-20260101T000000Z.db-wal");
     let shm = backups.join("rolled-back-20260101T000000Z.db-shm");
-    // `init` leaves its schema in the WAL (the database file alone is an empty page), the
-    // very state a killed run loses: move both side files as `replace_db` does.
+    // A WAL holds committed transactions the database file does not yet have, the very
+    // state a killed run loses: move both side files as `replace_db` does.
+    ensure_side_files(&data);
     let (db_wal, db_shm) = (data.join("ferrite.db-wal"), data.join("ferrite.db-shm"));
-    assert!(db_wal.is_file() && db_shm.is_file(), "init left a WAL");
     std::fs::rename(&db_wal, &wal).expect("move wal");
     std::fs::rename(&db_shm, &shm).expect("move shm");
     let refused = |extra: &[&str]| {
@@ -464,6 +478,7 @@ fn a_restore_tmp_with_a_linked_wal_warns_with_the_rm() {
     init_sqlite(&data);
     let staged = data.join("ferrite.db.restore-20260101T000000Z.tmp");
     std::fs::copy(data.join("ferrite.db"), &staged).expect("copy");
+    ensure_side_files(&data);
     let link = data
         .join("backups")
         .join("rolled-back-20260101T000000Z.db-wal");
