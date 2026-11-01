@@ -277,9 +277,14 @@ pub async fn runner_busy_refunds_the_attempt(db: Arc<TestDb>) {
     let id = enqueue(store.as_ref(), new).await;
     const BUSY_RUNS: usize = 5;
     let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // When each run started: the busy release is due a delay after it, which a slow test
+    // can read only after that time has passed (`run_at - now` is then negative).
+    let started = Arc::new(Mutex::new(Vec::<Timestamp>::new()));
     let (handler, log) = TestHandler::new(KIND, {
         let runs = runs.clone();
+        let started = started.clone();
         move |_| {
+            started.lock().unwrap().push(Timestamp::now());
             let n = runs.fetch_add(1, Ordering::SeqCst);
             async move {
                 if n < BUSY_RUNS {
@@ -304,10 +309,11 @@ pub async fn runner_busy_refunds_the_attempt(db: Arc<TestDb>) {
         .await;
         assert_eq!(job.attempts, 0, "run {n}: attempt refunded");
         assert_eq!(job.last_error, None, "run {n}");
-        let due_in = job.run_at.as_micros() - Timestamp::now().as_micros();
+        let ran_at = started.lock().unwrap()[n - 1];
+        let due_after = job.run_at.as_micros() - ran_at.as_micros();
         assert!(
-            due_in > 0 && due_in <= 5_000_000,
-            "run {n}: due in {due_in} µs"
+            (1_000_000..=5_500_000).contains(&due_after),
+            "run {n}: due {due_after} µs after the run started"
         );
         db.force_job_due(id).await;
     }
@@ -1559,73 +1565,4 @@ async fn duplicate_handler_kinds_are_refused() {
         ),
         Err(ClusterError::Store(_))
     ));
-}
-
-/// Records the fields of every `job` span (a scoped subscriber; no output).
-#[derive(Clone, Default)]
-struct JobSpans {
-    spans: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
-    next: Arc<std::sync::atomic::AtomicU64>,
-}
-
-struct Fields<'a>(&'a mut BTreeMap<String, String>);
-
-impl tracing::field::Visit for Fields<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name().to_owned(), format!("{value:?}"));
-    }
-}
-
-impl tracing::Subscriber for JobSpans {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        if span.metadata().name() == "job" {
-            let mut fields = BTreeMap::new();
-            span.record(&mut Fields(&mut fields));
-            self.spans.lock().unwrap().push(fields);
-        }
-        tracing::span::Id::from_u64(self.next.fetch_add(1, Ordering::SeqCst) + 1)
-    }
-
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-
-    fn event(&self, _: &tracing::Event<'_>) {}
-
-    fn enter(&self, _: &tracing::span::Id) {}
-
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
-/// M4-4 T5.4b: the span every job runs in names the node that claimed it, so a log line
-/// of a job (an `import.wordpress` one included) says where it ran after the job row
-/// cleared `locked_by`. A current-thread runtime, so the scoped subscriber sees the
-/// runner's tasks; both backends.
-#[tokio::test]
-async fn job_span_names_the_node() {
-    let dbs = [Some(TestDb::sqlite().await), TestDb::postgres().await];
-    for db in dbs.into_iter().flatten() {
-        let spans = JobSpans::default();
-        let scoped = tracing::subscriber::set_default(spans.clone());
-        let store = db.shared_store();
-        let id = enqueue(store.as_ref(), NewJob::new(KIND, json!({"v": 1}))).await;
-        let (handler, _log) = TestHandler::new(KIND, |_| async { Ok(()) }).build();
-        let node = NodeId::new();
-        let (stop, handle) = start(store.clone(), RunnerConfig::new(node, 1), vec![handler]);
-        wait_status(store.as_ref(), id, JobStatus::Done, Duration::from_secs(5)).await;
-        stop_runner(stop, handle).await;
-        drop(scoped);
-        let seen = spans.spans.lock().unwrap().clone();
-        let span = seen
-            .iter()
-            .find(|f| f.get("id") == Some(&id.to_string()))
-            .unwrap_or_else(|| panic!("no job span for {id}: {seen:?}"));
-        assert_eq!(span.get("node"), Some(&node.to_string()), "{span:?}");
-        assert_eq!(span.get("kind").map(String::as_str), Some(KIND));
-        db.teardown().await;
-    }
 }

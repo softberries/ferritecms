@@ -82,8 +82,9 @@ that lists its capabilities and settings:
 | `analytics` | counts page views per day, path and referrer host, without cookies or IP addresses, and shows them at `/_p/analytics/` to the users you list | its own storage, routes, read one option, the batched request events |
 | `contact-form` | a contact form whose messages are mailed to the site's admins and kept in an inbox at `/_p/contact-form/inbox` | routes, its own storage, mail to admins, read one option |
 
-Releases will carry them as `ferrite-plugins-<version>.tar.gz`. Until then, build them
-from a clone of the repository:
+Each release carries them as `ferrite-plugins-<version>.tar.gz` (folders `seo/`,
+`analytics/` and `contact-form/`, each ready for `ferrite plugin install --dir`). To build
+one from a clone of the repository instead:
 
 ```sh
 cargo build --release --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo

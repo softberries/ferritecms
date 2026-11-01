@@ -3,7 +3,7 @@
 name        = "blog"
 version     = "0.1.0"
 author      = "FerriteCMS"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 homepage    = "https://github.com/softberries/ferritecms"
 description = "A clean, readable blog theme with light and dark modes."
 

@@ -4,7 +4,7 @@
 name        = "docs"
 version     = "0.1.0"
 author      = "FerriteCMS"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 homepage    = "https://github.com/softberries/ferritecms"
 description = "Documentation with a page-tree sidebar, breadcrumbs, a table of contents and previous/next links. Light and dark modes."
 

@@ -4,7 +4,7 @@ version     = "0.1.0"
 publisher   = "ferritecms.dev"
 description = "A contact form: messages are mailed to the site's admins and kept in an inbox page for chosen users"
 world       = "ferrite:plugin/plugin@0.1.0"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 
 # A standalone form page at `/_p/contact-form/`, the form's target `/_p/contact-form/submit`
 # (a theme posts its own form there too) and an inbox page for the users listed in the

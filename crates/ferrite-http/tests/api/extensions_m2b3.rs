@@ -58,7 +58,7 @@ fn sha256(bytes: &[u8]) -> String {
 /// The facts `themes/blog/theme.toml` declares, whatever the entry's origin.
 fn assert_blog_facts(blog: &Value) {
     assert_eq!(blog["author"], "FerriteCMS", "{blog}");
-    assert_eq!(blog["license"], "MIT", "{blog}");
+    assert_eq!(blog["license"], "AGPL-3.0-only", "{blog}");
     assert_eq!(
         blog["homepage"], "https://github.com/softberries/ferritecms",
         "{blog}"
