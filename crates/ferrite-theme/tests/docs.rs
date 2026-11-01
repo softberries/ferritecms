@@ -329,7 +329,7 @@ fn loads_cleanly() {
     assert_eq!(t.name(), "docs");
     assert!(Theme::embedded_names().contains(&"docs".to_owned()));
     let m = t.manifest();
-    assert_eq!(m.license.as_deref(), Some("MIT"));
+    assert_eq!(m.license.as_deref(), Some("AGPL-3.0-only"));
     assert_eq!(m.menus["primary"], "Primary navigation");
     assert_eq!(m.menus["footer"], "Footer");
     assert_eq!(m.settings["accent_color"].default, Some(json!("#2563eb")));
