@@ -123,6 +123,9 @@ fn page_sql(table: &TableSpec, after: bool) -> String {
     if let Export::OnlyKeys(_) = table.export {
         conds.push(format!("{key} = ANY({})", mark()));
     }
+    if let Export::RowsWithout(column) = table.export {
+        conds.push(format!("{} IS NULL", quote(column)));
+    }
     let limit = mark();
     let filter = if conds.is_empty() {
         String::new()

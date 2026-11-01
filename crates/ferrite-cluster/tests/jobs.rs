@@ -26,10 +26,10 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OAuthRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
     TestDb, backend_tests_spawning, fixtures::fixture_user, window::in_one_window,
@@ -691,6 +691,9 @@ impl Repos for FaultyRepos {
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self.inner.read().node_metrics()
     }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self.inner.read().oauth()
+    }
 }
 
 #[async_trait]
@@ -1306,6 +1309,7 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
         created_at: ago(40 * day),
         last_used_at: None,
         expires_at,
+        oauth_grant_id: None,
     };
     let tokens = repos.api_tokens();
     tokens

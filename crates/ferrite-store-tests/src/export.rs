@@ -106,8 +106,10 @@ pub async fn catalogue_is_fk_ordered(db: &TestDb) {
         }
         let spec = &TABLES[pos[table.as_str()]];
         // A load writes no row of a skipped table, so an exported row referencing one
-        // could never be loaded (A-Minor2).
-        if spec.is_exported() {
+        // could never be loaded (A-Minor2). The exception is a column whose set rows the
+        // export leaves out (`api_tokens.oauth_grant_id`).
+        let left_out = matches!(spec.export, Export::RowsWithout(c) if c == column);
+        if spec.is_exported() && !left_out {
             assert!(
                 TABLES[pos[referenced.as_str()]].is_exported(),
                 "{table}.{column} references {referenced}, which is not exported"

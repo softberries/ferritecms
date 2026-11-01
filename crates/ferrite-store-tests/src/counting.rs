@@ -26,9 +26,9 @@ use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
     LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo,
-    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
-    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo,
+    RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError,
+    Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::Value;
 
@@ -215,6 +215,9 @@ impl Repos for CountingRepos {
     }
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self.inner.read().node_metrics()
+    }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self.inner.read().oauth()
     }
 }
 
@@ -649,6 +652,9 @@ impl Repos for CountingTx {
     }
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self.tx.node_metrics()
+    }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self.tx.oauth()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

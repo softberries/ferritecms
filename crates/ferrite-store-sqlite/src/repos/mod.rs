@@ -23,6 +23,7 @@ mod job;
 mod menu;
 mod node;
 mod node_metrics;
+mod oauth;
 mod plugin;
 mod plugin_failure;
 
@@ -38,7 +39,7 @@ use async_trait::async_trait;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
-    NodeMetricsRepo, NodeRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
     RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
     StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
@@ -153,6 +154,9 @@ impl Repos for SqliteRepos {
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self
     }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -236,4 +240,5 @@ delegate_repos!(
     autosaves: AutosaveRepo,
     imports: ImportRepo,
     node_metrics: NodeMetricsRepo,
+    oauth: OAuthRepo,
 );

@@ -54,6 +54,11 @@ pub enum Export {
     /// and binary. The reader applies the filter, and the loader writes such rows over the
     /// target's.
     OnlyKeys(&'static [&'static str]),
+    /// Every row whose column (named here, a nullable column) is `NULL`. `api_tokens` is
+    /// exported without the OAuth access tokens (`oauth_grant_id` set): their grants are
+    /// not exported, so such a row could not be loaded, and a client must be authorised
+    /// again on the new site. The loader refuses a row with the column set.
+    RowsWithout(&'static str),
     /// Not exported: the data is transient or derived (P2). The reader refuses it.
     Skip,
 }
@@ -521,6 +526,82 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &["ip_hash", "user_agent"],
         export: Export::Skip,
     },
+    // The OAuth tables (M5, design 12 §4) hold short-lived or per-site authorisations: a
+    // client is authorised again on the new site, like a login (as `sessions`). They come
+    // before `api_tokens`, whose `oauth_grant_id` references `oauth_grants`.
+    TableSpec {
+        name: "oauth_clients",
+        columns: &[
+            ("id", Text),
+            ("kind", Text),
+            ("name", Text),
+            ("redirect_uris", Json),
+            ("client_uri", Text),
+            ("logo_uri", Text),
+            ("created_at", Ts),
+            ("fetched_at", Ts),
+            ("last_used_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["client_uri", "logo_uri", "fetched_at", "last_used_at"],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "oauth_requests",
+        columns: &[
+            ("id", Id),
+            ("client_id", Text),
+            ("redirect_uri", Text),
+            ("scopes", Json),
+            ("state", Text),
+            ("code_challenge", Text),
+            ("resource", Text),
+            ("created_at", Ts),
+            ("expires_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["state", "resource"],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "oauth_codes",
+        columns: &[
+            ("code_hash", Text),
+            ("client_id", Text),
+            ("user_id", Id),
+            ("redirect_uri", Text),
+            ("scopes", Json),
+            ("code_challenge", Text),
+            ("resource", Text),
+            ("created_at", Ts),
+            ("expires_at", Ts),
+            ("grant_id", Id),
+        ],
+        key: &["code_hash"],
+        self_ref: None,
+        nullable: &["resource", "grant_id"],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "oauth_grants",
+        columns: &[
+            ("id", Id),
+            ("client_id", Text),
+            ("user_id", Id),
+            ("scopes", Json),
+            ("refresh_hash", Text),
+            ("previous_hash", Text),
+            ("created_at", Ts),
+            ("last_used_at", Ts),
+            ("expires_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["previous_hash"],
+        export: Export::Skip,
+    },
     TableSpec {
         name: "api_tokens",
         columns: &[
@@ -532,11 +613,12 @@ pub static TABLES: &[TableSpec] = &[
             ("created_at", Ts),
             ("last_used_at", Ts),
             ("expires_at", Ts),
+            ("oauth_grant_id", Id),
         ],
         key: &["id"],
         self_ref: None,
-        nullable: &["last_used_at", "expires_at"],
-        export: Export::Rows,
+        nullable: &["last_used_at", "expires_at", "oauth_grant_id"],
+        export: Export::RowsWithout("oauth_grant_id"),
     },
     TableSpec {
         name: "rate_limits",
@@ -847,8 +929,11 @@ mod tests {
                 assert_eq!(t.key.len(), 1, "{}", t.name);
                 assert_eq!(t.column(t.key[0]), Some(ColType::Text), "{}", t.name);
             }
+            if let Export::RowsWithout(c) = t.export {
+                assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
+            }
         }
-        assert_eq!(TABLES.len(), 35);
+        assert_eq!(TABLES.len(), 39);
     }
 
     #[test]
@@ -867,6 +952,10 @@ mod tests {
                 "jobs",
                 "nodes",
                 "sessions",
+                "oauth_clients",
+                "oauth_requests",
+                "oauth_codes",
+                "oauth_grants",
                 "rate_limits",
                 "idempotency_keys",
                 "node_metrics",

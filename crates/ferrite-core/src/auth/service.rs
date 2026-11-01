@@ -731,6 +731,7 @@ impl AuthService {
             created_at: now,
             last_used_at: None,
             expires_at,
+            oauth_grant_id: None,
         };
         let tx = self.store.begin().await?;
         let done = async {

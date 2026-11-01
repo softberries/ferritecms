@@ -10,9 +10,10 @@ use ferrite_domain::{
     ContentType, Event, FailureBucket, IdemBegin, IdempotencyKey, ImportMapKind, ImportMapRow,
     ImportRun, ImportRunId, ImportRunState, InstalledPlugin, InstalledTheme, Job, JobId, JobLease,
     JobQuery, JobStatus, Media, Menu, MetricCounts, NewAudit, NewContent, NewEvent, NewJob,
-    NewNode, NewUser, Node, NodeId, OptionEntry, Page, RateHit, Redirect, RedirectId,
-    RedirectQuery, Revision, RevisionId, SearchQuery, Secret, SeriesBucket, SeriesStep, Session,
-    Taxonomy, Term, TermId, Timestamp, User, UserId, UserQuery,
+    NewNode, NewUser, Node, NodeId, OAuthClient, OAuthClientId, OAuthCode, OAuthGrant,
+    OAuthGrantId, OAuthPruned, OAuthRequest, OAuthRequestId, OptionEntry, Page, RateHit, Redirect,
+    RedirectId, RedirectQuery, Revision, RevisionId, SearchQuery, Secret, SeriesBucket, SeriesStep,
+    Session, Taxonomy, Term, TermId, Timestamp, User, UserId, UserQuery,
 };
 
 use uuid::Uuid;
@@ -197,6 +198,7 @@ pub trait Repos: Send + Sync {
     fn autosaves(&self) -> &dyn AutosaveRepo;
     fn imports(&self) -> &dyn ImportRepo;
     fn node_metrics(&self) -> &dyn NodeMetricsRepo;
+    fn oauth(&self) -> &dyn OAuthRepo;
 }
 
 /// Per-node minute metrics (`node_metrics`, M4-2 P35).
@@ -1041,21 +1043,109 @@ pub trait ApiTokenRepo: Send + Sync {
     async fn insert(&self, token: &ApiToken) -> Result<(), StoreError>;
     /// Fetches a token by its hash, expired or not (the caller checks `expires_at`).
     async fn get_by_hash(&self, token_hash: &str) -> Result<Option<ApiToken>, StoreError>;
-    /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) tokens of `user`, oldest first
-    /// (`created_at, id`).
+    /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) personal tokens of `user` (those
+    /// without an OAuth grant), oldest first (`created_at, id`).
     async fn list_for_user(&self, user: UserId) -> Result<Vec<ApiToken>, StoreError>;
-    /// Number of tokens `user` holds.
+    /// Number of personal tokens `user` holds (OAuth access tokens do not count).
     async fn count_for_user(&self, user: UserId) -> Result<u64, StoreError>;
     /// Moves `last_used_at` forward to `at`; `false` when the token is gone.
     async fn touch(&self, id: ApiTokenId, at: Timestamp) -> Result<bool, StoreError>;
     /// Deletes the token only if `user` owns it; `true` if a row was deleted.
     async fn delete(&self, user: UserId, id: ApiTokenId) -> Result<bool, StoreError>;
-    /// Deletes every token of `user`; returns the count.
+    /// Deletes every token of `user`, OAuth access tokens included; returns the count.
     async fn delete_for_user(&self, user: UserId) -> Result<u64, StoreError>;
+    /// Deletes the access tokens issued for `grant` (the grant stays); returns the count.
+    async fn delete_for_grant(&self, grant: OAuthGrantId) -> Result<u64, StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) tokens with
     /// `expires_at < now` (tokens without an expiry stay); returns the count. Callers
     /// loop until a batch comes back short (R5).
     async fn prune(&self, now: Timestamp, limit: u32) -> Result<u64, StoreError>;
+}
+
+/// The OAuth authorization server's records (`0013_oauth`, design 12 §3.2, §4): clients,
+/// pending authorization requests, authorization codes and grants. Hashes (of codes and
+/// refresh tokens) are SHA-256 hex strings the caller computes; they are stored and
+/// compared, never returned inside [`OAuthGrant`]. Text binds are NUL-checked (`Invalid`).
+/// "Expired" always means `expires_at <= now`, with `now` the caller's clock.
+#[async_trait]
+pub trait OAuthRepo: Send + Sync {
+    /// Inserts a client or replaces its `kind`, `name`, redirect URIs, `client_uri`,
+    /// `logo_uri` and `fetched_at`; `created_at` and `last_used_at` of a known client stay.
+    async fn upsert_client(&self, client: &OAuthClient) -> Result<(), StoreError>;
+    async fn get_client(&self, id: &OAuthClientId) -> Result<Option<OAuthClient>, StoreError>;
+    /// Moves `last_used_at` forward to `at`; `false` when the client is unknown.
+    async fn touch_client(&self, id: &OAuthClientId, at: Timestamp) -> Result<bool, StoreError>;
+
+    /// Stores a pending request; an unknown client is `ForeignKey`.
+    async fn insert_request(&self, request: &OAuthRequest) -> Result<(), StoreError>;
+    /// The request if it has not expired at `now`; it stays.
+    async fn get_request(
+        &self,
+        id: OAuthRequestId,
+        now: Timestamp,
+    ) -> Result<Option<OAuthRequest>, StoreError>;
+    /// Deletes and returns the request, if it has not expired at `now` (one statement, so
+    /// concurrent takers get it once).
+    async fn take_request(
+        &self,
+        id: OAuthRequestId,
+        now: Timestamp,
+    ) -> Result<Option<OAuthRequest>, StoreError>;
+
+    /// Stores a code (`grant_id` is ignored and stored as `NULL`); a stored hash is
+    /// `UniqueViolation`, an unknown client or user `ForeignKey`.
+    async fn insert_code(&self, code: &OAuthCode) -> Result<(), StoreError>;
+    /// Claims an unused, unexpired code in one statement: stamps `grant` (the id of the
+    /// grant the caller is about to insert) on it and returns it with `grant_id` set. A
+    /// second claim, or an expired or unknown code, gives `None`; the row stays for
+    /// [`code_by_hash_any`](Self::code_by_hash_any) until pruned.
+    async fn take_code(
+        &self,
+        code_hash: &str,
+        now: Timestamp,
+        grant: OAuthGrantId,
+    ) -> Result<Option<OAuthCode>, StoreError>;
+    /// The code however used or expired (reuse detection: its `grant_id` is the grant to
+    /// revoke).
+    async fn code_by_hash_any(&self, code_hash: &str) -> Result<Option<OAuthCode>, StoreError>;
+
+    /// Stores a grant with its current refresh token hash; a stored hash is
+    /// `UniqueViolation`, an unknown client or user `ForeignKey`.
+    async fn insert_grant(&self, grant: &OAuthGrant, refresh_hash: &str) -> Result<(), StoreError>;
+    /// The grant whose current refresh token has this hash.
+    async fn grant_by_refresh(&self, hash: &str) -> Result<Option<OAuthGrant>, StoreError>;
+    /// The grant whose refresh token this hash was rotated away from (replay detection).
+    async fn grant_by_previous(&self, hash: &str) -> Result<Option<OAuthGrant>, StoreError>;
+    /// Rotates the refresh token, only while `prev_hash` is still the current one (so of
+    /// two concurrent refreshes one wins): `refresh_hash = new_hash`, `previous_hash =
+    /// prev_hash`, `expires_at`, `last_used_at = now`. `false` when the grant is gone or
+    /// its current hash is another one.
+    async fn rotate_grant(
+        &self,
+        id: OAuthGrantId,
+        new_hash: &str,
+        prev_hash: &str,
+        expires_at: Timestamp,
+        now: Timestamp,
+    ) -> Result<bool, StoreError>;
+    /// Deletes the grant and, through the foreign key, its access tokens; `true` if it
+    /// existed.
+    async fn delete_grant(&self, id: OAuthGrantId) -> Result<bool, StoreError>;
+    /// Up to [`MAX_AUTH_LIST`](crate::MAX_AUTH_LIST) grants of `user`, newest first
+    /// (`created_at DESC, id DESC`).
+    async fn grants_for_user(&self, user: UserId) -> Result<Vec<OAuthGrant>, StoreError>;
+    /// Every grant, newest first, `limit` (1..=200) per page; `cursor` from a previous
+    /// page (tag [`GRANT_CURSOR_TAG`](crate::GRANT_CURSOR_TAG)).
+    async fn all_grants(
+        &self,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Page<OAuthGrant>, StoreError>;
+
+    /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) expired
+    /// requests, codes and grants each (a grant's access tokens go with it); returns the
+    /// counts. Callers loop until every count comes back short (R5).
+    async fn prune_expired(&self, now: Timestamp, limit: u32) -> Result<OAuthPruned, StoreError>;
 }
 
 /// Fixed-window rate-limit counters shared by every node (P5).
