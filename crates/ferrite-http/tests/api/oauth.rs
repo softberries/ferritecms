@@ -707,6 +707,23 @@ async fn oauth_token_refused_by_rest_api(api: Api) -> Api {
             "{r:?}"
         );
     }
+    // The public comment submit (optional credentials) refuses it too.
+    let r = api
+        .send(json_body(
+            builder(
+                Method::POST,
+                "/api/v1/content/post/0196f6b0-0000-7000-8000-000000000000/comments",
+            )
+            .header(header::AUTHORIZATION, format!("Bearer {access}")),
+            &json!({"body": "hi", "author_name": "A", "author_email": "a@example.com"}),
+        ))
+        .await;
+    r.assert_problem(401, "unauthenticated");
+    assert_eq!(
+        r.header("www-authenticate"),
+        Some("Bearer error=\"invalid_token\""),
+        "{r:?}"
+    );
     // A personal token still works.
     let plain = api.user("plain", Role::Editor, false).await;
     let personal = api.bearer(&plain, &["*"]).await;
@@ -980,6 +997,8 @@ async fn answer<S: tokio::io::AsyncWrite + Unpin>(io: &mut S, path: &str) {
             b"",
         ),
         "/to-landing" => http_response(302, &[("Location", "/landing.json")], b""),
+        "/multiple" => http_response(300, &[("Location", "/landing.json")], b""),
+        "/not-modified" => http_response(304, &[("Location", "/landing.json")], b""),
         "/big" => {
             // No Content-Length: 1 MiB of spaces, then the connection closes. The
             // fetcher must stop reading at 16 KiB.
@@ -1115,6 +1134,13 @@ async fn metadata_fetcher_enforces_egress_rules() {
         fetch("/missing").await,
         Err(FetchError::Failed(_))
     ));
+    // Only 301, 302, 303, 307 and 308 are followed; another 3xx is a failure.
+    for path in ["/multiple", "/not-modified"] {
+        assert!(
+            matches!(fetch(path).await, Err(FetchError::Failed(_))),
+            "{path}"
+        );
+    }
     // Not https at all, credentials, IP literals off the address rule.
     let strict = server.fetcher(is_public_ip);
     for url in [

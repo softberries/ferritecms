@@ -9,8 +9,9 @@
 //!   the addresses it returned and the connected peer is checked again. An IP-literal
 //!   host must pass the address rule itself (reqwest does not resolve it).
 //! * **URLs.** `https` only, without user information, for the first URL and every
-//!   redirect; at most [`MAX_REDIRECTS`] redirects (`Location` joined to the current
-//!   URL).
+//!   redirect; at most [`MAX_REDIRECTS`] redirects (301, 302, 303, 307 and 308;
+//!   `Location` joined to the current URL). Another 3xx is a failure, like any status
+//!   other than 2xx.
 //! * **Bounds.** One [`TIMEOUT`] (5 s) for the whole fetch, redirects and body included.
 //!   A `Content-Length` over [`MAX_METADATA_DOCUMENT`] (16 KiB) is refused before the
 //!   body is read; otherwise the body is read in chunks and the read stops as soon as
@@ -110,7 +111,7 @@ impl OAuthFetcher {
                 return Err(FetchError::Refused("address not allowed".into()));
             }
             let status = response.status();
-            if status.is_redirection() {
+            if matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
                 hops += 1;
                 if hops > MAX_REDIRECTS {
                     return Err(FetchError::Refused("too many redirects".into()));

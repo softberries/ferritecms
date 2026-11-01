@@ -31,7 +31,9 @@
 //!   `no-store`, a CSP without scripts, `X-Frame-Options: DENY`, every text escaped,
 //!   since core's message can quote what the request carried); never a redirect.
 //! * **The token endpoint** takes `application/x-www-form-urlencoded` only (else
-//!   `invalid_request`); a repeated parameter is `invalid_request`. Errors are RFC 6749
+//!   `invalid_request`); a repeated parameter, or more than [`MAX_FORM_FIELDS`], is
+//!   `invalid_request` (parsed in linear time and stopped there, before core counts the
+//!   per-IP limit). Errors are RFC 6749
 //!   §5.2 JSON with the status of [`OAuthError::status`]; a rate limit is `429` with
 //!   `Retry-After`.
 //! * **Registration** takes `application/json` (RFC 7591 §3.1); unknown members are
@@ -40,6 +42,7 @@
 //!   answers `200` whether or not the token was known (RFC 7009 §2.2); it is limited to
 //!   [`REVOKE_PER_IP`] a minute per IP (bucket `oauth:revoke`).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -401,14 +404,41 @@ fn content_type_is(headers: &HeaderMap, essence: &str) -> bool {
         .is_some_and(|v| v.trim().eq_ignore_ascii_case(essence))
 }
 
-/// A form body as `(name, value)` pairs; a name sent twice is `invalid_request`.
+/// Most parameters one form body may carry (the token endpoint uses at most eight).
+pub const MAX_FORM_FIELDS: usize = 32;
+
+/// The parameters the token and revocation endpoints read (named in errors).
+const FORM_PARAMETERS: [&str; 10] = [
+    "grant_type",
+    "code",
+    "redirect_uri",
+    "client_id",
+    "code_verifier",
+    "refresh_token",
+    "scope",
+    "resource",
+    "token",
+    "token_type_hint",
+];
+
+/// A form body as `(name, value)` pairs, in linear time: more than [`MAX_FORM_FIELDS`]
+/// parameters, or a name sent twice, is `invalid_request` (parsing stops there).
 fn form_fields(body: &[u8]) -> Result<Vec<(String, String)>, OAuthError> {
+    let mut seen = HashSet::new();
     let mut fields: Vec<(String, String)> = Vec::new();
     for (key, value) in url::form_urlencoded::parse(body) {
-        if fields.iter().any(|(k, _)| *k == key) {
+        if fields.len() == MAX_FORM_FIELDS {
             return Err(OAuthError::InvalidRequest(format!(
-                "the parameter {key} is repeated"
+                "the body has more than {MAX_FORM_FIELDS} parameters"
             )));
+        }
+        if !seen.insert(key.clone()) {
+            return Err(OAuthError::InvalidRequest(
+                match FORM_PARAMETERS.iter().find(|p| **p == key) {
+                    Some(name) => format!("the parameter {name} is repeated"),
+                    None => "a parameter is repeated".to_owned(),
+                },
+            ));
         }
         fields.push((key.into_owned(), value.into_owned()));
     }
@@ -482,6 +512,20 @@ struct RegistrationBody {
     response_types: Option<Vec<String>>,
 }
 
+/// What is wrong with a registration body serde refused, without echoing it.
+fn registration_error(e: &serde_path_to_error::Error<serde_json::Error>) -> String {
+    let path = e.path().to_string();
+    if !e.inner().is_data() {
+        "the body is not valid JSON".into()
+    } else if e.inner().to_string().starts_with("duplicate field") {
+        "the client metadata repeats a member".into()
+    } else if path == "." {
+        "the body is not a JSON object of client metadata".into()
+    } else {
+        format!("{path} has the wrong type")
+    }
+}
+
 async fn register(
     State(api): State<Arc<ApiState>>,
     client: ClientInfo,
@@ -495,14 +539,7 @@ async fn register(
     let mut de = serde_json::Deserializer::from_slice(&body);
     let input: RegistrationBody = match serde_path_to_error::deserialize(&mut de) {
         Ok(b) => b,
-        Err(e) => {
-            let path = e.path().to_string();
-            return meta(if path == "." {
-                "the body is not a JSON object of client metadata".into()
-            } else {
-                format!("{path} has the wrong type")
-            });
-        }
+        Err(e) => return meta(registration_error(&e)),
     };
     let registered = api
         .oauth
@@ -623,8 +660,54 @@ mod tests {
         assert_eq!(take(&mut f, "b").as_deref(), Some("+"));
         assert!(take(&mut f, "c").is_none());
         assert_eq!(
-            form_fields(b"a=1&a=2").unwrap_err().as_code(),
-            "invalid_request"
+            form_fields(b"a=1&a=2").unwrap_err().description(),
+            "a parameter is repeated"
         );
+        assert_eq!(
+            form_fields(b"code=1&grant_type=x&code=2")
+                .unwrap_err()
+                .description(),
+            "the parameter code is repeated"
+        );
+        let fields: Vec<String> = (0..MAX_FORM_FIELDS).map(|i| format!("k{i}=v")).collect();
+        assert_eq!(form_fields(fields.join("&").as_bytes()).unwrap().len(), 32);
+    }
+
+    /// A 64 KiB body of distinct short keys is refused at the 33rd, at once.
+    #[test]
+    fn many_parameters_are_refused_quickly() {
+        let mut body = String::new();
+        let mut i = 0;
+        while body.len() < 64 * 1024 {
+            body.push_str(&format!("k{i}=&"));
+            i += 1;
+        }
+        let started = std::time::Instant::now();
+        let err = form_fields(body.as_bytes()).unwrap_err();
+        assert_eq!(err.as_code(), "invalid_request");
+        assert!(err.description().contains("more than 32"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn registration_errors_do_not_echo_the_body() {
+        let error = |body: &str| {
+            let mut de = serde_json::Deserializer::from_str(body);
+            let e = serde_path_to_error::deserialize::<_, RegistrationBody>(&mut de).unwrap_err();
+            registration_error(&e)
+        };
+        assert_eq!(
+            error(r#"{"client_name": "a", "client_name": "b"}"#),
+            "the client metadata repeats a member"
+        );
+        assert_eq!(
+            error(r#"{"redirect_uris": "x"}"#),
+            "redirect_uris has the wrong type"
+        );
+        assert_eq!(
+            error("7"),
+            "the body is not a JSON object of client metadata"
+        );
+        assert_eq!(error("{"), "the body is not valid JSON");
     }
 }
