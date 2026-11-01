@@ -278,7 +278,7 @@ client) and `AuthService` learns about grant-bound tokens.
 - Tokens: 32 random bytes, sha-256 at rest; codes and refresh tokens the same. Constant-
   time comparison of hashes is unnecessary (lookups by hash), PKCE comparison is of hashes.
 - Consent page: `frame-ancestors 'none'` (the admin CSP), approval needs the session and
-  CSRF token, the request id is single-use and bound to the user who opened it.
+  CSRF token, and the request id is single-use (approve or deny consumes it).
 - Open redirect: the server only ever redirects to a URI registered for that client, and
   never before the client and URI are validated.
 - Metadata fetch: SSRF rules of the plugin egress client; the fetched JSON is size-capped
