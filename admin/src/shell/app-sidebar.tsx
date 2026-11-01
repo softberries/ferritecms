@@ -5,6 +5,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { FerriteMark } from "@/components/kit/ferrite-mark";
 import {
   Sidebar,
   SidebarContent,
@@ -79,12 +80,7 @@ export function AppSidebar({
               className="h-10 gap-2.5 px-1.5 group-data-[collapsible=icon]:p-0! hover:bg-transparent"
             >
               <Link to="/" onClick={close}>
-                <span
-                  aria-hidden="true"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary font-mono text-xs font-bold text-primary-foreground shadow-1"
-                >
-                  Fe
-                </span>
+                <FerriteMark className="size-7" />
                 <span className="flex min-w-0 flex-col leading-tight">
                   <span className="truncate text-sm font-semibold" title={siteTitle}>
                     {siteTitle}

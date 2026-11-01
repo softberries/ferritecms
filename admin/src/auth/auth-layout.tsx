@@ -8,6 +8,7 @@ import { cn } from "cn";
 import type { ComponentProps, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { metaQuery } from "@/api/meta";
+import { FerriteMark } from "@/components/kit/ferrite-mark";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -111,21 +112,6 @@ export function AuthLayout({ title, description, children, footer, icon }: AuthL
         </span>
       </footer>
     </div>
-  );
-}
-
-/** The product mark: "Fe" on ember (iron, the product's namesake; 11 §3). */
-export function FerriteMark({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-[0.6rem] bg-primary font-mono text-sm font-bold tracking-tight text-primary-foreground shadow-1",
-        className,
-      )}
-    >
-      Fe
-    </span>
   );
 }
 
