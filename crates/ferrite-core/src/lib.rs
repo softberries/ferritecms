@@ -42,7 +42,9 @@ pub use actor::{
 pub use auth::{
     AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,
 };
-pub use content::{AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
+pub use content::{
+    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, SiteSearch,
+};
 pub use error::{CoreError, RowError};
 pub use extensions::{
     EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,

@@ -62,6 +62,9 @@ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "
 # passed in through `new_with_client_config`, so its `webpki-roots` feature is not needed.
 rustls-acme = { version = "=0.15.4", default-features = false, features = ["ring"] }
 rust-embed = { version = "8.13", features = ["debug-embed"] }
+# The MCP endpoint (M5, design 12 §2): the official Rust SDK, server side only, stateless
+# Streamable HTTP; no client, auth or child-process transports.
+rmcp = { version = "=3.8.0", default-features = false, features = ["server", "macros", "schemars", "transport-streamable-http-server"] }
 # `aws-base` + `reqwest` + `ring` is `aws` without aws-lc-rs (M4-2 P28): SigV4 signing on
 # ring, TLS through reqwest on the process default (ring) provider. reqwest's TLS comes from
 # its own `rustls-no-provider` feature, which ferrite-media turns on by depending on it.
@@ -72,6 +75,8 @@ s3s-fs = "0.17"
 # (M2a-2b P24); `hmac`'s own `zeroize` only reaches its buffers.
 sha2 = { version = "0.11", features = ["zeroize"] }
 serde = { version = "1", features = ["derive"] }
+# MCP tool input schemas (rmcp's `schemars` feature uses 1.x).
+schemars = "1"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "migrate", "macros", "json", "uuid", "chrono"] }
 semver = { version = "1.0.28", features = ["serde"] }
 serde_json = "1"

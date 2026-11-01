@@ -142,6 +142,10 @@ pub struct Authenticated {
     /// The OAuth grant the bearer token was issued for (design 12 §3.1): such a token is
     /// for `/mcp` only. `None` for sessions and personal API tokens.
     pub oauth: Option<OAuthGrantId>,
+    /// The bearer token's name: what its owner called a personal token, or the client's
+    /// name for an OAuth access token (design 12 §5.1, the audit's `client`). `None` for
+    /// sessions.
+    pub token_name: Option<String>,
 }
 
 /// The credential a request used.
@@ -532,6 +536,7 @@ impl AuthService {
             user,
             via: Via::Session(session),
             oauth: None,
+            token_name: None,
         }))
     }
 
@@ -887,6 +892,7 @@ impl AuthService {
             user,
             via: Via::Token(token.id),
             oauth: token.oauth_grant_id,
+            token_name: Some(token.name),
         }))
     }
 

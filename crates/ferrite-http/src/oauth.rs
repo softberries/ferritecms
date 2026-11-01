@@ -121,13 +121,13 @@ pub fn router(api: Arc<ApiState>) -> Router {
 }
 
 /// The off switch: `404` for every route while `mcp.enabled` is off; `503` when the
-/// option cannot be read.
-async fn gate(State(api): State<Arc<ApiState>>, req: Request, next: Next) -> Response {
+/// option cannot be read. The MCP endpoint ([`crate::mcp`]) sits behind it too.
+pub(crate) async fn gate(State(api): State<Arc<ApiState>>, req: Request, next: Next) -> Response {
     match api.mcp_enabled().await {
         Ok(true) => next.run(req).await,
         Ok(false) => plain(StatusCode::NOT_FOUND, "not found\n"),
         Err(e) => {
-            tracing::error!(error = %e, "mcp.enabled unreadable; OAuth endpoint refused");
+            tracing::error!(error = %e, "mcp.enabled unreadable; OAuth or MCP request refused");
             let mut res = plain(StatusCode::SERVICE_UNAVAILABLE, "unavailable, retry\n");
             res.headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));

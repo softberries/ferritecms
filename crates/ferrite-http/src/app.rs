@@ -131,15 +131,17 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     shared_layers(&state, public(&state))
 }
 
-/// The whole site: `/api/v1` ([`api::router`](crate::api::router)) and the OAuth
+/// The whole site: `/api/v1` ([`api::router`](crate::api::router)), the OAuth
 /// endpoints ([`oauth::router`](crate::oauth::router): `/.well-known/oauth-*`,
-/// `/oauth/*`) in front of the public fallback, all inside the shared layers (catch-panic, compression, security
+/// `/oauth/*`) and the MCP endpoint ([`mcp::router`](crate::mcp::router): `/mcp`) in
+/// front of the public fallback, all inside the shared layers (catch-panic, compression, security
 /// headers, request span, client address). API responses also get `no-store`, and a
 /// panic in an API handler is a problem document (the API's own layers).
 pub fn build_site(state: Arc<AppState>, api: Arc<ApiState>) -> Router {
     let oauth = crate::oauth::router(api.clone());
+    let mcp = crate::mcp::router(api.clone());
     let (api, _) = crate::api::router(api);
-    shared_layers(&state, api.merge(oauth).merge(public(&state)))
+    shared_layers(&state, api.merge(oauth).merge(mcp).merge(public(&state)))
 }
 
 /// Plugin routes ([`plugin_route`]; `/_p/{plugin}/` too, since the wildcard does not

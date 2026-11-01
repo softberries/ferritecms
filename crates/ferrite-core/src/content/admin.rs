@@ -70,6 +70,21 @@ impl AdminQuery {
     }
 }
 
+/// A full-text search across content types ([`ContentService::search`]): what the MCP
+/// `site_search` tool asks (design 12 §5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteSearch {
+    /// The search text; blank is `InvalidField("q")`.
+    pub q: String,
+    /// Only these content types; empty: every type but media. `media` is refused
+    /// (media has its own list), and so is an unknown type (`InvalidField("types")`).
+    pub kinds: Vec<String>,
+    /// 1 through [`ferrite_domain::MAX_PAGE`].
+    pub limit: u32,
+    /// `next_cursor` of the previous page of the same search.
+    pub cursor: Option<String>,
+}
+
 /// Who wrote an item or a revision, as the admin shows it ([`ContentService::authors`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorRef {
@@ -232,6 +247,76 @@ impl ContentService {
             .into_iter()
             .filter(|i| {
                 i.kind == query.kind && statuses.contains(&i.status) && can_read(actor, i, now)
+            })
+            .collect();
+        Ok(Page {
+            items,
+            next_cursor: hits.next_cursor,
+        })
+    }
+
+    /// One page of the non-trash items matching `search.q` across `search.kinds`, best
+    /// match first, as [`list`](Self::list) with search text decides what `actor` may
+    /// see (`require_read(Content)`, the `readable_by` filter, then [`can_read`] per
+    /// item). See [`SiteSearch`] for the refusals.
+    pub async fn search(
+        &self,
+        actor: &Actor,
+        search: &SiteSearch,
+    ) -> Result<Page<ContentItem>, CoreError> {
+        require_read(actor, Area::Content)?;
+        let q = search.q.trim();
+        if q.is_empty() {
+            return Err(CoreError::invalid_field("q", "q must not be blank"));
+        }
+        if !(1..=ferrite_domain::MAX_PAGE).contains(&search.limit) {
+            return Err(CoreError::invalid_field(
+                "limit",
+                format!("limit must be 1..={}", ferrite_domain::MAX_PAGE),
+            ));
+        }
+        let repos = self.store.read();
+        let types: Vec<String> = repos
+            .types()
+            .list()
+            .await?
+            .into_iter()
+            .map(|t| t.name)
+            .filter(|name| name != MEDIA_KIND)
+            .collect();
+        let kinds = if search.kinds.is_empty() {
+            types
+        } else {
+            if let Some(bad) = search.kinds.iter().find(|k| !types.contains(k)) {
+                return Err(CoreError::invalid_field(
+                    "types",
+                    format!("{bad:?} is not a content type that can be searched"),
+                ));
+            }
+            search.kinds.clone()
+        };
+        let now = Timestamp::now();
+        let hits = repos
+            .search()
+            .search(&SearchQuery {
+                q: q.to_owned(),
+                kinds: kinds.clone(),
+                statuses: WALKED.to_vec(),
+                readable_by: readable_by(actor, now),
+                limit: search.limit,
+                cursor: search.cursor.clone(),
+            })
+            .await?;
+        let items = if hits.items.is_empty() {
+            Vec::new()
+        } else {
+            repos.content().get_many(&hits.items).await?
+        };
+        // The rows may have changed since the search read them.
+        let items = items
+            .into_iter()
+            .filter(|i| {
+                kinds.contains(&i.kind) && WALKED.contains(&i.status) && can_read(actor, i, now)
             })
             .collect();
         Ok(Page {

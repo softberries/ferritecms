@@ -3,7 +3,8 @@
 //! merged by [`build_site`]), the pure URL
 //! router ([`route`]), plugin wiring ([`plugins`]), the install pipeline
 //! ([`extensions`]), media upload staging ([`media`]), the page `<head>` ([`head`]) and
-//! the metrics registry with its `/metrics` app ([`metrics`]), the OAuth authorization
+//! the metrics registry with its `/metrics` app ([`metrics`]), the MCP endpoint `/mcp`
+//! ([`mcp`]), the OAuth authorization
 //! server's endpoints ([`oauth`]) and its metadata-document fetcher ([`oauth_fetch`]),
 //! and HSTS plus the https redirect app for the built-in TLS ([`tls`]).
 
@@ -15,6 +16,7 @@ pub mod head;
 pub mod import_blobs;
 pub mod import_fetch;
 pub mod mail;
+pub mod mcp;
 pub mod media;
 pub mod metrics;
 pub mod oauth;

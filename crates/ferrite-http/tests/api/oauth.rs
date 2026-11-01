@@ -176,7 +176,7 @@ fn assert_oauth_error(r: &Resp, status: u16, error: &str) {
 }
 
 /// A signed-in admin, a registered client and its tokens (`access`, `refresh`).
-async fn connected(api: &Api, scopes: &[&str]) -> (Client, String, String, String) {
+pub(crate) async fn connected(api: &Api, scopes: &[&str]) -> (Client, String, String, String) {
     api.user("boss", Role::Admin, false).await;
     let mut c = api.logged_in("boss").await;
     let client_id = registered(api).await;

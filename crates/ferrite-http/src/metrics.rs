@@ -88,6 +88,8 @@ pub enum RouteClass {
     /// `/.well-known/oauth-protected-resource…` and `/.well-known/oauth-authorization-server…`
     /// metadata documents.
     OAuth,
+    /// The MCP endpoint, `/mcp` (and anything under it).
+    Mcp,
     /// Health checks (`/healthz`, `/readyz`): load-balancer noise, left out of the
     /// dashboard's requests (ruling R3).
     Other,
@@ -95,7 +97,7 @@ pub enum RouteClass {
 
 impl RouteClass {
     /// Every class, in label order.
-    pub const ALL: [RouteClass; 8] = [
+    pub const ALL: [RouteClass; 9] = [
         RouteClass::Page,
         RouteClass::Api,
         RouteClass::Admin,
@@ -103,6 +105,7 @@ impl RouteClass {
         RouteClass::Plugin,
         RouteClass::Preview,
         RouteClass::OAuth,
+        RouteClass::Mcp,
         RouteClass::Other,
     ];
 
@@ -128,6 +131,8 @@ impl RouteClass {
             || path.starts_with("/.well-known/oauth-authorization-server")
         {
             RouteClass::OAuth
+        } else if under("/mcp") {
+            RouteClass::Mcp
         } else if path == "/healthz" || path == "/readyz" {
             RouteClass::Other
         } else {
@@ -145,6 +150,7 @@ impl RouteClass {
             RouteClass::Plugin => "plugin",
             RouteClass::Preview => "preview",
             RouteClass::OAuth => "oauth",
+            RouteClass::Mcp => "mcp",
             RouteClass::Other => "other",
         }
     }
@@ -795,6 +801,10 @@ mod tests {
             (&Method::POST, "/oauth/token", RouteClass::OAuth),
             (&get, "/oauth", RouteClass::OAuth),
             (&get, "/oauthx", RouteClass::Page),
+            (&Method::POST, "/mcp", RouteClass::Mcp),
+            (&get, "/mcp", RouteClass::Mcp),
+            (&get, "/mcp/x", RouteClass::Mcp),
+            (&get, "/mcpx", RouteClass::Page),
             (
                 &get,
                 "/.well-known/oauth-protected-resource/mcp",

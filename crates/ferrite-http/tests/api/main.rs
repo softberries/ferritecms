@@ -16,6 +16,7 @@ mod foundation;
 mod idempotency;
 mod import;
 mod jobs;
+mod mcp;
 mod media;
 mod media_filters;
 mod menu_locations;

@@ -7,7 +7,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use ferrite_core::{
     Actor, AdminQuery, ContentDraft, ContentService, ContentTypeService, CoreError, PermalinkRules,
-    Scopes,
+    Scopes, SiteSearch,
 };
 use ferrite_domain::{
     ContentId, ContentOrder, ContentStatus, NewUser, ParentFilter, Role, Term, TermId, UserId,
@@ -502,8 +502,73 @@ pub async fn revisions_need_edit_rights(db: &TestDb) {
         .unwrap();
 }
 
+/// `ContentService::search` (design 12 §5.2 `site_search`): across types, never media,
+/// with the list's visibility rules and its refusals.
+async fn site_search_across_types(db: &TestDb) {
+    let store = db.shared_store();
+    let svc = service(db);
+    let admin = actor(store.as_ref(), Role::Admin).await;
+    let author = actor(store.as_ref(), Role::Author).await;
+    let hidden = svc
+        .create(&admin, draft("post", "Quokka draft", "quokka secrets"))
+        .await
+        .unwrap();
+    let page = svc
+        .create(&admin, draft("page", "Quokka page", "quokka facts"))
+        .await
+        .unwrap();
+    svc.publish(&admin, page.id, page.version).await.unwrap();
+    let own = svc
+        .create(&author, draft("post", "My quokka", "quokka notes"))
+        .await
+        .unwrap();
+    let search = |q: &str, kinds: &[&str]| SiteSearch {
+        q: q.into(),
+        kinds: kinds.iter().map(|k| (*k).to_owned()).collect(),
+        limit: 50,
+        cursor: None,
+    };
+    let ids = |items: Vec<ferrite_domain::ContentItem>| -> HashSet<ContentId> {
+        items.into_iter().map(|i| i.id).collect()
+    };
+    let all = svc.search(&admin, &search("quokka", &[])).await.unwrap();
+    assert_eq!(ids(all.items), HashSet::from([hidden.id, page.id, own.id]));
+    // The author sees the published page and its own draft, not the admin's draft.
+    let theirs = svc.search(&author, &search("quokka", &[])).await.unwrap();
+    assert_eq!(ids(theirs.items), HashSet::from([page.id, own.id]));
+    let pages = svc
+        .search(&admin, &search("quokka", &["page"]))
+        .await
+        .unwrap();
+    assert_eq!(ids(pages.items), HashSet::from([page.id]));
+    // Refusals.
+    for (s, field) in [
+        (search("  ", &[]), "q"),
+        (search("quokka", &["media"]), "types"),
+        (search("quokka", &["nope"]), "types"),
+        (
+            SiteSearch {
+                limit: 0,
+                ..search("quokka", &[])
+            },
+            "limit",
+        ),
+    ] {
+        match svc.search(&admin, &s).await {
+            Err(CoreError::InvalidField { field: f, .. }) => assert_eq!(f, field),
+            other => panic!("{s:?}: {other:?}"),
+        }
+    }
+    let no_scope = admin.with_scopes(Scopes::from_strs(&["media:read".into()]).unwrap());
+    assert!(matches!(
+        svc.search(&no_scope, &search("quokka", &[])).await,
+        Err(CoreError::Forbidden("content:read"))
+    ));
+}
+
 backend_tests!(
     admin_list_filters_and_search,
     revisions_list_get_restore,
-    revisions_need_edit_rights
+    revisions_need_edit_rights,
+    site_search_across_types,
 );

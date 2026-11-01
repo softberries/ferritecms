@@ -175,10 +175,56 @@ async fn test_mail_falls_back_when_the_title_read_fails(db: &TestDb) {
     assert_eq!(sent[0].subject, "Test e-mail from Test Site");
 }
 
+/// Design 12 §5.1: any actor records its own MCP write as `mcp.<tool>` with the
+/// client's name; the action cannot leave `mcp.`.
+async fn mcp_audit_rows_name_the_client(db: &TestDb) {
+    let store = db.shared_store();
+    let system = SystemService::new(store.clone());
+    let contributor = actor(store.as_ref(), Role::Contributor).await;
+    let narrow = contributor.with_scopes(scopes(&["content:read"]));
+    system
+        .audit_mcp(
+            &narrow,
+            "content_create",
+            ("content", Some("abc".into())),
+            "Claude",
+            json!({"type": "post"}),
+        )
+        .await
+        .unwrap();
+    let rows = store
+        .read()
+        .audit()
+        .list(&ferrite_domain::AuditQuery::first(10))
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].action, "mcp.content_create");
+    assert_eq!(rows[0].actor_id, Some(contributor.user));
+    assert_eq!(rows[0].target_kind, "content");
+    assert_eq!(rows[0].target_id.as_deref(), Some("abc"));
+    assert_eq!(rows[0].details, json!({"type": "post", "client": "Claude"}));
+    for bad in [
+        "",
+        "user.delete",
+        "a.b",
+        "Content",
+        "x".repeat(65).as_str(),
+        "_x",
+    ] {
+        let r = system
+            .audit_mcp(&narrow, bad, ("content", None), "Claude", json!({}))
+            .await;
+        assert!(matches!(r, Err(CoreError::Invalid(_))), "{bad}: {r:?}");
+    }
+}
+
 backend_tests!(
     system_reads_need_manage_system,
     node_meta_errors_are_scrubbed_on_read,
     test_mail_falls_back_when_the_title_read_fails,
+    mcp_audit_rows_name_the_client,
 );
 
 /// Review M1: two nodes (Postgres `peer()`; SQLite one store, whose writes are

@@ -274,7 +274,7 @@ fn check_csrf(parts: &Parts, api: &ApiState, who: &Authenticated) -> Result<(), 
 }
 
 /// The token of `Authorization: Bearer <token>` (scheme case-insensitive).
-fn bearer_token(value: &HeaderValue) -> Option<&str> {
+pub(crate) fn bearer_token(value: &HeaderValue) -> Option<&str> {
     let (scheme, token) = value.to_str().ok()?.trim().split_once(' ')?;
     let token = token.trim();
     (scheme.eq_ignore_ascii_case("bearer")
@@ -325,6 +325,7 @@ async fn logged_in(api: &ApiState, headers: &HeaderMap, issued: IssuedSession) -
         user: issued.user,
         via: Via::Session(issued.session),
         oauth: None,
+        token_name: None,
     };
     let user = MeDto::of(&api.auth, &who, api.mail.is_some());
     let csrf_token = user.csrf_token.clone().unwrap_or_default();
