@@ -29,6 +29,9 @@ const SMALL_LIMIT: usize = 8 * 1024 * 1024;
 const PART_SIZE: usize = 8 * 1024 * 1024;
 /// Parts in flight at once (bounds memory to roughly this many parts).
 const PART_CONCURRENCY: usize = 2;
+/// How long a failed or cancelled upload waits for its parts in flight before the abort
+/// (at most `PART_CONCURRENCY` parts; the S3 client's read timeout is 30 s too).
+const PART_DRAIN: Duration = Duration::from_secs(30);
 /// How much of the payload is inspected for MIME sniffing.
 const SNIFF_LEN: usize = 8 * 1024;
 
@@ -660,10 +663,19 @@ impl StagingGuard {
     }
 
     async fn cleanup(store: Arc<dyn ObjectStore>, tmp: Path, writer: Option<WriteMultipart>) {
-        if let Some(writer) = writer
-            && let Err(e) = writer.abort().await
-        {
-            tracing::warn!(key = %tmp, error = %e, "failed to abort multipart upload");
+        if let Some(mut writer) = writer {
+            // Let the parts already sent land first: S3 may keep a part that lands after
+            // the abort. A failed part is done too; the wait is bounded by `PART_DRAIN`.
+            let drained = tokio::time::timeout(PART_DRAIN, async {
+                while writer.wait_for_capacity(0).await.is_err() {}
+            })
+            .await;
+            if drained.is_err() {
+                tracing::warn!(key = %tmp, "parts still in flight when the upload was aborted");
+            }
+            if let Err(e) = writer.abort().await {
+                tracing::warn!(key = %tmp, error = %e, "failed to abort multipart upload");
+            }
         }
         match store.delete(&tmp).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
@@ -926,6 +938,140 @@ mod tests {
                 path_prefix: "/_media".into(),
             },
         }
+    }
+
+    /// An in-memory store whose multipart parts land 200 ms after they are sent, on their
+    /// own task, as a server finishes a request whose body it has even when the client
+    /// gives up on it. Each landed part and each abort is logged in order.
+    #[derive(Debug, Default)]
+    struct SlowParts {
+        inner: InMemory,
+        log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl std::fmt::Display for SlowParts {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("SlowParts")
+        }
+    }
+
+    #[derive(Debug)]
+    struct SlowUpload {
+        inner: Box<dyn MultipartUpload>,
+        log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MultipartUpload for SlowUpload {
+        fn put_part(&mut self, data: PutPayload) -> object_store::UploadPart {
+            let part = self.inner.put_part(data);
+            let log = self.log.clone();
+            let landing = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let res = part.await;
+                log.lock().unwrap().push("part");
+                res
+            });
+            Box::pin(async move { landing.await.expect("part task") })
+        }
+
+        async fn complete(&mut self) -> object_store::Result<PutResult> {
+            self.inner.complete().await
+        }
+
+        async fn abort(&mut self) -> object_store::Result<()> {
+            self.log.lock().unwrap().push("abort");
+            self.inner.abort().await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for SlowParts {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            let inner = self.inner.put_multipart_opts(location, opts).await?;
+            Ok(Box::new(SlowUpload {
+                inner,
+                log: self.log.clone(),
+            }))
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    /// A failed upload aborts only after the parts already sent have landed: S3 may keep
+    /// a part that lands after the abort (the `cancelled_upload_cleans_staging::s3` flake).
+    #[tokio::test]
+    async fn abort_waits_for_parts_in_flight() {
+        let slow = Arc::new(SlowParts::default());
+        let store = MediaStore {
+            inner: slow.clone(),
+            prefix: String::new(),
+            public: PublicUrlMode::ServeViaApp {
+                path_prefix: "/_media".into(),
+            },
+        };
+        // One full part (sent at the switch to multipart), one more byte, then an error.
+        let items: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from(vec![1u8; SMALL_LIMIT])),
+            Ok(Bytes::from_static(b"x")),
+            Err(std::io::Error::other("boom")),
+        ];
+        let err = store
+            .put_stream(futures::stream::iter(items), u64::MAX)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MediaError::Io(_)), "{err:?}");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(*slow.log.lock().unwrap(), ["part", "abort"]);
     }
 
     /// R18: a placement the store refuses although the final key is absent fails loudly
