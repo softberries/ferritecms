@@ -4,7 +4,7 @@ version     = "0.1.0"
 publisher   = "ferritecms.dev"
 description = "Open Graph site name and locale, Twitter cards, article tags, JSON-LD and verification metas"
 world       = "ferrite:plugin/plugin@0.1.0"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 
 # Adds to core's head what core does not emit, and never repeats a tag core (or an
 # earlier plugin) already put there. Both options are answered by the host: `site.url`

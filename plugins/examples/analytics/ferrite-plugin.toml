@@ -4,7 +4,7 @@ version     = "0.1.0"
 publisher   = "ferritecms.dev"
 description = "Privacy-friendly page-view statistics: counts per day, path and referrer host, with a stats page for chosen users"
 world       = "ferrite:plugin/plugin@0.1.0"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 
 # Counts page views from the batched `request.served` events (no cookies, no IP, no user
 # agent, no query string) into one JSON blob per UTC day in the plugin's own storage (the

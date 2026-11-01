@@ -10,8 +10,10 @@ and a fixed set of helpers, and anything that needs logic belongs in a plugin.
 
 ## The built-in themes
 
-Three themes are compiled into the binary. Each is MIT-licensed, uses plain CSS with no
-build step, and follows the visitor's light or dark setting.
+Three themes are compiled into the binary. Each uses plain CSS with no build step and
+follows the visitor's light or dark setting. They are licensed like FerriteCMS
+(`AGPL-3.0-only`), with a permission to copy them into a theme of your own under any license
+(`LICENSE-EXCEPTION.md` in the repository).
 
 | Theme | For | Settings |
 |---|---|---|

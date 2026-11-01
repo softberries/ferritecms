@@ -8,7 +8,7 @@ name        = "admin-e2e"
 version     = "0.1.0"
 publisher   = "ferritecms.dev"
 description = "Adds a greeting meta tag to every page. Used by the admin's end-to-end tests."
-license     = "MIT"
+license     = "AGPL-3.0-only"
 homepage    = "https://example.com/admin-e2e"
 world       = "ferrite:plugin/plugin@0.1.0"
 

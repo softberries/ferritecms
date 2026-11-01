@@ -4,7 +4,7 @@
 name        = "business"
 version     = "0.1.0"
 author      = "FerriteCMS"
-license     = "MIT"
+license     = "AGPL-3.0-only"
 homepage    = "https://github.com/softberries/ferritecms"
 description = "A front page with a hero, feature cards and news, and a contact page for the contact-form plugin. Light and dark modes."
 
