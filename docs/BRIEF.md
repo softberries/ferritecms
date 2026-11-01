@@ -265,7 +265,7 @@ ferritecms/
 
 ## 8. Business model
 
-- Open-source core (license TBD: AGPL/MPL vs MIT/Apache — decide before first release).
+- Open-source core, licensed `MIT OR Apache-2.0` (decided 2026-11-01, before the first release).
 - Managed hosting: tiny per-site footprint → high density, good margins.
 - Plugin registry with signing + verified publishers (paid publisher accounts / revenue share).
 - Paid WordPress → FerriteCMS migrations for agencies.

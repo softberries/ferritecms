@@ -2,7 +2,8 @@
 # Packs the plugins release asset (M4-3a P47): `ferrite-plugins-<VERSION>.tar.gz` in
 # OUT_DIR, holding three folders at its top level, one per example plugin:
 #
-#   seo/ analytics/ contact-form/   each with ferrite-plugin.toml, <name>.wasm, README.md
+#   seo/ analytics/ contact-form/   each with ferrite-plugin.toml, <name>.wasm, README.md,
+#                                   LICENSE* (when present)
 #
 # so that `ferrite plugin check|install --dir <folder>` works on an extracted folder as it
 # is (the plugin READMEs' Install sections describe this layout). The wasm files are the
@@ -71,6 +72,9 @@ for entry in "${plugins[@]}"; do
   fi
   mkdir "$stage/$plugin"
   cp "$src/ferrite-plugin.toml" "$src/README.md" "$stage/$plugin/"
+  for f in LICENSE*; do
+    if [ -f "$f" ]; then cp "$f" "$stage/$plugin/"; fi
+  done
   cp "$wasm_dir/$wasm" "$stage/$plugin/$plugin.wasm"
   chmod 0644 "$stage/$plugin"/*
 done
