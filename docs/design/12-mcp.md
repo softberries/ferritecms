@@ -43,7 +43,8 @@ both speak HTTP), plugins adding MCP tools (later: a WIT extension, see §10).
 - **Origin check** (DNS rebinding, MCP security best practice): a request carrying an
   `Origin` header that is not the site's origin is refused (`403`). Requests without
   `Origin` (server-side clients) pass.
-- **Body limit** 8 MiB (base64 media uploads, §5.2); responses are JSON.
+- **Body limit** 9 MiB (a 6 MiB media upload as base64 plus the JSON envelope, §5.2);
+  responses are JSON.
 - Server info: name `FerriteCMS`, the binary version, and `instructions`: a short text that
   tells the model what the site is (title, URL, content types), how content is written
   (Markdown in, Markdown out), that changes are live, and to ask before destructive steps.
