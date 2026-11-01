@@ -91,7 +91,9 @@ secrets): authorization code with **PKCE S256** (required), refresh tokens with 
 | `POST /oauth/register` | RFC 7591 | dynamic client registration, public clients only |
 | `POST /oauth/revoke` | RFC 7009 | revokes a refresh token (the whole grant) or an access token |
 
-`<site>` is `site.url` without a trailing slash; the issuer has no path.
+`<site>` is `site.url` without a trailing slash and is the issuer. When `site.url` has a
+path, the metadata is also served at the RFC 8414 path-inserted address
+(`/.well-known/oauth-authorization-server/<path>`).
 
 **Clients** are known in two ways (MCP client registration, in the spec's order):
 
