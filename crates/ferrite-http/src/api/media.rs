@@ -117,7 +117,7 @@ pub struct MediaListParams {
 
 /// The items with their uploaders (one author lookup for all of them). Items reference
 /// existing users (foreign keys), so a missing uploader is a `500`.
-async fn dtos(
+pub(crate) async fn dtos(
     api: &ApiState,
     actor: &Actor,
     items: Vec<MediaItem>,
@@ -136,7 +136,7 @@ async fn dtos(
         .collect()
 }
 
-async fn dto(api: &ApiState, actor: &Actor, m: MediaItem) -> Result<MediaDto, Problem> {
+pub(crate) async fn dto(api: &ApiState, actor: &Actor, m: MediaItem) -> Result<MediaDto, Problem> {
     dtos(api, actor, vec![m])
         .await?
         .pop()
@@ -180,6 +180,19 @@ async fn write_problem(api: &ApiState, actor: &Actor, id: ContentId, e: CoreErro
     }
 }
 
+/// A `cursor` the store could not decode is a `400` naming it (the store decodes it again).
+pub(crate) fn check_cursor(query: &MediaQuery) -> Result<(), Problem> {
+    let Some(c) = &query.cursor else {
+        return Ok(());
+    };
+    let valid = if query.search_text().is_some() {
+        ferrite_store::rank_cursor(c).is_ok()
+    } else {
+        ferrite_store::content_cursor(ContentOrder::UpdatedDesc, c).is_ok()
+    };
+    if valid { Ok(()) } else { Err(invalid_cursor()) }
+}
+
 #[utoipa::path(
     get,
     path = "/media",
@@ -209,17 +222,7 @@ pub async fn list_media(
         kind: params.kind.map(MediaKind::from),
         trash: params.trash,
     };
-    if let Some(c) = &query.cursor {
-        // The store decodes it again; decoding here makes a bad one a 400 naming it.
-        let valid = if query.search_text().is_some() {
-            ferrite_store::rank_cursor(c).is_ok()
-        } else {
-            ferrite_store::content_cursor(ContentOrder::UpdatedDesc, c).is_ok()
-        };
-        if !valid {
-            return Err(invalid_cursor());
-        }
-    }
+    check_cursor(&query)?;
     let page = api.media_service.list(&who.actor, query).await?;
     Ok(Json(MediaList {
         items: dtos(&api, &who.actor, page.items).await?,

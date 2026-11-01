@@ -1771,6 +1771,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "axum",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "ferrite-cache",

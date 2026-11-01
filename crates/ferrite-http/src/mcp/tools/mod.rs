@@ -10,7 +10,12 @@
 //! [`FerriteMcp::audit`]; reads are not audited.
 
 pub mod content;
+pub mod media;
+pub mod menus;
+pub mod redirects;
 pub mod site;
+pub mod terms;
+pub mod types;
 
 use serde_json::Value;
 

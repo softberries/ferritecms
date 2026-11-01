@@ -42,6 +42,7 @@
 //! | `Busy` | 503 | `busy` + `Retry-After: 5` |
 //! | `Idle { secs }` | 400 | `malformed-body` (`errors[0].field` = `file`; no bytes for `media.upload_idle_timeout`) |
 //! | `Body(_)` | 413 / 400 | `too-large` (over the route limit) / `malformed-body` |
+//! | `Unreachable` | 422 | `validation` (`errors[0].field` = `url`; MCP `media_upload` by URL only: refused address or scheme, unreachable, not 200, timeout) |
 //! | `Media(_)`, `Task(_)` | 500 | `internal` |
 //!
 //! **Every 401 carries `WWW-Authenticate`** (RFC 9110 §11.6.1): `Bearer` unless the
@@ -461,6 +462,11 @@ impl From<UploadError> for Problem {
                 .with_error(Some("file"), detail)
             }
             UploadError::Body(body) => body_error(body),
+            UploadError::Unreachable => {
+                let detail = "the URL could not be fetched: it must be a public https address that \
+                              answers 200 within 30 seconds (redirects stay on https)";
+                Self::validation(detail).with_error(Some("url"), detail)
+            }
             UploadError::Media(_) | UploadError::Task(_) => {
                 tracing::error!(error = %e, "media upload failed");
                 Self::internal()

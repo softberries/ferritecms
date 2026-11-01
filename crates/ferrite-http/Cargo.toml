@@ -16,6 +16,7 @@ test-seams = ["ferrite-core/test-seams"]
 [dependencies]
 arc-swap.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true

@@ -18,6 +18,10 @@
 //! A file that cannot be fetched (refused, unreachable, not 2xx, too many redirects) is
 //! missing (`Ok(None)`): the import reports it and keeps the old URL in the items. The
 //! size cap is the import's (`max`), also enforced while staging.
+//!
+//! The MCP `media_upload` tool fetches a URL with the same client and rules but `https`
+//! only ([`HttpSource::for_upload`]): `http` is refused as the first URL and a redirect
+//! to it as any other refused hop.
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -35,6 +39,8 @@ use crate::plugins::egress::{self, MAX_REDIRECTS, MEDIA_TIMEOUT, is_public_ip};
 pub struct HttpSource {
     client: reqwest::Client,
     allow_ip: fn(IpAddr) -> bool,
+    /// Plain `http` is refused (uploads by URL); the import allows it.
+    https_only: bool,
     /// `ferrite/<version> import`.
     agent: String,
 }
@@ -42,19 +48,30 @@ pub struct HttpSource {
 impl HttpSource {
     /// The production source: only public addresses.
     pub fn new(version: &str) -> Result<Self, String> {
-        Self::with_rule(version, is_public_ip)
+        Self::with_rule(version, is_public_ip, false)
+    }
+
+    /// The source of uploads by URL (MCP `media_upload`): only public addresses and
+    /// only `https`.
+    pub fn for_upload(version: &str) -> Result<Self, String> {
+        Self::with_rule(version, is_public_ip, true)
     }
 
     /// Test seam: every address allowed, so tests can serve files from 127.0.0.1.
     #[cfg(feature = "test-seams")]
     pub fn allowing_private(version: &str) -> Result<Self, String> {
-        Self::with_rule(version, |_| true)
+        Self::with_rule(version, |_| true, false)
     }
 
-    fn with_rule(version: &str, allow_ip: fn(IpAddr) -> bool) -> Result<Self, String> {
+    fn with_rule(
+        version: &str,
+        allow_ip: fn(IpAddr) -> bool,
+        https_only: bool,
+    ) -> Result<Self, String> {
         Ok(Self {
             client: egress::media_client(allow_ip)?,
             allow_ip,
+            https_only,
             agent: format!("ferrite/{version} import"),
         })
     }
@@ -62,10 +79,12 @@ impl HttpSource {
     /// Whether `url` may be requested: `http(s)`, no credentials, a host, and an IP
     /// literal only when the address rule allows it.
     fn allowed(&self, url: &Url) -> bool {
-        if !matches!(url.scheme(), "http" | "https")
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
+        let scheme_ok = match url.scheme() {
+            "https" => true,
+            "http" => !self.https_only,
+            _ => false,
+        };
+        if !scheme_ok || !url.username().is_empty() || url.password().is_some() {
             return false;
         }
         match url.host() {
@@ -173,6 +192,17 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// An upload source refuses plain `http` as well; the import's source does not.
+    #[test]
+    fn upload_urls_are_https_only() {
+        let source = HttpSource::for_upload("0.0.0").unwrap();
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(source.allowed(&u("https://cdn.example.org/a.png")));
+        assert!(!source.allowed(&u("http://cdn.example.org/a.png")));
+        assert!(!source.allowed(&u("https://127.0.0.1/a.png")));
+        assert!(!source.allowed(&u("https://user:pw@example.org/a.png")));
+    }
 
     #[test]
     fn urls_follow_the_address_and_scheme_rules() {

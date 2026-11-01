@@ -12,6 +12,10 @@
 //! read. A body over `max_upload` is cut while it streams; a cut, a client that goes
 //! away and a refused type leave nothing stored (the store aborts and removes its
 //! staging object).
+//! The MCP `media_upload` tool stages through the same pipeline and slots:
+//! [`Uploader::stage_bytes`] for base64 data and [`Uploader::stage_url`] for a file
+//! fetched with the importer's SSRF-checked client ([`HttpSource::for_upload`]: `https`
+//! only, public addresses, 30 s, the size cap enforced while streaming).
 //! An upload that receives no bytes for the idle timeout (`media.upload_idle_timeout`,
 //! default [`DEFAULT_IDLE_TIMEOUT`]) is aborted the same way and frees its slot, so slow
 //! clients cannot hold the node's slots.
@@ -20,14 +24,16 @@
 
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use axum::extract::multipart::{Field, MultipartError};
+use bytes::Bytes;
 use ferrite_domain::{Artifact, ArtifactKind, Timestamp};
+use ferrite_import_wp::{ImportError, run::MediaSource};
 use ferrite_media::{
     MediaError, MediaStore, VariantSpec, default_variants,
     ingest::{StagedFile, stage_stream},
@@ -36,7 +42,10 @@ use ferrite_media::{
 #[cfg(doc)]
 use ferrite_media::{ingest::HEAD_BYTES, svg::MAX_SVG_BYTES};
 use ferrite_theme::Theme;
+use futures::StreamExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::import_fetch::HttpSource;
 
 /// Uploads streaming at once per node (P9); one more is [`UploadError::Busy`].
 pub const MEDIA_UPLOAD_SLOTS: usize = 8;
@@ -80,6 +89,11 @@ pub enum UploadError {
     /// The sanitiser's blocking task panicked or was cancelled.
     #[error("internal error: {0}")]
     Task(String),
+    /// A file named by URL could not be fetched: a refused address or scheme, an
+    /// unreachable host, a status other than 2xx, too many redirects, a timeout or a
+    /// body that broke. Nothing was stored.
+    #[error("the URL could not be fetched")]
+    Unreachable,
 }
 
 /// A staged file, ready for [`NewUpload`](ferrite_core::NewUpload).
@@ -108,6 +122,11 @@ pub struct Uploader {
     idle: Duration,
     slots: Arc<Semaphore>,
     started: AtomicU64,
+    /// The client for files named by URL, built on first use.
+    remote: OnceLock<Result<HttpSource, String>>,
+    /// Test seam: the client allows loopback and plain `http`.
+    #[cfg(feature = "test-seams")]
+    private_fetch: bool,
 }
 
 /// Why the file stream given to the store ended early.
@@ -127,7 +146,18 @@ impl Uploader {
             idle: DEFAULT_IDLE_TIMEOUT,
             slots: Arc::new(Semaphore::new(MEDIA_UPLOAD_SLOTS)),
             started: AtomicU64::new(0),
+            remote: OnceLock::new(),
+            #[cfg(feature = "test-seams")]
+            private_fetch: false,
         }
+    }
+
+    /// Test seam (`test-seams`): files named by URL may come from loopback addresses and
+    /// over plain `http`, so tests can serve them from 127.0.0.1.
+    #[cfg(feature = "test-seams")]
+    pub fn with_private_fetch(mut self) -> Self {
+        self.private_fetch = true;
+        self
     }
 
     /// Aborts an upload that receives nothing for `idle` (`media.upload_idle_timeout`).
@@ -173,15 +203,38 @@ impl Uploader {
         self.started.load(Ordering::Relaxed)
     }
 
-    /// Stages the `file` part `field`: takes a slot (else `Busy`), then
-    /// [`stage_stream`]s the field with the idle timeout applied to every chunk.
-    pub async fn stage(&self, field: Field<'_>) -> Result<StagedUpload, UploadError> {
+    /// Takes an upload slot (else `Busy`).
+    fn take_slot(&self) -> Result<OwnedSemaphorePermit, UploadError> {
         let slot = self
             .slots
             .clone()
             .try_acquire_owned()
             .map_err(|_| UploadError::Busy)?;
         self.started.fetch_add(1, Ordering::Relaxed);
+        Ok(slot)
+    }
+
+    /// [`stage_stream`]s `stream` as file `original_name` (at most `cap` bytes) and
+    /// keeps `slot` with the result.
+    async fn stage_slot<S>(
+        &self,
+        slot: OwnedSemaphorePermit,
+        original_name: &str,
+        stream: S,
+        cap: u64,
+    ) -> Result<StagedUpload, MediaError>
+    where
+        S: futures::Stream<Item = Result<Bytes, std::io::Error>> + Send + Unpin,
+    {
+        let file =
+            stage_stream(&self.media, original_name, stream, cap, self.strip_metadata).await?;
+        Ok(staged(file, slot))
+    }
+
+    /// Stages the `file` part `field`: takes a slot (else `Busy`), then
+    /// [`stage_stream`]s the field with the idle timeout applied to every chunk.
+    pub async fn stage(&self, field: Field<'_>) -> Result<StagedUpload, UploadError> {
+        let slot = self.take_slot()?;
         let original_name = field.file_name().unwrap_or_default().to_owned();
         // The stager sees an I/O error and aborts; why the stream failed is kept for the
         // answer.
@@ -201,20 +254,107 @@ impl Uploader {
                 Some((Err(io), (field, failure)))
             },
         );
-        let result = stage_stream(
-            &self.media,
-            &original_name,
-            Box::pin(stream),
-            self.max_upload,
-            self.strip_metadata,
-        )
-        .await;
+        let result = self
+            .stage_slot(slot, &original_name, Box::pin(stream), self.max_upload)
+            .await;
         match (result, failure) {
-            (Ok(file), _) => Ok(staged(file, slot)),
+            (Ok(file), _) => Ok(file),
             (Err(_), Some(Failure::Body(body))) => Err(UploadError::Body(body)),
             (Err(_), Some(Failure::Idle)) => Err(self.idle_error()),
             (Err(e), None) => Err(e.into()),
         }
+    }
+
+    /// Stages `bytes` already in memory as file `original_name`: the same slots, type
+    /// sniffing, SVG sanitising and metadata stripping as [`stage`](Self::stage), with
+    /// the size cap `limit.min(max_upload)`.
+    pub async fn stage_bytes(
+        &self,
+        bytes: Bytes,
+        original_name: &str,
+        limit: u64,
+    ) -> Result<StagedUpload, UploadError> {
+        let slot = self.take_slot()?;
+        let cap = limit.min(self.max_upload);
+        let stream = futures::stream::iter([Ok::<_, std::io::Error>(bytes)]);
+        Ok(self.stage_slot(slot, original_name, stream, cap).await?)
+    }
+
+    /// Fetches `url` (`https` only, public addresses, redirects bounded, 30 s in all;
+    /// see [`HttpSource::for_upload`]) and stages the body as file `original_name`, with
+    /// the size cap `limit.min(max_upload)` enforced while it streams. The slot is taken
+    /// before the fetch, so downloads count against the node's upload slots too. A
+    /// fetch that fails for any reason is [`UploadError::Unreachable`].
+    pub async fn stage_url(
+        &self,
+        url: &str,
+        original_name: &str,
+        limit: u64,
+    ) -> Result<StagedUpload, UploadError> {
+        let slot = self.take_slot()?;
+        let cap = limit.min(self.max_upload);
+        let source = self.remote()?;
+        let body = match source.open(original_name, url, cap).await {
+            Ok(Some(body)) => body,
+            Ok(None) => return Err(UploadError::Unreachable),
+            Err(ImportError::Media(e)) => return Err(e.into()),
+            Err(_) => return Err(UploadError::Unreachable),
+        };
+        // The body breaking mid-way is the fetch failing, not storage.
+        let broke = Arc::new(AtomicBool::new(false));
+        let flag = broke.clone();
+        let stream = body.inspect(move |chunk| {
+            if chunk.is_err() {
+                flag.store(true, Ordering::Relaxed);
+            }
+        });
+        match self
+            .stage_slot(slot, original_name, Box::pin(stream), cap)
+            .await
+        {
+            Ok(file) => Ok(file),
+            Err(_) if broke.load(Ordering::Relaxed) => Err(UploadError::Unreachable),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Parses `raw` as a URL to fetch: absolute, `https` (plain `http` too under the
+    /// `test-seams` private-fetch seam), no credentials. The address rules are the
+    /// client's, applied when it connects. The error is a sentence for the caller.
+    pub fn check_fetch_url(&self, raw: &str) -> Result<url::Url, &'static str> {
+        let url = url::Url::parse(raw.trim()).map_err(|_| "not an absolute URL")?;
+        #[cfg(feature = "test-seams")]
+        let plain_ok = self.private_fetch;
+        #[cfg(not(feature = "test-seams"))]
+        let plain_ok = false;
+        match url.scheme() {
+            "https" => {}
+            "http" if plain_ok => {}
+            "http" => return Err("only https URLs are fetched; http is refused"),
+            _ => return Err("only https URLs are fetched"),
+        }
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err("URLs with credentials are refused");
+        }
+        if url.host().is_none() {
+            return Err("the URL has no host");
+        }
+        Ok(url)
+    }
+
+    /// The client for files named by URL.
+    fn remote(&self) -> Result<&HttpSource, UploadError> {
+        self.remote
+            .get_or_init(|| {
+                let version = env!("CARGO_PKG_VERSION");
+                #[cfg(feature = "test-seams")]
+                if self.private_fetch {
+                    return HttpSource::allowing_private(version);
+                }
+                HttpSource::for_upload(version)
+            })
+            .as_ref()
+            .map_err(|e| UploadError::Task(e.clone()))
     }
 }
 

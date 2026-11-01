@@ -15,7 +15,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ferrite_domain::TermId;
+use ferrite_core::{Actor, CoreError};
+use ferrite_domain::{Term, TermId};
 use uuid::Uuid;
 
 use super::{
@@ -273,24 +274,56 @@ pub async fn update_term(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(patch): ApiJson<TermPatch>,
 ) -> Result<Json<TermDto>, Problem> {
-    let actor = &who.actor;
-    let current = api.taxonomy.get_term(actor, TermId::from_uuid(id)).await?;
-    let parent = match patch.parent_id {
+    let term = merge_term(
+        &api,
+        &who.actor,
+        TermId::from_uuid(id),
+        TermChange {
+            name: patch.name,
+            slug: patch.slug,
+            parent_id: patch.parent_id,
+            description: patch.description,
+        },
+    )
+    .await?;
+    Ok(Json(term.into()))
+}
+
+/// The members of a term change that were sent; the others keep the stored value.
+pub(crate) struct TermChange {
+    pub name: Option<String>,
+    pub slug: Option<String>,
+    /// `Some(None)` moves the term to the top level.
+    pub parent_id: Option<Option<Uuid>>,
+    pub description: Option<String>,
+}
+
+/// Merges `change` into term `id` as read now and saves the result (`PATCH /terms/{id}`,
+/// MCP `term_update`).
+pub(crate) async fn merge_term(
+    api: &ApiState,
+    actor: &Actor,
+    id: TermId,
+    change: TermChange,
+) -> Result<Term, CoreError> {
+    let current = api.taxonomy.get_term(actor, id).await?;
+    let parent = match change.parent_id {
         None => current.parent_id,
         Some(p) => p.map(TermId::from_uuid),
     };
-    let term = api
-        .taxonomy
+    api.taxonomy
         .update_term(
             actor,
             current.id,
-            patch.name.as_deref().unwrap_or(&current.name),
-            patch.slug,
+            change.name.as_deref().unwrap_or(&current.name),
+            change.slug,
             parent,
-            patch.description.as_deref().unwrap_or(&current.description),
+            change
+                .description
+                .as_deref()
+                .unwrap_or(&current.description),
         )
-        .await?;
-    Ok(Json(term.into()))
+        .await
 }
 
 #[utoipa::path(

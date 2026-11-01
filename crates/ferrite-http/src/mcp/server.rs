@@ -107,7 +107,13 @@ impl FerriteMcp {
     /// Every tool and prompt. A new tool file adds its router here.
     pub fn routers() -> Routers {
         Routers {
-            tools: Self::site_tools() + Self::content_tools(),
+            tools: Self::site_tools()
+                + Self::content_tools()
+                + Self::media_tools()
+                + Self::term_tools()
+                + Self::menu_tools()
+                + Self::type_tools()
+                + Self::redirect_tools(),
             prompts: Self::prompt_router(),
         }
     }
