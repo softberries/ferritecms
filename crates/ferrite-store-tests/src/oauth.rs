@@ -7,8 +7,13 @@ use ferrite_domain::{
     OAuthGrantId, OAuthRequest, OAuthRequestId, Timestamp, User,
 };
 use ferrite_store::{MAX_PRUNE_BATCH, StoreError};
+use serde_json::json;
 
-use crate::{TestDb, fixtures::fixture_user};
+use crate::{
+    TestDb,
+    export::{dump, row, spec},
+    fixtures::fixture_user,
+};
 
 const MINUTE: i64 = 60 * 1_000_000;
 const DAY: i64 = 24 * 3600 * 1_000_000;
@@ -598,4 +603,62 @@ pub async fn deleting_user_cascades_grants(db: &TestDb) {
     assert_eq!(oauth.code_by_hash_any("c-mine").await.unwrap(), None);
     assert!(oauth.grant_by_refresh("r-theirs").await.unwrap().is_some());
     assert!(oauth.code_by_hash_any("c-theirs").await.unwrap().is_some());
+}
+
+/// The export of `api_tokens` leaves out OAuth access tokens (`Export::RowsWithout`): their
+/// grants are not exported, so such rows could not be loaded.
+pub async fn export_leaves_out_oauth_tokens(db: &TestDb) {
+    let store = db.store();
+    let oauth = store.read().oauth();
+    let tokens = store.read().api_tokens();
+    let user = fixture_user(store).await;
+    let now = Timestamp::now();
+    let c = client("ferc_export_client_000001", ClientKind::Registered, now);
+    oauth.upsert_client(&c).await.unwrap();
+    let g = grant(&c, &user, now, 30 * DAY);
+    oauth.insert_grant(&g, "r-export").await.unwrap();
+    let access = oauth_token(&user, g.id, "t-export-oauth", now);
+    let personal = personal_token(&user, "t-export-personal", now);
+    tokens.insert(&access).await.unwrap();
+    tokens.insert(&personal).await.unwrap();
+
+    let mut reader = store.export_reader().await.unwrap();
+    let rows = dump(reader.as_mut(), spec("api_tokens"), 10).await;
+    reader.finish().await.unwrap();
+    let ids: Vec<_> = rows.iter().map(|r| r["id"].clone()).collect();
+    assert_eq!(ids, vec![json!(personal.id.to_string())], "{rows:?}");
+    assert_eq!(rows[0]["oauth_grant_id"], serde_json::Value::Null);
+}
+
+/// The loader refuses an `api_tokens` row with `oauth_grant_id` set (`Invalid`, nothing
+/// written); a row with the column `null` or absent is accepted.
+pub async fn import_refuses_oauth_token_rows(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    let base = |id: u128| {
+        json!({
+            "id": uuid::Uuid::from_u128(id).to_string(),
+            "user_id": user.id.to_string(),
+            "name": "t", "token_hash": format!("{id:064x}"), "scopes": [],
+            "created_at": "2026-01-02T01:02:03.000004Z",
+        })
+    };
+    let mut oauth_row = base(1);
+    oauth_row["oauth_grant_id"] = json!(uuid::Uuid::from_u128(9).to_string());
+    let mut writer = store.import_writer().await.unwrap();
+    assert!(matches!(
+        writer.rows(spec("api_tokens"), vec![row(oauth_row)]).await,
+        Err(StoreError::Invalid(m)) if m.contains("oauth_grant_id")
+    ));
+    drop(writer);
+
+    // Null and absent are fine (an archive from before 0013 has no such column).
+    let mut with_null = base(2);
+    with_null["oauth_grant_id"] = serde_json::Value::Null;
+    let mut writer = store.import_writer().await.unwrap();
+    writer
+        .rows(spec("api_tokens"), vec![row(with_null), row(base(3))])
+        .await
+        .unwrap();
+    drop(writer);
 }

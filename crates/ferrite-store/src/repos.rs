@@ -1066,7 +1066,8 @@ pub trait ApiTokenRepo: Send + Sync {
 /// pending authorization requests, authorization codes and grants. Hashes (of codes and
 /// refresh tokens) are SHA-256 hex strings the caller computes; they are stored and
 /// compared, never returned inside [`OAuthGrant`]. Text binds are NUL-checked (`Invalid`).
-/// "Expired" always means `expires_at <= now`, with `now` the caller's clock.
+/// "Expired" always means `expires_at <= now`, with `now` the caller's clock (here, unlike
+/// `ApiTokenRepo::prune`, which deletes `expires_at < now`).
 #[async_trait]
 pub trait OAuthRepo: Send + Sync {
     /// Inserts a client or replaces its `kind`, `name`, redirect URIs, `client_uri`,
@@ -1098,7 +1099,9 @@ pub trait OAuthRepo: Send + Sync {
     /// Claims an unused, unexpired code in one statement: stamps `grant` (the id of the
     /// grant the caller is about to insert) on it and returns it with `grant_id` set. A
     /// second claim, or an expired or unknown code, gives `None`; the row stays for
-    /// [`code_by_hash_any`](Self::code_by_hash_any) until pruned.
+    /// [`code_by_hash_any`](Self::code_by_hash_any) until pruned. Reuse detection is only
+    /// race-safe when the caller claims the code, inserts the grant and inserts the access
+    /// token in the same `Tx`: a replay then sees either no stamp or a grant that exists.
     async fn take_code(
         &self,
         code_hash: &str,
