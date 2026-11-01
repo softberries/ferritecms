@@ -1,7 +1,11 @@
 // Keyboard shortcuts (docs/design/11-admin-ui.md §6): one `keydown` listener on the
 // window for every registered binding. `keys` is a combination (`mod+k`, `mod+shift+p`,
 // `?`) or a sequence of steps separated by spaces (`g d`); a sequence times out after
-// 1 000 ms between steps. `mod` is ⌘ on Apple platforms and Ctrl elsewhere. Inside
+// 1 000 ms between steps: once a timer that long has fired and the next key's `timeStamp`
+// is that long after the last step's too. Chromium and Firefox stamp a key when it is
+// pressed, so a busy page that handles it late still completes the sequence there; WebKit
+// stamps it when it is handled, which leaves the timer. `mod` is ⌘ on Apple platforms and
+// Ctrl elsewhere. Inside
 // `input`, `textarea`, `select` and `[contenteditable]` only `allowInInput` bindings
 // fire, so typing (and the editor's own `mod+b`) is never taken over.
 
@@ -40,6 +44,8 @@ const registry = new Map<string, Shortcut>();
 let pending: {
   pressed: KeyboardEvent[];
   timer: ReturnType<typeof setTimeout>;
+  /** The timer has fired: the sequence may have timed out. */
+  expired: boolean;
 } | null = null;
 let listening = false;
 
@@ -123,6 +129,13 @@ function clearPending(): void {
   pending = null;
 }
 
+/** Whether `e` came too late for the sequence under way. */
+function timedOut(e: KeyboardEvent): boolean {
+  if (!pending?.expired) return false;
+  const last = pending.pressed[pending.pressed.length - 1];
+  return last === undefined || e.timeStamp - last.timeStamp >= CHORD_TIMEOUT_MS;
+}
+
 function eligible(s: Shortcut, inInput: boolean): boolean {
   if (inInput && !s.allowInInput) return false;
   return s.when ? s.when() : true;
@@ -139,6 +152,7 @@ function onKeyDown(e: KeyboardEvent): void {
   if (["shift", "control", "meta", "alt"].includes(e.key.toLowerCase())) return;
   const inInput = inTextField(e.target);
 
+  if (pending && timedOut(e)) clearPending();
   if (pending) {
     const pressed = [...pending.pressed, e];
     const next = [...registry.values()].filter((s) => {
@@ -178,7 +192,14 @@ function onKeyDown(e: KeyboardEvent): void {
 
 function startPending(pressed: KeyboardEvent[]): void {
   clearPending();
-  pending = { pressed, timer: setTimeout(clearPending, CHORD_TIMEOUT_MS) };
+  const next = {
+    pressed,
+    expired: false,
+    timer: setTimeout(() => {
+      next.expired = true;
+    }, CHORD_TIMEOUT_MS),
+  };
+  pending = next;
 }
 
 /** Registers a binding; the returned function removes it. */

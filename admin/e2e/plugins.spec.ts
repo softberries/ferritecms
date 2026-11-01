@@ -13,6 +13,7 @@ import type { Page } from "@playwright/test";
 import { keptState } from "./support/app-state";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { chord } from "./support/keys";
 import { fixtureComponent, fixtureFiles, fixtureManifest } from "./support/plugin-fixture";
 import { uid } from "./support/uid";
 
@@ -345,8 +346,7 @@ test("plugins_screens", async ({ as, site, siteKey, snap, expectAccessible }) =>
     await expect(
       page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Plugins" }),
     ).toBeVisible();
-    await page.keyboard.press("g");
-    await page.keyboard.press("l");
+    await chord(page, "g", "l");
     await expect(page).toHaveURL(/\/admin\/plugins$/);
     await expect(row(page, shown)).toBeVisible();
     await expect(retainedRow(page, gone)).toBeVisible();

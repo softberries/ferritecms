@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { chord } from "./support/keys";
 import { uid } from "./support/uid";
 
 /** The highest migration the repository holds (`NNNN_name.up.sql`, same on both backends). */
@@ -112,8 +113,7 @@ test("system_screens", async ({ as, snap, expectAccessible }) => {
   await page.goto("/admin/");
   const nav = page.getByRole("navigation", { name: "Main" });
   await expect(nav.getByRole("link", { name: "System" })).toBeVisible();
-  await page.keyboard.press("g");
-  await page.keyboard.press("y");
+  await chord(page, "g", "y");
   await expect(page).toHaveURL(/\/admin\/system\/status$/);
 
   // Nodes: this one node, live, with what it reports.

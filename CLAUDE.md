@@ -72,7 +72,7 @@ registry with `/metrics` on `server.metrics_listen`, per-minute `node_metrics` r
 series API and the dashboard's Site traffic, `site.timezone` in the `date` filter (jiff),
 a ring-only build, the release workflow (six targets, minisign, GHCR), the systemd unit,
 the `compat` CI job and the runbooks in `docs/operations/`; migration `0012_node_metrics`.
-Nothing is released: the first tag waits for the release gate in the exit. M4-3a is done
+The first release, `v0.1.0`, was tagged on 2026-11-01 after the release gate in the exit. M4-3a is done
 too (`m4-3a-exit.md`): the example plugins `seo`, `analytics` and `contact-form` (SDK
 helpers, the host answering `options.get("site.url"|"site.title")`, percent-encoded
 `request.served` paths, analytics' two storage tiers under the KV quota, X7) shipped as the
@@ -98,9 +98,12 @@ environment's client options; the Markdown import's byte and folder caps, NFC-co
 entries reported missing, an expired lease no longer keeps an import run live; the admin's
 44 px touch icons, the popup edge, stale states at full contrast (P81, R-c3), SEO counting by
 code points; the test flakes fixed (SQLite `close()` now releases `ferrite.lock`);
-reproducible release archives (`repro-tar.sh`); no migration. Next: the develop→main pull
-request (the user decides) and the release gate, both under "Before v0.1.0" in the
-roadmap; the other open follow-ups are under "Later". Work top-down in
+reproducible release archives (`repro-tar.sh`); no migration. `v0.1.0` is released
+(2026-11-01): licensed `AGPL-3.0-only` with a plugin and theme permission
+(`LICENSE-EXCEPTION.md`; `LICENSING.md`, a commercial license from SOFTBERRIES), outside
+contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub Pages
+(`.github/workflows/pages.yml`, `site/export-static.sh` + `site/rewrite-static.py`). What is
+still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
 `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`).
 
@@ -261,8 +264,8 @@ and `FERRITE_TEST_RELEASE_PUBKEY`. HTTPS for solo sites: `[server.tls] mode = "a
 test -p ferrite --test tls` runs Pebble in Docker). Metrics: `[server] metrics_listen =
 "127.0.0.1:9464"` serves `GET /metrics`; `GET /api/v1/system/metrics/series?from&to&step=
 minute|hour|day[&node]` (`system:read`). Release: `.github/workflows/release.yml` (a manual
-run is a dry run with a throwaway key; publishing needs the release gate in
-`m4-2-exit.md`; it also attaches the plugins asset from `.github/scripts/package-plugins.sh
+run is a dry run with a throwaway key; a `v*` tag publishes, signed with the `release`
+environment's key; the tag ruleset lets only admins create, move or delete `v*` tags; it also attaches the plugins asset from `.github/scripts/package-plugins.sh
 VERSION OUT_DIR`, which refuses a manifest whose `version` is not the workspace version, so a
 version bump moves the three `plugins/examples/{seo,analytics,contact-form}/ferrite-plugin.toml`
 with it); systemd: `packaging/systemd/` (README there).

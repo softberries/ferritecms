@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import type { Page, Request } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { chord } from "./support/keys";
 import { uid } from "./support/uid";
 import { packTheme } from "../src/appearance/ustar";
 
@@ -241,8 +242,7 @@ test("themes_screens", async ({ as, site, siteKey, snap, expectAccessible }) => 
     await expect(
       page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Appearance" }),
     ).toBeVisible();
-    await page.keyboard.press("g");
-    await page.keyboard.press("a");
+    await chord(page, "g", "a");
     await expect(page).toHaveURL(/\/admin\/appearance\/themes$/);
     await expect(card(page, "blog-min")).toBeVisible();
     const active = page.locator("[data-slot=theme-card][data-active]");
