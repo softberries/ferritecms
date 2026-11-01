@@ -5,14 +5,17 @@
 //! reads a file's TOML front matter; [`convert()`] turns a file's Markdown into the stored
 //! block tree through the WordPress importer's HTML converter; [`map_id`] is a file's
 //! key in `import_map`; [`locate`] finds the file a relative image or link names, never
-//! outside the folder; [`run()`] imports the folder through an import run.
+//! outside the folder; [`run()`] imports the folder through an import run;
+//! [`markdown_to_body()`] converts one Markdown text, as the MCP tools take bodies.
 
+pub mod body;
 pub mod convert;
 pub mod error;
 pub mod front;
 pub mod run;
 pub mod scan;
 
+pub use body::{MarkdownBody, markdown_to_body};
 pub use convert::{Converted, convert};
 pub use error::MdError;
 pub use front::{FrontMatter, split_front_matter};

@@ -4,11 +4,13 @@
 //! nesting) without panicking or overflowing the stack.
 
 mod anchor;
+mod markdown;
 mod render;
 mod text;
 mod url;
 
 pub use anchor::TocEntry;
+pub use markdown::{BLOCK_FENCE, to_markdown};
 pub use render::{render_html, render_html_toc};
 pub use text::{excerpt, extract_text};
 pub use url::{canonical_embed_url, embed_id, safe_href};
