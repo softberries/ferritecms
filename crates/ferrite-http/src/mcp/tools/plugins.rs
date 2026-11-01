@@ -16,9 +16,23 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::plugins::{plugin_list, plugin_settings, set_enabled, set_plugin_settings},
+    api::{
+        dto::extensions::PluginDto,
+        plugins::{plugin_list, plugin_settings, set_enabled, set_plugin_settings},
+    },
     mcp::{Caller, FerriteMcp, results},
 };
+
+/// A plugin's entry as the tools show it: the REST entry without the install-approval
+/// `fingerprint` of its permission report (it only means something to the person
+/// installing, and no tool installs).
+fn plugin_value(plugin: &PluginDto) -> Value {
+    let mut v = serde_json::to_value(plugin).unwrap_or(Value::Null);
+    if let Some(report) = v.get_mut("report").and_then(Value::as_object_mut) {
+        report.remove("fingerprint");
+    }
+    v
+}
 
 /// A plugin named by its name.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -54,7 +68,11 @@ impl FerriteMcp {
             Ok(list) => {
                 let on = list.items.iter().filter(|p| p.enabled).count();
                 let summary = format!("{} plugins, {on} enabled.", list.items.len());
-                results::ok(list, summary)
+                let items: Vec<Value> = list.items.iter().map(plugin_value).collect();
+                results::ok(
+                    json!({"items": items, "next_cursor": list.next_cursor}),
+                    summary,
+                )
             }
             Err(p) => results::from_problem(p),
         }
@@ -174,7 +192,7 @@ impl FerriteMcp {
                 )
                 .await;
                 let summary = format!("{} is {verb}.", plugin.name);
-                results::ok(plugin, summary)
+                results::ok(plugin_value(&plugin), summary)
             }
             Err(p) => results::from_problem(p),
         }

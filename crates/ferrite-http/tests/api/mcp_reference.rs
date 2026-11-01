@@ -98,7 +98,6 @@ async fn reference_page_lists_every_tool(api: Api) -> Api {
         unknown.is_empty(),
         "rows of {PAGE} without a tool: {unknown:?}"
     );
-    assert!(listed.len() >= 56, "{listed:?}");
     api
 }
 

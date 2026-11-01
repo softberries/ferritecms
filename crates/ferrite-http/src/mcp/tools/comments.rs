@@ -7,6 +7,7 @@
 //! the comment rules (enabled, public post, parent approved, depth, length). Moderation
 //! is last-write-wins, as in the REST API.
 
+use chrono::{DateTime, Utc};
 use ferrite_core::comments::Commenter;
 use ferrite_domain::MAX_PAGE;
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
@@ -19,7 +20,9 @@ use super::per_page;
 use crate::{
     api::{
         comments::{CommentListParams, comment_page, moderate, submit},
-        dto::comments::{CommentCountsDto, CommentDto, CommentPublicDto, CommentSubmit},
+        dto::comments::{
+            CommentCountsDto, CommentDto, CommentItemDto, CommentPublicDto, CommentSubmit,
+        },
         problem::Problem,
     },
     mcp::{Caller, FerriteMcp, results},
@@ -98,10 +101,51 @@ pub struct ReplyInput {
 
 // ---- outputs -----------------------------------------------------------------------------
 
+/// A comment as the tools show it: what a moderator needs to decide, without the
+/// visitor's e-mail address or the keyed hash of their client address (personal data a
+/// model has no use for).
+#[derive(Debug, Serialize)]
+pub struct CommentOut {
+    pub id: Uuid,
+    /// The content item commented on.
+    pub item_id: Uuid,
+    /// That item: id, type, title, status and its public path.
+    pub item: CommentItemDto,
+    /// The comment replied to.
+    pub parent_id: Option<Uuid>,
+    /// The signed-in commenter; `null` for a guest.
+    pub user_id: Option<Uuid>,
+    pub author_name: String,
+    /// `""`: none.
+    pub author_url: String,
+    /// Plain text as submitted.
+    pub body: String,
+    /// `pending`, `approved`, `spam` or `trash`.
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<CommentDto> for CommentOut {
+    fn from(c: CommentDto) -> Self {
+        Self {
+            id: c.id,
+            item_id: c.item_id,
+            item: c.item,
+            parent_id: c.parent_id,
+            user_id: c.user_id,
+            author_name: c.author_name,
+            author_url: c.author_url,
+            body: c.body,
+            status: c.status,
+            created_at: c.created_at,
+        }
+    }
+}
+
 /// One page of `comments_list`.
 #[derive(Debug, Serialize)]
 pub struct ListOut {
-    pub items: Vec<CommentDto>,
+    pub items: Vec<CommentOut>,
     /// Pass as `cursor` for the next page; `null` on the last one.
     pub next_cursor: Option<String>,
     /// How many comments have each status, for the same `item` filter (not for
@@ -163,7 +207,7 @@ impl FerriteMcp {
                 );
                 results::ok(
                     ListOut {
-                        items: page.items,
+                        items: page.items.into_iter().map(CommentOut::from).collect(),
                         next_cursor: page.next_cursor,
                         counts,
                     },
@@ -199,8 +243,9 @@ impl FerriteMcp {
                     json!({"status": c.status, "item": c.item_id}),
                 )
                 .await;
-                let summary = format!("Comment by {} is now {}.", c.author_name, c.status);
-                results::ok(c, summary)
+                // By id: the author's name is visitor-controlled text.
+                let summary = format!("Comment {} is now {}.", c.id, c.status);
+                results::ok(CommentOut::from(c), summary)
             }
             Err(p) => results::from_problem(p),
         }

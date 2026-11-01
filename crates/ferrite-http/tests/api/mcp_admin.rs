@@ -119,6 +119,12 @@ async fn moderate_and_reply_comment(api: Api) -> Api {
     assert_eq!(items[0]["item"]["title"], "Hello", "{out}");
     assert_eq!(items[0]["item"]["permalink"], "/hello/", "{out}");
     assert_eq!(items[0]["body"], "Hello", "{out}");
+    assert_eq!(items[0]["author_name"], "Ann", "{out}");
+    // No visitor e-mail, no address hash, in any tool output.
+    let shown = out.to_string();
+    for needle in ["ann@example.com", "author_email", "ip_hash"] {
+        assert!(!shown.contains(needle), "{needle} in {out}");
+    }
     assert_eq!(
         out["counts"],
         json!({"pending": 1, "approved": 0, "spam": 1, "trash": 0}),
@@ -145,6 +151,19 @@ async fn moderate_and_reply_comment(api: Api) -> Api {
     assert_eq!(ok(&r)["status"], "approved", "{r}");
     assert_eq!(ok(&r)["item_id"], item.to_string(), "{r}");
     assert!(text(&r).contains("approved"), "{}", text(&r));
+    assert!(
+        text(&r).contains(&pending.to_string()),
+        "named by id: {}",
+        text(&r)
+    );
+    assert!(
+        !text(&r).contains("Ann"),
+        "not by the visitor's name: {}",
+        text(&r)
+    );
+    for needle in ["ann@example.com", "author_email", "ip_hash"] {
+        assert!(!r.to_string().contains(needle), "{needle} in {r}");
+    }
     let counts = tool(&api, &t.0, "comments_list", json!({})).await;
     assert_eq!(ok(&counts)["counts"]["approved"], 1, "{counts}");
 
@@ -743,10 +762,16 @@ async fn plugin_enable_disable(api: Api) -> Api {
         "the approved permissions: {r}"
     );
     assert!(text(&r).contains("1 plugins, 0 enabled"), "{}", text(&r));
+    assert!(
+        p["report"].get("fingerprint").is_none(),
+        "no approval hash: {r}"
+    );
+    assert!(!r.to_string().contains("fingerprint"), "{r}");
 
     let seq = api.store.read().events().max_seq().await.unwrap();
     let r = tool(&api, &t.0, "plugin_enable", json!({"name": "hello"})).await;
     assert_eq!(ok(&r)["enabled"], true, "{r}");
+    assert!(!r.to_string().contains("fingerprint"), "{r}");
     let events = api.store.read().events().since(seq, 100).await.unwrap();
     assert!(
         events
