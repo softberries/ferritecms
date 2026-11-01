@@ -13,6 +13,8 @@ uploads run at once; each row in the upload tray shows its progress, and a faile
 says why, with **Retry** where retrying can help. You can also upload from the media
 picker while you edit an item, or drop an image straight into the editor's body.
 
+<figure><img src="../images/admin-media.webp" alt="The media library as a grid of image thumbnails with a search field, a type filter and an Upload button"><figcaption>The media library.</figcaption></figure>
+
 Uploading needs the author role or higher. The largest file is 256 MiB by default; the
 `max_upload` setting in the `[media]` section of `ferrite.toml` changes it (up to 1 GiB).
 

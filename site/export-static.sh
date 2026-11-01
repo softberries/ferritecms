@@ -9,7 +9,8 @@
 # a path (https://softberries.github.io/ferritecms): root-relative links get the path in
 # front. The search form needs the server (`/?s=`), so the export leaves it out; 404.html
 # is the site's own 404 page. FERRITE is the command that runs ferrite, as in build.sh;
-# PORT the loopback port to serve on (default 18089). Needs wget, curl and python3.
+# PORT the loopback port to serve on (default 18089). Needs wget, curl and python3, and
+# npx (Node.js) for the search index of the brand layer (site/brand/).
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -86,7 +87,20 @@ if [ "$status" != "404" ]; then
   exit 1
 fi
 
+# The brand layer (site/brand/): its assets next to the pages; rewrite-static.py adds the
+# rest to every page.
+if [ -d "$root/site/brand" ]; then
+  mkdir -p "$out/brand"
+  cp -R "$root/site/brand/." "$out/brand/"
+  find "$out/brand" -name '*.html' -delete
+fi
+
 echo "==> rewrite links for $base"
 python3 -I "$root/site/rewrite-static.py" "$out" "$origin" "$base"
+# The search index (Pagefind, run through npx) for the brand layer's search dialog.
+if [ -d "$root/site/brand" ]; then
+  echo "==> search index"
+  npx -y "pagefind@${PAGEFIND_VERSION:-1.5.2}" --site "$out" --quiet
+fi
 touch "$out/.nojekyll"
 echo "Exported to $out"

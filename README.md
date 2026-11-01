@@ -1,8 +1,17 @@
-# FerriteCMS
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/ferrite-logo-horizontal-dark.svg">
+    <img src="docs/brand/ferrite-logo-horizontal-light.svg" alt="FerriteCMS" width="440">
+  </picture>
+</p>
+
+<p align="center">
 
 [![CI](https://github.com/softberries/ferritecms/actions/workflows/ci.yml/badge.svg)](https://github.com/softberries/ferritecms/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/softberries/ferritecms)](https://github.com/softberries/ferritecms/releases)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+
+</p>
 
 A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in a
 **WebAssembly sandbox** and can only do what it declared.
@@ -19,6 +28,16 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
   menus and 301 redirects from a WXR export.
 
 **Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)** · Built by [SOFTBERRIES](https://softberries.dev)
+
+<p align="center">
+  <img src="site/content/images/admin-dashboard.webp" alt="The FerriteCMS admin dashboard" width="900">
+</p>
+
+| The editor | Your site (the `business` theme) |
+|---|---|
+| <img src="site/content/images/admin-editor.webp" alt="The editor with its settings panel"> | <img src="site/content/images/site-front.webp" alt="A small business site in the business theme"> |
+| **Plugins and their permissions** | **The command palette** |
+| <img src="site/content/images/admin-plugin-detail.webp" alt="A plugin's page with its permissions, settings and metrics"> | <img src="site/content/images/admin-palette.webp" alt="The command palette over the dashboard"> |
 
 ## Quickstart
 

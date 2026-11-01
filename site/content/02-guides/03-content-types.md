@@ -30,6 +30,8 @@ points at it. The built-in types cannot be deleted.
 Open a type to edit its fields with the **field builder**. Each field has a label, a name,
 a kind and a **Required** switch. The kinds are:
 
+<figure><img src="../images/admin-type-fields.webp" alt="A Projects content type in the field builder: client, location, completed date, size, a service choice and a gallery repeater"><figcaption>A content type and its custom fields.</figcaption></figure>
+
 | Kind | Holds |
 |---|---|
 | text, rich text | a line of text, or formatted text |
@@ -67,6 +69,8 @@ Each term has a public page at `/<taxonomy>/<slug>/` that lists its items.
 
 **Structure → Menus** shows the menu locations of the active theme and the menu in each.
 Create a menu, then **Add items**:
+
+<figure><img src="../images/admin-menus.webp" alt="The primary menu: its items in a tree that can be reordered by dragging"><figcaption>A menu. Drag items to reorder or nest them.</figcaption></figure>
 
 - **Content**: search the items of the types listed in the sidebar;
 - **Terms**: pick terms of a taxonomy;

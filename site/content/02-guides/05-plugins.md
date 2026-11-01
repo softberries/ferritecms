@@ -58,6 +58,10 @@ and the `.wasm`; the admin shows the permission report, with high-risk items fir
 **Approve and install** installs it. A new plugin is installed disabled; the last step
 offers **Enable**.
 
+<figure><img src="../images/admin-plugins.webp" alt="The Plugins screen: the seo, analytics and contact-form plugins, all enabled"><figcaption>The installed plugins.</figcaption></figure>
+
+<figure><img src="../images/admin-plugin-detail.webp" alt="The contact-form plugin's page: what it is allowed to do, its settings and its metrics"><figcaption>A plugin's page: its permissions, settings and metrics.</figcaption></figure>
+
 ## Settings
 
 A plugin's settings are on its page in the admin (**Plugins**, then the plugin). Secret
@@ -75,6 +79,8 @@ admin.
 
 The repository has three example plugins under `plugins/examples/`, each with a README
 that lists its capabilities and settings:
+
+<figure><img src="../images/plugin-analytics.webp" alt="The analytics plugin's stats page: page views, responses by status and the most visited pages"><figcaption>The <code>analytics</code> plugin's stats page at <code>/_p/analytics/</code>.</figcaption></figure>
 
 | Plugin | What it does | Capabilities |
 |---|---|---|

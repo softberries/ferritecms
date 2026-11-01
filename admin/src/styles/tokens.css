@@ -13,6 +13,10 @@
 :root {
   color-scheme: light;
 
+  /* The product mark's two colours (docs/brand/), the same in both themes. */
+  --brand-ember: #d2652c;
+  --brand-steel: #3f78a8;
+
   /* Cool graphite neutrals (hue 260). */
   --background: oklch(0.99 0.002 250);
   --foreground: oklch(0.21 0.012 260);
