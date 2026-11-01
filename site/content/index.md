@@ -11,9 +11,8 @@ manifest declares.
 FerriteCMS imports WordPress content (a WXR export file) but does not run WordPress PHP
 plugins or themes.
 
-> **Status:** in development. No version has been released yet: there are no release
-> binaries, no published Docker image and no hosted copy of these docs. Building from
-> source is the way to run it today ([Install](01-getting-started/01-install.md)).
+> **Status:** early. The first release is 0.1.0: signed binaries for Linux and macOS and
+> a Docker image ([Install](01-getting-started/01-install.md)). Expect changes before 1.0.
 
 ## Principles
 

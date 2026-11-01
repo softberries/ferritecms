@@ -276,7 +276,7 @@ Updates this binary to a newer signed release. With `--data` the new binary's `c
 check` and `migrate status` run for the site first; a configuration it refuses stops the
 update, unless `--skip-config-check`. Exit 0 updated or already up to date; 2 a newer
 release exists (with `--check`); 1 an error (an older or equal `--version` too: use
-`rollback`; also while no release exists: "no release found at …").
+`rollback`).
 
 ### rollback
 
