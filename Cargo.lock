@@ -1778,6 +1778,7 @@ dependencies = [
  "ferrite-core",
  "ferrite-domain",
  "ferrite-http",
+ "ferrite-import-md",
  "ferrite-import-wp",
  "ferrite-media",
  "ferrite-plugin-host",
@@ -4554,6 +4555,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

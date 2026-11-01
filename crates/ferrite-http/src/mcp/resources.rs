@@ -14,8 +14,11 @@ use ferrite_core::{
 };
 use rmcp::{
     ErrorData,
-    model::{ReadResourceResult, Resource, ResourceContents},
+    model::{ReadResourceResult, Resource, ResourceContents, ResourceTemplate},
 };
+use uuid::Uuid;
+
+use crate::api::problem::Problem;
 
 use super::{Caller, FerriteMcp, results, tools::site::Overview};
 
@@ -23,6 +26,10 @@ use super::{Caller, FerriteMcp, results, tools::site::Overview};
 pub const SITE: &str = "ferrite://site";
 /// The writing conventions.
 pub const WRITING_GUIDE: &str = "ferrite://guide/writing";
+/// The prefix of an item's URI: `ferrite://content/{type}/{id}`.
+pub const CONTENT_PREFIX: &str = "ferrite://content/";
+/// The template of an item's URI.
+pub const CONTENT_TEMPLATE: &str = "ferrite://content/{type}/{id}";
 const MARKDOWN: &str = "text/markdown";
 
 /// The resources `resources/list` names.
@@ -40,6 +47,21 @@ pub fn list() -> Vec<Resource> {
             .with_description(
                 "How to write content for this site: Markdown, images and the theme's \
                  image sizes, embeds and other blocks, titles and SEO fields.",
+            )
+            .with_mime_type(MARKDOWN),
+    ]
+}
+
+/// The resource templates `resources/templates/list` names.
+pub fn templates() -> Vec<ResourceTemplate> {
+    vec![
+        ResourceTemplate::new(CONTENT_TEMPLATE, "content-item")
+            .with_title("Content item")
+            .with_description(
+                "One post, page or other content item as Markdown with a front matter \
+                 block (id, type, title, slug, status, version, urls, dates) and the \
+                 body. {type} is the content type name, {id} the item's id. Drafts and \
+                 other items are readable as the tools allow.",
             )
             .with_mime_type(MARKDOWN),
     ]
@@ -66,6 +88,7 @@ pub async fn read(
             }
         },
         WRITING_GUIDE => writing_guide(server).await,
+        _ if uri.starts_with(CONTENT_PREFIX) => content_item(server, caller, uri).await?,
         _ => {
             return Err(ErrorData::resource_not_found(
                 format!("no resource {uri:?}"),
@@ -211,4 +234,32 @@ async fn writing_guide(server: &FerriteMcp) -> String {
          (content_preview_link) and publish only when they ask.\n",
         theme_name = theme.name(),
     )
+}
+
+/// `ferrite://content/{type}/{id}` as Markdown. Anything that does not name an item the
+/// caller may read is the protocol's resource-not-found error.
+async fn content_item(
+    server: &FerriteMcp,
+    caller: &Caller,
+    uri: &str,
+) -> Result<String, ErrorData> {
+    let not_found = || ErrorData::resource_not_found(format!("no resource {uri:?}"), None);
+    let rest = uri.strip_prefix(CONTENT_PREFIX).ok_or_else(not_found)?;
+    let (kind, id) = rest.split_once('/').ok_or_else(not_found)?;
+    let id = Uuid::parse_str(id).map_err(|_| not_found())?;
+    server
+        .item_markdown(caller, kind, id)
+        .await
+        .map_err(|p| problem_error(&p, uri))
+}
+
+/// A problem as the protocol error of a resource read: a missing or unreadable item is
+/// not found, a refusal is an invalid request that names what is missing.
+fn problem_error(p: &Problem, uri: &str) -> ErrorData {
+    let doc = p.document();
+    match doc.status {
+        404 => ErrorData::resource_not_found(format!("no resource {uri:?}"), None),
+        s if s < 500 => ErrorData::invalid_params(format!("{}: {}", doc.title, doc.detail), None),
+        _ => ErrorData::internal_error(format!("{}: {}", doc.title, doc.detail), None),
+    }
 }

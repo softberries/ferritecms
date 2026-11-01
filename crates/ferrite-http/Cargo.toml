@@ -23,6 +23,7 @@ ferrite-cache = { path = "../ferrite-cache" }
 ferrite-config = { path = "../ferrite-config" }
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
+ferrite-import-md = { path = "../ferrite-import-md" }
 ferrite-import-wp = { path = "../ferrite-import-wp" }
 ferrite-media = { path = "../ferrite-media" }
 ferrite-plugin-host = { path = "../ferrite-plugin-host" }

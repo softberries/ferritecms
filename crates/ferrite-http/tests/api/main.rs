@@ -17,6 +17,7 @@ mod idempotency;
 mod import;
 mod jobs;
 mod mcp;
+mod mcp_content;
 mod media;
 mod media_filters;
 mod menu_locations;

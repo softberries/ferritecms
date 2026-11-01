@@ -8,7 +8,8 @@
 //! * [`from_problem`] / [`from_core`]: `structuredContent` is the REST API's problem
 //!   document (`type`, `title`, `status`, `detail`, `errors`, and `current` for a stale
 //!   version); `content` is one text: `<title>: <detail>`, then one line per field
-//!   error, then the current item if there is one. A missing capability or scope is
+//!   error and a hint about `current`, followed (for a stale version) by a second block
+//!   with the current item as JSON. A missing capability or scope is
 //!   named (`Forbidden: missing content:read`).
 
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -62,6 +63,11 @@ pub fn from_problem(p: Problem) -> CallToolResult {
     let value = serde_json::to_value(&doc).unwrap_or(Value::Null);
     let mut result = CallToolResult::structured_error(value);
     result.content = vec![ContentBlock::text(text)];
+    // The current item as JSON text too, for clients that pass only `content` to the
+    // model: it needs it to re-apply its change.
+    if let Some(current) = &doc.current {
+        result.content.push(ContentBlock::text(current.to_string()));
+    }
     result
 }
 
@@ -116,6 +122,8 @@ mod tests {
                 .with_current(json!({"version": 4})),
         );
         assert!(text(&r).contains("(version 4)"), "{}", text(&r));
+        assert_eq!(r.content.len(), 2);
+        assert_eq!(r.content[1].as_text().unwrap().text, r#"{"version":4}"#);
         assert_eq!(r.structured_content.unwrap()["current"]["version"], 4);
     }
 }

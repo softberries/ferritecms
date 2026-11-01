@@ -32,9 +32,9 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, DiscoverResult, ErrorCode,
         GetPromptRequestParams, GetPromptResponse, Implementation, InitializeRequestParams,
-        InitializeResult, ListPromptsResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-        ResultType, ServerCapabilities, ServerConfig, Tool,
+        InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResponse, ResultType, ServerCapabilities, ServerConfig, Tool,
     },
     service::RequestContext,
 };
@@ -107,7 +107,7 @@ impl FerriteMcp {
     /// Every tool and prompt. A new tool file adds its router here.
     pub fn routers() -> Routers {
         Routers {
-            tools: Self::site_tools(),
+            tools: Self::site_tools() + Self::content_tools(),
             prompts: Self::prompt_router(),
         }
     }
@@ -317,6 +317,18 @@ impl ServerHandler for FerriteMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let mut result = ListResourcesResult::with_all_items(resources::list());
+        if cache_hints(&context) {
+            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        let mut result = ListResourceTemplatesResult::with_all_items(resources::templates());
         if cache_hints(&context) {
             result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
         }

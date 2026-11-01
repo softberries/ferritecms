@@ -9,6 +9,7 @@
 //! counted before the tool runs (`call_tool`). A successful write ends with
 //! [`FerriteMcp::audit`]; reads are not audited.
 
+pub mod content;
 pub mod site;
 
 use serde_json::Value;

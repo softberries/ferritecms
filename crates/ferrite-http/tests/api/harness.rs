@@ -288,6 +288,9 @@ impl Api {
         let routes = load_route_table(store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
+        let auth = Arc::new(
+            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
+        );
         let app = Arc::new(
             AppState::new(AppParts {
                 store: store.clone(),
@@ -300,16 +303,15 @@ impl Api {
                 config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
                 migrations_ok: true,
             })
-            .expect("app state"),
+            .expect("app state")
+            // Sessions are resolved for `/_preview/<id>`.
+            .with_auth(auth.clone()),
         );
         let mailer = Arc::new(MemoryMailer::new());
         let content = Arc::new(ContentService::new(
             store.clone(),
             Arc::new(PermalinkRules::default()),
         ));
-        let auth = Arc::new(
-            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
-        );
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
