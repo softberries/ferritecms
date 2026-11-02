@@ -105,6 +105,16 @@ fn warnings(config: &Config) -> Vec<String> {
                 .to_owned(),
         );
     }
+    // M6-2: a daily registry check that has no registry to check (this build has no
+    // embedded key and none is configured).
+    if config.plugins.trust.registry_check == ferrite_config::RegistryCheck::Daily
+        && matches!(crate::registry::configured(&config.plugins.trust), Ok(None))
+    {
+        out.push(
+            "plugins.registry_check = daily has no effect: this build has no key for the default registry; set plugins.registry_key"
+                .to_owned(),
+        );
+    }
     out.extend(
         config
             .warnings

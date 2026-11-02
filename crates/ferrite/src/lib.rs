@@ -20,6 +20,7 @@ mod migrate;
 mod node;
 mod node_metrics;
 mod open;
+pub mod registry;
 pub mod reload;
 mod seed;
 pub mod serve;

@@ -1337,6 +1337,7 @@ mod tests {
             max_concurrent_calls: 5,
             render_budget_ms: 300,
             volatile_ttl_secs: 60,
+            trust: Default::default(),
         };
         let h = host_config(&p);
         assert_eq!(h.max_concurrent_calls, 5);

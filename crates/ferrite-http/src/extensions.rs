@@ -72,6 +72,14 @@ pub const THEME_MIME: &str = "application/x-tar";
 /// MIME type recorded for plugin component artifacts.
 pub const PLUGIN_MIME: &str = "application/wasm";
 
+/// The plugin registry a site uses: its index URL and the key the index is signed with
+/// (M6-2, design 14 §5.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryTarget {
+    pub url: url::Url,
+    pub key: ferrite_domain::plugin_trust::PublisherKey,
+}
+
 /// Why an install step failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtensionError {
