@@ -111,7 +111,7 @@ and Client ID Metadata Documents, refresh rotation, tokens bound to `/mcp`), the
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
 card; migration `0013_oauth`; design 12, roadmap "M5". Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
 M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
@@ -120,16 +120,15 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
 `doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
-M5: `mcp/` (the MCP endpoint: `auth` guard, `server`, `tools/` one file per area,
-`resources`, `prompts`, `results`), `oauth.rs` (the OAuth endpoints and the off-switch gate),
-`oauth_fetch.rs` (the SSRF-checked Client ID Metadata Document fetch), `api/oauth.rs` (the
-consent API);
 previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
 plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
 `extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
 source), `import_blobs` (import reports over the media store), `metrics` (the registry,
 `/metrics` text), `tls` (HSTS, the redirect app); the REST API in `src/api/` with its
-OpenAPI snapshot `openapi.json`) -> `ferrite-import-wp` (the WordPress importer: WXR
+OpenAPI snapshot `openapi.json`; M5: `mcp/` (the MCP endpoint: `auth` guard, `server`,
+`tools/` one file per area, `resources`, `prompts`, `results`), `oauth.rs` (the OAuth
+endpoints and the off-switch gate), `oauth_fetch.rs` (the SSRF-checked Client ID Metadata
+Document fetch), `api/oauth.rs` (the consent API)) -> `ferrite-import-wp` (the WordPress importer: WXR
 parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter (M5: `markdown_to_body`, used by the MCP
