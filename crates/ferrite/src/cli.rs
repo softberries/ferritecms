@@ -230,7 +230,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::SelfUpdate(args) => update::run(args).await,
         Command::Rollback(args) => update::rollback::run(args).await,
         Command::Theme(cmd) => ext_cmd::run_theme(cmd).await.map(|()| ExitCode::SUCCESS),
-        Command::Plugin(cmd) => ext_cmd::run_plugin(cmd).await.map(|()| ExitCode::SUCCESS),
+        Command::Plugin(cmd) => ext_cmd::run_plugin(cmd).await,
         Command::User(cmd) => user_cmd::run(cmd).await.map(|()| ExitCode::SUCCESS),
     }
 }
