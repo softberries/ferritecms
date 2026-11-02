@@ -426,14 +426,14 @@ backends.
 | Table | Columns (key ones) | Notes |
 |---|---|---|
 | `content_types` | `name` PK, `label`, `hierarchical`, `has_archive`, `fields` (json schema), `built_in`, `created_at` | `post`, `page`, `media` are built in |
-| `content_items` | `id` PK, `type` FK, `status`, `slug`, `parent_id`, `author_id`, `title`, `excerpt`, `body` (json blocks), `body_html` (cached render), `fields` (json, custom fields), `menu_order`, `published_at`, `scheduled_at`, `created_at`, `updated_at`, `version` | `UNIQUE(type, parent_id, slug)` with NULL-parent handling; `status ∈ {draft, pending, scheduled, published, private, trash}`; `version` for optimistic locking |
+| `content_items` | `id` PK, `type` FK, `status`, `slug`, `parent_id`, `author_id`, `title`, `excerpt`, `body` (json blocks), `body_html` (cached render), `fields` (json, custom fields), `menu_order`, `published_at`, `scheduled_at`, `created_at`, `updated_at`, `version`, `locale` *(since `0014_locales`: BCP 47 tag, `''` only from an older binary)*, `translation_group` null *(since `0014`: the group original's id; `NULL` only from an older binary; `settle` fills both, 13 §2.2)* | `UNIQUE(type, locale, parent_id, slug)` with NULL-parent handling (`content_items_slug_uq`, widened by `locale` in `0014`); `UNIQUE(translation_group, locale)` `content_items_translation_uq`; index `content_items_locale_list_idx (type, locale, status, published_at DESC, id DESC)`; `status ∈ {draft, pending, scheduled, published, private, trash}`; `version` for optimistic locking |
 | `content_meta` | `item_id` FK, `key`, `value` (json), PK(`item_id`,`key`) | Namespaced keys (`seo.title`, `plugin.<name>.*`) — plugin write scopes match on these. `seo.title` / `seo.description` (JSON strings) are written by content writes in the item's transaction (M2b P28) and read by the head |
 | `revisions` | `id` PK, `item_id` FK, `author_id`, `created_at`, `title`, `excerpt`, `body`, `fields`, `meta` (json snapshot), `note` | Written on every save; retention configurable (default: keep 50 per item) |
 | `autosaves` *(since `0007_autosaves`)* | `item_id` → `content_items` `ON DELETE CASCADE` (`autosaves_item_id_fk`), `user_id` → `users` `ON DELETE CASCADE` (`autosaves_user_id_fk`), `base_version` bigint, `title`, `excerpt` null (= derive), `slug` null, `parent_id` null (no FK; the working copy's parent, `null` = top level, R4), `menu_order` int null, `terms` json array null (`null` = unchanged for `slug`, `menu_order`, `terms` and `seo`, F11), `body` json, `fields` json, `seo` json null *(since `0008_autosave_seo`: the editor's SEO patch `{title?, description?}` as sent)*, `saved_at`; PK (`item_id`, `user_id`) `autosaves_pkey`; index `autosaves_user_idx (user_id)` (users FK on delete) | The admin's per-user working copy (M2b P15): never a revision; the user's next real save of the item deletes it; at most one row per (item, user), so no retention job; the `0007` down drops it (lossy), the `0008` down drops `seo` (lossy) |
 | `taxonomies` | `name` PK, `label`, `hierarchical`, `content_types` (json list), `built_in` | `category`, `tag` built in |
-| `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `UNIQUE(taxonomy, slug)` | |
+| `terms` | `id` PK, `taxonomy` FK, `slug`, `name`, `description`, `parent_id`, `locale`, `translation_group` null *(both since `0014`)*, `UNIQUE(taxonomy, locale, slug)` (`terms_taxonomy_slug_uq`, widened in `0014`), `UNIQUE(translation_group, locale)` `terms_translation_uq` | |
 | `term_links` | `item_id` FK, `term_id` FK, `position`, PK(`item_id`,`term_id`) | |
-| `menus` / `menu_items` | menu: `name` PK, `label`; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
+| `menus` / `menu_items` | menu: `name` PK, `label`, `locale`, `translation_of` null *(both since `0014`: the default-locale menu this one translates; `UNIQUE(translation_of, locale)` `menus_translation_uq`)*; item: `id`, `menu`, `parent_id`, `position`, `kind` (`item`/`term`/`url`), `target_id`, `url`, `label` | |
 | `media` | `item_id` PK/FK → `content_items` (type `media`), `artifact_hash` FK, `mime`, `bytes`, `width`, `height`, `alt`, `original_name`, `variants` (json: name → hash, w, h, mime), `sanitized` boolean not null default false (since `0006_media_comments`; SQLite `INTEGER CHECK (sanitized IN (0, 1))`) | `sanitized`: the stored bytes are the SVG sanitiser's output, so the file may be served inline (M2a-2b P7); the `0006` down drops it (lossy) |
 | `media_variants` | `hash`, `item_id` FK → `media` (`ON DELETE CASCADE`), `name`, PK(`item_id`,`name`), index on `hash` | Added by `0003_media_variants` (ruling R29). Derived from `media.variants` (one row per entry whose value is an object with a string `hash`), backfilled by the migration and kept in sync by `MediaRepo::insert`/`update` in the same transaction; `media.variants` stays the source of truth |
 | `comments` | `id`, `item_id` → `content_items` `CASCADE`, `parent_id` → `comments` `CASCADE`, `user_id` null → `users` `SET NULL`, `author_name`, `author_email` (ASCII-lowercased), `author_url` (`""` = none), `body` (plain text), `status` (`pending`/`approved`/`spam`/`trash`, no CHECK, P2), `ip_hash` null (keyed), `created_at`, `by_account` boolean not null default false (since `0006`; SQLite `INTEGER CHECK (by_account IN (0, 1))`; set on insert when `user_id` is given and kept after the user is deleted, so such a comment never counts for a guest in `has_approved_from`; the `0006` down drops it, lossy; `0006` does not backfill it: before `0006` no code path wrote comments (no `INSERT INTO comments` existed), so there are no rows to mark. Every later insert path, e.g. the M3 WXR importer, must set it whenever `user_id` is set, as `CommentRepo::insert` does); indexes `comments_item_created_idx (item_id, created_at)` (`0001`) and since `0006`: `comments_status_created_idx (status, created_at, id)` and `comments_created_idx (created_at, id)` (moderation queue), `comments_item_status_idx (item_id, status, created_at, id)` (an item's approved thread), `comments_author_email_idx (author_email, status)` and `comments_user_idx (user_id, status)` (`known` checks, F19; also the users FK on delete) | `CommentRepo` since M2a-2b |
@@ -600,6 +600,10 @@ crates/ferrite-store-sqlite/migrations/
     0011_artifact_gc.down.sql       #   and its partial index (P11, R3)
     0012_node_metrics.up.sql        # M4-2, phase expand, not lossy: node_metrics (P35)
     0012_node_metrics.down.sql
+    0013_oauth.up.sql               # M5, phase expand, not lossy: the OAuth tables
+    0013_oauth.down.sql
+    0014_locales.up.sql             # M6-1, phase expand, lossy-down: locales and translation
+    0014_locales.down.sql           #   groups; the down deletes non-default-locale rows
 crates/ferrite-store-postgres/migrations/
     0001_init.up.sql
     0001_init.down.sql
@@ -625,6 +629,10 @@ crates/ferrite-store-postgres/migrations/
     0011_artifact_gc.down.sql
     0012_node_metrics.up.sql        # M4-2, phase expand: node_metrics (P35, R7)
     0012_node_metrics.down.sql
+    0013_oauth.up.sql               # M5, phase expand: the OAuth tables
+    0013_oauth.down.sql
+    0014_locales.up.sql             # M6-1, phase expand, lossy-down (as SQLite)
+    0014_locales.down.sql
 ```
 
 - sqlx reversible migrations, embedded with `sqlx::migrate!()`; sqlx's
@@ -768,6 +776,14 @@ silently remove the guard.
   `ferrite_store::migrate::expand_lint`). One `DROP` passes since M3-2: a `DROP CONSTRAINT`
   that re-adds the same name as a `CHECK (col IN (<string literals>))` whose list is a
   strict superset of the one the down restores (a widening; Postgres `0010`, ruling R56).
+  Since M6-1 (`widens_unique`, design 13 D6) a unique index or constraint may be widened
+  the same way: `DROP INDEX x` immediately followed by `CREATE UNIQUE INDEX x ON t (…)`,
+  or `ALTER TABLE t DROP CONSTRAINT x, ADD CONSTRAINT x UNIQUE [NULLS NOT DISTINCT] (…)`,
+  passes when the new column list keeps, in order, every column of the one the down
+  restores under `x` and adds at least one (`0014_locales`). Every pair of rows the old
+  index allowed is still allowed, and the old binary's conflict handling on `x` still
+  fires (on SQLite the column-list form of `terms_taxonomy_slug_uq` reports new columns,
+  which a v0.2.0 binary does not map to the name; ruling R-1-2 in the M6-1 exit).
 - *Backward-compat check* (as built, M4-2 P38: `ci.yml` job `compat`,
   `.github/scripts/compat.sh`): CI finds the newest `v*` tag before `HEAD`, builds that
   tag's `ferrite` (debug, in its own worktree and target folder) and this commit's; the

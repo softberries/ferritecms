@@ -112,7 +112,7 @@ pub const BACKEND_SPECIFIC: &[&str] = &["search_docs"];
 
 use ColType::{Bool, Bytes, Id, Int, Json, Text, Timestamp as Ts};
 
-/// Every table of the latest schema (migrations 0001–0012), in foreign-key order: each
+/// Every table of the latest schema (migrations 0001–0014), in foreign-key order: each
 /// table comes after the tables it references. Not listed: SQLite's FTS5 `search_fts`
 /// and its shadow tables, and sqlx's `_sqlx_migrations`.
 pub static TABLES: &[TableSpec] = &[
@@ -179,10 +179,18 @@ pub static TABLES: &[TableSpec] = &[
             ("created_at", Ts),
             ("updated_at", Ts),
             ("version", Int),
+            ("locale", Text),
+            ("translation_group", Id),
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
-        nullable: &["parent_id", "body_html", "published_at", "scheduled_at"],
+        nullable: &[
+            "parent_id",
+            "body_html",
+            "published_at",
+            "scheduled_at",
+            "translation_group",
+        ],
         export: Export::Rows,
     },
     TableSpec {
@@ -235,10 +243,12 @@ pub static TABLES: &[TableSpec] = &[
             ("name", Text),
             ("description", Text),
             ("parent_id", Id),
+            ("locale", Text),
+            ("translation_group", Id),
         ],
         key: &["id"],
         self_ref: Some("parent_id"),
-        nullable: &["parent_id"],
+        nullable: &["parent_id", "translation_group"],
         export: Export::Rows,
     },
     TableSpec {
@@ -251,10 +261,15 @@ pub static TABLES: &[TableSpec] = &[
     },
     TableSpec {
         name: "menus",
-        columns: &[("name", Text), ("label", Text)],
+        columns: &[
+            ("name", Text),
+            ("label", Text),
+            ("locale", Text),
+            ("translation_of", Text),
+        ],
         key: &["name"],
         self_ref: None,
-        nullable: &[],
+        nullable: &["translation_of"],
         export: Export::Rows,
     },
     TableSpec {

@@ -523,10 +523,10 @@ fn import_site_into_newer_fresh_target_migrates_down_then_up() {
 
     let target = ex.tmp.path().join("target");
     init(&target);
-    assert_eq!(schema_version(&target), 13);
+    assert_eq!(schema_version(&target), 14);
     let out = import_site(&target, &path, &[]);
     assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(schema_version(&target), 13);
+    assert_eq!(schema_version(&target), 14);
     assert_eq!(count(&target, "artifacts"), count(&ex.source, "artifacts"));
     assert_eq!(
         count(&target, "content_items"),
@@ -539,17 +539,22 @@ fn import_site_into_newer_fresh_target_migrates_down_then_up() {
 /// the sha256s recomputed.
 fn v10_archive(ex: &Exported) -> Vec<u8> {
     let mut entries = unpack(&std::fs::read(&ex.archive).unwrap());
-    assert_eq!(schema_version(&ex.source), 13);
-    for (table, column) in [
-        ("artifacts", "orphaned_at"),
-        ("api_tokens", "oauth_grant_id"),
+    assert_eq!(schema_version(&ex.source), 14);
+    for (table, columns) in [
+        ("artifacts", &["orphaned_at"][..]),
+        ("api_tokens", &["oauth_grant_id"][..]),
+        ("content_items", &["locale", "translation_group"][..]),
+        ("terms", &["locale", "translation_group"][..]),
+        ("menus", &["locale", "translation_of"][..]),
     ] {
         let file = format!("tables/{table}.ndjson");
         let entry = entries.iter_mut().find(|(p, _)| *p == file).unwrap();
         let mut lines = Vec::new();
         for line in entry.1.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
             let mut row: serde_json::Map<String, Value> = serde_json::from_slice(line).unwrap();
-            assert!(row.remove(column).is_some());
+            for column in columns {
+                assert!(row.remove(*column).is_some(), "{table}.{column}");
+            }
             lines.extend(serde_json::to_vec(&row).unwrap());
             lines.push(b'\n');
         }
@@ -574,11 +579,11 @@ fn import_site_failure_after_migrate_down_restores_the_schema() {
     init(&target);
     let out = import_site(&target, &cut, &[]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
-    assert_eq!(schema_version(&target), 13, "the migrate-down is undone");
+    assert_eq!(schema_version(&target), 14, "the migrate-down is undone");
     assert_eq!(count(&target, "users"), 0);
     let out = import_site(&target, &whole, &[]);
     assert!(out.status.success(), "{}", text(&out));
-    assert_eq!(schema_version(&target), 13);
+    assert_eq!(schema_version(&target), 14);
     assert_eq!(count(&target, "users"), count(&ex.source, "users"));
 }
 
@@ -774,7 +779,7 @@ fn db_copy_refuses_the_same_source_and_target() {
     let source = seeded(tmp.path(), "source");
     let out = db_copy(&source, &source);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
-    assert_eq!(schema_version(&source), 13);
+    assert_eq!(schema_version(&source), 14);
     assert!(count(&source, "content_items") > 0);
 }
 
@@ -919,7 +924,7 @@ fn db_copy_sqlite_to_new_sqlite_file() {
     for table in ["content_items", "users", "artifacts", "media"] {
         assert_eq!(count(&source, table), count(&dest, table), "{table}");
     }
-    assert_eq!(schema_version(&dest), 13);
+    assert_eq!(schema_version(&dest), 14);
     // A second copy into the now filled database is refused.
     let mut c = ferrite();
     c.args(["db", "copy", "--from"])

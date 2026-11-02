@@ -17,6 +17,10 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("comments.id", "comments_pkey"),
     ("content_items.id", "content_items_pkey"),
     (
+        "content_items.translation_group, content_items.locale",
+        "content_items_translation_uq",
+    ),
+    (
         "content_meta.item_id, content_meta.key",
         "content_meta_pkey",
     ),
@@ -41,6 +45,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("menu_items.id", "menu_items_pkey"),
     ("menus.name", "menus_pkey"),
+    ("menus.translation_of, menus.locale", "menus_translation_uq"),
     (
         "node_metrics.node_id, node_metrics.minute",
         "node_metrics_pkey",
@@ -70,6 +75,15 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("term_links.item_id, term_links.term_id", "term_links_pkey"),
     ("terms.id", "terms_pkey"),
     ("terms.taxonomy, terms.slug", "terms_taxonomy_slug_uq"),
+    // 0014: widened by the locale.
+    (
+        "terms.taxonomy, terms.locale, terms.slug",
+        "terms_taxonomy_slug_uq",
+    ),
+    (
+        "terms.translation_group, terms.locale",
+        "terms_translation_uq",
+    ),
     ("themes.active", "themes_one_active_uq"),
     ("themes.name", "themes_pkey"),
     ("user_meta.user_id, user_meta.key", "user_meta_pkey"),

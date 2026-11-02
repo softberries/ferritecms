@@ -377,6 +377,67 @@ impl TestDb {
         }
     }
 
+    /// [`Self::exec_raw`] returning the database's error instead of panicking.
+    pub async fn try_exec_raw(&self, sql: &str) -> Result<(), String> {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let r = sqlx::raw_sql(AssertSqlSafe(sql.to_owned()))
+                    .execute(&mut c)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                c.close().await.expect("close raw sqlite connection");
+                r
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                let r = sqlx::raw_sql(AssertSqlSafe(format!(
+                    "SET search_path TO {}; {sql}",
+                    quote_ident(&f.schema)
+                )))
+                .execute(&mut c)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+                c.close().await.expect("close raw postgres connection");
+                r
+            }
+        }
+    }
+
+    /// The first column of every row `sql` returns, as text (`sql` must yield a text
+    /// column or `NULL`), on a dedicated connection.
+    pub async fn query_text(&self, sql: &str) -> Vec<Option<String>> {
+        match &self.backing {
+            Backing::Sqlite { path, .. } => {
+                let mut c = sqlite_conn(path).await;
+                let rows = sqlx::query_scalar(AssertSqlSafe(sql.to_owned()))
+                    .fetch_all(&mut c)
+                    .await
+                    .expect("query sqlite");
+                c.close().await.expect("close raw sqlite connection");
+                rows
+            }
+            Backing::Postgres(f) => {
+                let mut c = PgConnection::connect(&f.url).await.expect("connect");
+                sqlx::raw_sql(AssertSqlSafe(format!(
+                    "SET search_path TO {}",
+                    quote_ident(&f.schema)
+                )))
+                .execute(&mut c)
+                .await
+                .expect("search_path");
+                let rows = sqlx::query_scalar(AssertSqlSafe(sql.to_owned()))
+                    .fetch_all(&mut c)
+                    .await
+                    .expect("query postgres");
+                c.close().await.expect("close raw postgres connection");
+                rows
+            }
+        }
+    }
+
     /// Makes a job due: sets its `run_at` one second into the past (database clock).
     pub async fn force_job_due(&self, id: JobId) {
         let done = match &self.backing {

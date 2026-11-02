@@ -184,7 +184,7 @@ fn migrate_status_output() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains("database version: 14"), "{out}");
     assert!(
         out.contains(&format!("(ferrite {})", env!("CARGO_PKG_VERSION"))),
         "{out}"
@@ -210,7 +210,7 @@ fn migrate_status_output() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let out = stdout_code(
         {
             let mut c = ferrite();
@@ -252,7 +252,7 @@ fn migrate_status_output() {
 
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -275,7 +275,7 @@ fn migrate_down_requires_yes() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains("database version: 14"), "{out}");
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
         },
         0,
     );
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains("database version: 14"), "{out}");
 }
 
 /// M4-4 fix round 2 (Minor A): killed inside the `-wal` move (the link made, the source not
@@ -930,7 +930,7 @@ fn postgres_init_and_migrate() {
         stdout(c)
     };
     let out = status(tmp.path());
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains("database version: 14"), "{out}");
     assert!(out.contains("verdict: up to date"), "{out}");
 
     let mut c = ferrite();
@@ -944,13 +944,13 @@ fn postgres_init_and_migrate() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains("Reverted migrations: 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
     let mut c = ferrite();
     c.args(["migrate", "status", "--data"]).arg(tmp.path());
     assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"));
+    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));

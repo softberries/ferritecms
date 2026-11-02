@@ -105,7 +105,13 @@ fn directive_err(msg: String) -> StoreError {
 pub fn expand_lint(up_sql: &str, down_sql: &str) -> Vec<String> {
     let down = strip_comments(down_sql);
     let mut problems = Vec::new();
-    for original in strip_comments(up_sql).split(';') {
+    let up = strip_comments(up_sql);
+    let statements: Vec<&str> = up.split(';').collect();
+    for (i, original) in statements.iter().copied().enumerate() {
+        let next = statements[i + 1..]
+            .iter()
+            .copied()
+            .find(|s| !s.trim().is_empty());
         let stmt = original.to_uppercase();
         let stmt = stmt.as_str();
         let words = words(stmt);
@@ -113,7 +119,10 @@ pub fn expand_lint(up_sql: &str, down_sql: &str) -> Vec<String> {
             continue;
         }
         let label = words.iter().take(3).copied().collect::<Vec<_>>().join(" ");
-        if words.contains(&"DROP") && !widens_checks(original, &down) {
+        if words.contains(&"DROP")
+            && !widens_checks(original, &down)
+            && !widens_unique(original, next, &down)
+        {
             problems.push(format!("DROP in expand migration: `{label} ...`"));
         }
         if words.contains(&"RENAME") {
@@ -165,7 +174,7 @@ fn widens_checks(stmt: &str, down: &str) -> bool {
         .collect();
     let added = |clauses: &[ConstraintClause], name: &str| {
         clauses.iter().rev().find_map(|c| match c {
-            ConstraintClause::Add(n, check) if n == name => Some(check.clone()),
+            ConstraintClause::Add(n, check, _) if n == name => Some(check.clone()),
             _ => None,
         })
     };
@@ -195,8 +204,181 @@ struct CheckIn {
 
 enum ConstraintClause {
     Drop(String),
-    /// The constraint's name and, when it is one, its `CHECK (col IN (…))`.
-    Add(String, Option<CheckIn>),
+    /// The constraint's name and, when it is one, its `CHECK (col IN (…))` or its
+    /// `UNIQUE` column list.
+    Add(String, Option<CheckIn>, Option<UniqueCols>),
+}
+
+/// A `UNIQUE [NULLS NOT DISTINCT] (…)` constraint or a `CREATE UNIQUE INDEX` column
+/// list: each top-level item as normalised text (upper case, no whitespace).
+#[derive(Debug, Clone, PartialEq)]
+struct UniqueCols {
+    nulls_not_distinct: bool,
+    columns: Vec<String>,
+}
+
+impl UniqueCols {
+    /// Whether `self` keeps every column of `old` in order and adds at least one.
+    fn widens(&self, old: &UniqueCols) -> bool {
+        if self.nulls_not_distinct != old.nulls_not_distinct
+            || self.columns.len() <= old.columns.len()
+        {
+            return false;
+        }
+        let mut rest = self.columns.iter();
+        old.columns.iter().all(|c| rest.any(|n| n == c))
+    }
+}
+
+/// `( item [, item …] )` exactly, split on top-level commas.
+fn paren_list(tokens: &[Token]) -> Option<Vec<String>> {
+    let [Token::Punct('('), inner @ .., Token::Punct(')')] = tokens else {
+        return None;
+    };
+    let mut items = vec![String::new()];
+    let mut depth = 0i32;
+    for t in inner {
+        match t {
+            Token::Punct('(') => depth += 1,
+            Token::Punct(')') => depth -= 1,
+            Token::Punct(',') if depth == 0 => {
+                items.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        if depth < 0 {
+            return None;
+        }
+        let last = items.last_mut()?;
+        match t {
+            Token::Word(w) => {
+                if last
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                {
+                    last.push(' ');
+                }
+                last.push_str(w);
+            }
+            Token::Str(v) => {
+                last.push('\'');
+                last.push_str(&v.replace('\'', "''"));
+                last.push('\'');
+            }
+            Token::Punct(c) => last.push(*c),
+        }
+    }
+    (depth == 0 && items.iter().all(|i| !i.is_empty())).then_some(items)
+}
+
+/// `UNIQUE [NULLS NOT DISTINCT] ( … )`, exactly.
+fn unique_cols(tokens: &[Token]) -> Option<UniqueCols> {
+    let word = |t: &Token, w: &str| matches!(t, Token::Word(x) if x == w);
+    let (first, rest) = tokens.split_first()?;
+    if !word(first, "UNIQUE") {
+        return None;
+    }
+    let (nulls_not_distinct, rest) = match rest {
+        [a, b, c, rest @ ..] if word(a, "NULLS") && word(b, "NOT") && word(c, "DISTINCT") => {
+            (true, rest)
+        }
+        _ => (false, rest),
+    };
+    Some(UniqueCols {
+        nulls_not_distinct,
+        columns: paren_list(rest)?,
+    })
+}
+
+/// `CREATE UNIQUE INDEX name ON table ( … )`: the name, the table and the columns.
+fn create_unique_index(stmt: &str) -> Option<(String, String, UniqueCols)> {
+    let tokens = tokens(stmt)?;
+    let word = |t: &Token, w: &str| matches!(t, Token::Word(x) if x == w);
+    match tokens.as_slice() {
+        [
+            c,
+            u,
+            i,
+            Token::Word(name),
+            on,
+            Token::Word(table),
+            rest @ ..,
+        ] if word(c, "CREATE") && word(u, "UNIQUE") && word(i, "INDEX") && word(on, "ON") => {
+            Some((
+                name.clone(),
+                table.clone(),
+                UniqueCols {
+                    nulls_not_distinct: false,
+                    columns: paren_list(rest)?,
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// A unique index or constraint widened under its own name (design 13 D6): every pair
+/// of rows the old one allowed is still allowed, and a conflict on the name still
+/// fires for the old binary. Two forms pass:
+///
+/// - `DROP INDEX x` immediately followed by `CREATE UNIQUE INDEX x ON t (…)` (SQLite,
+///   and a Postgres unique index), whose columns keep, in order, every column of the
+///   `CREATE UNIQUE INDEX x ON t (…)` the down restores, plus at least one more;
+/// - `ALTER TABLE t DROP CONSTRAINT x, ADD CONSTRAINT x UNIQUE [NULLS NOT DISTINCT]
+///   (…)` (a Postgres constraint), widening the `ADD CONSTRAINT x UNIQUE` the down
+///   restores the same way (and with the same `NULLS NOT DISTINCT`).
+fn widens_unique(stmt: &str, next: Option<&str>, down: &str) -> bool {
+    let word = |t: &Token, w: &str| matches!(t, Token::Word(x) if x == w);
+    if let Some(tokens) = tokens(stmt)
+        && let [d, i, Token::Word(name)] = tokens.as_slice()
+        && word(d, "DROP")
+        && word(i, "INDEX")
+    {
+        let Some((new_name, table, new)) = next.and_then(create_unique_index) else {
+            return false;
+        };
+        let restored = down
+            .rsplit(';')
+            .filter_map(create_unique_index)
+            .find(|(n, _, _)| n == name);
+        return match restored {
+            Some((_, old_table, old)) => {
+                new_name == *name && old_table == table && new.widens(&old)
+            }
+            None => false,
+        };
+    }
+    let Some(swap) = constraint_clauses(stmt) else {
+        return false;
+    };
+    let added = |clauses: &[ConstraintClause], name: &str| {
+        clauses.iter().rev().find_map(|c| match c {
+            ConstraintClause::Add(n, _, unique) if n == name => Some(unique.clone()),
+            _ => None,
+        })
+    };
+    let restored = |name: &str| {
+        down.rsplit(';')
+            .filter_map(constraint_clauses)
+            .find_map(|clauses| added(&clauses, name))
+            .flatten()
+    };
+    let dropped: Vec<&String> = swap
+        .iter()
+        .filter_map(|c| match c {
+            ConstraintClause::Drop(name) => Some(name),
+            ConstraintClause::Add(..) => None,
+        })
+        .collect();
+    !dropped.is_empty()
+        && dropped.iter().all(|name| {
+            let (Some(Some(new)), Some(old)) = (added(&swap, name), restored(name)) else {
+                return false;
+            };
+            new.widens(&old)
+        })
 }
 
 #[derive(Debug, PartialEq)]
@@ -281,7 +463,11 @@ fn constraint_clauses(stmt: &str) -> Option<Vec<ConstraintClause>> {
             [Token::Word(op), c, Token::Word(name), rest @ ..]
                 if op == "ADD" && word(c, "CONSTRAINT") =>
             {
-                out.push(ConstraintClause::Add(name.clone(), check_in(rest)));
+                out.push(ConstraintClause::Add(
+                    name.clone(),
+                    check_in(rest),
+                    unique_cols(rest),
+                ));
             }
             _ => return None,
         }
@@ -760,6 +946,64 @@ mod tests {
             .is_empty()
         );
         assert!(!expand_lint("DROP TABLE t, ADD CONSTRAINT t CHECK (true);", down).is_empty());
+    }
+
+    /// A unique index or constraint replaced under its name by a strict superset of its
+    /// columns passes (design 13 D6).
+    #[test]
+    fn widening_unique_passes() {
+        let down = "DROP INDEX t_uq;\nCREATE UNIQUE INDEX t_uq ON t (a, coalesce(p, x''), s);";
+        let up = "DROP INDEX t_uq;\n\
+                  CREATE UNIQUE INDEX t_uq ON t (a, locale, coalesce(p, x''), s);";
+        assert_eq!(expand_lint(up, down), Vec::<String>::new());
+        let up_lower =
+            "drop index t_uq;\ncreate unique index t_uq on t (a, coalesce(p, x''), s, z);";
+        assert!(expand_lint(up_lower, down).is_empty());
+        let pg_down = "ALTER TABLE t DROP CONSTRAINT t_uq, \
+                       ADD CONSTRAINT t_uq UNIQUE NULLS NOT DISTINCT (a, p, s);";
+        let pg_up = "ALTER TABLE t DROP CONSTRAINT t_uq, \
+                     ADD CONSTRAINT t_uq UNIQUE NULLS NOT DISTINCT (a, locale, p, s);";
+        assert_eq!(expand_lint(pg_up, pg_down), Vec::<String>::new());
+    }
+
+    #[test]
+    fn narrowing_or_same_columns_fails() {
+        let down = "CREATE UNIQUE INDEX t_uq ON t (a, s);";
+        for create in [
+            "CREATE UNIQUE INDEX t_uq ON t (a, s)",
+            "CREATE UNIQUE INDEX t_uq ON t (a)",
+            "CREATE UNIQUE INDEX t_uq ON t (s, a, z)",
+            "CREATE UNIQUE INDEX t_uq ON other (a, z, s)",
+            "CREATE UNIQUE INDEX t_other ON t (a, z, s)",
+            "CREATE INDEX t_uq ON t (a, z, s)",
+        ] {
+            let up = format!("DROP INDEX t_uq;\n{create};");
+            assert!(!expand_lint(&up, down).is_empty(), "{create}");
+        }
+        let pg_down = "ALTER TABLE t DROP CONSTRAINT t_uq, ADD CONSTRAINT t_uq UNIQUE NULLS NOT DISTINCT (a, s);";
+        for add in [
+            "ADD CONSTRAINT t_uq UNIQUE NULLS NOT DISTINCT (a, s)",
+            "ADD CONSTRAINT t_uq UNIQUE (a, z, s)",
+            "ADD CONSTRAINT t_uq UNIQUE NULLS NOT DISTINCT (s, z, a)",
+        ] {
+            let up = format!("ALTER TABLE t DROP CONSTRAINT t_uq, {add};");
+            assert!(!expand_lint(&up, pg_down).is_empty(), "{add}");
+        }
+    }
+
+    #[test]
+    fn drop_without_recreate_fails() {
+        let down = "CREATE UNIQUE INDEX t_uq ON t (a, s);";
+        assert!(!expand_lint("DROP INDEX t_uq;", down).is_empty());
+        assert!(!expand_lint("DROP INDEX t_uq;\nSELECT 1;", down).is_empty());
+        // Recreated wider, but the down does not restore it: nothing to compare with.
+        assert!(
+            !expand_lint(
+                "DROP INDEX t_uq;\nCREATE UNIQUE INDEX t_uq ON t (a, z, s);",
+                ""
+            )
+            .is_empty()
+        );
     }
 
     /// The real Postgres `0010_import_jobs` widens `artifacts_kind_check` and passes.

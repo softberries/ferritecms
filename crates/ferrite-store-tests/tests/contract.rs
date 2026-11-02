@@ -23,6 +23,12 @@ backend_tests!(
     migration_0012_roundtrip,
     migration_0013_roundtrip,
     migrate_up_reports_snapshot,
+    migration_0014_roundtrip,
+    backfill_uses_site_locale_option,
+    old_style_insert_without_new_columns_works,
+    slug_unique_per_locale,
+    translation_unique_per_group,
+    down_deletes_non_default_rows_and_restores_indexes,
 );
 
 backend_tests!(
