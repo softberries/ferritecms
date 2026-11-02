@@ -132,11 +132,14 @@ offered: they stay with a person in the admin.
 
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
-| `plugins_list` | Lists the installed plugins with their state and approved permissions. | `extensions:read` | read |
+| `plugins_list` | Lists the installed plugins with their state, approved permissions and publisher (verified, signed or unsigned, and an update the registry offers). | `extensions:read` | read |
 | `plugin_enable` | Turns on an installed plugin. | `extensions:write` | write |
 | `plugin_disable` | Turns off an installed plugin; its settings and data are kept. | `extensions:write` | write |
 | `plugin_settings_get` | Reads a plugin's settings; a secret shows only whether it is set. | `extensions:read` | read |
 | `plugin_settings_update` | Changes a plugin's settings; a secret can be set or cleared but never read back. | `extensions:write` | write |
+
+Installing, updating and removing plugins, and revoking publisher keys, stay with a person in
+the admin or the CLI: no tool does them.
 
 ## Users
 

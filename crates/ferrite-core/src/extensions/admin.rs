@@ -68,6 +68,26 @@ impl ExtensionAdmin {
         require(actor, Capability::ManagePlugins)
     }
 
+    /// Whether `actor` may read plugins (`manage_plugins` with `extensions:read`): the
+    /// registry view and the publisher keys (M6-2).
+    pub fn authorize_plugin_reads(&self, actor: &Actor) -> Result<(), CoreError> {
+        require_reader(actor, Capability::ManagePlugins)
+    }
+
+    /// Whether `actor` may refresh the registry now: a plugin write, and at most one
+    /// refresh per minute for the whole site (`RateLimited` otherwise; M6-2, design 14
+    /// §7.3). Counts the attempt.
+    pub async fn authorize_registry_refresh(&self, actor: &Actor) -> Result<(), CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        crate::auth::limits::hit(
+            self.store.as_ref(),
+            &crate::auth::limits::registry_refresh(),
+            crate::auth::limits::REGISTRY_REFRESH_PER_SITE,
+            crate::auth::limits::WINDOW,
+        )
+        .await
+    }
+
     /// Whether `actor` may write themes; handlers call it before unpacking an upload.
     pub fn authorize_themes(&self, actor: &Actor) -> Result<(), CoreError> {
         require(actor, Capability::ManageThemes)
@@ -205,6 +225,13 @@ impl ExtensionAdmin {
         source_if_new: KeySource,
     ) -> Result<Vec<String>, CoreError> {
         require(actor, Capability::ManagePlugins)?;
+        let reason = revocation.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 500 {
+            return Err(CoreError::invalid_field(
+                "reason",
+                "a reason of 1 to 500 characters is required",
+            ));
+        }
         let details = json!({
             "key_id": key.key_id.to_string(),
             "reason": revocation.reason,

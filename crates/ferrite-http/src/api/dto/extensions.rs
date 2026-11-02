@@ -16,7 +16,7 @@ use ferrite_core::{
 use ferrite_domain::plugin_trust::{InstallSource, KeySource, OwnerId};
 use ferrite_domain::{FailureBucket, InstalledPlugin, InstalledTheme, Node};
 use ferrite_plugin_host::{HookStats, LimitItem, PermissionItem, PermissionReport, PluginMeta};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -978,4 +978,183 @@ pub struct PluginMetricsDto {
     pub failures: Vec<FailureBucketDto>,
     /// The answering node's call statistics (each node counts its own).
     pub node: NodeHookStatsDto,
+}
+
+/// The configured registry and its cached copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RegistryMetaDto {
+    /// The index URL.
+    pub url: String,
+    /// The index's `name`; `null` before the first successful check.
+    pub name: Option<String>,
+    pub serial: Option<i64>,
+    pub generated_at: Option<DateTime<Utc>>,
+    /// The last successful check.
+    pub checked_at: Option<DateTime<Utc>>,
+    /// The last failed check's error, cleared by a successful one.
+    pub last_error: Option<String>,
+    pub last_error_at: Option<DateTime<Utc>>,
+}
+
+/// A registry plugin that is installed here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RegistryInstalledDto {
+    pub version: String,
+    /// A newer version this binary runs is listed (and may be installed over it).
+    pub update_available: bool,
+    /// The registry publisher owns this plugin's data (`false`: unsigned-owned, an
+    /// update binds its data to the registry publisher).
+    pub publisher_matches: bool,
+}
+
+/// One plugin of the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RegistryPluginDto {
+    pub name: String,
+    pub publisher: PublisherRefDto,
+    pub description: String,
+    pub homepage: Option<String>,
+    pub license: Option<String>,
+    /// The newest version this binary runs, not yanked; `null` when none.
+    pub latest: Option<String>,
+    /// Every listed version, newest first (yanked ones included).
+    pub versions: Vec<RegistryVersionDto>,
+    pub installed: Option<RegistryInstalledDto>,
+}
+
+/// One listed version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RegistryVersionDto {
+    pub version: String,
+    pub world: String,
+    pub published_at: Option<DateTime<Utc>>,
+    /// Why it was yanked; `null` when it is not.
+    pub yanked: Option<String>,
+}
+
+/// `GET /plugins/registry`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct RegistryDto {
+    /// `null` when no registry is configured.
+    pub registry: Option<RegistryMetaDto>,
+    /// The cached index's plugins matching `q`, by name (at most 50).
+    pub plugins: Vec<RegistryPluginDto>,
+}
+
+impl From<crate::extensions::RegistryView> for RegistryDto {
+    fn from(v: crate::extensions::RegistryView) -> Self {
+        Self {
+            registry: v.registry.map(|m| RegistryMetaDto {
+                url: m.url,
+                name: m.name,
+                serial: m.serial,
+                generated_at: m.generated_at.map(|t| t.as_datetime()),
+                checked_at: m.checked_at.map(|t| t.as_datetime()),
+                last_error: m.last_error,
+                last_error_at: m.last_error_at.map(|t| t.as_datetime()),
+            }),
+            plugins: v
+                .plugins
+                .into_iter()
+                .map(|p| {
+                    let mut versions: Vec<RegistryVersionDto> = p
+                        .plugin
+                        .versions
+                        .iter()
+                        .map(|v| RegistryVersionDto {
+                            version: v.version.clone(),
+                            world: v.world.clone(),
+                            published_at: v.published_at.map(|t| t.as_datetime()),
+                            yanked: v.yanked.clone(),
+                        })
+                        .collect();
+                    versions.sort_by(|a, b| {
+                        match (
+                            semver::Version::parse(&a.version),
+                            semver::Version::parse(&b.version),
+                        ) {
+                            (Ok(a), Ok(b)) => b.cmp(&a),
+                            _ => b.version.cmp(&a.version),
+                        }
+                    });
+                    RegistryPluginDto {
+                        name: p.plugin.name,
+                        publisher: PublisherRefDto {
+                            id: p.plugin.publisher,
+                            name: p.publisher_name,
+                        },
+                        description: p.plugin.description,
+                        homepage: p.plugin.homepage,
+                        license: p.plugin.license,
+                        latest: p.latest,
+                        versions,
+                        installed: p.installed.map(|i| RegistryInstalledDto {
+                            version: i.version,
+                            update_available: i.update_available,
+                            publisher_matches: i.publisher_matches,
+                        }),
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// `POST /plugins/registry/inspect`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryInspectRequest {
+    pub name: String,
+    /// Default: the newest version this binary runs, not yanked.
+    pub version: Option<String>,
+}
+
+/// `POST /plugins/registry/install`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryInstallRequest {
+    pub name: String,
+    pub version: String,
+    /// The `fingerprint` of the report `POST /plugins/registry/inspect` gave.
+    pub approve: String,
+}
+
+/// A publisher key this site knows: its own (approved, operator), the configured
+/// registry's, and every revocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PublisherKeyDto {
+    pub key_id: String,
+    /// The minisign public key (base64 line).
+    pub public_key: String,
+    pub label: String,
+    /// `approved`, `operator` or `registry`.
+    pub source: String,
+    /// The registry publisher that lists it.
+    pub registry_publisher: Option<PublisherRefDto>,
+    /// When this site trusted it; `null` for a registry key with no row here.
+    pub trusted_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_reason: Option<String>,
+    pub compromised: bool,
+    /// The installed or retained plugins whose current version it signed.
+    pub plugins: Vec<String>,
+}
+
+/// `GET /plugins/publishers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct PublisherKeyList {
+    pub items: Vec<PublisherKeyDto>,
+    /// `[plugins] signatures`.
+    pub policy: String,
+}
+
+/// `POST /plugins/publishers/{key_id}/revoke`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeKeyRequest {
+    /// Why (1..=500 characters; shown with the key and on disabled plugins).
+    pub reason: String,
+    /// The key was stolen or leaked: every installed plugin it signed is disabled.
+    #[serde(default)]
+    pub compromised: bool,
 }
