@@ -142,6 +142,9 @@ impl FerriteMcp {
         if input.changes.is_empty() {
             return results::invalid(Some("changes"), "send at least one setting to change");
         }
+        if let Err(p) = results::within_json_cap("changes", &input.changes) {
+            return results::from_problem(p);
+        }
         let keys: Vec<String> = input.changes.keys().cloned().collect();
         match set_theme_settings(&self.api, caller.actor(), &input.name, input.changes).await {
             Ok(s) => {

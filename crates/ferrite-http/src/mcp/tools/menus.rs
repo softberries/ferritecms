@@ -206,6 +206,9 @@ impl FerriteMcp {
         };
         let mut items = Vec::new();
         flatten(input.items, None, &mut items);
+        if let Err(p) = results::within_json_cap("items", &items) {
+            return results::from_problem(p);
+        }
         let menu = Menu {
             name: input.name,
             label,

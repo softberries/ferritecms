@@ -49,7 +49,10 @@ use crate::{
         },
         problem::Problem,
     },
-    mcp::{Caller, FerriteMcp, results},
+    mcp::{
+        Caller, FerriteMcp,
+        results::{self, bad_input},
+    },
 };
 
 /// The largest `body_markdown`, in bytes.
@@ -856,12 +859,6 @@ fn with_notes(mut summary: String, notes: &[String]) -> String {
     summary
 }
 
-/// `422 validation` naming `field` (when known).
-fn bad(field: Option<&str>, detail: impl Into<String>) -> Problem {
-    let detail = detail.into();
-    Problem::validation(detail.clone()).with_error(field, detail)
-}
-
 /// A body converted for a write.
 struct Body {
     /// The new body; `None` when the call sends none.
@@ -880,7 +877,7 @@ fn resolve_body(
     title: Option<&str>,
 ) -> Result<Body, Problem> {
     match (markdown, blocks) {
-        (Some(_), Some(_)) => Err(bad(
+        (Some(_), Some(_)) => Err(bad_input(
             Some("body_markdown"),
             "send body_markdown or body_blocks, not both",
         )),
@@ -892,11 +889,12 @@ fn resolve_body(
         }),
         (None, Some(doc)) => {
             if !blocks::is_document(&doc) {
-                return Err(bad(
+                return Err(bad_input(
                     Some("body_blocks"),
                     "body_blocks must be a document: {\"type\":\"doc\",\"content\":[...]}",
                 ));
             }
+            results::within_json_cap("body_blocks", &doc)?;
             Ok(Body {
                 body: Some(doc),
                 field: "body_blocks",
@@ -906,7 +904,7 @@ fn resolve_body(
         }
         (Some(markdown), None) => {
             if markdown.len() > MAX_BODY_MARKDOWN {
-                return Err(bad(
+                return Err(bad_input(
                     Some("body_markdown"),
                     format!(
                         "body_markdown is {} bytes; the limit is {MAX_BODY_MARKDOWN} (1 MiB). \
@@ -920,7 +918,7 @@ fn resolve_body(
             let lifted = match (given, converted.title) {
                 (Some(g), Some(h)) if g.to_lowercase() == h.trim().to_lowercase() => None,
                 (Some(g), Some(h)) => {
-                    return Err(bad(
+                    return Err(bad_input(
                         Some("body_markdown"),
                         format!(
                             "body_markdown starts with the heading \"# {h}\", which differs from \
@@ -1152,7 +1150,7 @@ impl FerriteMcp {
         if missing.is_empty() {
             return Ok(());
         }
-        Err(bad(
+        Err(bad_input(
             Some(field),
             format!(
                 "no media you can read has the id{} {}. Find media ids with media_list or \
@@ -1252,13 +1250,16 @@ impl FerriteMcp {
         let api = &self.api;
         let actor = caller.actor();
         known_type(api, actor, &input.kind).await?;
+        if let Some(fields) = &input.fields {
+            results::within_json_cap("fields", fields)?;
+        }
         let converted = resolve_body(
             input.body_markdown,
             input.body_blocks,
             input.title.as_deref(),
         )?;
         let title = converted.title.or(input.title).ok_or_else(|| {
-            bad(
+            bad_input(
                 Some("title"),
                 "a title is required: send `title`, or start body_markdown with a `# Heading`",
             )
@@ -1321,7 +1322,7 @@ impl FerriteMcp {
             && input.featured_image.is_none()
             && input.seo.is_none()
         {
-            return Err(bad(
+            return Err(bad_input(
                 None,
                 "nothing to change: send at least one of title, slug, excerpt, body_markdown, \
                  body_blocks, fields, terms, parent, featured_image or seo",
@@ -1332,6 +1333,9 @@ impl FerriteMcp {
             input.body_blocks,
             input.title.as_deref(),
         )?;
+        if let Some(fields) = &input.fields {
+            results::within_json_cap("fields", fields)?;
+        }
         // The members sent replace the same members of the stored fields; `null` clears
         // a member.
         let fields = if input.fields.is_some() || input.featured_image.is_some() {
@@ -1464,7 +1468,7 @@ impl FerriteMcp {
         let at = DateTime::parse_from_rfc3339(input.at.trim())
             .map(|t| t.with_timezone(&Utc))
             .map_err(|_| {
-                bad(
+                bad_input(
                     Some("at"),
                     "at must be an RFC 3339 time with its zone, for example 2026-12-01T09:00:00Z",
                 )
@@ -1566,7 +1570,7 @@ impl FerriteMcp {
     async fn preview_link(&self, caller: &Caller, input: ItemInput) -> Result<PreviewOut, Problem> {
         let item = load(&self.api, caller.actor(), &input.kind, input.id).await?;
         if item.status == ferrite_domain::ContentStatus::Trash {
-            return Err(bad(
+            return Err(bad_input(
                 None,
                 "a trashed item has no preview; restore it with content_restore first",
             ));

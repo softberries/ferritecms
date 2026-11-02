@@ -69,6 +69,9 @@ impl FerriteMcp {
         if input.changes.is_empty() {
             return results::invalid(Some("changes"), "send at least one setting to change");
         }
+        if let Err(p) = results::within_json_cap("changes", &input.changes) {
+            return results::from_problem(p);
+        }
         if input.changes.contains_key(MCP_ENABLED) {
             return results::invalid(
                 Some(MCP_ENABLED),

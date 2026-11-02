@@ -16,7 +16,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::api::problem::Problem;
+use crate::api::{extract::MAX_JSON_BODY, problem::Problem};
 use ferrite_core::CoreError;
 
 /// A successful result: `value` as structured content, `summary` for people.
@@ -72,10 +72,62 @@ pub fn from_problem(p: Problem) -> CallToolResult {
 }
 
 /// An error result for input the tool refuses before calling core (`422 validation`,
-/// with `field` when known).
+/// with `field` when known): [`bad_input`] as a result.
 pub fn invalid(field: Option<&str>, detail: impl Into<String>) -> CallToolResult {
+    from_problem(bad_input(field, detail))
+}
+
+/// The problem of input a tool refuses before calling core: `422 validation` naming
+/// `field` (when known).
+pub fn bad_input(field: Option<&str>, detail: impl Into<String>) -> Problem {
     let detail = detail.into();
-    from_problem(Problem::validation(detail.clone()).with_error(field, detail))
+    Problem::validation(detail.clone()).with_error(field, detail)
+}
+
+/// `Err` ([`bad_input`] naming `field`) when `value`, serialized as JSON, is larger than
+/// the REST API's body cap ([`MAX_JSON_BODY`], 4 MiB). `/mcp` accepts bigger requests
+/// (for base64 uploads), but a structured value a tool writes stays within what
+/// `/api/v1` would take. Counts the bytes without keeping them.
+pub fn within_json_cap(field: &str, value: &impl Serialize) -> Result<(), Problem> {
+    /// Counts bytes and stops the serializer once past the cap.
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            if self.0 > MAX_JSON_BODY {
+                return Err(std::io::Error::other("over the cap"));
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match serde_json::to_writer(&mut count, value) {
+        Ok(()) => Ok(()),
+        Err(_) if count.0 > MAX_JSON_BODY => Err(bad_input(
+            Some(field),
+            format!(
+                "{field} is more than {MAX_JSON_BODY} bytes as JSON (4 MiB, the REST API's \
+                 limit). Send less at once"
+            ),
+        )),
+        Err(e) => {
+            tracing::error!(error = %e, field, "MCP input not serializable");
+            Err(Problem::internal())
+        }
+    }
+}
+
+/// The summary of one page of a listing, without a final period: `"3 jobs"`, `"1 job"`,
+/// with `"; more with next_cursor"` when `more`.
+pub fn page_summary(n: usize, noun: &str, more: bool) -> String {
+    format!(
+        "{n} {noun}{}{}",
+        if n == 1 { "" } else { "s" },
+        if more { "; more with next_cursor" } else { "" }
+    )
 }
 
 #[cfg(test)]
@@ -94,6 +146,30 @@ mod tests {
         assert_eq!(r.structured_content, Some(json!({"a": 1})));
         assert_eq!(text(&r), "one item");
         assert_eq!(r.content[1].as_text().unwrap().text, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn page_summaries() {
+        assert_eq!(page_summary(0, "job", false), "0 jobs");
+        assert_eq!(page_summary(1, "job", false), "1 job");
+        assert_eq!(
+            page_summary(2, "audit row", true),
+            "2 audit rows; more with next_cursor"
+        );
+    }
+
+    #[test]
+    fn json_cap_matches_the_rest_api() {
+        assert!(within_json_cap("fields", &json!({"a": "b"})).is_ok());
+        // Exactly at the cap is fine; one byte more is not.
+        let at_cap = "x".repeat(MAX_JSON_BODY - 2);
+        assert!(within_json_cap("fields", &json!(at_cap)).is_ok());
+        let over = json!({"text": "x".repeat(MAX_JSON_BODY)});
+        let p = within_json_cap("fields", &over).unwrap_err();
+        let doc = p.document();
+        assert_eq!(doc.status, 422);
+        assert_eq!(doc.errors[0].field.as_deref(), Some("fields"));
+        assert!(doc.detail.contains("4 MiB"), "{}", doc.detail);
     }
 
     #[test]

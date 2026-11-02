@@ -31,6 +31,7 @@ api_tests!(
     content_resource_reads_an_item,
     content_tools_are_annotated,
     other_types_and_missing_items,
+    structured_inputs_keep_the_rest_cap,
 );
 
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1460,5 +1461,69 @@ async fn other_types_and_missing_items(api: Api) -> Api {
     let r = tool(&api, &none.0, "content_list", json!({"type": "post"})).await;
     assert_eq!(problem(&r)["status"], 403, "{r}");
     assert!(text(&r).contains("content:read"), "{}", text(&r));
+    api
+}
+
+/// `/mcp` takes up to 9 MiB (base64 uploads), but `body_blocks`, `fields`, menu items and
+/// settings maps stay within the REST API's 4 MiB JSON cap.
+async fn structured_inputs_keep_the_rest_cap(api: Api) -> Api {
+    let (_, t) = editor(&api).await;
+    let big = "a".repeat(4 * 1024 * 1024 + 1);
+    let blocks = json!({"type": "doc", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": big}]}
+    ]});
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Huge", "body_blocks": blocks}),
+    )
+    .await;
+    let p = problem(&r);
+    assert_eq!(p["status"], 422, "{p}");
+    assert_eq!(p["errors"][0]["field"], "body_blocks", "{p}");
+    let r = tool(
+        &api,
+        &t.0,
+        "content_create",
+        json!({"type": "post", "title": "Huge", "fields": {"note": big}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "fields", "{r}");
+    let made = create(&api, &t, json!({"type": "post", "title": "Small"})).await;
+    let r = tool(
+        &api,
+        &t.0,
+        "content_update",
+        json!({"type": "post", "id": made["id"], "version": made["version"],
+            "fields": {"note": big}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "fields", "{r}");
+    let admin = api.user("caps-admin", Role::Admin, false).await;
+    let a = api.bearer(&admin, &["*"]).await;
+    let r = tool(
+        &api,
+        &a.0,
+        "settings_update",
+        json!({"changes": {"site.title": big}}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "changes", "{r}");
+    let r = tool(
+        &api,
+        &a.0,
+        "menu_set",
+        json!({"name": "primary", "items": [{"kind": "url", "label": "x", "url": format!("/{big}")}]}),
+    )
+    .await;
+    assert_eq!(problem(&r)["errors"][0]["field"], "items", "{r}");
+    // Nothing was written.
+    assert!(
+        !rows(&api)
+            .await
+            .iter()
+            .any(|r| r.action == "mcp.settings_update")
+    );
     api
 }

@@ -37,7 +37,10 @@ use crate::{
         media::{check_cursor, dto, dtos},
         problem::Problem,
     },
-    mcp::{Caller, FerriteMcp, results},
+    mcp::{
+        Caller, FerriteMcp,
+        results::{self, bad_input},
+    },
     media::UploadError,
 };
 
@@ -572,11 +575,11 @@ impl FerriteMcp {
         let cap = MAX_UPLOAD_BYTES.min(api.max_upload);
         let (staged, source, host) = match (data_base64, url) {
             (Some(_), Some(_)) | (None, None) => {
-                return Err(bad(None, "send exactly one of data_base64 and url"));
+                return Err(bad_input(None, "send exactly one of data_base64 and url"));
             }
             (Some(data), None) => {
                 let name = filename.ok_or_else(|| {
-                    bad(Some("filename"), "filename is required with data_base64")
+                    bad_input(Some("filename"), "filename is required with data_base64")
                 })?;
                 check_file_name(&name).map_err(|_| bad_filename())?;
                 // Decoded only once an upload slot is taken: a busy node answers without
@@ -591,7 +594,7 @@ impl FerriteMcp {
                 let parsed = api
                     .uploader
                     .check_fetch_url(&raw)
-                    .map_err(|why| bad(Some("url"), why))?;
+                    .map_err(|why| bad_input(Some("url"), why))?;
                 let name = match filename {
                     Some(n) => {
                         check_file_name(&n).map_err(|_| bad_filename())?;
@@ -600,7 +603,7 @@ impl FerriteMcp {
                     None => {
                         let n = name_from_url(&parsed);
                         check_file_name(&n).map_err(|_| {
-                            bad(
+                            bad_input(
                                 Some("filename"),
                                 "the URL gives no usable file name; send filename",
                             )
@@ -649,16 +652,10 @@ impl FerriteMcp {
 
 /// The refusal of a `filename` that core's file name rules reject.
 fn bad_filename() -> Problem {
-    bad(
+    bad_input(
         Some("filename"),
         "filename is invalid: it needs 1 to 255 bytes, no control characters, and is not . or ..",
     )
-}
-
-/// `422 validation` naming `field` (when known).
-fn bad(field: Option<&str>, detail: impl Into<String>) -> Problem {
-    let detail = detail.into();
-    Problem::validation(detail.clone()).with_error(field, detail)
 }
 
 /// The summary line of a media item.
@@ -684,7 +681,7 @@ fn decode_base64(data: &str, cap: u64) -> Result<Bytes, Problem> {
         return Err(too_large());
     }
     let bytes = STANDARD.decode(data.trim()).map_err(|_| {
-        bad(
+        bad_input(
             Some("data_base64"),
             "not valid standard base64 (RFC 4648 with = padding, no line breaks, no data: prefix)",
         )

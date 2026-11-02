@@ -44,7 +44,10 @@ both speak HTTP), plugins adding MCP tools (later: a WIT extension, see §10).
   `Origin` header that is not the site's origin is refused (`403`). Requests without
   `Origin` (server-side clients) pass.
 - **Body limit** 9 MiB (a 6 MiB media upload as base64 plus the JSON envelope, §5.2);
-  responses are JSON.
+  responses are JSON. Structured values a tool writes (`body_blocks`, `fields`, `menu_set`
+  items, the settings maps of `settings_update`, `theme_settings_update` and
+  `plugin_settings_update`) are refused with a field error above the REST API's 4 MiB JSON
+  cap, so MCP writes nothing `/api/v1` would not take.
 - Server info: name `FerriteCMS`, the binary version, and `instructions`: a short text that
   tells the model what the site is (title, URL, content types), how content is written
   (Markdown in, Markdown out), that changes are live, and to ask before destructive steps.
