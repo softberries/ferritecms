@@ -3,7 +3,8 @@
 //! that file.
 
 use anyhow::{Context, Result, anyhow, bail};
-use minisign_verify::{PublicKey, Signature};
+use ferrite_domain::plugin_trust::PublisherKey;
+use ferrite_plugin_host::trust::{TrustError, verify_minisig};
 
 /// The embedded release key file: minisign's two lines since the release gate (key id
 /// 432051207B9BA065); before it, a comment-only placeholder.
@@ -11,7 +12,7 @@ const RELEASE_PUB: &str = include_str!("../../release.pub");
 
 /// The release key this binary trusts; `None` for a build without one (a placeholder file).
 /// Under `test-seams`, `FERRITE_TEST_RELEASE_PUBKEY` replaces the embedded file.
-pub(super) fn release_key() -> Result<Option<PublicKey>> {
+pub(super) fn release_key() -> Result<Option<PublisherKey>> {
     #[cfg(feature = "test-seams")]
     if let Ok(text) = std::env::var("FERRITE_TEST_RELEASE_PUBKEY") {
         return parse_key(&text);
@@ -22,31 +23,21 @@ pub(super) fn release_key() -> Result<Option<PublicKey>> {
 /// Parses a minisign public key file (`untrusted comment: …` + base64 line) or a bare
 /// base64 key. Blank lines and lines starting with `#` are ignored; nothing else left
 /// means no key.
-fn parse_key(text: &str) -> Result<Option<PublicKey>> {
-    let lines: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .collect();
-    let key = match lines.as_slice() {
-        [] => return Ok(None),
-        [comment, b64] if comment.starts_with("untrusted comment:") => PublicKey::from_base64(b64),
-        [b64] => PublicKey::from_base64(b64),
-        _ => bail!("the embedded release key is malformed"),
-    };
-    key.map(Some)
-        .map_err(|e| anyhow!("the embedded release key is malformed: {e}"))
+fn parse_key(text: &str) -> Result<Option<PublisherKey>> {
+    PublisherKey::parse(text).map_err(|e| anyhow!("the embedded release key is malformed: {e}"))
 }
 
 /// Checks `signature` (a `.minisig` file) over `sums` with `key`. Only prehashed
 /// signatures (minisign's default since 0.8) are accepted.
-pub(super) fn check_signature(key: &PublicKey, sums: &[u8], signature: &[u8]) -> Result<()> {
+pub(super) fn check_signature(key: &PublisherKey, sums: &[u8], signature: &[u8]) -> Result<()> {
     let text = std::str::from_utf8(signature)
         .map_err(|_| anyhow!("the SHA256SUMS signature is not valid minisign text"))?;
-    let sig = Signature::decode(text)
-        .map_err(|e| anyhow!("the SHA256SUMS signature is malformed: {e}"))?;
-    key.verify(sums, &sig, false)
-        .map_err(|e| anyhow!("the SHA256SUMS signature does not verify with the release key: {e}"))
+    verify_minisig(key, sums, text).map_err(|e| match e {
+        TrustError::Mismatch | TrustError::UnknownKey(_) => {
+            anyhow!("the SHA256SUMS signature does not verify with the release key: {e}")
+        }
+        other => anyhow!("the SHA256SUMS signature is malformed: {other}"),
+    })
 }
 
 /// The sha256 (lowercase hex) that `sums` (`sha256sum` output) lists for `name`.

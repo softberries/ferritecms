@@ -338,7 +338,8 @@ pub(crate) fn capabilities_json(c: &Capabilities) -> Value {
     Value::Object(out)
 }
 
-const WORLD: &str = "ferrite:plugin/plugin@0.1.0";
+/// The plugin world this host runs.
+pub const WORLD: &str = "ferrite:plugin/plugin@0.1.0";
 const HTTP_METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 #[derive(Default)]
