@@ -20,6 +20,15 @@ name: Release
 # edited copy of this workflow cannot reach the key. (Environments in a private
 # repository need a paid GitHub plan.)
 #
+# Signed plugins and the registry index (M6-2, design 14 §11; ruling P5): the same
+# environment may hold PLUGINS_SECRET_KEY / PLUGINS_PASSWORD (the publisher key of
+# ferritecms.dev, whose public half is registry/publishers.json's key) and
+# REGISTRY_SECRET_KEY / REGISTRY_PASSWORD (the index key, whose public half is
+# crates/ferrite/registry.pub). While they are absent, `plugins-sign` packs the plugins
+# unsigned, as before M6-2, and publishes no index (a notice says so); the dry run signs
+# with throwaway keys either way. Creating the keys: docs/design/09-operations.md,
+# "Plugin keys".
+#
 # Every action is pinned by its commit SHA (the comment names the version).
 
 on:
@@ -227,11 +236,140 @@ jobs:
           toolchain: stable
           targets: wasm32-wasip2
       - run: cargo build --release --locked --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form
-      - run: .github/scripts/package-plugins.sh "$VERSION" dist
+      # Checked here (the version rule) and packed by the sign jobs below.
+      - run: .github/scripts/package-plugins.sh "$VERSION" "$RUNNER_TEMP/check"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugins-wasm
+          path: |
+            plugins/target/wasm32-wasip2/release/seo.wasm
+            plugins/target/wasm32-wasip2/release/analytics.wasm
+            plugins/target/wasm32-wasip2/release/contact_form.wasm
+          if-no-files-found: error
+          retention-days: 7
+
+  # M6-2: signs the three example plugins with the ferritecms.dev publisher key and writes
+  # the registry index on top of the published one (verified with registry.pub first: a
+  # tampered Pages copy is never re-signed), signed with the registry key; then packs the
+  # plugins tarball from the signed folders and the per-plugin registry assets. Without the
+  # PLUGINS_*/REGISTRY_* secrets it packs the plugins unsigned and writes no index.
+  plugins-sign:
+    needs: [meta, plugins]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugins-wasm
+          path: plugins/target/wasm32-wasip2/release
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          minisign -v
+      - name: Sign the plugins and the registry index
+        env:
+          PLUGINS_SECRET_KEY: ${{ secrets.PLUGINS_SECRET_KEY }}
+          PLUGINS_PASSWORD: ${{ secrets.PLUGINS_PASSWORD }}
+          REGISTRY_SECRET_KEY: ${{ secrets.REGISTRY_SECRET_KEY }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          if [ -z "$PLUGINS_SECRET_KEY" ] || [ -z "$REGISTRY_SECRET_KEY" ]; then
+            echo "::notice::PLUGINS_SECRET_KEY or REGISTRY_SECRET_KEY is not set: the plugins are packed unsigned and no registry index is published (ruling P5)"
+            .github/scripts/package-plugins.sh "$VERSION" dist
+            exit 0
+          fi
+          umask 077
+          keys="$RUNNER_TEMP/keys"
+          mkdir -p "$keys"
+          trap 'rm -rf "$keys"' EXIT
+          printf '%s\n' "$PLUGINS_SECRET_KEY" > "$keys/plugins.key"
+          printf '%s\n' "$REGISTRY_SECRET_KEY" > "$keys/registry.key"
+          # The public halves: registry/publishers.json's first key, and registry.pub.
+          python3 -c 'import json; k=json.load(open("registry/publishers.json"))["publishers"][0]["keys"]; print(k[0] if k else "")' > "$keys/plugins.pub"
+          if [ ! -s "$keys/plugins.pub" ] || [ "$(cat "$keys/plugins.pub")" = "" ]; then
+            echo "::error::registry/publishers.json lists no key for ferritecms.dev, but PLUGINS_SECRET_KEY is set"
+            exit 1
+          fi
+          if ! grep -v '^[[:space:]]*#' crates/ferrite/registry.pub | grep -q '[^[:space:]]'; then
+            echo "::error::crates/ferrite/registry.pub is the placeholder, but REGISTRY_SECRET_KEY is set"
+            exit 1
+          fi
+          # The published index, verified before it is built upon.
+          base=https://softberries.github.io/ferritecms/registry/v1/index.json
+          previous=-
+          code=$(curl -sS -o "$RUNNER_TEMP/previous.json" -w '%{http_code}' "$base" || echo 000)
+          if [ "$code" = 200 ]; then
+            curl -fsS -o "$RUNNER_TEMP/previous.json.minisig" "$base.minisig"
+            .github/scripts/verify-file.sh crates/ferrite/registry.pub "$RUNNER_TEMP/previous.json"
+            previous="$RUNNER_TEMP/previous.json"
+          elif [ "$code" = 404 ]; then
+            if gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
+                gh release view "$tag" --json assets --jq '.assets[].name' | grep -qx ferrite-registry-index.json && echo "$tag"
+              done | grep -q .; then
+              echo "::error::the published index is missing, but an earlier release has one: refusing to start again at serial 1"
+              exit 1
+            fi
+            echo "::notice::no published index yet: starting at serial 1"
+          else
+            echo "::error::fetching $base answered $code"
+            exit 1
+          fi
+          .github/scripts/sign-plugins.sh "$VERSION" dist "$keys/plugins.key" "$keys/plugins.pub" \
+            "$keys/registry.key" crates/ferrite/registry.pub "$previous"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-plugins
-          path: dist/*.tar.gz
+          path: dist/ferrite-*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # The dry run of `plugins-sign`, with two throwaway keys made here (their .pub files go
+  # into the artifact), as `sign-dry-run` does for the release key.
+  plugins-sign-dry-run:
+    needs: [meta, plugins]
+    if: needs.meta.outputs.publish != 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugins-wasm
+          path: plugins/target/wasm32-wasip2/release
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          minisign -v
+      - name: Sign with throwaway keys
+        run: |
+          mkdir -p dist
+          minisign -G -W -p dist/throwaway-plugins.pub -s "$RUNNER_TEMP/plugins.key"
+          minisign -G -W -p dist/throwaway-registry.pub -s "$RUNNER_TEMP/registry.key"
+          EXTRA_KEY=dist/throwaway-plugins.pub .github/scripts/sign-plugins.sh "$VERSION" dist \
+            "$RUNNER_TEMP/plugins.key" dist/throwaway-plugins.pub \
+            "$RUNNER_TEMP/registry.key" dist/throwaway-registry.pub -
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-plugins
+          path: |
+            dist/ferrite-*
+            dist/throwaway-*.pub
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -240,7 +378,7 @@ jobs:
   # made with the release key of the `release` environment. Only one of the two sign jobs
   # runs; both upload the artifact `release`.
   sign:
-    needs: [meta, build, plugins]
+    needs: [meta, build, plugins-sign]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     environment: release
@@ -286,7 +424,7 @@ jobs:
 
   # A dry run signs with a throwaway key made here (its .pub goes into the artifact).
   sign-dry-run:
-    needs: [meta, build, plugins]
+    needs: [meta, build, plugins-sign-dry-run]
     if: needs.meta.outputs.publish != 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -327,6 +465,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # M6-2: the last step starts pages.yml, which publishes the registry index.
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -353,12 +493,15 @@ jobs:
           fi
       - name: Upload the assets
         run: |
-          gh release upload "$TAG" --clobber dist/ferrite-*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.minisig
+          shopt -s nullglob
+          # Seven tarballs (six targets and the plugins), SHA256SUMS and its signature, and
+          # (M6-2, with the plugin keys set) six per-plugin registry assets and the index.
+          assets=(dist/ferrite-*.tar.gz dist/ferrite-plugin-*.toml dist/ferrite-plugin-*.wasm dist/ferrite-registry-index.json dist/ferrite-registry-index.json.minisig dist/SHA256SUMS dist/SHA256SUMS.minisig)
+          gh release upload "$TAG" --clobber "${assets[@]}"
           count=$(gh release view "$TAG" --json assets --jq '.assets | length')
-          # Seven tarballs (six targets and the plugins), SHA256SUMS and its signature.
-          if [ "$count" -ne 9 ]; then
+          if [ "$count" -ne "${#assets[@]}" ] || { [ "$count" -ne 9 ] && [ "$count" -ne 17 ]; }; then
             gh release view "$TAG" --json assets --jq '.assets[].name'
-            echo "::error::expected 9 assets on $TAG, found $count"
+            echo "::error::expected ${#assets[@]} (9, or 17 with signed plugins) assets on $TAG, found $count"
             exit 1
           fi
       # Only the newest stable version becomes GitHub's latest release (newest.sh).
@@ -369,6 +512,11 @@ jobs:
           else
             gh release edit "$TAG" --draft=false --latest=false
           fi
+      # M6-2: pages.yml places the latest release's registry index on Pages. A
+      # workflow_dispatch made with GITHUB_TOKEN starts a run (other events would not).
+      - name: Publish the registry index on Pages
+        if: needs.meta.outputs.latest == 'true'
+        run: gh workflow run pages.yml --ref main
 
   # The image (P37), built natively per platform and pushed by digest once the binaries
   # are built and signed; `image-tags` joins the digests under the version tags once the
