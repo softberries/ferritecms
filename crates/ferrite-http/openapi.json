@@ -10546,7 +10546,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The requested scopes this user can grant (preselect these); `<area>:write`\nimplies `<area>:read`."
+            "description": "The requested scopes this user can grant (preselect these); `<area>:write`\nimplies `<area>:read`. Never `users:write`, `import:write` or `system:write`."
           },
           "id": {
             "type": "string",
@@ -10555,14 +10555,14 @@
           },
           "redirect_host": {
             "type": "string",
-            "description": "Where the browser goes back to: the host of an `http(s)` redirect URI,\n`scheme://host` for another scheme, the whole URI when it has no host."
+            "description": "Where the browser goes back to: the host of an `http(s)` redirect URI (with a\nnon-default port, `app.example:8443`), `scheme://host` for another scheme, the\nwhole URI when it has no host."
           },
           "requested": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The requested scopes (all 22 when the client named none)."
+            "description": "The requested scopes (the 19 an OAuth grant can hold when the client named none)."
           },
           "verified": {
             "type": "boolean",

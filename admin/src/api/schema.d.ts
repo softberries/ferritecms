@@ -1656,7 +1656,7 @@ export interface components {
             client: components["schemas"]["OAuthClientDto"];
             /**
              * @description The requested scopes this user can grant (preselect these); `<area>:write`
-             *     implies `<area>:read`.
+             *     implies `<area>:read`. Never `users:write`, `import:write` or `system:write`.
              */
             grantable: string[];
             /**
@@ -1665,11 +1665,12 @@ export interface components {
              */
             id: string;
             /**
-             * @description Where the browser goes back to: the host of an `http(s)` redirect URI,
-             *     `scheme://host` for another scheme, the whole URI when it has no host.
+             * @description Where the browser goes back to: the host of an `http(s)` redirect URI (with a
+             *     non-default port, `app.example:8443`), `scheme://host` for another scheme, the
+             *     whole URI when it has no host.
              */
             redirect_host: string;
-            /** @description The requested scopes (all 22 when the client named none). */
+            /** @description The requested scopes (the 19 an OAuth grant can hold when the client named none). */
             requested: string[];
             /**
              * @description `true` when the client is known by a metadata document, `false` when it

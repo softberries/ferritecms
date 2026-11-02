@@ -65,13 +65,14 @@ pub struct ConsentDto {
     /// `true` when the client is known by a metadata document, `false` when it
     /// registered itself.
     pub verified: bool,
-    /// Where the browser goes back to: the host of an `http(s)` redirect URI,
-    /// `scheme://host` for another scheme, the whole URI when it has no host.
+    /// Where the browser goes back to: the host of an `http(s)` redirect URI (with a
+    /// non-default port, `app.example:8443`), `scheme://host` for another scheme, the
+    /// whole URI when it has no host.
     pub redirect_host: String,
-    /// The requested scopes (all 22 when the client named none).
+    /// The requested scopes (the 19 an OAuth grant can hold when the client named none).
     pub requested: Vec<String>,
     /// The requested scopes this user can grant (preselect these); `<area>:write`
-    /// implies `<area>:read`.
+    /// implies `<area>:read`. Never `users:write`, `import:write` or `system:write`.
     pub grantable: Vec<String>,
 }
 
