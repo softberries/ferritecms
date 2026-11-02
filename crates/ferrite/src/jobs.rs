@@ -14,6 +14,7 @@ mod gc;
 mod import;
 pub(crate) mod media;
 mod permalinks;
+mod registry;
 
 use std::{sync::Arc, time::Duration};
 
@@ -46,6 +47,10 @@ pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};
 pub use permalinks::PermalinkRedirectsHandler;
+pub use registry::{
+    REGISTRY_CHECK_EVERY, REGISTRY_CHECK_KIND, REGISTRY_CHECK_OFFSET, RegistryCheckHandler,
+    registry_check_periodic,
+};
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
