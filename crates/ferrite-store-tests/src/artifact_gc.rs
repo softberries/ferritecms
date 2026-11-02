@@ -454,7 +454,7 @@ pub async fn migration_0011_roundtrip(db: &TestDb) {
 
     assert_eq!(
         store.migrate_down(10, false).await.unwrap(),
-        vec![13, 12, 11]
+        vec![16, 13, 12, 11]
     );
     let has_index = |objects: &[String]| {
         objects
@@ -464,7 +464,7 @@ pub async fn migration_0011_roundtrip(db: &TestDb) {
     assert!(!has_index(&db.user_objects().await));
     assert_eq!(
         store.migrate_up(None).await.unwrap().applied,
-        vec![11, 12, 13]
+        vec![11, 12, 13, 16]
     );
     assert_eq!(orphaned_at(db, 'a').await, None);
     assert!(has_index(&db.user_objects().await));

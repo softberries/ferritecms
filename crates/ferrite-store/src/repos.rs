@@ -199,6 +199,7 @@ pub trait Repos: Send + Sync {
     fn imports(&self) -> &dyn ImportRepo;
     fn node_metrics(&self) -> &dyn NodeMetricsRepo;
     fn oauth(&self) -> &dyn OAuthRepo;
+    fn webhooks(&self) -> &dyn crate::WebhookRepo;
 }
 
 /// Per-node minute metrics (`node_metrics`, M4-2 P35).

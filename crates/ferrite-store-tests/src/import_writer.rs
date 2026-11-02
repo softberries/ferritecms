@@ -310,6 +310,24 @@ pub fn rich_site() -> Dump {
                 "fields": {}, "saved_at": T_NOW, "seo": {"title": "x"}})]),
         ),
         (
+            "webhook_endpoints",
+            rows(vec![
+                json!({"id": uid(0xa01), "name": "deploy", "url": "https://hooks.example/x?t=1",
+                       "events": ["content.*"], "content_types": ["post"], "enabled": true,
+                       "install_id": "install-rich", "secret_sealed": "sealed",
+                       "previous_secret_sealed": "old",
+                       "previous_secret_expires_at": T_NOW, "payload_version": 1,
+                       "failing_since": T_NOW, "consecutive_failures": 2,
+                       "last_success_at": T_PRE_1970, "last_failure_at": T_NOW,
+                       "created_by": uid(U1), "created_at": T_NOW, "updated_at": T_NOW}),
+                json!({"id": uid(0xa02), "name": "gone", "url": "https://other.example/",
+                       "events": ["*"], "content_types": null, "enabled": false,
+                       "disabled_reason": "gone", "disabled_at": T_NOW,
+                       "install_id": "install-rich", "secret_sealed": "sealed2",
+                       "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
             "import_runs",
             rows(vec![json!({
                 "id": uid(0x901), "source": "wp:example", "token": "tok", "state": "done",

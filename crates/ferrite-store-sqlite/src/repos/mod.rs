@@ -34,6 +34,7 @@ mod search;
 mod site;
 mod taxonomy;
 mod user;
+mod webhook;
 
 use async_trait::async_trait;
 use ferrite_store::{
@@ -41,7 +42,7 @@ use ferrite_store::{
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
     NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
     RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, WebhookRepo,
 };
 use sqlx::SqlitePool;
 
@@ -157,6 +158,9 @@ impl Repos for SqliteRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self
     }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -241,4 +245,5 @@ delegate_repos!(
     imports: ImportRepo,
     node_metrics: NodeMetricsRepo,
     oauth: OAuthRepo,
+    webhooks: WebhookRepo,
 );

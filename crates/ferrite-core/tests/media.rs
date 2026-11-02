@@ -898,6 +898,9 @@ impl Repos for FailingTx {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.oauth()
     }
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.webhooks()
+    }
 }
 
 #[async_trait]
