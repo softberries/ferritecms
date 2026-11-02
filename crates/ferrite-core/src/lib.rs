@@ -31,6 +31,7 @@ mod taxonomy;
 mod tx;
 mod types;
 mod users;
+pub mod webhooks;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
 pub const MAX_PARENT_DEPTH: usize = 64;

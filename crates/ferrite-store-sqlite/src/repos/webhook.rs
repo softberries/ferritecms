@@ -167,6 +167,19 @@ impl WebhookRepo for SqliteRepos {
         row.as_ref().map(endpoint).transpose()
     }
 
+    async fn get_endpoint_for_update(
+        &self,
+        id: WebhookId,
+    ) -> Result<Option<WebhookEndpoint>, StoreError> {
+        // Inside a Tx the reader is the transaction, which holds the single writer.
+        let row = run!(&self.reader, |x| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE id = ?"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(x))?;
+        row.as_ref().map(endpoint).transpose()
+    }
+
     async fn list_endpoints(&self) -> Result<Vec<WebhookEndpoint>, StoreError> {
         let rows = run!(&self.reader, |x| sqlx::query(AssertSqlSafe(format!(
             "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints \

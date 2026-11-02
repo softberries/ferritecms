@@ -174,6 +174,12 @@ pub async fn endpoint_crud_and_cascade(db: &TestDb) {
     );
     assert_eq!(w.get_endpoint(a.id).await.unwrap(), Some(a.clone()));
     assert_eq!(w.get_endpoint(WebhookId::new()).await.unwrap(), None);
+    let tx = store.begin().await.unwrap();
+    assert_eq!(
+        tx.webhooks().get_endpoint_for_update(a.id).await.unwrap(),
+        Some(a.clone())
+    );
+    tx.rollback().await.unwrap();
 
     // Whole-row update.
     let mut changed = a.clone();

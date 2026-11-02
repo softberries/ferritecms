@@ -72,6 +72,12 @@ pub trait WebhookRepo: Send + Sync {
     /// Inserts an endpoint; a known id is `UniqueViolation`.
     async fn insert_endpoint(&self, endpoint: &WebhookEndpoint) -> Result<(), StoreError>;
     async fn get_endpoint(&self, id: WebhookId) -> Result<Option<WebhookEndpoint>, StoreError>;
+    /// The endpoint, its row locked until the `Tx` ends (Postgres `FOR UPDATE`; SQLite
+    /// serialises writers anyway), for a read-modify-write of the whole row.
+    async fn get_endpoint_for_update(
+        &self,
+        id: WebhookId,
+    ) -> Result<Option<WebhookEndpoint>, StoreError>;
     /// Every endpoint by name (binary order), then id, at most
     /// [`MAX_WEBHOOK_ENDPOINTS_READ`].
     async fn list_endpoints(&self) -> Result<Vec<WebhookEndpoint>, StoreError>;

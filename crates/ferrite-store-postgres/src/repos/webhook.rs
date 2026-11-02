@@ -151,6 +151,18 @@ impl WebhookRepo for PgRepos {
         row.as_ref().map(endpoint).transpose()
     }
 
+    async fn get_endpoint_for_update(
+        &self,
+        id: WebhookId,
+    ) -> Result<Option<WebhookEndpoint>, StoreError> {
+        let row = run!(&self.exec, |x| sqlx::query(AssertSqlSafe(format!(
+            "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE id = $1 FOR UPDATE"
+        )))
+        .bind(id.as_uuid())
+        .fetch_optional(x))?;
+        row.as_ref().map(endpoint).transpose()
+    }
+
     async fn list_endpoints(&self) -> Result<Vec<WebhookEndpoint>, StoreError> {
         let rows = run!(&self.exec, |x| sqlx::query(AssertSqlSafe(format!(
             "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints \
@@ -171,9 +183,8 @@ impl WebhookRepo for PgRepos {
 
     async fn update_endpoint(&self, e: &WebhookEndpoint) -> Result<(), StoreError> {
         check_webhook_endpoint(e)?;
-        let done =
-            run!(&self.exec, |x| {
-                sqlx::query(
+        let done = run!(&self.exec, |x| {
+            sqlx::query(
             "UPDATE webhook_endpoints SET name = $1, url = $2, events = $3, content_types = $4, \
              enabled = $5, disabled_reason = $6, disabled_at = $7, install_id = $8, \
              secret_sealed = $9, previous_secret_sealed = $10, \
@@ -201,7 +212,7 @@ impl WebhookRepo for PgRepos {
         .bind(pg(e.updated_at))
         .bind(e.id.as_uuid())
         .execute(x)
-            })?;
+        })?;
         if done.rows_affected() == 0 {
             return Err(StoreError::NotFound);
         }
