@@ -232,12 +232,10 @@ impl FerriteMcp {
         match run.await {
             Ok(out) => {
                 let n = out.items.len();
-                let more = if out.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
-                let summary = format!("{n} media item{}{more}.", if n == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{}.",
+                    results::page_summary(n, "media item", out.next_cursor.is_some())
+                );
                 results::ok(out, summary)
             }
             Err(p) => results::from_problem(p),

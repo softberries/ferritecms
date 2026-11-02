@@ -9,7 +9,6 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_core::comments::Commenter;
-use ferrite_domain::MAX_PAGE;
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -173,7 +172,7 @@ impl FerriteMcp {
         Parameters(input): Parameters<ListInput>,
     ) -> CallToolResult {
         let limit = match per_page(input.per_page) {
-            Ok(n) => n.min(MAX_PAGE),
+            Ok(n) => n,
             Err(e) => return e,
         };
         let actor = caller.actor();
@@ -195,14 +194,9 @@ impl FerriteMcp {
         match comment_page(&self.api, actor, params, limit).await {
             Ok(page) => {
                 let n = page.items.len();
-                let more = if page.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
                 let summary = format!(
-                    "{n} comment{}{more} ({} pending in all).",
-                    if n == 1 { "" } else { "s" },
+                    "{} ({} pending in all).",
+                    results::page_summary(n, "comment", page.next_cursor.is_some()),
                     counts.pending
                 );
                 results::ok(

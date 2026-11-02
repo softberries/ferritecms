@@ -22,7 +22,6 @@ use crate::{
             content::nullable,
             types::{TaxonomyDto, TermDto},
         },
-        problem::Problem,
         taxonomies::{TermChange, merge_term},
     },
     mcp::{Caller, FerriteMcp, results},
@@ -331,7 +330,7 @@ impl FerriteMcp {
                 let summary = format!("Updated the term {:?} (slug {}).", term.name, term.slug);
                 results::ok(TermDto::from(term), summary)
             }
-            Err(e) => results::from_problem(Problem::from(e)),
+            Err(e) => results::from_core(e),
         }
     }
 

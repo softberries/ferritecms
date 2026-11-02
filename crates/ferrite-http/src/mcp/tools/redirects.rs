@@ -7,7 +7,7 @@
 //! source, target, code, loop and chain rules. Redirects are last-write-wins, as in the
 //! REST API (no version).
 
-use ferrite_domain::{MAX_PAGE, RedirectId, RedirectQuery};
+use ferrite_domain::{RedirectId, RedirectQuery};
 use ferrite_store::REDIRECT_CURSOR_TAG;
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
 use schemars::JsonSchema;
@@ -17,10 +17,7 @@ use uuid::Uuid;
 
 use super::per_page;
 use crate::{
-    api::{
-        dto::site::RedirectDto, extract::invalid_cursor, problem::Problem,
-        redirects::merge_redirect,
-    },
+    api::{dto::site::RedirectDto, extract::invalid_cursor, redirects::merge_redirect},
     mcp::{Caller, FerriteMcp, results},
 };
 
@@ -112,7 +109,7 @@ impl FerriteMcp {
         Parameters(input): Parameters<ListInput>,
     ) -> CallToolResult {
         let limit = match per_page(input.per_page) {
-            Ok(n) => n.min(MAX_PAGE),
+            Ok(n) => n,
             Err(e) => return e,
         };
         if let Some(c) = &input.cursor
@@ -139,12 +136,10 @@ impl FerriteMcp {
                     next_cursor: page.next_cursor,
                 };
                 let n = out.items.len();
-                let more = if out.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
-                let summary = format!("{n} redirect{}{more}.", if n == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{}.",
+                    results::page_summary(n, "redirect", out.next_cursor.is_some())
+                );
                 results::ok(out, summary)
             }
             Err(e) => results::from_core(e),
@@ -233,7 +228,7 @@ impl FerriteMcp {
                 let summary = format!("{} -> {} ({}).", r.source_path, r.target, r.code);
                 results::ok(RedirectDto::from(r), summary)
             }
-            Err(e) => results::from_problem(Problem::from(e)),
+            Err(e) => results::from_core(e),
         }
     }
 

@@ -10,7 +10,7 @@
 //! can never carry them, whatever the DTO grows later.
 
 use chrono::{DateTime, Utc};
-use ferrite_domain::{MAX_PAGE, User, UserId};
+use ferrite_domain::{User, UserId};
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -108,7 +108,7 @@ impl FerriteMcp {
         Parameters(input): Parameters<ListInput>,
     ) -> CallToolResult {
         let limit = match per_page(input.per_page) {
-            Ok(n) => n.min(MAX_PAGE),
+            Ok(n) => n,
             Err(e) => return e,
         };
         let params = UserListParams {
@@ -125,12 +125,10 @@ impl FerriteMcp {
                     next_cursor: page.next_cursor,
                 };
                 let n = out.items.len();
-                let more = if out.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
-                let summary = format!("{n} user{}{more}.", if n == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{}.",
+                    results::page_summary(n, "user", out.next_cursor.is_some())
+                );
                 results::ok(out, summary)
             }
             Err(p) => results::from_problem(p),

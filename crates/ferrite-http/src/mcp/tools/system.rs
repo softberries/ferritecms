@@ -7,7 +7,6 @@
 //! anything is read, so other roles and narrower tokens learn nothing, not even the
 //! version.
 
-use ferrite_domain::MAX_PAGE;
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -128,7 +127,7 @@ impl FerriteMcp {
         Parameters(input): Parameters<JobsInput>,
     ) -> CallToolResult {
         let limit = match per_page(input.per_page) {
-            Ok(n) => n.min(MAX_PAGE),
+            Ok(n) => n,
             Err(e) => return e,
         };
         let params = JobListParams {
@@ -140,12 +139,10 @@ impl FerriteMcp {
         match job_page(&self.api, caller.actor(), params, limit).await {
             Ok(page) => {
                 let n = page.items.len();
-                let more = if page.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
-                let summary = format!("{n} job{}{more}.", if n == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{}.",
+                    results::page_summary(n, "job", page.next_cursor.is_some())
+                );
                 results::ok(page, summary)
             }
             Err(p) => results::from_problem(p),
@@ -164,7 +161,7 @@ impl FerriteMcp {
         Parameters(input): Parameters<AuditInput>,
     ) -> CallToolResult {
         let limit = match per_page(input.per_page) {
-            Ok(n) => n.min(MAX_PAGE),
+            Ok(n) => n,
             Err(e) => return e,
         };
         let params = AuditListParams {
@@ -178,12 +175,10 @@ impl FerriteMcp {
         match audit_page(&self.api, caller.actor(), params).await {
             Ok(page) => {
                 let n = page.items.len();
-                let more = if page.next_cursor.is_some() {
-                    "; more with next_cursor"
-                } else {
-                    ""
-                };
-                let summary = format!("{n} audit row{}{more}.", if n == 1 { "" } else { "s" });
+                let summary = format!(
+                    "{}.",
+                    results::page_summary(n, "audit row", page.next_cursor.is_some())
+                );
                 results::ok(page, summary)
             }
             Err(p) => results::from_problem(p),
