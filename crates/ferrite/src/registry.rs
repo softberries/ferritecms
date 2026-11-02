@@ -6,7 +6,7 @@
 use anyhow::{Context, Result, bail};
 use ferrite_config::{DEFAULT_REGISTRY_URL, PluginTrustConfig};
 use ferrite_domain::plugin_trust::PublisherKey;
-use ferrite_http::extensions::RegistryTarget;
+use ferrite_http::extensions::{RegistryTarget, TrustSettings};
 use url::Url;
 
 /// The embedded registry index key file.
@@ -42,6 +42,14 @@ fn configured_with(
     };
     let url = Url::parse(url).context("plugins.registry is not a URL")?;
     Ok(Some(RegistryTarget { url, key }))
+}
+
+/// The install pipeline's trust settings for this configuration.
+pub fn trust_settings(cfg: &PluginTrustConfig) -> Result<TrustSettings> {
+    Ok(TrustSettings {
+        policy: cfg.signatures,
+        registry: configured(cfg)?,
+    })
 }
 
 /// How `config check` and doctor describe the registry setting.

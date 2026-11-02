@@ -40,7 +40,8 @@ pub async fn install_plugin_file(
         media.clone(),
         crate::serve::host_config(limits),
     )
-    .context("cannot start a plugin host")?;
+    .context("cannot start a plugin host")?
+    .with_trust(crate::registry::trust_settings(&limits.trust)?);
     let inspected = installer
         .inspect_plugin(manifest_toml, Bytes::copy_from_slice(wasm))
         .await
@@ -59,13 +60,13 @@ pub(crate) async fn record_plugin(
 ) -> anyhow::Result<InstalledPlugin> {
     let name = inspected.manifest().plugin.name.clone();
     let fingerprint = inspected.report().fingerprint.clone();
-    let (artifact, row) = installer
+    let staged = installer
         .stage_plugin(inspected, &fingerprint)
         .await
-        .context("cannot upload the plugin component")?;
+        .with_context(|| format!("cannot install plugin {name:?}"))?;
     let service = ExtensionService::new(store.clone());
     service
-        .install_plugin(&artifact, &row)
+        .install_plugin_trusted(&staged.artifact, &staged.row, &staged.trust)
         .await
         .with_context(|| format!("cannot record plugin {name:?}"))?;
     if enabled {

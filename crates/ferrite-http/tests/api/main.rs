@@ -27,6 +27,7 @@ mod menu_locations;
 mod metrics_series;
 mod oauth;
 mod plugins;
+mod plugins_trust;
 mod redirect_search;
 mod reset;
 mod sessions;

@@ -31,16 +31,20 @@
 //! in the request: a concurrent install of the same bytes that has uploaded them but not
 //! yet recorded its rows would lose its blob.
 
+mod trust;
+
 use std::sync::Arc;
 
 use axum::http::StatusCode;
 use bytes::Bytes;
 use ferrite_core::{
-    CoreError,
+    CoreError, InstallTrust, TrustDecision,
     ext_settings::{SettingDef, SettingType, SettingsSchema},
 };
+use ferrite_domain::plugin_trust::{InstallSource, KeyId};
 use ferrite_domain::{Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, Timestamp};
 use ferrite_media::{MediaError, MediaStore};
+use ferrite_plugin_host::trust::TrustError;
 use ferrite_plugin_host::{
     ApprovedLimits, Grant, HostConfig, InMemoryServices, Manifest, ManifestError, ManifestProblem,
     PermissionReport, PluginError, PluginHost, PreparedPlugin,
@@ -55,6 +59,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::api::Problem;
+
+pub use trust::{BundleSignature, TrustContext, TrustSettings};
 
 /// Largest plugin component accepted (plan "Exact values"): 32 MiB.
 pub const MAX_PLUGIN_BYTES: u64 = 32 * 1024 * 1024;
@@ -107,6 +113,13 @@ pub enum ExtensionError {
     Approval(String),
     #[error(transparent)]
     Core(#[from] CoreError),
+    /// A signature that is present but does not verify, names an unknown key, is legacy
+    /// or malformed (M6-2 D6: never treated as unsigned).
+    #[error("{0}")]
+    Trust(TrustError),
+    /// The `publisher_key` part (or `ferrite-plugin.pub`) is not a minisign public key.
+    #[error("the publisher key is not a minisign public key: {0}")]
+    PublisherKey(String),
     /// A blocking task panicked or was cancelled (runtime shutdown).
     #[error("internal error: {0}")]
     Task(String),
@@ -161,6 +174,20 @@ impl From<ExtensionError> for Problem {
             ExtensionError::Approval(message) => {
                 Self::validation(message.clone()).with_error(Some("approve"), message)
             }
+            ExtensionError::Trust(TrustError::TooLarge) => Self::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "too-large",
+                "Request too large",
+                e.to_string(),
+            ),
+            ExtensionError::Trust(_) => {
+                let detail = e.to_string();
+                Self::validation(detail.clone()).with_error(Some("signature"), detail)
+            }
+            ExtensionError::PublisherKey(_) => {
+                let detail = e.to_string();
+                Self::validation(detail.clone()).with_error(Some("publisher_key"), detail)
+            }
             ExtensionError::TooLarge { limit } => Self::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "too-large",
@@ -187,9 +214,49 @@ pub struct Inspected {
     report: PermissionReport,
     wasm: Bytes,
     update: bool,
+    /// What core gets at install (M6-2).
+    trust: InstallTrust,
+    /// Core's trust decision on the state at inspection, or its refusal (the install
+    /// decides again in its transaction).
+    decision: Result<TrustDecision, TrustRefusal>,
+}
+
+/// A trust refusal core made at inspection (`InvalidField` on `signature` or
+/// `publisher`), kept so the report can still be shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustRefusal {
+    pub field: &'static str,
+    pub message: String,
+}
+
+impl From<TrustRefusal> for CoreError {
+    fn from(r: TrustRefusal) -> Self {
+        CoreError::InvalidField {
+            field: r.field,
+            message: r.message,
+        }
+    }
+}
+
+/// An approved, uploaded plugin: the rows to record and the trust core decides with.
+#[derive(Debug, Clone)]
+pub struct Staged {
+    pub artifact: Artifact,
+    pub row: InstalledPlugin,
+    pub trust: InstallTrust,
 }
 
 impl Inspected {
+    /// The upload's trust input (signer, claim, policy, source, registry).
+    pub fn trust(&self) -> &InstallTrust {
+        &self.trust
+    }
+
+    /// The trust decision at inspection: `Err` is the refusal an install would get.
+    pub fn decision(&self) -> &Result<TrustDecision, TrustRefusal> {
+        &self.decision
+    }
+
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
     }
@@ -229,6 +296,7 @@ pub struct Installer {
     slots: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     prepare: PrepareFn,
+    trust: TrustSettings,
     #[cfg(feature = "test-seams")]
     theme_loaded: Option<ThemeLoadedFn>,
 }
@@ -251,6 +319,7 @@ impl Installer {
             prepare: Arc::new(|host, manifest, wasm, approved| {
                 host.prepare_with(manifest, wasm, approved)
             }),
+            trust: TrustSettings::default(),
             #[cfg(feature = "test-seams")]
             theme_loaded: None,
         })
@@ -289,12 +358,28 @@ impl Installer {
         self
     }
 
-    /// Checks a plugin upload and builds its permission report (see the module docs).
-    /// Nothing is written.
+    /// Checks an unsigned plugin upload and builds its permission report (see the module
+    /// docs). Nothing is written.
     pub async fn inspect_plugin(
         &self,
         manifest_toml: &str,
         wasm: Bytes,
+    ) -> Result<Inspected, ExtensionError> {
+        self.inspect_bundle(manifest_toml, wasm, None, InstallSource::Upload)
+            .await
+    }
+
+    /// [`inspect_plugin`](Self::inspect_plugin) of a bundle that may be signed (M6-2,
+    /// design 14 §2.3): a signature is verified against the given publisher key, the
+    /// site's keys and the cached registry index's keys before anything else is decided
+    /// (a bad one is refused, never treated as unsigned), the report's fingerprint
+    /// covers the signer, and core's trust decision is made on the stored state.
+    pub async fn inspect_bundle(
+        &self,
+        manifest_toml: &str,
+        wasm: Bytes,
+        signature: Option<BundleSignature>,
+        source: InstallSource,
     ) -> Result<Inspected, ExtensionError> {
         if wasm.len() as u64 > MAX_PLUGIN_BYTES {
             return Err(ExtensionError::TooLarge {
@@ -303,6 +388,37 @@ impl Installer {
         }
         let manifest = Manifest::parse(manifest_toml)?;
         let manifest_json = manifest_json(manifest_toml)?;
+        let registry = self.registry_context().await?;
+        let signer = match &signature {
+            None => None,
+            Some(sig) => Some(
+                self.verify_signature(
+                    manifest_toml.as_bytes(),
+                    &wasm,
+                    sig,
+                    registry.as_ref().map(|r| r.index.as_ref()),
+                )
+                .await?,
+            ),
+        };
+        let signer_id = signer.as_ref().map(|s| s.key.key_id);
+        let (trust, decision) = match self
+            .decide_trust(
+                &manifest.plugin.name,
+                &manifest.plugin.publisher,
+                signer,
+                source,
+                registry,
+            )
+            .await
+        {
+            Ok((trust, decision)) => (trust, Ok(decision)),
+            Err(ExtensionError::Core(CoreError::InvalidField { field, message })) => (
+                self.refused_trust(&manifest, source),
+                Err(TrustRefusal { field, message }),
+            ),
+            Err(e) => return Err(e),
+        };
         let (update, current) = self.current_grant(&manifest.plugin.name).await?;
         let permit = self.slot().await?;
         let host = self.host.clone();
@@ -312,7 +428,12 @@ impl Installer {
             // Held until the compile ends, even if the caller stops waiting.
             let _permit = permit;
             let artifact = sha256_hex(&component);
-            let report = m.permission_report(&artifact, current.as_ref(), host.config())?;
+            let report = m.permission_report_signed(
+                &artifact,
+                signer_id.as_ref(),
+                current.as_ref(),
+                host.config(),
+            )?;
             let approved = Grant::of(&m).limits;
             prepare(&host, m, &component, approved)?;
             Ok::<_, PluginError>(report)
@@ -326,7 +447,20 @@ impl Installer {
             report,
             wasm,
             update,
+            trust,
+            decision,
         })
+    }
+
+    /// The trust input kept for a refused inspection (it is never installed).
+    fn refused_trust(&self, manifest: &Manifest, source: InstallSource) -> InstallTrust {
+        InstallTrust {
+            signer: None,
+            publisher_claim: manifest.plugin.publisher.clone(),
+            policy: self.trust.policy,
+            source,
+            registry: None,
+        }
     }
 
     /// Uploads an inspected plugin approved with `approve` (its report's fingerprint)
@@ -334,16 +468,23 @@ impl Installer {
     /// [`Grant::of`] the manifest). Nothing is uploaded without the fingerprint. The
     /// fingerprint is recomputed here from the inspected manifest and the hash of the
     /// component (defence in depth: [`Inspected`] cannot be changed after inspection).
+    ///
+    /// An inspection whose trust decision was a refusal is refused here too (the
+    /// refusal, before anything is uploaded).
     pub async fn stage_plugin(
         &self,
         inspected: Inspected,
         approve: &str,
-    ) -> Result<(Artifact, InstalledPlugin), ExtensionError> {
+    ) -> Result<Staged, ExtensionError> {
+        if let Err(e) = &inspected.decision {
+            return Err(ExtensionError::Core(e.clone().into()));
+        }
         let (m, component) = (inspected.manifest.clone(), inspected.wasm.clone());
         let cfg = self.host.config().clone();
+        let signer = inspected.trust.signer.as_ref().map(|s| s.key.key_id);
         let (artifact_hex, fingerprint) = tokio::task::spawn_blocking(move || {
             let artifact = sha256_hex(&component);
-            let report = m.permission_report(&artifact, None, &cfg)?;
+            let report = m.permission_report_signed(&artifact, signer.as_ref(), None, &cfg)?;
             Ok::<_, PluginError>((artifact, report.fingerprint))
         })
         .await
@@ -379,7 +520,11 @@ impl Installer {
             installed_at: now,
             updated_at: now,
         };
-        Ok((artifact, row))
+        Ok(Staged {
+            artifact,
+            row,
+            trust: inspected.trust,
+        })
     }
 
     /// Checks a theme bundle (size before parsing, unpack, compile) and uploads it;
@@ -469,12 +614,27 @@ impl Installer {
     /// `fingerprint` is the one its install was approved with. `None` (logged) when
     /// the stored manifest or grant no longer parses. No component is read.
     pub fn row_report(&self, row: &InstalledPlugin) -> Option<PermissionReport> {
+        self.row_report_signed(row, None)
+    }
+
+    /// [`row_report`](Self::row_report) of a row whose installed version was signed by
+    /// `signer` (its owner row's `signer_key`): the fingerprint is the approved one.
+    pub fn row_report_signed(
+        &self,
+        row: &InstalledPlugin,
+        signer: Option<&KeyId>,
+    ) -> Option<PermissionReport> {
         let built = Manifest::from_json(&row.manifest)
             .map_err(|e| e.to_string())
             .and_then(|m| {
                 let grant = row_grant(&m, row)?;
-                m.permission_report(row.artifact_hash.as_str(), Some(&grant), self.host.config())
-                    .map_err(|e| e.to_string())
+                m.permission_report_signed(
+                    row.artifact_hash.as_str(),
+                    signer,
+                    Some(&grant),
+                    self.host.config(),
+                )
+                .map_err(|e| e.to_string())
             });
         match built {
             Ok(report) => Some(report),

@@ -1793,6 +1793,7 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "lettre",
+ "minisign",
  "percent-encoding",
  "quick-xml 0.41.0",
  "reqwest",

@@ -553,7 +553,8 @@ async fn boot(
     // One install pipeline per node: its compile slots bound the node (P8).
     let installer = Arc::new(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
-            .context("cannot start the plugin installer")?,
+            .context("cannot start the plugin installer")?
+            .with_trust(crate::registry::trust_settings(&config.plugins.trust)?),
     );
     // The OAuth authorization server (design 12 §3.2): its issuer is `site.url`; client
     // metadata documents come through the SSRF-checked egress rules.

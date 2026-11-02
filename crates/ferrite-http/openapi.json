@@ -11750,6 +11750,60 @@
           }
         }
       },
+      "InstalledTrustDto": {
+        "type": "object",
+        "description": "An installed plugin's trust (design 14 §7.1).",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OwnerDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignerDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceDto",
+                "description": "How the installed version arrived; `null` for one installed before M6-2."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`verified` (a registry publisher's key), `signed` (a key of this site),\n`unsigned`, or `revoked` (its signing key is revoked)."
+          },
+          "update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UpdateDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "JobCountsDto": {
         "type": "object",
         "description": "Jobs per status.",
@@ -12890,6 +12944,58 @@
           }
         }
       },
+      "OwnerChangeDto": {
+        "type": "object",
+        "description": "What an install does to the owner of the plugin name's data.",
+        "required": [
+          "change"
+        ],
+        "properties": {
+          "change": {
+            "type": "string",
+            "description": "`bind`, `bind_unsigned`, `same`, `claim` or `unsigned_update`."
+          },
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The current owner (`reg:<key>:<publisher>` or `key:<key>`); `null` when unsigned\nor none."
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner after the install."
+          },
+          "next_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`next` in words (\"FerriteCMS (registry)\", \"key 5A1C…\")."
+          }
+        }
+      },
+      "OwnerDto": {
+        "type": "object",
+        "description": "The owner of an installed plugin's data.",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "`reg:<registry key>:<publisher>` or `key:<key id>`."
+          },
+          "label": {
+            "type": "string",
+            "description": "In words: \"FerriteCMS (registry)\" or \"key 5A1C…\"."
+          }
+        }
+      },
       "PasswordChange": {
         "type": "object",
         "description": "`POST /auth/password`.",
@@ -13012,7 +13118,8 @@
           {
             "type": "object",
             "required": [
-              "update"
+              "update",
+              "trust"
             ],
             "properties": {
               "description": {
@@ -13043,6 +13150,10 @@
                 ],
                 "description": "The manifest's `plugin.publisher` (text, unverified)."
               },
+              "trust": {
+                "$ref": "#/components/schemas/TrustDto",
+                "description": "Who signed it and whose data it gets (M6-2, design 14 §7.2)."
+              },
               "update": {
                 "type": "boolean",
                 "description": "Whether a plugin of this name is installed: `added` is then against its grant."
@@ -13061,7 +13172,8 @@
           "enabled",
           "installed_at",
           "updated_at",
-          "nodes"
+          "nodes",
+          "trust"
         ],
         "properties": {
           "description": {
@@ -13127,6 +13239,10 @@
               }
             ]
           },
+          "trust": {
+            "$ref": "#/components/schemas/InstalledTrustDto",
+            "description": "Who signed it, whose data it holds, and an update the registry offers (M6-2)."
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -13138,7 +13254,7 @@
       },
       "PluginInspectUpload": {
         "type": "object",
-        "description": "`POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads\nthe parts itself). Every part is required; an unknown or repeated one is refused.",
+        "description": "`POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads\nthe parts itself). `manifest` and `component` are required; an unknown or repeated\npart is refused.",
         "required": [
           "manifest",
           "component"
@@ -13152,6 +13268,20 @@
           "manifest": {
             "type": "string",
             "description": "`ferrite-plugin.toml` (UTF-8, at most 64 KiB)."
+          },
+          "publisher_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ferrite-plugin.pub`: the publisher's minisign public key (at most 1 KiB), for a\nkey this site does not know yet."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ferrite-plugin.minisig`: the publisher's minisign signature over the signing\npayload (UTF-8, at most 4 KiB)."
           }
         }
       },
@@ -13309,7 +13439,7 @@
       },
       "PluginUpload": {
         "type": "object",
-        "description": "`POST /plugins` (`multipart/form-data`; the schema only). Every part is required;\nan unknown or repeated one is refused.",
+        "description": "`POST /plugins` (`multipart/form-data`; the schema only). `manifest`, `component`\nand `approve` are required; an unknown or repeated part is refused.",
         "required": [
           "manifest",
           "component",
@@ -13328,6 +13458,20 @@
           "manifest": {
             "type": "string",
             "description": "`ferrite-plugin.toml` (UTF-8, at most 64 KiB)."
+          },
+          "publisher_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ferrite-plugin.pub` (at most 1 KiB)."
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ferrite-plugin.minisig` (UTF-8, at most 4 KiB)."
           }
         }
       },
@@ -13368,6 +13512,22 @@
           "type": {
             "type": "string",
             "description": "`/api/v1/problems/<slug>`."
+          }
+        }
+      },
+      "PublisherRefDto": {
+        "type": "object",
+        "description": "A registry publisher as the index names it.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -14075,6 +14235,67 @@
       "SettingsPatch": {
         "type": "object",
         "description": "`PATCH /themes/{name}/settings` and `PATCH /plugins/{name}/settings` (the schema\nonly): an object of declared keys to their new values; `null` resets a key to its\ndefault (for a secret: deletes it). Keys not in the body stay as they are."
+      },
+      "SignerDto": {
+        "type": "object",
+        "description": "The key that signed a plugin.",
+        "required": [
+          "key_id",
+          "source",
+          "claimed"
+        ],
+        "properties": {
+          "claimed": {
+            "type": "string",
+            "description": "The manifest's `plugin.publisher` (text; verified only when `publisher` is set)."
+          },
+          "key_id": {
+            "type": "string",
+            "description": "16 uppercase hex digits, as minisign prints it."
+          },
+          "publisher": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublisherRefDto",
+                "description": "The registry publisher that lists the key."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "`registry` (listed by the configured registry), `approved` (approved at an earlier\ninstall), `operator` (`ferrite plugin keys trust`) or `new` (approving trusts it)."
+          }
+        }
+      },
+      "SourceDto": {
+        "type": "object",
+        "description": "How a plugin arrives.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`upload`, `folder` or `registry`."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The registry index URL, for `registry`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The registry version, for `registry`."
+          }
+        }
       },
       "SystemStatusDto": {
         "type": "object",
@@ -14809,6 +15030,102 @@
             "type": "string"
           },
           "secret_base32": {
+            "type": "string"
+          }
+        }
+      },
+      "TrustDto": {
+        "type": "object",
+        "description": "The trust part of a permission report (design 14 §7.2).",
+        "required": [
+          "policy",
+          "signature",
+          "source",
+          "warnings"
+        ],
+        "properties": {
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OwnerChangeDto",
+                "description": "`null` when the install is refused (`refusal`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "type": "string",
+            "description": "`[plugins] signatures`: `any`, `signed` or `trusted`."
+          },
+          "refusal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TrustRefusalDto",
+                "description": "Set when an install would be refused."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature": {
+            "type": "string",
+            "description": "`verified` (a signature verified) or `unsigned`."
+          },
+          "signer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignerDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceDto"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`unsigned`, `new_key`, `unsigned_data_claimed`, `unsigned_reads_data`."
+          }
+        }
+      },
+      "TrustRefusalDto": {
+        "type": "object",
+        "description": "A trust refusal (the install would be refused with this `422`).",
+        "required": [
+          "field",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "`signature` or `publisher`."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateDto": {
+        "type": "object",
+        "description": "An update the cached registry index offers for an installed plugin.",
+        "required": [
+          "version",
+          "publisher_matches"
+        ],
+        "properties": {
+          "publisher_matches": {
+            "type": "boolean",
+            "description": "Whether the registry's publisher is this plugin's owner (`false` for an\nunsigned-owned plugin: updating binds its data to that publisher)."
+          },
+          "version": {
             "type": "string"
           }
         }

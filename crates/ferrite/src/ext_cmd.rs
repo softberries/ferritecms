@@ -294,12 +294,13 @@ async fn with_site(
 }
 
 fn installer(site: &Site) -> anyhow::Result<Installer> {
-    Installer::new(
+    Ok(Installer::new(
         site.store.clone(),
         site.media.clone(),
         host_config(&site.config.plugins),
     )
-    .context("cannot start a plugin host")
+    .context("cannot start a plugin host")?
+    .with_trust(crate::registry::trust_settings(&site.config.plugins.trust)?))
 }
 
 // ---- themes --------------------------------------------------------------------------

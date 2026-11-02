@@ -54,7 +54,7 @@ use crate::{
 pub use admin::{ExtensionAdmin, MAX_FAILURE_BUCKETS};
 pub use trust::{
     InstallTrust, OwnerChange, RegistryContext, SignerInput, SignerSource, SignerView,
-    TrustDecision, TrustWarning,
+    TrustDecision, TrustWarning, owner_label,
 };
 
 /// What [`ExtensionService::store_registry`] did with a fetched index.

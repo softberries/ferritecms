@@ -56,15 +56,19 @@ use utoipa::IntoParams;
 use super::{
     ApiState, Authed, BASE,
     dto::extensions::{
-        FailureBucketDto, GrantReportDto, HookStatsDto, NodeHookStatsDto, PermissionReportDto,
-        PluginDto, PluginFacts, PluginInspectUpload, PluginList, PluginMetricsDto, PluginNodeState,
-        PluginSettingsDto, PluginUpload, RetainedPluginDto, RetainedPluginList, SettingsPatch,
+        FailureBucketDto, GrantReportDto, HookStatsDto, InstalledTrustDto, NodeHookStatsDto,
+        PermissionReportDto, PluginDto, PluginFacts, PluginInspectUpload, PluginList,
+        PluginMetricsDto, PluginNodeState, PluginSettingsDto, PluginUpload, RetainedPluginDto,
+        RetainedPluginList, SettingsPatch, TrustDto,
     },
     extract::{ApiJson, ApiPath, created_at, parse_query},
-    multipart::{open, read_parts},
+    multipart::{open, read_parts_with},
     problem::{Problem, ProblemDocument},
 };
-use crate::extensions::{ExtensionError, MAX_PLUGIN_BYTES};
+use crate::extensions::{
+    BundleSignature, ExtensionError, Inspected, MAX_PLUGIN_BYTES, TrustContext,
+};
+use ferrite_domain::plugin_trust::{InstallSource, MAX_PUBLISHER_KEY_BYTES, MAX_SIGNATURE_BYTES};
 
 /// Largest `approve` part.
 pub const MAX_APPROVE_BYTES: usize = 128;
@@ -82,6 +86,10 @@ pub const PLUGIN_METRICS_WINDOW: Duration = Duration::from_secs(24 * 3600);
 
 const COMPONENT_PART: (&str, usize) = ("component", MAX_PLUGIN_BYTES as usize);
 const MANIFEST_PART: (&str, usize) = ("manifest", MAX_MANIFEST_BYTES);
+const SIGNATURE_PART: (&str, usize) = ("signature", MAX_SIGNATURE_BYTES);
+const PUBLISHER_KEY_PART: (&str, usize) = ("publisher_key", MAX_PUBLISHER_KEY_BYTES);
+/// The parts a plugin upload may leave out (M6-2).
+const OPTIONAL_PARTS: &[&str] = &["signature", "publisher_key"];
 
 #[utoipa::path(
     get,
@@ -107,8 +115,12 @@ pub async fn list_plugins(
 pub(crate) async fn plugin_list(api: &ApiState, actor: &Actor) -> Result<PluginList, Problem> {
     let rows = api.extensions.list_plugins(actor).await?;
     let nodes = live_nodes(api).await?;
+    let trust = api.installer.trust_context().await?;
     Ok(PluginList {
-        items: rows.into_iter().map(|r| dto(api, r, &nodes)).collect(),
+        items: rows
+            .into_iter()
+            .map(|r| dto(api, r, &nodes, &trust))
+            .collect(),
         next_cursor: None,
     })
 }
@@ -133,7 +145,8 @@ pub async fn get_plugin(
     ApiPath(name): ApiPath<String>,
 ) -> Result<Json<PluginDto>, Problem> {
     let row = api.extensions.get_plugin(&who.actor, &name).await?;
-    Ok(Json(dto(&api, row, &live_nodes(&api).await?)))
+    let trust = api.installer.trust_context().await?;
+    Ok(Json(dto(&api, row, &live_nodes(&api).await?, &trust)))
 }
 
 #[utoipa::path(
@@ -161,19 +174,79 @@ pub async fn inspect_plugin(
 ) -> Result<Json<PermissionReportDto>, Problem> {
     api.extensions.authorize_plugins(&who.actor)?;
     let _upload = upload_slot(&api)?;
-    let mut parts = read_parts(
+    let mut parts = read_parts_with(
         open(req, MAX_UPLOAD_BODY).await?,
-        &[MANIFEST_PART, COMPONENT_PART],
+        &[
+            MANIFEST_PART,
+            COMPONENT_PART,
+            SIGNATURE_PART,
+            PUBLISHER_KEY_PART,
+        ],
+        OPTIONAL_PARTS,
     )
     .await?;
     let manifest = manifest_text(&parts)?;
+    let signature = signature_parts(&mut parts)?;
     let component = parts.remove("component").unwrap_or_default();
-    let inspected = api.installer.inspect_plugin(&manifest, component).await?;
-    Ok(Json(PermissionReportDto::new(
+    let inspected = api
+        .installer
+        .inspect_bundle(&manifest, component, signature, InstallSource::Upload)
+        .await?;
+    let report = report_dto(&inspected);
+    if let Err(refusal) = inspected.decision() {
+        return Err(with_report(
+            Problem::from(ferrite_core::CoreError::from(refusal.clone())),
+            &report,
+        )?);
+    }
+    Ok(Json(report))
+}
+
+/// The optional `signature` and `publisher_key` parts as a [`BundleSignature`]; a key
+/// without a signature is refused (`422`, `publisher_key`).
+fn signature_parts(
+    parts: &mut std::collections::BTreeMap<&'static str, Bytes>,
+) -> Result<Option<BundleSignature>, Problem> {
+    let key = parts.remove("publisher_key");
+    match parts.remove("signature") {
+        None if key.is_some() => Err(Problem::validation(
+            "a publisher key needs the signature it verifies",
+        )
+        .with_error(Some("publisher_key"), "sent without a signature")),
+        None => Ok(None),
+        Some(sig) => Ok(Some(BundleSignature::from_bytes(&sig, key.as_deref())?)),
+    }
+}
+
+/// The permission report of an inspection, with its trust part.
+pub(crate) fn report_dto(inspected: &Inspected) -> PermissionReportDto {
+    let decision = match inspected.decision() {
+        Ok(d) => Ok(d),
+        Err(r) => Err((r.field, r.message.as_str())),
+    };
+    PermissionReportDto::new(
         inspected.report(),
         inspected.is_update(),
         PluginFacts::of(&inspected.manifest().plugin),
-    )))
+        TrustDto::new(
+            inspected.trust(),
+            decision,
+            inspected.report().signer.is_some(),
+            &inspected.manifest().plugin.version.to_string(),
+        ),
+    )
+}
+
+/// `problem` with the upload's report as its `report` member.
+pub(crate) fn with_report(
+    problem: Problem,
+    report: &PermissionReportDto,
+) -> Result<Problem, Problem> {
+    let report = serde_json::to_value(report).map_err(|e| {
+        tracing::error!(error = %e, "cannot serialize a permission report");
+        Problem::internal()
+    })?;
+    Ok(problem.with_report(report))
 }
 
 #[utoipa::path(
@@ -202,45 +275,65 @@ pub async fn install_plugin(
     let actor = &who.actor;
     api.extensions.authorize_plugins(actor)?;
     let _upload = upload_slot(&api)?;
-    let mut parts = read_parts(
+    let mut parts = read_parts_with(
         open(req, MAX_UPLOAD_BODY).await?,
         &[
             MANIFEST_PART,
             COMPONENT_PART,
             ("approve", MAX_APPROVE_BYTES),
+            SIGNATURE_PART,
+            PUBLISHER_KEY_PART,
         ],
+        OPTIONAL_PARTS,
     )
     .await?;
     let manifest = manifest_text(&parts)?;
     // Not UTF-8 cannot be a fingerprint: it simply does not match.
     let approve =
         String::from_utf8(parts.remove("approve").unwrap_or_default().to_vec()).unwrap_or_default();
+    let signature = signature_parts(&mut parts)?;
     let component = parts.remove("component").unwrap_or_default();
-    let inspected = api.installer.inspect_plugin(&manifest, component).await?;
-    let report = PermissionReportDto::new(
-        inspected.report(),
-        inspected.is_update(),
-        PluginFacts::of(&inspected.manifest().plugin),
-    );
-    let (artifact, row) = match api.installer.stage_plugin(inspected, &approve).await {
+    let inspected = api
+        .installer
+        .inspect_bundle(&manifest, component, signature, InstallSource::Upload)
+        .await?;
+    install_inspected(&api, actor, inspected, &approve).await
+}
+
+/// Stages an inspection approved with `approve` and records it with its trust: `201`
+/// with the plugin, or `422` (the upload's report attached) for an approval mismatch or
+/// a trust refusal. Shared by uploads and registry installs.
+pub(crate) async fn install_inspected(
+    api: &ApiState,
+    actor: &Actor,
+    inspected: Inspected,
+    approve: &str,
+) -> Result<Response, Problem> {
+    let report = report_dto(&inspected);
+    let staged = match api.installer.stage_plugin(inspected, approve).await {
         Ok(staged) => staged,
-        Err(e @ ExtensionError::Approval(_)) => {
-            let report = serde_json::to_value(&report).map_err(|e| {
-                tracing::error!(error = %e, "cannot serialize a permission report");
-                Problem::internal()
-            })?;
-            return Err(Problem::from(e).with_report(report));
+        Err(e @ (ExtensionError::Approval(_) | ExtensionError::Core(_))) => {
+            return Err(with_report(Problem::from(e), &report)?);
         }
         Err(e) => return Err(e.into()),
     };
     // When this fails, the staged blob has no row and is left to the artifacts GC
-    // (M4-1 P12).
-    api.extensions
-        .install_plugin(actor, &artifact, &row)
-        .await?;
-    let stored = api.extensions.get_plugin(actor, &row.name).await?;
+    // (M4-1 P12). Core decides the trust again in its transaction.
+    match api
+        .extensions
+        .install_plugin_trusted(actor, &staged.artifact, &staged.row, &staged.trust)
+        .await
+    {
+        Ok(_) => {}
+        Err(e @ ferrite_core::CoreError::InvalidField { .. }) => {
+            return Err(with_report(Problem::from(e), &report)?);
+        }
+        Err(e) => return Err(e.into()),
+    }
+    let stored = api.extensions.get_plugin(actor, &staged.row.name).await?;
     let (status, headers) = created_at(&format!("{BASE}/plugins/{}", stored.name));
-    let body = dto(&api, stored, &live_nodes(&api).await?);
+    let trust = api.installer.trust_context().await?;
+    let body = dto(api, stored, &live_nodes(api).await?, &trust);
     Ok((status, headers, Json(body)).into_response())
 }
 
@@ -512,7 +605,8 @@ pub(crate) async fn set_enabled(
         .set_plugin_enabled(actor, name, enabled)
         .await?;
     let row = api.extensions.get_plugin(actor, name).await?;
-    Ok(dto(api, row, &live_nodes(api).await?))
+    let trust = api.installer.trust_context().await?;
+    Ok(dto(api, row, &live_nodes(api).await?, &trust))
 }
 
 /// One of the node's upload slots (shared by plugin and theme uploads), or `503 busy`
@@ -535,16 +629,23 @@ fn manifest_text(
     })
 }
 
-fn dto(api: &ApiState, row: InstalledPlugin, nodes: &[Node]) -> PluginDto {
+pub(crate) fn dto(
+    api: &ApiState,
+    row: InstalledPlugin,
+    nodes: &[Node],
+    trust: &TrustContext,
+) -> PluginDto {
+    let signer = trust.owner(&row.name).and_then(|o| o.signer_key);
     let report = api
         .installer
-        .row_report(&row)
+        .row_report_signed(&row, signer.as_ref())
         .map(|r| GrantReportDto::from(&r));
     let states = nodes
         .iter()
         .filter_map(|n| PluginNodeState::of(n, &row.name))
         .collect();
-    PluginDto::new(row, report, states)
+    let trust = InstalledTrustDto::of(trust, &row.name);
+    PluginDto::new(row, report, states, trust)
 }
 
 /// The registered nodes with a heartbeat within [`NODE_STALE_AFTER`] of the database
