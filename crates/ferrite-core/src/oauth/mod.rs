@@ -823,7 +823,9 @@ impl OAuthService {
             if !pkce::verify(verifier, &claimed.code_challenge) {
                 return burnt("code_verifier does not match the code_challenge");
             }
-            if !active(tx.as_ref(), claimed.user_id).await? {
+            // A locking read: a concurrent disable either commits first (seen here) or
+            // waits for this `Tx`, whose grant it then ends.
+            if !active_locked(tx.as_ref(), claimed.user_id).await? {
                 return burnt("the user can no longer sign in");
             }
             let Some(client) = oauth.get_client(&claimed.client_id).await? else {
@@ -930,7 +932,14 @@ impl OAuthService {
         if grant.expires_at <= now {
             return Err(unknown());
         }
-        let granted = Scopes::from_strs(&grant.scopes)?;
+        // A grant made before an area became ungrantable loses it at its next refresh
+        // (`within` also folds `x:read x:write` into `x:write`, so only when needed).
+        let stored = Scopes::from_strs(&grant.scopes)?;
+        let granted = if Scopes::OAUTH.covers(stored) {
+            stored
+        } else {
+            stored.within(Scopes::OAUTH)
+        };
         let scopes = match form.scope.as_deref().map(parse_scope) {
             None | Some(Ok(None)) => granted,
             Some(Ok(Some(asked))) if granted.covers(asked) => asked,
@@ -1104,6 +1113,9 @@ pub(crate) async fn end_user_grants(
     user: UserId,
     reason: &str,
 ) -> Result<u64, CoreError> {
+    // Codes not yet exchanged would otherwise outlive the disable and make a grant when the
+    // user is active again.
+    repos.oauth().delete_codes_for_user(user).await?;
     let mut ended = 0;
     // `grants_for_user` returns a bounded page; every pass deletes what it listed.
     loop {
@@ -1220,6 +1232,16 @@ async fn active(repos: &dyn Repos, user: UserId) -> Result<bool, CoreError> {
     Ok(repos
         .users()
         .get(user)
+        .await?
+        .is_some_and(|u| u.status == UserStatus::Active))
+}
+
+/// [`active`] with the user row read `FOR UPDATE` (Postgres; SQLite has one writer): for
+/// a `Tx` that goes on to create something that disabling the user must end.
+async fn active_locked(repos: &dyn Repos, user: UserId) -> Result<bool, CoreError> {
+    Ok(repos
+        .users()
+        .get_for_update(user)
         .await?
         .is_some_and(|u| u.status == UserStatus::Active))
 }

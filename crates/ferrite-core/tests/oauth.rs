@@ -16,7 +16,7 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_core::{
-    Actor, CoreError, NewAccount, Scopes, UserPatch, UserService,
+    Actor, Area, CoreError, NewAccount, Scope, Scopes, UserPatch, UserService,
     auth::{AuthService, SiteKey, Via},
     oauth::{
         AuthorizeError, AuthorizeParams, ClientMetadataFetcher, ClientRegistration, FetchError,
@@ -24,8 +24,8 @@ use ferrite_core::{
     },
 };
 use ferrite_domain::{
-    ApiToken, ApiTokenId, AuditQuery, ClientKind, OAuthClient, OAuthClientId, Role, Timestamp,
-    User, UserStatus,
+    ApiToken, ApiTokenId, AuditQuery, ClientKind, OAuthClient, OAuthClientId, OAuthGrant,
+    OAuthGrantId, Role, Timestamp, User, UserStatus,
 };
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
@@ -687,6 +687,45 @@ async fn scope_narrowing_on_refresh_never_widens(db: &TestDb) {
     assert_eq!(third.scope, "content:write media:read");
 }
 
+/// A grant stored while `users:write` was still grantable loses it at its next refresh.
+async fn refresh_drops_scopes_no_longer_grantable(db: &TestDb) {
+    let e = env(db);
+    let client = registered(&e).await;
+    let (user, _) = make_user(db, "oldgrant", Role::Admin).await;
+    let now = Timestamp::now();
+    let grant = OAuthGrant {
+        id: OAuthGrantId::new(),
+        client_id: client.id.clone(),
+        user_id: user.id,
+        scopes: vec!["content:write".into(), "users:write".into()],
+        created_at: now,
+        last_used_at: now,
+        expires_at: Timestamp::from_micros(now.as_micros() + 30 * 24 * 3600 * 1_000_000).unwrap(),
+    };
+    db.store()
+        .read()
+        .oauth()
+        .insert_grant(&grant, &sha256_hex("legacy-refresh"))
+        .await
+        .unwrap();
+    let request = TokenRequest {
+        grant_type: Some("refresh_token".into()),
+        refresh_token: Some("legacy-refresh".into()),
+        client_id: Some(client.id.as_str().into()),
+        ..TokenRequest::default()
+    };
+    let issued = e.oauth.exchange(request, ip(1)).await.unwrap();
+    assert_eq!(issued.scope, "content:write users:read");
+    let who = e
+        .auth
+        .resolve_token(issued.access_token.expose(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!who.actor.scopes.allows(Scope::write(Area::Users)));
+    assert!(who.actor.scopes.allows(Scope::write(Area::Content)));
+}
+
 async fn admin_cannot_grant_unused_writes(db: &TestDb) {
     let e = env(db);
     let client = registered(&e).await;
@@ -916,6 +955,34 @@ async fn disabling_a_user_ends_their_grants(db: &TestDb) {
     assert_eq!(rows.items[0].details["reason"], "user_disabled");
     assert_eq!(rows.items[0].details["user"], user.id.to_string());
     assert_eq!(rows.items[0].actor_id, Some(admin.user));
+}
+
+/// Disabling a user also ends the codes they approved but no client exchanged yet.
+async fn disabling_a_user_ends_their_pending_codes(db: &TestDb) {
+    let e = env(db);
+    let client = registered(&e).await;
+    let (user, actor) = make_user(db, "pending", Role::Editor).await;
+    let (_, admin) = make_user(db, "boss", Role::Admin).await;
+    let code = approve_code(&e, &actor, client.id.as_str(), None).await;
+    let users = UserService::new(db.shared_store());
+    let status = |s| UserPatch {
+        status: Some(s),
+        ..UserPatch::default()
+    };
+    users
+        .update(&admin, user.id, status(UserStatus::Disabled))
+        .await
+        .unwrap();
+    users
+        .update(&admin, user.id, status(UserStatus::Active))
+        .await
+        .unwrap();
+    invalid_grant(
+        e.oauth
+            .exchange(code_request(client.id.as_str(), &code), ip(1))
+            .await,
+    );
+    assert!(e.oauth.grants(&actor, None).await.unwrap().is_empty());
 }
 
 // ---- grant-bound tokens ----------------------------------------------------------------
@@ -1206,9 +1273,11 @@ backend_tests!(
     refresh_rotates_and_replay_revokes,
     scope_narrowing_on_refresh_never_widens,
     contributor_cannot_grant_beyond_role,
+    refresh_drops_scopes_no_longer_grantable,
     admin_cannot_grant_unused_writes,
     disconnect_kills_access_tokens,
     disabling_a_user_ends_their_grants,
+    disabling_a_user_ends_their_pending_codes,
     resolve_token_marks_oauth_tokens,
     token_prefix_must_match_its_kind,
     personal_token_limit_ignores_oauth_tokens,

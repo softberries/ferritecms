@@ -286,6 +286,50 @@ pub async fn oauth_code_expires(db: &TestDb) {
     );
 }
 
+/// `delete_codes_for_user` removes the user's unused codes (expired ones too), keeps used
+/// codes and other users' codes, and counts what it removed.
+pub async fn delete_codes_for_user_leaves_used_and_foreign_codes(db: &TestDb) {
+    let store = db.store();
+    let oauth = store.read().oauth();
+    let user = fixture_user(store).await;
+    let other = fixture_user(store).await;
+    let now = Timestamp::now();
+    let c = client("ferc_delcodes_client_0001", ClientKind::Registered, now);
+    oauth.upsert_client(&c).await.unwrap();
+
+    for hash in ["u-open", "u-open-2"] {
+        oauth
+            .insert_code(&code(&c, &user, hash, now, MINUTE))
+            .await
+            .unwrap();
+    }
+    oauth
+        .insert_code(&code(&c, &user, "u-expired", now, -MINUTE))
+        .await
+        .unwrap();
+    oauth
+        .insert_code(&code(&c, &user, "u-used", now, MINUTE))
+        .await
+        .unwrap();
+    oauth
+        .take_code("u-used", now, OAuthGrantId::new())
+        .await
+        .unwrap()
+        .expect("claimed");
+    oauth
+        .insert_code(&code(&c, &other, "o-open", now, MINUTE))
+        .await
+        .unwrap();
+
+    assert_eq!(oauth.delete_codes_for_user(user.id).await.unwrap(), 3);
+    for gone in ["u-open", "u-open-2", "u-expired"] {
+        assert_eq!(oauth.code_by_hash_any(gone).await.unwrap(), None, "{gone}");
+    }
+    assert!(oauth.code_by_hash_any("u-used").await.unwrap().is_some());
+    assert!(oauth.code_by_hash_any("o-open").await.unwrap().is_some());
+    assert_eq!(oauth.delete_codes_for_user(user.id).await.unwrap(), 0);
+}
+
 /// Insert, look up by the current and by the previous refresh hash, rotate (a
 /// compare-and-swap on the current hash), delete.
 pub async fn grant_rotation_keeps_previous_hash(db: &TestDb) {

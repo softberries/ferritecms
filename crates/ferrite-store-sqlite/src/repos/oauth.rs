@@ -212,6 +212,15 @@ impl OAuthRepo for SqliteRepos {
         row.as_ref().map(codec::oauth_code).transpose()
     }
 
+    async fn delete_codes_for_user(&self, user: UserId) -> Result<u64, StoreError> {
+        let done = run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM oauth_codes WHERE user_id = ? AND grant_id IS NULL"
+        )
+        .bind(user.as_uuid())
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
     async fn insert_grant(&self, grant: &OAuthGrant, refresh_hash: &str) -> Result<(), StoreError> {
         validate_text("oauth client id", grant.client_id.as_str())?;
         validate_text("oauth refresh hash", refresh_hash)?;

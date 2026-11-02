@@ -1111,6 +1111,11 @@ pub trait OAuthRepo: Send + Sync {
     /// The code however used or expired (reuse detection: its `grant_id` is the grant to
     /// revoke).
     async fn code_by_hash_any(&self, code_hash: &str) -> Result<Option<OAuthCode>, StoreError>;
+    /// Deletes the unused codes (`grant_id` still `NULL`) of `user`, expired or not, so none
+    /// can be exchanged any more; returns the count. Used codes stay for reuse detection. Call
+    /// it with the user's row locked (`UserRepo::get_for_update`): on Postgres a code being
+    /// claimed by another `Tx` is skipped, and that exchange then sees the user disabled.
+    async fn delete_codes_for_user(&self, user: UserId) -> Result<u64, StoreError>;
 
     /// Stores a grant with its current refresh token hash; a stored hash is
     /// `UniqueViolation`, an unknown client or user `ForeignKey`.

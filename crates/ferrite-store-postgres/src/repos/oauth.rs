@@ -218,6 +218,19 @@ impl OAuthRepo for PgRepos {
         row.as_ref().map(codec::oauth_code).transpose()
     }
 
+    // `SKIP LOCKED`: a code another `Tx` is claiming right now is left to it. That exchange
+    // then waits on the user's row (locked by the caller) and finds the user disabled, so
+    // the two never wait on each other.
+    async fn delete_codes_for_user(&self, user: UserId) -> Result<u64, StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM oauth_codes WHERE code_hash IN (SELECT code_hash FROM oauth_codes \
+             WHERE user_id = $1 AND grant_id IS NULL FOR UPDATE SKIP LOCKED)"
+        )
+        .bind(user.as_uuid())
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
     async fn insert_grant(&self, grant: &OAuthGrant, refresh_hash: &str) -> Result<(), StoreError> {
         validate_text("oauth client id", grant.client_id.as_str())?;
         validate_text("oauth refresh hash", refresh_hash)?;

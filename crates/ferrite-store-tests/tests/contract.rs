@@ -34,6 +34,7 @@ backend_tests!(
     personal_token_counts_ignore_oauth_tokens,
     prune_removes_expired_oauth_rows,
     deleting_user_cascades_grants,
+    delete_codes_for_user_leaves_used_and_foreign_codes,
     export_leaves_out_oauth_tokens,
     import_refuses_oauth_token_rows,
 );
