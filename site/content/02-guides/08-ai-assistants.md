@@ -278,6 +278,10 @@ stands and the server logs the failure.
   are stored only as hashes.
 - **Cookies do nothing on `/mcp`.** Every request needs a bearer token, and a browser
   request from another site is refused (`403`).
+- **After an account is compromised**, check **Account → Connected apps** (and **Account →
+  API tokens**) and disconnect what you do not recognise. Changing or resetting the
+  password signs out every session but keeps connected apps, as it keeps personal tokens;
+  disabling the user ends both.
 - **Behind a reverse proxy**, `site.url` must be the public address (it is the address
   assistants are told to sign in at), and the proxy must be in `server.trusted_proxies` so
   rate limits count real client addresses ([Configuration](../04-operations/01-configuration.md)).
