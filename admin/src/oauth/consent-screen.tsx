@@ -17,7 +17,7 @@ import {
   TimerOffIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { createContext, useContext, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { reportApiError } from "@/api/client";
 import { metaQuery } from "@/api/meta";
@@ -54,48 +54,82 @@ export interface ConsentScreenProps {
   redirect?: (url: string) => void;
 }
 
-export function ConsentScreen({ requestId, me, redirect = assignLocation }: ConsentScreenProps) {
-  const { t } = useTranslation("ai");
+/** Says a new state through the screen's status region (it stays mounted). */
+const AnnounceContext = createContext<(text: string) => void>(() => {});
+
+/** A result state: announces `text` once it has mounted. */
+function useAnnounce(text: string): void {
+  const announce = useContext(AnnounceContext);
+  useEffect(() => {
+    announce(text);
+  }, [announce, text]);
+}
+
+export function ConsentScreen(props: ConsentScreenProps) {
+  // One status region for every state of the screen, mounted from the start, so a state
+  // change that sets its text is announced (a region mounted with its text often is not).
+  const [said, setSaid] = useState("");
+  return (
+    <AnnounceContext value={setSaid}>
+      <ConsentStates {...props} />
+      <div role="status" data-slot="consent-status" className="sr-only">
+        {said}
+      </div>
+    </AnnounceContext>
+  );
+}
+
+function ConsentStates({ requestId, me, redirect = assignLocation }: ConsentScreenProps) {
   const consent = useQuery({ ...consentQuery(requestId ?? ""), enabled: requestId !== undefined });
 
   if (requestId === undefined) return <MissingRequest me={me} />;
   if (consent.isError) {
     if (consent.error instanceof ApiError && consent.error.status === 404) return <Expired />;
-    return (
-      <AuthLayout title={t("consent.loadFailed.title")} icon={<TriangleAlertIcon />}>
-        <Alert tone="error">
-          {consent.error instanceof ApiError
-            ? consent.error.problem.detail || consent.error.problem.title
-            : t("consent.failed")}
-        </Alert>
-        <Button variant="outline" className="h-11" onClick={() => void consent.refetch()}>
-          {t("consent.loadFailed.retry")}
-        </Button>
-      </AuthLayout>
-    );
+    return <LoadFailed error={consent.error} retry={() => void consent.refetch()} />;
   }
-  if (!consent.data) {
-    return (
-      <AuthLayout title={t("consent.loadingTitle")} wide>
-        <div aria-busy="true" aria-label={t("consent.loading")} className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <Skeleton className="size-14 rounded-2xl" />
-            <div className="flex flex-1 flex-col gap-2">
-              <Skeleton className="h-5 w-40" />
-              <Skeleton className="h-4 w-24" />
-            </div>
-          </div>
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </AuthLayout>
-    );
-  }
+  if (!consent.data) return <Loading />;
   return <Consent key={consent.data.id} consent={consent.data} me={me} redirect={redirect} />;
 }
 
+function Loading() {
+  const { t } = useTranslation("ai");
+  return (
+    <AuthLayout title={t("consent.loadingTitle")} wide>
+      <div aria-busy="true" aria-label={t("consent.loading")} className="flex flex-col gap-4">
+        <div className="flex items-center gap-3">
+          <Skeleton className="size-14 rounded-2xl" />
+          <div className="flex flex-1 flex-col gap-2">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        </div>
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-11 w-full" />
+      </div>
+    </AuthLayout>
+  );
+}
+
+function LoadFailed({ error, retry }: { error: unknown; retry: () => void }) {
+  const { t } = useTranslation("ai");
+  const title = t("consent.loadFailed.title");
+  useAnnounce(title);
+  return (
+    <AuthLayout title={title} icon={<TriangleAlertIcon />} focusTitle>
+      <Alert tone="error">
+        {error instanceof ApiError
+          ? error.problem.detail || error.problem.title
+          : t("consent.failed")}
+      </Alert>
+      <Button variant="outline" className="h-11" onClick={retry}>
+        {t("consent.loadFailed.retry")}
+      </Button>
+    </AuthLayout>
+  );
+}
+
 type Busy = "approve" | "deny" | null;
-type Done = { kind: "approved" | "denied" } | null;
+type Done = { kind: "approved" | "denied" | "refused" } | null;
 
 function Consent({
   consent,
@@ -134,9 +168,13 @@ function Consent({
           ? await approveConsent(consent.id, chosen)
           : await denyConsent(consent.id);
       const target = safeRedirect(to);
-      if (target === null) throw new Error("refused redirect");
       // The request is used up. Its cached copy is never refetched here (a refetch would
       // answer 404 over "Connected"); a reload or Back reads it afresh and says expired.
+      if (target === null) {
+        // Saved on the server, but not a place this page sends a browser to.
+        setDone({ kind: "refused" });
+        return;
+      }
       setDone({ kind: kind === "approve" ? "approved" : "denied" });
       redirect(target);
     } catch (error) {
@@ -158,24 +196,7 @@ function Consent({
   };
 
   if (expired) return <Expired />;
-  if (done) {
-    const approved = done.kind === "approved";
-    return (
-      <AuthLayout
-        title={approved ? t("consent.approved.title") : t("consent.denied.title")}
-        description={
-          approved
-            ? t("consent.approved.body", { client: name })
-            : t("consent.denied.body", { client: name })
-        }
-        icon={approved ? <CircleCheckIcon /> : <CircleSlashIcon />}
-      >
-        <span role="status" className="sr-only">
-          {approved ? t("consent.approved.title") : t("consent.denied.title")}
-        </span>
-      </AuthLayout>
-    );
-  }
+  if (done) return <Decided kind={done.kind} client={name} />;
 
   const signOut = () => {
     const next = `/admin/connect?request=${encodeURIComponent(consent.id)}`;
@@ -433,14 +454,38 @@ function PermissionRow({
   );
 }
 
+/** After Approve or Deny: where the browser goes, or why it does not. */
+function Decided({ kind, client }: { kind: "approved" | "denied" | "refused"; client: string }) {
+  const { t } = useTranslation("ai");
+  const [title, body, icon] =
+    kind === "approved"
+      ? [t("consent.approved.title"), t("consent.approved.body", { client }), <CircleCheckIcon />]
+      : kind === "denied"
+        ? [t("consent.denied.title"), t("consent.denied.body", { client }), <CircleSlashIcon />]
+        : [
+            t("consent.redirectRefused.title"),
+            t("consent.redirectRefused.body"),
+            <TriangleAlertIcon />,
+          ];
+  useAnnounce(title);
+  return (
+    <AuthLayout title={title} description={body} icon={icon} focusTitle>
+      {null}
+    </AuthLayout>
+  );
+}
+
 /** A request that is unknown, expired or already decided (or the switch is off). */
 function Expired() {
   const { t } = useTranslation("ai");
+  const title = t("consent.expired.title");
+  useAnnounce(title);
   return (
     <AuthLayout
-      title={t("consent.expired.title")}
+      title={title}
       description={t("consent.expired.body")}
       icon={<TimerOffIcon />}
+      focusTitle
     >
       <Button asChild variant="outline" className="h-11">
         <Link to="/">{t("consent.expired.dashboard")}</Link>

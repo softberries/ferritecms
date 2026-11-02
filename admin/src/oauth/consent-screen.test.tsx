@@ -90,6 +90,24 @@ test("shows_the_client_its_return_host_and_grantable_areas", async () => {
   expect(document.querySelector("[data-slot=client-logo] img")).toBeNull();
 });
 
+test("a_self_registered_client_never_shows_its_logo", async () => {
+  api(
+    consent({
+      client: {
+        id: "ferc_abcdefghijklmnopqrstuv",
+        kind: "registered",
+        name: "Claude Code",
+        client_uri: null,
+        logo_uri: "https://evil.example/claude-logo.png",
+      },
+    }),
+  );
+  renderWithRouter(<ConsentScreen requestId={ID} me={ME} redirect={vi.fn()} />);
+  await screen.findByRole("heading", { name: "Connect Claude Code" });
+  expect(document.querySelector("[data-slot=client-logo] img")).toBeNull();
+  expect(document.querySelector("[data-slot=client-logo]")).toHaveTextContent("C");
+});
+
 test("a_verified_client_shows_its_https_logo_and_origin", async () => {
   api(
     consent({
@@ -124,7 +142,28 @@ test("narrowed_approve_posts_the_chosen_scopes_and_navigates", async () => {
   await waitFor(() => expect(redirect).toHaveBeenCalledOnce());
   expect(decisions).toEqual([{ url: `${BASE}/approve`, body: { scopes: ["content:read"] } }]);
   expect(redirect).toHaveBeenCalledWith("http://127.0.0.1:4567/cb?code=c0de&state=s1&iss=x");
-  expect(await screen.findByRole("heading", { name: "Connected" })).toBeInTheDocument();
+  const heading = await screen.findByRole("heading", { name: "Connected" });
+  // The result takes the focus and is said by the status region that was there all along.
+  expect(heading).toHaveFocus();
+  expect(document.querySelector("[data-slot=consent-status]")).toHaveTextContent("Connected");
+});
+
+test("a_redirect_the_page_refuses_says_the_decision_was_saved", async () => {
+  stubRoutes({
+    "/api/v1/meta": META,
+    [BASE]: () => json(consent()),
+    [`${BASE}/approve`]: () => json({ redirect_to: "javascript:alert(1)" }),
+  });
+  const redirect = vi.fn();
+  renderWithRouter(<ConsentScreen requestId={ID} me={ME} redirect={redirect} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  const heading = await screen.findByRole("heading", {
+    name: "We couldn't return you to the app",
+  });
+  expect(heading).toHaveFocus();
+  expect(screen.getByText("You can close this tab; the decision was saved.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  expect(redirect).not.toHaveBeenCalled();
 });
 
 test("read_only_and_as_requested_set_every_row", async () => {
@@ -199,9 +238,11 @@ test("a_request_used_meanwhile_turns_into_expired_on_approve", async () => {
   const redirect = vi.fn();
   renderWithRouter(<ConsentScreen requestId={ID} me={ME} redirect={redirect} />);
   await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
-  expect(
-    await screen.findByRole("heading", { name: "This request has expired" }),
-  ).toBeInTheDocument();
+  const expired = await screen.findByRole("heading", { name: "This request has expired" });
+  expect(expired).toHaveFocus();
+  expect(document.querySelector("[data-slot=consent-status]")).toHaveTextContent(
+    "This request has expired",
+  );
   expect(redirect).not.toHaveBeenCalled();
 });
 

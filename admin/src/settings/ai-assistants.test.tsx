@@ -65,7 +65,11 @@ test("client_tabs_show_each_clients_steps", async () => {
       .getAllByRole("tab")
       .map((t) => t.textContent),
   ).toEqual(["Claude", "ChatGPT", "Claude Code", "Cursor", "VS Code"]);
-  expect(screen.getByRole("tabpanel")).toHaveTextContent("Settings, then Connectors");
+  const claude = screen.getByRole("tabpanel");
+  expect(claude).toHaveTextContent(
+    "Add a custom connector (in Claude's settings, under Connectors)",
+  );
+  expect(claude).toHaveTextContent("must be reachable over public HTTPS");
 
   await user.click(within(tabs).getByRole("tab", { name: "Claude Code" }));
   const code = screen.getByRole("tabpanel");
@@ -77,8 +81,17 @@ test("client_tabs_show_each_clients_steps", async () => {
     `claude mcp add --transport http ferrite ${URL_} --header "Authorization: Bearer <token>"`,
   );
 
+  expect(code).toHaveTextContent("run /mcp in Claude Code, pick ferrite and choose Authenticate");
+
+  await user.click(within(tabs).getByRole("tab", { name: "ChatGPT" }));
+  expect(screen.getByRole("tabpanel")).toHaveTextContent("turn on developer mode");
+  expect(screen.getByRole("tabpanel")).toHaveTextContent("public HTTPS");
+
   await user.click(within(tabs).getByRole("tab", { name: "Cursor" }));
   expect(screen.getByRole("tabpanel")).toHaveTextContent('"mcpServers"');
+  expect(screen.getByRole("tabpanel")).toHaveTextContent(
+    "a browser window opens; sign in and approve",
+  );
   await user.click(within(tabs).getByRole("tab", { name: "VS Code" }));
   expect(screen.getByRole("tabpanel")).toHaveTextContent('"type": "http"');
 

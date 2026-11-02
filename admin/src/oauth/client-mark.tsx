@@ -1,7 +1,8 @@
-// How an OAuth client shows (the consent screen, connected apps): its logo when it
-// declared an `https` one (loaded without a referrer; a failed load falls back), else a
-// monogram; and whether the site verified it through its own metadata document or it
-// registered itself. The name is the client's own text and renders as text.
+// How an OAuth client shows (the consent screen, connected apps): its logo when the
+// site verified it through its metadata document and it declared an `https` one (loaded
+// without a referrer; a failed load falls back), else a monogram (a self-registered
+// client's logo is unchecked, so it never shows); and whether the client is verified
+// or registered itself. The name is the client's own text and renders as text.
 
 import { cn } from "cn";
 import { BadgeCheckIcon, CircleDashedIcon } from "lucide-react";
@@ -14,11 +15,13 @@ export function ClientLogo({
   client,
   size = "md",
 }: {
-  client: Pick<OAuthClientDto, "name" | "logo_uri">;
+  client: Pick<OAuthClientDto, "name" | "logo_uri" | "kind">;
   size?: "md" | "lg";
 }) {
   const [failed, setFailed] = useState(false);
-  const logo = client.logo_uri?.startsWith("https://") && !failed ? client.logo_uri : null;
+  const verified = client.kind === "metadata";
+  const logo =
+    verified && client.logo_uri?.startsWith("https://") && !failed ? client.logo_uri : null;
   const box = size === "lg" ? "size-14 rounded-2xl text-xl" : "size-10 rounded-xl text-base";
   return (
     <span

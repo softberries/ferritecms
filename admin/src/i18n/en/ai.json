@@ -118,6 +118,10 @@
     "loadFailed": {
       "title": "Could not load the request",
       "retry": "Try again"
+    },
+    "redirectRefused": {
+      "title": "We couldn't return you to the app",
+      "body": "You can close this tab; the decision was saved."
     }
   },
   "apps": {
@@ -142,7 +146,8 @@
     "emptyOther": "This user has not connected any AI assistants.",
     "connectAction": "Connect an assistant",
     "guide": "Read the guide",
-    "paused": "AI assistants are turned off on this site, so connected apps are paused until an administrator turns them back on."
+    "paused": "AI assistants are turned off on this site, so connected apps are paused until an administrator turns them back on.",
+    "emptyOwn": "You have not connected any AI assistants."
   },
   "settings": {
     "enabled": "Allow AI assistants",
@@ -153,40 +158,37 @@
       "url": "MCP URL",
       "off": "AI assistants are turned off. Turn them on and save before connecting.",
       "clients": "Clients",
-      "guide": "Full guide: every client, permissions and troubleshooting"
+      "guide": "Full guide: every client, permissions and troubleshooting",
+      "cloudNote": "Claude and ChatGPT connect from their own servers, so this site must be reachable over public HTTPS. A site on localhost works with Claude Code, Cursor and VS Code."
     },
     "clients": {
       "claude": {
         "tab": "Claude",
         "lead": "On claude.ai or in Claude Desktop:",
-        "step1": "Open Settings, then Connectors.",
-        "step2": "Choose to add a custom connector and paste the MCP URL.",
-        "step3": "Connect: sign in here when Claude asks, then approve."
+        "body": "Add a custom connector (in Claude's settings, under Connectors), paste the URL, then sign in and approve."
       },
       "chatgpt": {
         "tab": "ChatGPT",
         "lead": "In ChatGPT:",
-        "step1": "Open Settings, then Connectors. Adding your own MCP server needs developer mode, in the connector settings.",
-        "step2": "Create a connector with the MCP URL and OAuth as its authentication.",
-        "step3": "Sign in here when ChatGPT asks, then approve."
+        "body": "In ChatGPT's settings, turn on developer mode and create a connector with this URL and OAuth sign-in."
       },
       "claudeCode": {
         "tab": "Claude Code",
         "lead": "In a terminal:",
         "command": "Command",
-        "then": "Then run /mcp in Claude Code and choose ferrite to sign in here and approve.",
+        "then": "Then run /mcp in Claude Code, pick ferrite and choose Authenticate: a browser window opens; sign in and approve.",
         "token": "Or connect with a personal API token (Account, API tokens) instead of signing in:",
         "tokenCommand": "Command with a token"
       },
       "cursor": {
         "tab": "Cursor",
         "lead": "Add the server to Cursor's MCP configuration:",
-        "then": "Cursor opens a sign-in here the first time it connects; approve it there."
+        "then": "The first time Cursor connects, a browser window opens; sign in and approve."
       },
       "vscode": {
         "tab": "VS Code",
         "lead": "Add the server to your workspace's MCP configuration:",
-        "then": "VS Code asks to sign in the first time the server starts; approve it here."
+        "then": "The first time VS Code starts the server, a browser window opens; sign in and approve."
       }
     },
     "can": {

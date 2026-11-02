@@ -26,7 +26,7 @@ export function UserApps({
         empty={
           <p className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
             <SparklesIcon aria-hidden="true" className="size-4 shrink-0" />
-            {t("apps.emptyOther")}
+            {own ? t("apps.emptyOwn") : t("apps.emptyOther")}
           </p>
         }
       />

@@ -137,3 +137,9 @@ test("another_user_without_apps_says_so", async () => {
     await screen.findByText("This user has not connected any AI assistants."),
   ).toBeInTheDocument();
 });
+
+test("your_own_row_without_apps_speaks_to_you", async () => {
+  stubRoutes({ "/api/v1/oauth/grants": () => json({ items: [] }) });
+  renderWithRouter(<UserApps userId={ME.id} userName="Ada" own />);
+  expect(await screen.findByText("You have not connected any AI assistants.")).toBeInTheDocument();
+});

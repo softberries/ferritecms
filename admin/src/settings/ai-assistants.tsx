@@ -9,6 +9,7 @@ import {
   ArrowUpRightIcon,
   CheckIcon,
   CircleUserRoundIcon,
+  GlobeIcon,
   HandIcon,
   ScrollTextIcon,
   ShieldCheckIcon,
@@ -170,23 +171,15 @@ function ClientTabs({ url }: { url: string }) {
         </TabsList>
       </div>
       <TabsContent value="claude" className="flex flex-col gap-3">
-        <Steps
+        <CloudClient
           lead={t("settings.clients.claude.lead")}
-          steps={[
-            t("settings.clients.claude.step1"),
-            t("settings.clients.claude.step2"),
-            t("settings.clients.claude.step3"),
-          ]}
+          body={t("settings.clients.claude.body")}
         />
       </TabsContent>
       <TabsContent value="chatgpt" className="flex flex-col gap-3">
-        <Steps
+        <CloudClient
           lead={t("settings.clients.chatgpt.lead")}
-          steps={[
-            t("settings.clients.chatgpt.step1"),
-            t("settings.clients.chatgpt.step2"),
-            t("settings.clients.chatgpt.step3"),
-          ]}
+          body={t("settings.clients.chatgpt.body")}
         />
       </TabsContent>
       <TabsContent value="claudeCode" className="flex min-w-0 flex-col gap-3">
@@ -213,23 +206,17 @@ function ClientTabs({ url }: { url: string }) {
   );
 }
 
-function Steps({ lead, steps }: { lead: string; steps: string[] }) {
+/** A client that connects from its vendor's servers: one step, and the public-HTTPS note. */
+function CloudClient({ lead, body }: { lead: string; body: string }) {
+  const { t } = useTranslation("ai");
   return (
     <>
       <p className="text-muted-foreground">{lead}</p>
-      <ol className="flex flex-col gap-2.5">
-        {steps.map((step, i) => (
-          <li key={i} className="flex items-start gap-3 text-foreground">
-            <span
-              aria-hidden="true"
-              className="flex size-6 shrink-0 items-center justify-center rounded-full border bg-muted text-xs font-semibold tabular-nums"
-            >
-              {i + 1}
-            </span>
-            <span className="pt-0.5 text-pretty">{step}</span>
-          </li>
-        ))}
-      </ol>
+      <p className="text-pretty text-foreground">{body}</p>
+      <p className="flex items-start gap-2 text-sm text-muted-foreground">
+        <GlobeIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-info" />
+        {t("settings.connect.cloudNote")}
+      </p>
     </>
   );
 }

@@ -312,5 +312,6 @@ test("dashboard_card_invites_an_author_without_apps", async ({
   await expect(card.getByRole("link", { name: "Set up" })).toHaveCount(0);
   await expect(card.getByRole("link", { name: "How it works" })).toBeVisible();
   await expectAccessible(page);
+  await atRest(page);
   await snap(page, "mcp-dashboard-card");
 });

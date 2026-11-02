@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, CircleAlertIcon, InfoIcon, TimerIcon } from "lucide-react";
 import { cn } from "cn";
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { metaQuery } from "@/api/meta";
 import { FerriteMark } from "@/components/kit/ferrite-mark";
@@ -39,6 +39,11 @@ export interface AuthLayoutProps {
   icon?: ReactNode;
   /** A wider card (32 rem) for a screen with a list of choices (the consent screen). */
   wide?: boolean;
+  /**
+   * Moves the focus to the title when the screen mounts (a state the user's action led
+   * to, such as the consent screen's result): the title takes `tabIndex=-1`.
+   */
+  focusTitle?: boolean;
 }
 
 export function AuthLayout({
@@ -48,9 +53,14 @@ export function AuthLayout({
   footer,
   icon,
   wide = false,
+  focusTitle = false,
 }: AuthLayoutProps) {
   const { t } = useTranslation("auth");
   const site = useSite();
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusTitle) titleRef.current?.focus();
+  }, [focusTitle]);
   return (
     <div className="relative isolate flex min-h-svh flex-col overflow-hidden bg-background">
       <Backdrop />
@@ -87,7 +97,12 @@ export function AuthLayout({
                   {icon}
                 </span>
               ) : null}
-              <h1 id="auth-title" className="text-2xl text-balance break-words">
+              <h1
+                id="auth-title"
+                ref={titleRef}
+                tabIndex={focusTitle ? -1 : undefined}
+                className="text-2xl text-balance break-words outline-none"
+              >
                 {title}
               </h1>
               {description ? (
