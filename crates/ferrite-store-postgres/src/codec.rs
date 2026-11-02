@@ -28,7 +28,28 @@ pub(crate) fn option_entry(row: &PgRow) -> Result<OptionEntry, StoreError> {
 
 pub(crate) const CONTENT_COLUMNS: &str = "id, type, status, slug, parent_id, author_id, title, \
      excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, created_at, \
-     updated_at, version";
+     updated_at, version, locale, translation_group";
+
+/// Maps a `group_members` row (`id, grp, type, locale, status, slug, parent_id,
+/// published_at, title`).
+pub(crate) fn translation_ref(row: &PgRow) -> Result<ferrite_store::TranslationRef, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let group: Uuid = row.try_get("grp").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    let status: String = row.try_get("status").map_err(map_db_err)?;
+    let published_at: Option<DateTime<Utc>> = row.try_get("published_at").map_err(map_db_err)?;
+    Ok(ferrite_store::TranslationRef {
+        id: ContentId::from_uuid(id),
+        group: ContentId::from_uuid(group),
+        kind: row.try_get("type").map_err(map_db_err)?,
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        status: status.parse()?,
+        slug: row.try_get("slug").map_err(map_db_err)?,
+        parent_id: parent.map(ContentId::from_uuid),
+        published_at: published_at.map(Into::into),
+        title: row.try_get("title").map_err(map_db_err)?,
+    })
+}
 
 /// Maps a row selected with [`CONTENT_COLUMNS`].
 pub(crate) fn content_item(row: &PgRow) -> Result<ContentItem, StoreError> {
@@ -60,6 +81,12 @@ pub(crate) fn content_item(row: &PgRow) -> Result<ContentItem, StoreError> {
         created_at: created_at.into(),
         updated_at: updated_at.into(),
         version: row.try_get("version").map_err(map_db_err)?,
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        translation_group: ContentId::from_uuid(
+            row.try_get::<Option<Uuid>, _>("translation_group")
+                .map_err(map_db_err)?
+                .unwrap_or(id),
+        ),
     })
 }
 
@@ -151,7 +178,7 @@ pub(crate) fn taxonomy(row: &PgRow) -> Result<Taxonomy, StoreError> {
 
 /// Term columns qualified with the `t` alias so joins stay unambiguous.
 pub(crate) const TERM_COLUMNS: &str =
-    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id";
+    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id, t.locale, t.translation_group";
 
 /// Maps a row selected with [`TERM_COLUMNS`].
 pub(crate) fn term(row: &PgRow) -> Result<Term, StoreError> {
@@ -164,6 +191,12 @@ pub(crate) fn term(row: &PgRow) -> Result<Term, StoreError> {
         name: row.try_get("name").map_err(map_db_err)?,
         description: row.try_get("description").map_err(map_db_err)?,
         parent_id: parent.map(TermId::from_uuid),
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        translation_group: TermId::from_uuid(
+            row.try_get::<Option<Uuid>, _>("translation_group")
+                .map_err(map_db_err)?
+                .unwrap_or(id),
+        ),
     })
 }
 

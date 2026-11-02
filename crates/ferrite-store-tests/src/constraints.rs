@@ -44,6 +44,8 @@ fn term(slug: &str) -> Term {
         name: slug.into(),
         description: String::new(),
         parent_id: None,
+        locale: "en".into(),
+        translation_group: TermId::new(),
     }
 }
 
@@ -80,6 +82,8 @@ pub async fn unique_violations_name_the_constraint(db: &TestDb) {
     );
     let mut same_id = new_post(&author, "q");
     same_id.id = post.id;
+    // Its own group, so only the primary key clashes (the group index would too).
+    same_id.translation_group = Some(ContentId::new());
     assert_unique(r.content().insert(&same_id).await, "content_items_pkey");
 
     // revisions
@@ -127,6 +131,8 @@ pub async fn unique_violations_name_the_constraint(db: &TestDb) {
         name: "main".into(),
         label: "Main".into(),
         items: vec![item.clone(), item],
+        locale: "en".into(),
+        translation_of: None,
     };
     assert_unique(r.menus().put(&menu).await, "menu_items_pkey");
 

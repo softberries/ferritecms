@@ -279,6 +279,7 @@ impl MediaService {
                         readable_by,
                         limit: query.limit,
                         cursor: query.cursor.clone(),
+                        locale: None,
                     })
                     .await?;
                 // An empty id set short-circuits (M1c-1 R3).

@@ -20,4 +20,8 @@ pub struct Term {
     pub name: String,
     pub description: String,
     pub parent_id: Option<TermId>,
+    /// The term's locale (13 §2.5).
+    pub locale: String,
+    /// The id of the term translation group's original; the term's own id when alone.
+    pub translation_group: TermId,
 }

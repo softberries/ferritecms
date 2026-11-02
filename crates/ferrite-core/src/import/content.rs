@@ -405,6 +405,8 @@ impl ImportBatch<'_> {
             scheduled_at: dates.scheduled_at,
             created_at: Some(c.created_at),
             updated_at: Some(c.updated_at),
+            locale: crate::locales::read(repos).await?.default.tag,
+            translation_group: None,
         });
         let saved = save_with_free_slug(self.tx.as_ref(), row, &base, None, &root).await?;
         set_terms(repos, saved.id, &dedup(&c.terms)).await?;

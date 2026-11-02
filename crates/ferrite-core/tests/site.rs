@@ -206,7 +206,10 @@ pub async fn term_permissions(db: &TestDb) {
         ));
         assert_eq!(max_seq(store).await, seq);
     }
-    assert_eq!(store.read().terms().list("tag").await.unwrap().len(), 1);
+    assert_eq!(
+        store.read().terms().list("tag", None).await.unwrap().len(),
+        1
+    );
     svc.delete_term(&admin, term.id).await.unwrap();
 }
 
@@ -300,6 +303,8 @@ pub async fn term_parent_rules(db: &TestDb) {
                 name: format!("deep-{i}"),
                 description: String::new(),
                 parent_id: parent,
+                locale: "en".into(),
+                translation_group: leaf,
             })
             .await
             .unwrap();
@@ -401,6 +406,8 @@ pub async fn term_slug_retry(db: Arc<TestDb>) {
             name: "race".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: TermId::new(),
         })
         .await
         .unwrap();
@@ -460,6 +467,8 @@ fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
         name: name.into(),
         label: "Main".into(),
         items,
+        locale: "en".into(),
+        translation_of: None,
     }
 }
 
@@ -485,6 +494,8 @@ pub async fn menu_roundtrip_and_events(db: &TestDb) {
             name: "t".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: term,
         })
         .await
         .unwrap();
@@ -511,7 +522,12 @@ pub async fn menu_roundtrip_and_events(db: &TestDb) {
     assert_eq!(got.items.len(), 4);
     assert_eq!(got.label, "Main");
     assert_eq!(
-        svc.list().await.unwrap(),
+        svc.list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.name, m.label))
+            .collect::<Vec<_>>(),
         [("main".to_owned(), "Main".to_owned())]
     );
 

@@ -2,10 +2,10 @@ use ferrite_store::{Phase, expand_lint, parse_directives};
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
-    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
-    menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
-    oauth::*, plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*,
-    tx::*, user::*, user_filters::*,
+    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*,
+    locale::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
+    node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, pool::*, search::*,
+    semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -29,6 +29,22 @@ backend_tests!(
     slug_unique_per_locale,
     translation_unique_per_group,
     down_deletes_non_default_rows_and_restores_indexes,
+);
+
+backend_tests!(
+    insert_defaults_group_to_id,
+    locale_filter_on_list_count_and_file_bounds,
+    media_ignores_locale_filter,
+    get_by_slug_with_and_without_locale,
+    same_slug_two_locales,
+    group_members_batches_and_caps,
+    relocate_checks_version_and_group_uniqueness,
+    term_slug_per_locale,
+    menu_translation_lookup,
+    locale_usage_counts,
+    relabel_all_and_blank,
+    fill_groups_sets_null_groups,
+    search_locale_filter,
 );
 
 backend_tests!(

@@ -144,7 +144,7 @@ impl TaxonomyService {
             if tax.built_in {
                 return Err(CoreError::Invalid("built-in taxonomy".into()));
             }
-            if !tx.terms().list(&tax.name).await?.is_empty() {
+            if !tx.terms().list(&tax.name, None).await?.is_empty() {
                 return Err(CoreError::Invalid("taxonomy has terms".into()));
             }
             tx.taxonomies().delete(&tax.name).await?;
@@ -190,7 +190,7 @@ impl TaxonomyService {
         if repos.taxonomies().get(taxonomy).await?.is_none() {
             return Err(CoreError::NotFound);
         }
-        Ok(repos.terms().list(taxonomy).await?)
+        Ok(repos.terms().list(taxonomy, None).await?)
     }
 
     /// Creates a term (an unknown `taxonomy` is `NotFound`). `slug = None` derives it
@@ -295,7 +295,7 @@ impl TaxonomyService {
         let done = async {
             let term = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
             let tax = get_taxonomy(tx.as_ref(), &term.taxonomy).await?;
-            let siblings = tx.terms().list(&term.taxonomy).await?;
+            let siblings = tx.terms().list(&term.taxonomy, None).await?;
             if siblings.iter().any(|t| t.parent_id == Some(id)) {
                 return Err(CoreError::Invalid("has children".into()));
             }
@@ -370,13 +370,16 @@ pub(crate) async fn create_term_in(
     if let Some(parent) = parent {
         check_parent_taxonomy(tx, taxonomy, parent).await?;
     }
+    let id = TermId::new();
     let term = Term {
-        id: TermId::new(),
+        id,
         taxonomy: taxonomy.to_owned(),
         slug: String::new(),
         name,
         description: description.to_owned(),
         parent_id: parent,
+        locale: crate::locales::read(tx).await?.default.tag,
+        translation_group: id,
     };
     let saved = save_with_free_slug(tx, term, &base, false).await?;
     // The archive path is the term's now; a redirect there would outrank it.
@@ -529,7 +532,7 @@ async fn save_with_free_slug(
         let attempt = tx.begin_nested().await?;
         let mut taken: Vec<String> = attempt
             .terms()
-            .list(&term.taxonomy)
+            .list(&term.taxonomy, None)
             .await?
             .into_iter()
             .filter(|t| t.id != term.id)

@@ -59,7 +59,7 @@ impl DemoBatch {
 
     /// The term `slug` of `taxonomy`, created (with its invalidation) if missing.
     pub async fn term(&self, taxonomy: &str, slug: &str, name: &str) -> Result<Term, CoreError> {
-        if let Some(t) = self.tx.terms().get_by_slug(taxonomy, slug).await? {
+        if let Some(t) = self.tx.terms().get_by_slug(taxonomy, None, slug).await? {
             return Ok(t);
         }
         let (term, keys) = create_term_in(

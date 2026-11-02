@@ -43,6 +43,8 @@ async fn term(site: &Site, taxonomy: &str, slug: &str, name: &str) -> TermId {
             name: name.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -80,6 +82,8 @@ async fn item(
             scheduled_at: None,
             created_at: None,
             updated_at: None,
+            locale: "en".into(),
+            translation_group: None,
         })
         .await
         .unwrap();

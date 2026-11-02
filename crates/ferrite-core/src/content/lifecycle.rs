@@ -604,6 +604,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             version: 1,
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         }
     }
 

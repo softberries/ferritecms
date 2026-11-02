@@ -6,6 +6,7 @@ mod export;
 mod import;
 mod import_writer;
 mod json;
+mod locale;
 mod lock;
 mod menu;
 mod migrate;
@@ -24,6 +25,7 @@ pub use import_writer::{
     ImportWriter, InsertBatch, LoadTarget, Loader, MAX_LOAD_BATCH, delete_sql, insert_sql,
 };
 pub use json::validate_json;
+pub use locale::{LocaleFilter, check_groups, kinds_locale_filter, locale_filter};
 pub use lock::{
     LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES,
     LockGuard, check_lock_name, lock,
@@ -58,10 +60,11 @@ pub use paging::{
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
-    MarkCounts, MediaRepo, MenuRepo, MetaRepo, NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, PoolStats, RateLimitRepo, RedirectRepo, Repos,
-    RetainedPlugin, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo, retained_marker,
+    LocaleRepo, LocaleUsage, MAX_GROUPS, MarkCounts, MediaRepo, MenuRepo, MenuSummary, MetaRepo,
+    NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    PoolStats, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo,
+    SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, TranslationRef, Tx,
+    UserRepo, retained_marker,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,

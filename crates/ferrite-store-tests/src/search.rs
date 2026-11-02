@@ -33,6 +33,7 @@ async fn find(search: &dyn SearchRepo, q: &str, limit: u32) -> Result<Vec<Conten
         readable_by: None,
         limit,
         cursor: None,
+        locale: None,
     };
     Ok(search.search(&query).await?.items)
 }
@@ -297,6 +298,7 @@ fn query(q: &str, kinds: &[&str], statuses: &[ContentStatus], limit: u32) -> Sea
         readable_by: None,
         limit,
         cursor: None,
+        locale: None,
     }
 }
 
@@ -533,6 +535,7 @@ pub async fn search_readable_by(db: &TestDb) {
         readable_by,
         limit: 50,
         cursor: None,
+        locale: None,
     };
     let mut got = store
         .read()
@@ -611,6 +614,7 @@ pub async fn search_readable_by_hides_future_dated(db: &TestDb) {
                 }),
                 limit: 50,
                 cursor: None,
+                locale: None,
             })
             .await
             .unwrap()

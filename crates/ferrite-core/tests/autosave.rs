@@ -308,6 +308,7 @@ pub async fn autosave_writes_nothing_else(db: &TestDb) {
         readable_by: None,
         limit: 10,
         cursor: None,
+        locale: None,
     };
 
     svc.put_autosave(&author, item.id, slot(item.version, "Zanzibarquux"))

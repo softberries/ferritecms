@@ -2284,7 +2284,7 @@ fn seed_business_profile() {
             let read = store.read();
             let home = read
                 .content()
-                .get_by_slug("page", None, "home")
+                .get_by_slug("page", None, None, "home")
                 .await
                 .unwrap()
                 .expect("the front page");
@@ -2322,7 +2322,7 @@ fn seed_business_profile() {
             for slug in ["about", "contact"] {
                 let p = read
                     .content()
-                    .get_by_slug("page", None, slug)
+                    .get_by_slug("page", None, None, slug)
                     .await
                     .unwrap();
                 assert!(p.is_some(), "page {slug}");
@@ -2337,7 +2337,7 @@ fn seed_business_profile() {
                 .await
                 .unwrap()
                 .into_iter()
-                .map(|(n, _)| n)
+                .map(|m| m.name)
                 .collect();
             menus.sort();
             assert_eq!(menus, ["footer", "primary"]);
@@ -2349,7 +2349,7 @@ fn seed_business_profile() {
             assert_eq!(labels, ["Garden design", "About", "Contact", "RSS feed"]);
             let design = read
                 .content()
-                .get_by_slug("page", Some(home.id), "garden-design")
+                .get_by_slug("page", None, Some(home.id), "garden-design")
                 .await
                 .unwrap()
                 .expect("garden design");

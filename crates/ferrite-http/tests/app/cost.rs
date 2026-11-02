@@ -71,6 +71,8 @@ async fn demo_menus(app: &App) {
                     name: name.into(),
                     label: name.into(),
                     items,
+                    locale: "en".into(),
+                    translation_of: None,
                 },
             )
             .await

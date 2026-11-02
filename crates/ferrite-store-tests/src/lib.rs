@@ -27,6 +27,7 @@ pub mod import;
 pub mod import_writer;
 pub mod job;
 pub mod job_list;
+pub mod locale;
 pub mod lock;
 pub mod menu;
 pub mod migrations;

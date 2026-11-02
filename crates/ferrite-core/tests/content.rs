@@ -77,6 +77,8 @@ async fn term(store: &dyn Store, slug: &str) -> TermId {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -94,6 +96,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             readable_by: None,
             limit: 50,
             cursor: None,
+            locale: None,
         })
         .await
         .unwrap()

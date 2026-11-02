@@ -266,7 +266,10 @@ impl FerriteMcp {
         let menus =
             section("menus", api.menus.list_for(actor).await, &mut unavailable)?.map(|list| {
                 list.into_iter()
-                    .map(|(name, label)| MenuInfo { name, label })
+                    .map(|m| MenuInfo {
+                        name: m.name,
+                        label: m.label,
+                    })
                     .collect()
             });
         let user = &caller.who.user;

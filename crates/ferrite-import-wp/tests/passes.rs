@@ -117,7 +117,7 @@ async fn term(store: &dyn Store, taxonomy: &str, slug: &str) -> Term {
     store
         .read()
         .terms()
-        .get_by_slug(taxonomy, slug)
+        .get_by_slug(taxonomy, None, slug)
         .await
         .unwrap()
         .unwrap_or_else(|| panic!("no term {taxonomy}/{slug}"))
@@ -783,7 +783,7 @@ pub async fn pass1_and_pass2_dry_run(db: &TestDb) {
     let none: Option<TermId> = store
         .read()
         .terms()
-        .get_by_slug("category", "local")
+        .get_by_slug("category", None, "local")
         .await
         .unwrap()
         .map(|t| t.id);

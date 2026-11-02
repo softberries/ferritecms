@@ -47,6 +47,8 @@ pub async fn missing_rows_update_not_found_delete_ok(db: &TestDb) {
                 name: "x".into(),
                 description: String::new(),
                 parent_id: None,
+                locale: "en".into(),
+                translation_group: TermId::new(),
             })
             .await,
         "terms.update",

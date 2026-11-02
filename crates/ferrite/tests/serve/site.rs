@@ -49,6 +49,8 @@ async fn insert_draft(store: &dyn Store) {
             scheduled_at: None,
             created_at: None,
             updated_at: None,
+            locale: "en".into(),
+            translation_group: None,
         })
         .await
         .expect("insert draft");
@@ -189,8 +191,13 @@ async fn seeded_rows(p: &Profile) -> (bool, usize, usize, bool, u64) {
     let store = p.store().await;
     let read = store.read();
     let admin = read.users().get_by_login("admin").await.expect("users");
-    let mut terms = read.terms().list("category").await.expect("terms").len();
-    terms += read.terms().list("tag").await.expect("terms").len();
+    let mut terms = read
+        .terms()
+        .list("category", None)
+        .await
+        .expect("terms")
+        .len();
+    terms += read.terms().list("tag", None).await.expect("terms").len();
     let menus = read.menus().list().await.expect("menus").len();
     let title = read.options().get("site.title").await.expect("options");
     let content = read
@@ -315,7 +322,7 @@ fn two_processes_share_invalidation() {
         let item = store
             .read()
             .content()
-            .get_by_slug("post", None, NEWEST_SLUG)
+            .get_by_slug("post", None, None, NEWEST_SLUG)
             .await
             .expect("content")
             .expect("seeded post");

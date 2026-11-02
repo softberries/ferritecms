@@ -351,6 +351,8 @@ async fn write_rows(
                 item(2, "News", MenuItemKind::Term, news.as_uuid()),
                 item(3, "Contact", MenuItemKind::Item, contact.id.as_uuid()),
             ],
+            locale: String::new(),
+            translation_of: None,
         })
         .await
         .context("primary menu")?;
@@ -363,6 +365,8 @@ async fn write_rows(
                 item(1, "Contact", MenuItemKind::Item, contact.id.as_uuid()),
                 url_item(2, "RSS feed", "/feed/"),
             ],
+            locale: String::new(),
+            translation_of: None,
         })
         .await
         .context("footer menu")?;
@@ -505,6 +509,8 @@ async fn write_business_rows(
                 url_item(2, "News", "/post/"),
                 item(3, "Contact", MenuItemKind::Item, contact.id.as_uuid()),
             ],
+            locale: String::new(),
+            translation_of: None,
         })
         .await
         .context("primary menu")?;
@@ -519,6 +525,8 @@ async fn write_business_rows(
                 item(2, "Contact", MenuItemKind::Item, contact.id.as_uuid()),
                 url_item(3, "RSS feed", "/feed/"),
             ],
+            locale: String::new(),
+            translation_of: None,
         })
         .await
         .context("footer menu")?;

@@ -674,6 +674,8 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
                 name: "n".into(),
                 description: String::new(),
                 parent_id: None,
+                locale: "en".into(),
+                translation_group: TermId::new(),
             })
             .await,
     );
@@ -693,6 +695,8 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
                     url: Some("/u\0".into()),
                     label: "l".into(),
                 }],
+                locale: "en".into(),
+                translation_of: None,
             })
             .await,
     );
@@ -767,8 +771,8 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     // Content family.
     invalid(repos.types().get(BAD).await);
     invalid(repos.types().delete(BAD).await);
-    invalid(repos.content().get_by_slug(BAD, None, "x").await);
-    invalid(repos.content().get_by_slug("post", None, BAD).await);
+    invalid(repos.content().get_by_slug(BAD, None, None, "x").await);
+    invalid(repos.content().get_by_slug("post", None, None, BAD).await);
     invalid(
         repos
             .content()
@@ -792,9 +796,9 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
     invalid(repos.meta().delete(item.id, BAD).await);
     // Taxonomies and terms.
     invalid(repos.taxonomies().get(BAD).await);
-    invalid(repos.terms().get_by_slug(BAD, "x").await);
-    invalid(repos.terms().get_by_slug("tag", BAD).await);
-    invalid(repos.terms().list(BAD).await);
+    invalid(repos.terms().get_by_slug(BAD, None, "x").await);
+    invalid(repos.terms().get_by_slug("tag", None, BAD).await);
+    invalid(repos.terms().list(BAD, None).await);
     // Menus.
     invalid(repos.menus().get(BAD).await);
     invalid(repos.menus().delete(BAD).await);
@@ -872,6 +876,7 @@ pub async fn text_lookups_reject_nul(db: &TestDb) {
         readable_by: None,
         limit: 10,
         cursor,
+        locale: None,
     };
     invalid(repos.search().search(&search(BAD, "post", None)).await);
     invalid(repos.search().search(&search("x", BAD, None)).await);

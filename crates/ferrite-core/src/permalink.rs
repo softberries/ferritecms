@@ -559,6 +559,8 @@ mod tests {
             created_at: created,
             updated_at: created,
             version: 1,
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         }
     }
 
@@ -570,6 +572,8 @@ mod tests {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: TermId::new(),
         }
     }
 

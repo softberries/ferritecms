@@ -47,5 +47,7 @@ pub fn new_post(author: &User, slug: &str) -> NewContent {
         scheduled_at: None,
         created_at: None,
         updated_at: None,
+        locale: "en".into(),
+        translation_group: None,
     }
 }

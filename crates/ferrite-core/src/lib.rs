@@ -15,6 +15,7 @@ mod extensions;
 pub mod fields;
 pub mod import;
 pub mod jobs;
+pub mod locales;
 pub mod mail;
 mod media;
 mod menu;

@@ -28,4 +28,9 @@ pub struct Menu {
     pub name: String,
     pub label: String,
     pub items: Vec<MenuItem>,
+    /// The menu's locale (13 §2.6).
+    pub locale: String,
+    /// The name of the default-locale menu this one translates; `None` for a menu of its
+    /// own.
+    pub translation_of: Option<String>,
 }

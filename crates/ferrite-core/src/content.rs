@@ -186,6 +186,7 @@ impl ContentService {
         .await?;
         let excerpt = excerpt_of(&draft);
         let seo = draft.seo;
+        let locale = crate::locales::read(tx).await?.default.tag;
         let row = Row::New(NewContent {
             id: ContentId::new(),
             kind: draft.kind,
@@ -203,6 +204,8 @@ impl ContentService {
             scheduled_at: None,
             created_at: None,
             updated_at: None,
+            locale,
+            translation_group: None,
         });
         let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
         set_terms(tx, saved.id, &terms).await?;
@@ -562,7 +565,7 @@ pub(crate) async fn save_with_free_slug(
         let attempt = tx.begin_nested().await?;
         let mut taken = attempt
             .content()
-            .slugs_with_prefix(row.kind(), row.parent(), base)
+            .slugs_with_prefix(row.kind(), None, row.parent(), base)
             .await?;
         if row.parent().is_none() {
             taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
@@ -574,7 +577,7 @@ pub(crate) async fn save_with_free_slug(
                 taken.extend(
                     attempt
                         .content()
-                        .slugs_with_prefix(peer, None, base)
+                        .slugs_with_prefix(peer, None, None, base)
                         .await?,
                 );
             }
@@ -1003,6 +1006,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             version: 1,
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         }
     }
 

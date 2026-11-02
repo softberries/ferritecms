@@ -190,6 +190,9 @@ impl Repos for HookRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.inner.read().locales()
+    }
 }
 
 #[async_trait]

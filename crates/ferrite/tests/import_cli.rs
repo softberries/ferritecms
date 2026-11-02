@@ -357,7 +357,7 @@ async fn snapshot(site: &Site) -> String {
         .collect();
     let mut terms = Vec::new();
     for tax in r.taxonomies().list().await.unwrap() {
-        for t in r.terms().list(&tax.name).await.unwrap() {
+        for t in r.terms().list(&tax.name, None).await.unwrap() {
             terms.push(format!("{}/{}", t.taxonomy, t.slug));
         }
     }

@@ -646,10 +646,10 @@ pub async fn down_deletes_non_default_rows_and_restores_indexes(db: &TestDb) {
         .await;
     assert!(menus.is_empty());
     // The narrow slug index is back: the same slug twice at top level is refused.
-    insert_post(store, &user, "dup").await;
-    let tx = store.begin().await.unwrap();
-    assert!(tx.content().insert(&new_post(&user, "dup")).await.is_err());
-    drop(tx);
+    let dup = db
+        .try_exec_raw("UPDATE content_items SET slug = 'en-post' WHERE slug = 'blank-post'")
+        .await;
+    assert!(dup.is_err(), "same type, both top level, same slug");
     store.migrate_up(None).await.unwrap();
 }
 

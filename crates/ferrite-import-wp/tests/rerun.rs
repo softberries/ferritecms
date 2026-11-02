@@ -99,7 +99,7 @@ async fn rows(store: &dyn Store) -> Rows {
     let r = store.read();
     let mut terms = 0;
     for taxonomy in ["category", "tag", "genre"] {
-        terms += r.terms().list(taxonomy).await.unwrap().len();
+        terms += r.terms().list(taxonomy, None).await.unwrap().len();
     }
     Rows {
         content: r.content().count(&ContentQuery::default()).await.unwrap(),
@@ -393,6 +393,8 @@ pub async fn native_menu_of_the_same_name_is_kept(db: &TestDb) {
                 name: "main".into(),
                 label: "Native".into(),
                 items: Vec::new(),
+                locale: "en".into(),
+                translation_of: None,
             },
         )
         .await
@@ -702,6 +704,8 @@ pub async fn long_menu_name_beside_a_site_menu(db: &TestDb) {
                 name: long.clone(),
                 label: "Native".into(),
                 items: Vec::new(),
+                locale: "en".into(),
+                translation_of: None,
             },
         )
         .await

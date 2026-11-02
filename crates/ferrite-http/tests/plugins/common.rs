@@ -306,6 +306,8 @@ impl Site {
                     .then(|| Timestamp::from_micros(now + HOUR).unwrap()),
                 created_at: None,
                 updated_at: None,
+                locale: "en".into(),
+                translation_group: None,
             })
             .await
             .unwrap();

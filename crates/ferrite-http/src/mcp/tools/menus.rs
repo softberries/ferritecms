@@ -213,6 +213,8 @@ impl FerriteMcp {
             name: input.name,
             label,
             items,
+            locale: String::new(),
+            translation_of: None,
         };
         if let Err(e) = self.api.menus.put(actor, &menu).await {
             return results::from_core(e);
@@ -268,7 +270,9 @@ fn flatten(items: Vec<ItemIn>, parent: Option<MenuItemId>, out: &mut Vec<MenuIte
 /// `menu` with its entries nested. Entries whose parent is not in the menu are left out
 /// (core does not store such a menu).
 fn menu_out(menu: Menu) -> MenuOut {
-    let Menu { name, label, items } = menu;
+    let Menu {
+        name, label, items, ..
+    } = menu;
     let mut sorted: Vec<&MenuItem> = items.iter().collect();
     sorted.sort_by_key(|i| (i.position, i.id.as_uuid()));
     MenuOut {

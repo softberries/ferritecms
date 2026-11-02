@@ -15,6 +15,8 @@ pub struct SearchQuery {
     /// [`ContentQuery::readable_by`](crate::ContentQuery::readable_by)); `None`: no such
     /// filter.
     pub readable_by: Option<ReadableBy>,
+    /// Only items in this locale; `None`: any.
+    pub locale: Option<String>,
     /// Page size, 1 through [`crate::MAX_PAGE`].
     pub limit: u32,
     /// Opaque cursor from a previous page's `next_cursor`.

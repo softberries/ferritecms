@@ -128,6 +128,19 @@ impl SearchRepo for PgRepos {
                 .push_bind(reader.user.as_uuid())
                 .push(")");
         }
+        if let Some(locale) = &query.locale {
+            match ferrite_store::kinds_locale_filter(None, &query.kinds) {
+                ferrite_store::LocaleFilter::None => {}
+                ferrite_store::LocaleFilter::Plain => {
+                    qb.push(" AND c.locale = ").push_bind(locale.clone());
+                }
+                ferrite_store::LocaleFilter::ExceptMedia => {
+                    qb.push(" AND (c.locale = ")
+                        .push_bind(locale.clone())
+                        .push(" OR c.type = 'media')");
+                }
+            }
+        }
         if let Some((rank, id)) = plan.after {
             qb.push(" AND (h.rank < ").push_bind(rank);
             qb.push(" OR (h.rank = ").push_bind(rank);

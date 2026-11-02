@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ferrite_domain::{ContentId, ContentStatus, Menu, MenuItem, MenuItemKind, TermId};
-use ferrite_store::{Repos, Store};
+use ferrite_store::{MenuSummary, Repos, Store};
 
 use crate::{
     Actor, CoreError,
@@ -29,18 +29,18 @@ pub struct MenuLocation {
 }
 
 /// The `declared` locations (name, label) in the given order, each with whether one of
-/// `menus` (name, label; from [`MenuService::list_for`]) has its name. Core knows no
+/// `menus` (from [`MenuService::list_for`]) has its name. Core knows no
 /// theme: the caller passes the locations of the theme it serves.
 pub fn menu_locations<'a>(
     declared: impl IntoIterator<Item = (&'a str, &'a str)>,
-    menus: &[(String, String)],
+    menus: &[MenuSummary],
 ) -> Vec<MenuLocation> {
     declared
         .into_iter()
         .map(|(name, label)| MenuLocation {
             name: name.to_owned(),
             label: label.to_owned(),
-            menu: menus.iter().any(|(m, _)| m == name),
+            menu: menus.iter().any(|m| m.name == name),
         })
         .collect()
 }
@@ -65,8 +65,8 @@ impl MenuService {
             .ok_or(CoreError::NotFound)
     }
 
-    /// Lists menus as (name, label) pairs.
-    pub async fn list(&self) -> Result<Vec<(String, String)>, CoreError> {
+    /// Lists every menu (name, label, locale, `translation_of`), by name.
+    pub async fn list(&self) -> Result<Vec<MenuSummary>, CoreError> {
         Ok(self.store.read().menus().list().await?)
     }
 
@@ -77,7 +77,7 @@ impl MenuService {
     }
 
     /// [`list`](Self::list) for the admin (`require_read(Menus)`, F16).
-    pub async fn list_for(&self, actor: &Actor) -> Result<Vec<(String, String)>, CoreError> {
+    pub async fn list_for(&self, actor: &Actor) -> Result<Vec<MenuSummary>, CoreError> {
         require_read(actor, Area::Menus)?;
         self.list().await
     }
@@ -142,12 +142,27 @@ fn check_menu(menu: &Menu) -> Result<(), CoreError> {
 /// [`MenuService::put`] without the capability check, the transaction and the event:
 /// validates the menu and every item against `repos` and replaces the menu. The caller
 /// emits `menu:<name>` (the WordPress import collects it into its batch's event).
+///
+/// An empty `menu.locale` keeps the stored menu's locale (a new menu takes the site's
+/// default locale).
 pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreError> {
     check_menu(menu)?;
     for item in &menu.items {
         check_item(repos, item).await?;
     }
-    repos.menus().put(menu).await?;
+    if menu.locale.is_empty() {
+        let locale = match repos.menus().get(&menu.name).await? {
+            Some(stored) if !stored.locale.is_empty() => stored.locale,
+            _ => crate::locales::read(repos).await?.default.tag,
+        };
+        let menu = Menu {
+            locale,
+            ..menu.clone()
+        };
+        repos.menus().put(&menu).await?;
+    } else {
+        repos.menus().put(menu).await?;
+    }
     Ok(())
 }
 
@@ -239,10 +254,13 @@ mod tests {
 
     #[test]
     fn locations_mark_existing_menus() {
-        let menus = [
-            ("primary".to_owned(), "Main".to_owned()),
-            ("sidebar".to_owned(), "Side".to_owned()),
-        ];
+        let summary = |name: &str, label: &str| ferrite_store::MenuSummary {
+            name: name.into(),
+            label: label.into(),
+            locale: "en".into(),
+            translation_of: None,
+        };
+        let menus = [summary("primary", "Main"), summary("sidebar", "Side")];
         let got = menu_locations([("footer", "Footer"), ("primary", "Primary")], &menus);
         let loc = |name: &str, label: &str, menu| MenuLocation {
             name: name.into(),

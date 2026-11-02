@@ -234,6 +234,7 @@ impl ContentService {
                 readable_by,
                 limit: query.limit,
                 cursor: query.cursor.clone(),
+                locale: None,
             })
             .await?;
         // An empty id set short-circuits (M1c-1 R3).
@@ -305,6 +306,7 @@ impl ContentService {
                 readable_by: readable_by(actor, now),
                 limit: search.limit,
                 cursor: search.cursor.clone(),
+                locale: None,
             })
             .await?;
         let items = if hits.items.is_empty() {

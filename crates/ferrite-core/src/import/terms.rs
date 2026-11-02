@@ -69,29 +69,33 @@ impl ImportBatch<'_> {
             Some(s) => slug::validate(s)?,
             None => slug::slugify(&t.name),
         };
-        let outcome =
-            if let Some(existing) = self.tx.terms().get_by_slug(&t.taxonomy, &wanted).await? {
-                TermOutcome {
-                    id: existing.id,
-                    how: TermMatched::Slug,
-                }
-            } else {
-                let (term, keys) = create_term_in(
-                    self.tx.as_ref(),
-                    &t.taxonomy,
-                    &t.name,
-                    slug,
-                    t.parent,
-                    &t.description,
-                )
-                .await?;
-                self.keys.extend(keys);
-                self.items += 1;
-                TermOutcome {
-                    id: term.id,
-                    how: TermMatched::Created,
-                }
-            };
+        let outcome = if let Some(existing) = self
+            .tx
+            .terms()
+            .get_by_slug(&t.taxonomy, None, &wanted)
+            .await?
+        {
+            TermOutcome {
+                id: existing.id,
+                how: TermMatched::Slug,
+            }
+        } else {
+            let (term, keys) = create_term_in(
+                self.tx.as_ref(),
+                &t.taxonomy,
+                &t.name,
+                slug,
+                t.parent,
+                &t.description,
+            )
+            .await?;
+            self.keys.extend(keys);
+            self.items += 1;
+            TermOutcome {
+                id: term.id,
+                how: TermMatched::Created,
+            }
+        };
         self.remember(ImportMapKind::Term, t.wp_id, outcome.id.as_uuid(), "", 0)
             .await?;
         Ok(outcome)

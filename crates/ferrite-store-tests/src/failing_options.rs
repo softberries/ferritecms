@@ -178,6 +178,9 @@ impl Repos for FailingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.store.read().oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.store.read().locales()
+    }
 }
 
 #[async_trait]

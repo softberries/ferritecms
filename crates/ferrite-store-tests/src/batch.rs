@@ -19,6 +19,8 @@ fn term(slug: &str) -> Term {
         name: format!("Name {slug}"),
         description: String::new(),
         parent_id: None,
+        locale: "en".into(),
+        translation_group: TermId::new(),
     }
 }
 

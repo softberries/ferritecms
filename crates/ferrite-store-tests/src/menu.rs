@@ -44,6 +44,8 @@ fn tree(name: &str) -> Menu {
             item(ceo, Some(people), 0, MenuItemKind::Item, "ceo"),
             item(docs, None, 2, MenuItemKind::Url, "docs"),
         ],
+        locale: "en".into(),
+        translation_of: None,
     }
 }
 
@@ -67,6 +69,8 @@ pub async fn menu_put_replaces_tree(db: &TestDb) {
         name: "main".into(),
         label: "Small".into(),
         items: vec![full.items[1].clone(), full.items[2].clone()],
+        locale: "en".into(),
+        translation_of: None,
     };
     menus.put(&small).await.unwrap();
     assert_eq!(menus.get("main").await.unwrap().unwrap(), small);
@@ -84,7 +88,13 @@ pub async fn menu_put_replaces_tree(db: &TestDb) {
     assert!(menus.get("third").await.unwrap().is_none());
 
     assert_eq!(
-        menus.list().await.unwrap(),
+        menus
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.name, m.label))
+            .collect::<Vec<_>>(),
         [
             ("footer".to_owned(), "Main ☃".to_owned()),
             ("main".to_owned(), "Small".to_owned())
@@ -96,6 +106,8 @@ pub async fn menu_put_replaces_tree(db: &TestDb) {
             name: "main".into(),
             label: "Empty".into(),
             items: vec![],
+            locale: "en".into(),
+            translation_of: None,
         })
         .await
         .unwrap();

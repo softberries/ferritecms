@@ -898,6 +898,9 @@ impl Repos for FailingTx {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.inner.locales()
+    }
 }
 
 #[async_trait]

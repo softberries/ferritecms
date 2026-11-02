@@ -242,6 +242,7 @@ mod tests {
             readable_by: None,
             limit: 10,
             cursor: None,
+            locale: None,
         };
         let plan = plan_search(&query).unwrap().unwrap();
         assert_eq!(plan.statuses, [Published, Draft]);

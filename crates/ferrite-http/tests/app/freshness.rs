@@ -42,6 +42,8 @@ pub async fn menu_of(app: &App, targets: &[(MenuItemKind, uuid::Uuid)]) {
                 name: "primary".into(),
                 label: "Primary".into(),
                 items,
+                locale: "en".into(),
+                translation_of: None,
             },
         )
         .await
@@ -246,7 +248,7 @@ async fn second_request_is_a_cache_hit(app: App) -> App {
     let tx = app.site.store.begin().await.unwrap();
     let mut row = tx
         .content()
-        .get_by_slug("post", None, "hello-world")
+        .get_by_slug("post", None, None, "hello-world")
         .await
         .unwrap()
         .unwrap();

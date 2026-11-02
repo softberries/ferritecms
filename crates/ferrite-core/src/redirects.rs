@@ -862,7 +862,10 @@ async fn walk(
     let mut parent = None;
     let mut found = None;
     for segment in segments {
-        found = repos.content().get_by_slug(kind, parent, segment).await?;
+        found = repos
+            .content()
+            .get_by_slug(kind, None, parent, segment)
+            .await?;
         match &found {
             Some(item) => parent = Some(item.id),
             None => return Ok(None),

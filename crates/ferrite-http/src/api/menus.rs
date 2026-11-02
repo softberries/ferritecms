@@ -55,7 +55,10 @@ pub(crate) async fn menu_list(api: &ApiState, actor: &Actor) -> Result<MenuList,
     Ok(MenuList {
         items: menus
             .into_iter()
-            .map(|(name, label)| MenuSummary { name, label })
+            .map(|m| MenuSummary {
+                name: m.name,
+                label: m.label,
+            })
             .collect(),
         next_cursor: None,
         locations: locations.into_iter().map(Into::into).collect(),
@@ -114,6 +117,8 @@ pub async fn put_menu(
         name: name.clone(),
         label: input.label,
         items: input.items.into_iter().map(MenuItem::from).collect(),
+        locale: String::new(),
+        translation_of: None,
     };
     let actor = &who.actor;
     api.menus.put(actor, &menu).await?;

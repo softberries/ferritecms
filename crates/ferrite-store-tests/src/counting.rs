@@ -25,8 +25,8 @@ use ferrite_domain::{
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
-    LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo,
-    OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo,
+    LocaleRepo, LockGuard, MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo,
+    NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo,
     RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError,
     Subscription, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
@@ -38,6 +38,9 @@ struct Inner {
     calls: Arc<AtomicUsize>,
     /// Rows `ContentRepo::list` returned through `read()`.
     listed: Arc<AtomicUsize>,
+    /// Content and search queries through `read()` that carried a locale filter, plus
+    /// slug lookups with a locale.
+    localized: Arc<AtomicUsize>,
     types: TypeCounters,
 }
 
@@ -77,6 +80,7 @@ impl CountingStore {
             store,
             calls: Arc::new(AtomicUsize::new(0)),
             listed: Arc::new(AtomicUsize::new(0)),
+            localized: Arc::new(AtomicUsize::new(0)),
             types: TypeCounters::default(),
         };
         Self {
@@ -109,7 +113,14 @@ impl CountingStore {
         self.inner.types.reads.load(Ordering::SeqCst)
     }
 
+    /// Reads through `read()` that carried a locale (a `ContentQuery` or `SearchQuery`
+    /// locale, or a slug lookup with one): zero on a one-locale site (design 13 D4).
+    pub fn localized_reads(&self) -> usize {
+        self.inner.localized.load(Ordering::SeqCst)
+    }
+
     pub fn reset(&self) {
+        self.inner.localized.store(0, Ordering::SeqCst);
         self.inner.calls.store(0, Ordering::SeqCst);
         self.inner.listed.store(0, Ordering::SeqCst);
         self.inner.types.lists.store(0, Ordering::SeqCst);
@@ -219,6 +230,9 @@ impl Repos for CountingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn locales(&self) -> &dyn LocaleRepo {
+        self.inner.read().locales()
+    }
 }
 
 #[async_trait]
@@ -292,13 +306,37 @@ impl ContentRepo for Counted {
     async fn get_by_slug(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError> {
+        if locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
         self.0
             .read()
             .content()
-            .get_by_slug(kind, parent, slug)
+            .get_by_slug(kind, locale, parent, slug)
+            .await
+    }
+    async fn group_members(
+        &self,
+        groups: &[ContentId],
+    ) -> Result<Vec<ferrite_store::TranslationRef>, StoreError> {
+        self.0.read().content().group_members(groups).await
+    }
+    async fn relocate(
+        &self,
+        id: ContentId,
+        locale: &str,
+        group: ContentId,
+        slug: &str,
+        expected_version: i64,
+    ) -> Result<ContentItem, StoreError> {
+        self.0
+            .read()
+            .content()
+            .relocate(id, locale, group, slug, expected_version)
             .await
     }
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
@@ -308,11 +346,17 @@ impl ContentRepo for Counted {
         self.0.read().content().set_updated_at(id, at).await
     }
     async fn list(&self, query: &ContentQuery) -> Result<Page<ContentItem>, StoreError> {
+        if query.locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
         let page = self.0.read().content().list(query).await?;
         self.0.listed.fetch_add(page.items.len(), Ordering::SeqCst);
         Ok(page)
     }
     async fn count(&self, query: &ContentQuery) -> Result<u64, StoreError> {
+        if query.locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
         self.0.read().content().count(query).await
     }
     async fn file_bounds(
@@ -320,6 +364,9 @@ impl ContentRepo for Counted {
         query: &ContentQuery,
         file_len: u32,
     ) -> Result<Vec<FileBound>, StoreError> {
+        if query.locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
         self.0.read().content().file_bounds(query, file_len).await
     }
     async fn get_many(&self, ids: &[ContentId]) -> Result<Vec<ContentItem>, StoreError> {
@@ -328,13 +375,14 @@ impl ContentRepo for Counted {
     async fn slugs_with_prefix(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         prefix: &str,
     ) -> Result<Vec<String>, StoreError> {
         self.0
             .read()
             .content()
-            .slugs_with_prefix(kind, parent, prefix)
+            .slugs_with_prefix(kind, locale, parent, prefix)
             .await
     }
     async fn delete(&self, id: ContentId) -> Result<(), StoreError> {
@@ -426,11 +474,22 @@ impl TermRepo for Counted {
     async fn get(&self, id: TermId) -> Result<Option<Term>, StoreError> {
         self.0.read().terms().get(id).await
     }
-    async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError> {
-        self.0.read().terms().get_by_slug(tax, slug).await
+    async fn get_by_slug(
+        &self,
+        tax: &str,
+        locale: Option<&str>,
+        slug: &str,
+    ) -> Result<Option<Term>, StoreError> {
+        if locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
+        self.0.read().terms().get_by_slug(tax, locale, slug).await
     }
-    async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError> {
-        self.0.read().terms().list(tax).await
+    async fn list(&self, tax: &str, locale: Option<&str>) -> Result<Vec<Term>, StoreError> {
+        self.0.read().terms().list(tax, locale).await
+    }
+    async fn group_members(&self, groups: &[TermId]) -> Result<Vec<Term>, StoreError> {
+        self.0.read().terms().group_members(groups).await
     }
     async fn delete(&self, id: TermId) -> Result<(), StoreError> {
         self.0.read().terms().delete(id).await
@@ -555,6 +614,9 @@ impl SearchRepo for Counted {
         self.0.read().search().remove(id).await
     }
     async fn search(&self, query: &SearchQuery) -> Result<Page<ContentId>, StoreError> {
+        if query.locale.is_some() {
+            self.0.localized.fetch_add(1, Ordering::SeqCst);
+        }
         self.0.read().search().search(query).await
     }
 }
@@ -655,6 +717,9 @@ impl Repos for CountingTx {
     }
     fn oauth(&self) -> &dyn OAuthRepo {
         self.tx.oauth()
+    }
+    fn locales(&self) -> &dyn LocaleRepo {
+        self.tx.locales()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

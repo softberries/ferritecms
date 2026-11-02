@@ -458,7 +458,7 @@ pub(crate) async fn check_name_free(
     for kind in ROOT_TYPES {
         if repos
             .content()
-            .get_by_slug(kind, None, name)
+            .get_by_slug(kind, None, None, name)
             .await?
             .is_some()
         {

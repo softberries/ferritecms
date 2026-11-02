@@ -107,6 +107,8 @@ async fn insert(store: &dyn Store, author: &User, rows: Vec<Row<'_>>) -> Vec<Con
                 scheduled_at: None,
                 created_at: None,
                 updated_at: None,
+                locale: "en".into(),
+                translation_group: None,
             })
             .await
             .unwrap();
@@ -520,6 +522,8 @@ pub async fn query_menu_order(db: &TestDb) {
             name: "News".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: news,
         })
         .await
         .unwrap();

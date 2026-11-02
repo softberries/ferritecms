@@ -169,7 +169,7 @@ pub async fn unicode_login_and_slug_exact(db: &TestDb) {
     let found = store
         .read()
         .content()
-        .get_by_slug("post", None, "zażółć")
+        .get_by_slug("post", None, None, "zażółć")
         .await
         .unwrap()
         .unwrap();
@@ -178,7 +178,7 @@ pub async fn unicode_login_and_slug_exact(db: &TestDb) {
         store
             .read()
             .content()
-            .get_by_slug("post", None, "ZAŻÓŁĆ")
+            .get_by_slug("post", None, None, "ZAŻÓŁĆ")
             .await
             .unwrap()
             .is_none()

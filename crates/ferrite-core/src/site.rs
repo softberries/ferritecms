@@ -379,7 +379,11 @@ impl SiteReader {
         let mut parent = None;
         let mut target = None;
         for (i, slug) in path_parts.iter().enumerate() {
-            let Some(node) = repos.content().get_by_slug(kind, parent, slug).await? else {
+            let Some(node) = repos
+                .content()
+                .get_by_slug(kind, None, parent, slug)
+                .await?
+            else {
                 return Ok(public(None, deps));
             };
             deps.insert(post_key(node.id));
@@ -499,7 +503,7 @@ impl SiteReader {
         let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
-        let Some(term) = repos.terms().get_by_slug(taxonomy, slug).await? else {
+        let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
             return Ok(public(None, deps));
         };
         deps.insert(term_key(term.id));
@@ -635,6 +639,7 @@ impl SiteReader {
             readable_by: None,
             limit: MAX_PAGE,
             cursor: None,
+            locale: None,
         };
         while ids.len() < SEARCH_CAP {
             query.limit =
@@ -714,7 +719,7 @@ impl SiteReader {
                 q.kind = Some(kind.clone());
             }
             FeedSource::Term { taxonomy, slug } => {
-                let Some(term) = repos.terms().get_by_slug(taxonomy, slug).await? else {
+                let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
                     return Ok(public(None, deps));
                 };
                 deps.insert(term_key(term.id));
@@ -1185,7 +1190,7 @@ impl SiteReader {
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
-        let Some(term) = repos.terms().get_by_slug(taxonomy, slug).await? else {
+        let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
             return Ok(public(Vec::new(), deps));
         };
         deps.insert(term_key(term.id));

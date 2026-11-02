@@ -236,34 +236,34 @@ pub async fn get_by_slug_root_and_child(db: &TestDb) {
     let content = store.read().content();
 
     let got = content
-        .get_by_slug("page", None, "about")
+        .get_by_slug("page", None, None, "about")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(got.id, root.id);
     let got = content
-        .get_by_slug("page", Some(root.id), "team")
+        .get_by_slug("page", None, Some(root.id), "team")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(got.id, child.id);
     assert!(
         content
-            .get_by_slug("page", None, "team")
+            .get_by_slug("page", None, None, "team")
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         content
-            .get_by_slug("page", Some(root.id), "about")
+            .get_by_slug("page", None, Some(root.id), "about")
             .await
             .unwrap()
             .is_none()
     );
     assert!(
         content
-            .get_by_slug("post", None, "about")
+            .get_by_slug("post", None, None, "about")
             .await
             .unwrap()
             .is_none()
@@ -1260,49 +1260,61 @@ pub async fn slugs_with_prefix_matches(db: &TestDb) {
     let repo = store.read().content();
     // Callers must filter numeric suffixes themselves: `hello-world` matches too.
     assert_eq!(
-        repo.slugs_with_prefix("post", None, "hello").await.unwrap(),
+        repo.slugs_with_prefix("post", None, None, "hello")
+            .await
+            .unwrap(),
         ["hello", "hello-2", "hello-world"]
     );
     assert_eq!(
-        repo.slugs_with_prefix("post", Some(parent.id), "hello")
+        repo.slugs_with_prefix("post", None, Some(parent.id), "hello")
             .await
             .unwrap(),
         ["hello-child"]
     );
     assert_eq!(
-        repo.slugs_with_prefix("page", None, "hello").await.unwrap(),
+        repo.slugs_with_prefix("page", None, None, "hello")
+            .await
+            .unwrap(),
         ["hello-page"]
     );
     // LIKE metacharacters in the prefix are literal.
     assert_eq!(
-        repo.slugs_with_prefix("post", None, "a%b").await.unwrap(),
+        repo.slugs_with_prefix("post", None, None, "a%b")
+            .await
+            .unwrap(),
         ["a%b", "a%b-2"]
     );
     assert_eq!(
-        repo.slugs_with_prefix("post", None, "a_c").await.unwrap(),
+        repo.slugs_with_prefix("post", None, None, "a_c")
+            .await
+            .unwrap(),
         ["a_c", "a_c-2"]
     );
     assert_eq!(
-        repo.slugs_with_prefix("post", None, "b\\c").await.unwrap(),
+        repo.slugs_with_prefix("post", None, None, "b\\c")
+            .await
+            .unwrap(),
         ["b\\c", "b\\c-2"]
     );
     // Case-sensitive on both backends.
     assert_eq!(
-        repo.slugs_with_prefix("post", None, "Hello").await.unwrap(),
+        repo.slugs_with_prefix("post", None, None, "Hello")
+            .await
+            .unwrap(),
         ["Hello-3"]
     );
     assert!(
-        repo.slugs_with_prefix("post", None, "zzz")
+        repo.slugs_with_prefix("post", None, None, "zzz")
             .await
             .unwrap()
             .is_empty()
     );
     assert!(matches!(
-        repo.slugs_with_prefix("post", None, "a\u{0}").await,
+        repo.slugs_with_prefix("post", None, None, "a\u{0}").await,
         Err(StoreError::Invalid(_))
     ));
     assert!(matches!(
-        repo.slugs_with_prefix("po\u{0}st", None, "a").await,
+        repo.slugs_with_prefix("po\u{0}st", None, None, "a").await,
         Err(StoreError::Invalid(_))
     ));
 }
@@ -1321,7 +1333,7 @@ pub async fn slugs_with_prefix_limit_1000(db: &TestDb) {
     let got = store
         .read()
         .content()
-        .slugs_with_prefix("post", None, "many")
+        .slugs_with_prefix("post", None, None, "many")
         .await
         .unwrap();
     assert_eq!(got.len(), 1_000);
