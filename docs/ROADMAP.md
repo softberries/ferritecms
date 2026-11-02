@@ -564,6 +564,7 @@ Follow-ups (not in M5):
 - Firefox and WebKit runs of `admin/e2e/mcp.spec.ts`, and the consent path for an account that must change its password (Task 9 rulings).
 - A failed audit append after a committed write only logs (the write may go unaudited; Task 5 ruling).
 - `content_preview_link` needs the human's admin session: no signed, expiring preview links for the model (Task 6 ruling).
+- CI flake seen on PR #8: `ferrite-plugin-host` `tests/limits.rs` `concurrency_cap_skips_without_failure` (a 1 s `action_deadline` trapped with `interrupt` on a loaded runner; passed on rerun; not touched by M5).
 - Pruning unused `oauth_clients` rows (Task 1 Minor 7); several resources per grant (Task 2 Minor 5).
 - From design 12 §10: plugins contributing tools (a WIT `mcp` interface), a stdio bridge, per-tool allow lists per grant, MCP elicitation for confirmations, the ChatGPT Apps SDK widgets.
 
