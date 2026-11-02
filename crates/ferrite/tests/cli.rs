@@ -2186,6 +2186,36 @@ fn seed_site(dir: &Path, pg: Option<&PgSchema>) {
     c.arg("--data").arg(dir).assert().success();
 }
 
+/// What `seed demo` prints after its summary while `admin` has no password
+/// (`seed_site` uses `https://example.com`).
+fn sign_in_hint(dir: &Path) -> String {
+    let d = dir.display();
+    format!(
+        "The admin user has no password yet. To sign in at https://example.com/admin/, set one \
+         (stop `ferrite serve` first):\n  \
+         ferrite user reset-password --data {d} --login admin\n\
+         or create your own account:\n  \
+         ferrite user create --data {d} --login me --email me@example.com\n"
+    )
+}
+
+#[test]
+fn seed_hint_goes_once_admin_has_a_password() {
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        stdout(seed_cmd(dir, &[]));
+        let mut c = user_cmd(
+            dir,
+            &["reset-password", "--login", "admin", "--password-stdin"],
+        );
+        c.write_stdin("a demo passphrase\n");
+        stdout(c);
+        let out = stdout(seed_cmd(dir, &["--force"]));
+        assert!(out.starts_with("Seeded demo content:"), "{out}");
+        assert!(!out.contains("no password"), "{out}");
+    });
+}
+
 fn seed_cmd(dir: &Path, extra: &[&str]) -> Command {
     let mut c = ferrite();
     c.args(["seed", "demo"]).args(extra).arg("--data").arg(dir);
@@ -2247,7 +2277,8 @@ fn seed_business_profile() {
             "next: ferrite theme activate business --data {}\n",
             dir.display()
         );
-        assert!(out.ends_with(&next), "{out}");
+        assert!(out.contains(&next), "{out}");
+        assert!(out.ends_with(&sign_in_hint(dir)), "{out}");
 
         with_seeded_store(dir, pg, async |store| {
             let read = store.read();
@@ -2338,7 +2369,10 @@ fn seed_default_profile_is_unchanged() {
         "Seeded demo content: 12 posts, 3 pages, 4 terms, 2 menus, 1 image (admin user: admin).\n";
     on_both_backends(|dir, pg| {
         seed_site(dir, pg);
-        assert_eq!(stdout(seed_cmd(dir, &[])), LINE);
+        assert_eq!(
+            stdout(seed_cmd(dir, &[])),
+            format!("{LINE}{}", sign_in_hint(dir))
+        );
         with_seeded_store(dir, pg, async |store| {
             let read = store.read();
             let posts = read
@@ -2419,7 +2453,7 @@ fn seed_default_profile_is_unchanged() {
         // `--profile blog` is the same profile.
         assert_eq!(
             stdout(seed_cmd(dir, &["--profile", "blog", "--force"])),
-            LINE
+            format!("{LINE}{}", sign_in_hint(dir))
         );
     });
 }

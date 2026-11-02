@@ -98,7 +98,9 @@ ferrite seed demo --data DIR [--profile blog|business] [--force]
 
 Adds demo content: posts, pages, terms, menus and a sample image. `--profile business`
 adds a small-business site with a static front page for the `business` theme. `--force`
-adds another batch even when the site has content.
+adds another batch even when the site has content. Its `admin` user has no password; while that is so,
+the command ends by printing how to set one (`user reset-password --login admin`) or
+create your own account (`user create`).
 
 ## Users
 

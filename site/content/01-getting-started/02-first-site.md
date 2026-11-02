@@ -56,7 +56,10 @@ ferrite seed demo --data ./mysite
 ```
 
 This adds 12 posts, three pages, categories, tags, two menus and a sample image. It also
-creates a user `admin` that has no password; you do not need it.
+creates a user `admin` that has no password, so nobody can sign in as it until you set
+one. You do not need it (sign in with the account you created above), but the command
+prints how, in case you want to: stop `serve`, then
+`ferrite user reset-password --data ./mysite --login admin`.
 
 `--profile business` writes a small business site instead: a front page with three
 service pages, About and Contact pages, three news posts, two menus and four images. It

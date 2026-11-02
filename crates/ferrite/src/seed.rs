@@ -155,7 +155,23 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
             );
         }
     }
+    if !s.admin_has_password {
+        print!("{}", sign_in_hint(&args.data, config.site.url.as_str()));
+    }
     Ok(())
+}
+
+/// How to sign in after a seed whose `admin` account has no password yet.
+fn sign_in_hint(data: &std::path::Path, site_url: &str) -> String {
+    let data = data.display();
+    let admin = format!("{}/admin/", site_url.trim_end_matches('/'));
+    format!(
+        "The {ADMIN_LOGIN} user has no password yet. To sign in at {admin}, set one \
+         (stop `ferrite serve` first):\n  \
+         ferrite user reset-password --data {data} --login {ADMIN_LOGIN}\n\
+         or create your own account:\n  \
+         ferrite user create --data {data} --login me --email me@example.com\n"
+    )
 }
 
 /// What one run wrote.
@@ -164,6 +180,9 @@ struct Summary {
     pages: usize,
     terms: usize,
     images: usize,
+    /// Whether the `admin` account already had a password (a `--force` re-run after
+    /// `user reset-password`); a fresh seed's admin has none.
+    admin_has_password: bool,
 }
 
 async fn seed_demo(
@@ -249,7 +268,7 @@ async fn write_rows(
     image: StoredImage,
     #[cfg(feature = "test-seams")] fail_after_posts: bool,
 ) -> anyhow::Result<Summary> {
-    let actor = admin_actor(batch).await?;
+    let (actor, admin_has_password) = admin_actor(batch).await?;
 
     let mut terms = Vec::new();
     for (tax, slug, name) in demo::TERMS {
@@ -364,11 +383,12 @@ async fn write_rows(
         pages: 3,
         terms: terms.len(),
         images: 1,
+        admin_has_password,
     })
 }
 
-/// The admin every profile writes as.
-async fn admin_actor(batch: &DemoBatch) -> anyhow::Result<Actor> {
+/// The admin every profile writes as, and whether that account already has a password.
+async fn admin_actor(batch: &DemoBatch) -> anyhow::Result<(Actor, bool)> {
     let admin = batch
         .user(&NewUser {
             id: UserId::new(),
@@ -381,7 +401,10 @@ async fn admin_actor(batch: &DemoBatch) -> anyhow::Result<Actor> {
             must_reset: true,
         })
         .await?;
-    Ok(Actor::new(admin.id, admin.role))
+    Ok((
+        Actor::new(admin.id, admin.role),
+        admin.password_hash.is_some(),
+    ))
 }
 
 /// A media item for `image` with `title` and `slug`; returns its id.
@@ -422,7 +445,7 @@ async fn write_business_rows(
     images: Vec<StoredImage>,
     #[cfg(feature = "test-seams")] fail_after_posts: bool,
 ) -> anyhow::Result<Summary> {
-    let actor = admin_actor(batch).await?;
+    let (actor, admin_has_password) = admin_actor(batch).await?;
     let (tax, slug, name) = business::NEWS;
     let news = batch
         .term(tax, slug, name)
@@ -524,6 +547,7 @@ async fn write_business_rows(
         pages: 3 + children.len(),
         terms: 1,
         images: business::IMAGES.len(),
+        admin_has_password,
     })
 }
 

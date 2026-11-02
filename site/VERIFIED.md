@@ -516,3 +516,10 @@ Run on 2026-11-02 on the release commit of branch `m5-mcp` (`develop` at 6f774f7
 | README | New in 0.2.0: the admin's consent screen, a Connected apps list and AI assistants settings | `admin/src/oauth/consent-screen.tsx`, `admin/src/account/connected-apps-card.tsx`, `admin/src/settings/ai-assistants.tsx`; `docs/superpowers/m5-exit.md` (admin row); the ai-assistants rows above | Verified |
 | README | New in 0.2.0: a redesigned documentation site with search, hosted on GitHub Pages | `git ls-tree -r v0.1.0 -- site/brand` is empty (the brand layer, landing page and search dialog are newer than 0.1.0); `site/brand/brand.js:126` (the search dialog); `site/export-static.sh:100-103` (the Pagefind index); `.github/workflows/pages.yml`; the "hosted copy" row above (search finds pages and opens them) | Verified |
 | README | The remaining items under "What's in 0.2.0" (starter themes, admin, REST API, plugins, imports, backups, solo and cluster profiles) are the 0.1.0 contents, unchanged | The 0.1.0 text of the README's list, checked against the rows above and `CLAUDE.md` "Current status" | Verified (carried over, not re-run) |
+
+## Seed sign-in hint (2026-11-02)
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| first-site, cli | `seed demo` creates `admin` without a password and, while it has none, ends by printing how to set one (`user reset-password --login admin`) or create an account (`user create`) | `crates/ferrite/src/seed.rs` (`sign_in_hint`, `Summary::admin_has_password`); tests `seed_default_profile_is_unchanged`, `seed_business_profile`, `seed_hint_goes_once_admin_has_a_password` (both backends) | Verified |
+
