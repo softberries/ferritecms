@@ -9,6 +9,7 @@ pub mod html;
 mod ids;
 mod import;
 mod job;
+pub mod locale;
 mod menu;
 mod metrics;
 mod node;
