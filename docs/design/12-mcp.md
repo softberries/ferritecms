@@ -63,8 +63,11 @@ resolved by `AuthService::resolve_token` (one path, one rate limit for bad token
    This is how Claude Code (`claude mcp add --transport http … --header`), Cursor, VS Code
    and scripts connect.
 2. **OAuth access tokens** issued by the built-in authorization server (§3.2). They are
-   rows of `api_tokens` too (same `fer_` format, sha-256 hashed), tied to an OAuth grant
-   (`api_tokens.oauth_grant_id`), valid for **1 hour**.
+   rows of `api_tokens` too (sha-256 hashed), tied to an OAuth grant
+   (`api_tokens.oauth_grant_id`), valid for **1 hour**, with their own prefix: `fera_` +
+   43 base64url characters. `resolve_token` requires the prefix to match the row (`fera_`
+   only for a row with a grant, `fer_` only for one without); a mismatch is an invalid
+   token.
 
 A missing or bad token answers `401` with
 `WWW-Authenticate: Bearer resource_metadata="<site>/.well-known/oauth-protected-resource/mcp"`
@@ -74,7 +77,11 @@ the sign-in flow.
 **Audience binding** (RFC 8707, MCP "token audience validation"): OAuth access tokens are
 for `/mcp` only. The REST API refuses a token that belongs to an OAuth grant (`401
 invalid_token`), so a token handed to an AI client cannot be replayed against
-`/api/v1`. Personal API tokens work in both places, as they always have.
+`/api/v1`. Personal API tokens work in both places, as they always have. The `fera_`
+prefix keeps the rule in a mixed-version cluster and after a binary rollback: a node
+older than M5 looks a bearer up only when it starts with `fer_` (v0.1.0's
+`resolve_token`) and knows nothing of grants, so it refuses an OAuth token before any
+lookup instead of accepting it on `/api/v1`.
 
 Sessions (cookies) are never accepted on `/mcp`.
 
@@ -158,10 +165,15 @@ deletes them in the same transaction (one `oauth.disconnect` audit row per grant
 
 ### 3.3 Scopes
 
-OAuth scopes are the existing 22 area scopes (`content:read` … `system:write`), so a
-grant is exactly like a personal token's scope list. A request without `scope` asks for
-all of them; the consent screen then preselects the areas the user's role can use. The
-token's effective rights are always `role ∩ scopes` (core, unchanged).
+OAuth scopes are the existing area scopes (`content:read` … `system:read`), so a grant is
+exactly like a personal token's scope list, except that the writes no MCP tool uses are
+never granted: `users:write`, `import:write` and `system:write` (defence in depth; users,
+imports and the system are read-only to assistants, §6). That leaves 19 scopes
+(`Scopes::OAUTH`), which is what the metadata's `scopes_supported` lists. A request
+without `scope` asks for all of them; one naming an ungrantable write is offered its read.
+The consent screen then preselects the areas the user's role can use, and users, import
+and system go no higher than read. The token's effective rights are always `role ∩
+scopes` (core, unchanged).
 
 ## 4. Storage (migration `0013_oauth`)
 

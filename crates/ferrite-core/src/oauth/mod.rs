@@ -26,14 +26,16 @@
 //!   only the previous hash is kept, so a token two rotations old is merely unknown
 //!   (`invalid_grant`) and does not revoke. `scope` may narrow the new access token, never
 //!   widen it; the grant keeps what the user approved.
-//! * **Access tokens** are `api_tokens` rows (`fer_…`, 1 hour) tied to the grant, named
+//! * **Access tokens** are `api_tokens` rows (`fera_…`, 1 hour) tied to the grant, named
 //!   after the client, with the grant's (or the narrowed) scopes. They do not count
 //!   towards the 50 personal tokens; [`AuthService::resolve_token`] marks them
 //!   ([`Authenticated::oauth`](crate::Authenticated::oauth)) so the REST API can refuse
-//!   them (audience binding, §3.1).
-//! * **Scopes** are the 22 area scopes. A user can grant what their role can use
-//!   ([`role_scopes`]) within their credential's scopes; a request asking for `<area>:write`
-//!   that the role can only read offers `<area>:read`.
+//!   them (audience binding, §3.1). Their own prefix keeps them off `/api/v1` on a node
+//!   older than M5 too, which only looks up `fer_` values.
+//! * **Scopes** are the area scopes of [`Scopes::OAUTH`] (19: no `users:write`,
+//!   `import:write` or `system:write`, which no MCP tool uses). A user can grant what their
+//!   role can use ([`role_scopes`]) within their credential's scopes and that set; a
+//!   request asking for `<area>:write` that can only be read offers `<area>:read`.
 //! * Audit: `oauth.connect` when the user approves (`{client, scopes}`), and
 //!   `oauth.disconnect` whenever a grant ends early (`{client, user, reason}`:
 //!   `disconnected`, `revoked`, `code_reuse` or `refresh_replay`). Never codes, tokens or
@@ -65,7 +67,7 @@ pub use metadata::{
 };
 
 use crate::auth::{
-    AuthService, MAX_TOKEN_NAME, mint_bearer, older_than, plus, random_bytes, sha256_hex,
+    AuthService, MAX_TOKEN_NAME, mint_oauth_bearer, older_than, plus, random_bytes, sha256_hex,
 };
 use crate::{
     Actor, CoreError, Scope, Scopes,
@@ -178,7 +180,7 @@ pub struct ConsentView {
     /// `scheme://host` for another scheme with a host, the whole URI without one (so
     /// `cursor://example.com/…` cannot pass for `example.com`).
     pub redirect_host: String,
-    /// The requested scopes (all 22 when the client sent no `scope`).
+    /// The requested scopes (all of [`Scopes::OAUTH`] when the client sent no `scope`).
     pub requested: Vec<String>,
     /// The requested scopes the user can grant (preselected).
     pub grantable: Vec<String>,
@@ -549,7 +551,7 @@ impl OAuthService {
             }
         };
         let scopes = match req.scope.as_deref().map(parse_scope) {
-            None | Some(Ok(None)) => Scopes::ALL,
+            None | Some(Ok(None)) => Scopes::OAUTH,
             Some(Ok(Some(s))) => s,
             Some(Err(why)) => return Err(fail("invalid_scope", &why)),
         };
@@ -771,7 +773,7 @@ impl OAuthService {
         let code_hash = sha256_hex(code.as_bytes());
         let now = self.now();
         let grant_id = OAuthGrantId::new();
-        let (access, access_hash) = mint_bearer()?;
+        let (access, access_hash) = mint_oauth_bearer()?;
         let (refresh, refresh_hash) = mint_refresh()?;
         let grant_expires = plus(now, GRANT_TTL)?;
         let access_expires = plus(now, ACCESS_TOKEN_TTL)?;
@@ -914,7 +916,7 @@ impl OAuthService {
             Some(Err(why)) => return Err(OAuthError::InvalidScope(why)),
         };
         let scope_names = scopes.to_strings();
-        let (access, access_hash) = mint_bearer()?;
+        let (access, access_hash) = mint_oauth_bearer()?;
         let (refresh, refresh_hash) = mint_refresh()?;
         let grant_expires = plus(now, GRANT_TTL)?;
         let access_expires = plus(now, ACCESS_TOKEN_TTL)?;
@@ -1122,9 +1124,12 @@ async fn delete_audited(
     Ok(true)
 }
 
-/// What `actor` can grant: the role's scopes ([`role_scopes`]) within the credential's.
+/// What `actor` can grant: the role's scopes ([`role_scopes`]) within the credential's
+/// and within [`Scopes::OAUTH`].
 fn grantable_by(actor: &Actor) -> Scopes {
-    role_scopes(actor.role).within(actor.scopes)
+    role_scopes(actor.role)
+        .within(actor.scopes)
+        .within(Scopes::OAUTH)
 }
 
 /// A space-separated scope list: `None` when empty, else the set; an unknown name is

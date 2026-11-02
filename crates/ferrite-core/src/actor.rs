@@ -62,7 +62,7 @@ impl Area {
         Area::System,
     ];
 
-    fn index(self) -> u32 {
+    const fn index(self) -> u32 {
         self as u32
     }
 }
@@ -122,7 +122,7 @@ impl Scope {
         }
     }
 
-    fn bit(self) -> u32 {
+    const fn bit(self) -> u32 {
         self.area.index() * 2
             + match self.access {
                 Access::Read => 0,
@@ -157,6 +157,15 @@ impl Scopes {
     pub const ALL: Scopes = Scopes((1 << SCOPE_NAMES.len()) - 1);
     /// No scope at all.
     pub const NONE: Scopes = Scopes(0);
+    /// What an OAuth client can be granted (design 12 §3.3): every scope except the
+    /// writes no MCP tool uses, `users:write`, `import:write` and `system:write` (their
+    /// reads stay), so a grant cannot be stretched beyond what assistants do.
+    pub const OAUTH: Scopes = Scopes(
+        Scopes::ALL.0
+            & !(1 << Scope::write(Area::Users).bit()
+                | 1 << Scope::write(Area::Import).bit()
+                | 1 << Scope::write(Area::System).bit()),
+    );
 
     /// The set holding `scope` alone.
     pub(crate) fn only(scope: Scope) -> Scopes {
@@ -549,6 +558,35 @@ mod tests {
             assert!(!editor.allows(Scope::read(area)), "{area:?}");
         }
         assert!(!editor.allows(Scope::write(Area::Users)));
+    }
+
+    #[test]
+    fn oauth_scopes_leave_out_unused_writes() {
+        let oauth = Scopes::OAUTH.to_strings();
+        assert_eq!(oauth.len(), 19);
+        for gone in ["users:write", "import:write", "system:write"] {
+            assert!(!oauth.iter().any(|s| s == gone), "{gone}");
+        }
+        for area in [Area::Users, Area::Import, Area::System] {
+            assert!(Scopes::OAUTH.allows(Scope::read(area)), "{area:?}");
+        }
+        assert!(Scopes::OAUTH.allows(Scope::write(Area::Content)));
+        assert_eq!(
+            Scopes::ALL.within(Scopes::OAUTH).to_strings(),
+            [
+                "content:write",
+                "media:write",
+                "terms:write",
+                "menus:write",
+                "comments:write",
+                "users:read",
+                "settings:write",
+                "redirects:write",
+                "extensions:write",
+                "import:read",
+                "system:read"
+            ]
+        );
     }
 
     #[test]

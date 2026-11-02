@@ -179,7 +179,7 @@ async fn protected_resource(State(api): State<Arc<ApiState>>, uri: Uri) -> Respo
     metadata(json!({
         "resource": api.oauth.resource(),
         "authorization_servers": [api.oauth.issuer()],
-        "scopes_supported": Scopes::ALL.to_strings(),
+        "scopes_supported": Scopes::OAUTH.to_strings(),
         "bearer_methods_supported": ["header"],
         "resource_name": title,
         "resource_documentation": RESOURCE_DOCUMENTATION,
@@ -207,7 +207,7 @@ async fn authorization_server(State(api): State<Arc<ApiState>>, uri: Uri) -> Res
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
-        "scopes_supported": Scopes::ALL.to_strings(),
+        "scopes_supported": Scopes::OAUTH.to_strings(),
         "client_id_metadata_document_supported": true,
         "authorization_response_iss_parameter_supported": true,
         "service_documentation": RESOURCE_DOCUMENTATION,

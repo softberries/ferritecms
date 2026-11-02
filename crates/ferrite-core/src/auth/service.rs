@@ -66,8 +66,12 @@ const MAX_TOKENS: u64 = 50;
 /// Longest API token name, in characters (OAuth access tokens are named after their
 /// client, cut to this).
 pub(crate) const MAX_TOKEN_NAME: usize = 100;
-/// Bearer token prefix.
+/// Prefix of a personal API token.
 const TOKEN_PREFIX: &str = "fer_";
+/// Prefix of an OAuth access token (design 12 §3.1). It does not start with
+/// [`TOKEN_PREFIX`], so a node older than M5, whose `resolve_token` looks up only `fer_`
+/// values and knows nothing of grants, refuses it before any lookup.
+const OAUTH_TOKEN_PREFIX: &str = "fera_";
 /// A login challenge (password checked, TOTP pending) is valid this long.
 const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
 /// A TOTP enrollment must be confirmed within this long.
@@ -851,15 +855,21 @@ impl AuthService {
     ) -> Result<Option<Authenticated>, CoreError> {
         let repos = self.store.read();
         let now = self.now();
-        let found = if bearer.starts_with(TOKEN_PREFIX) && bearer.len() <= MAX_TOKEN_INPUT {
-            repos
-                .api_tokens()
-                .get_by_hash(&sha256_hex(bearer.as_bytes()))
-                .await?
-        } else {
-            None
-        };
-        let Some(token) = found.filter(|t| t.expires_at.is_none_or(|at| now < at)) else {
+        let oauth = bearer.starts_with(OAUTH_TOKEN_PREFIX);
+        let found =
+            if (oauth || bearer.starts_with(TOKEN_PREFIX)) && bearer.len() <= MAX_TOKEN_INPUT {
+                repos
+                    .api_tokens()
+                    .get_by_hash(&sha256_hex(bearer.as_bytes()))
+                    .await?
+            } else {
+                None
+            };
+        // The prefix must match the row: `fera_` for a grant's token, `fer_` otherwise.
+        let Some(token) = found
+            .filter(|t| t.oauth_grant_id.is_some() == oauth)
+            .filter(|t| t.expires_at.is_none_or(|at| now < at))
+        else {
             if let Some(ip) = ip {
                 limits::hit(
                     self.store.as_ref(),
@@ -1166,13 +1176,19 @@ impl AuthService {
     }
 }
 
-/// A new bearer value (`fer_` + 32 random bytes as base64url) and the SHA-256 hex stored
-/// for it: personal API tokens and OAuth access tokens alike.
+/// A new personal API token (`fer_` + 32 random bytes as base64url) and the SHA-256 hex
+/// stored for it.
 pub(crate) fn mint_bearer() -> Result<(Secret, String), CoreError> {
-    let bearer = format!(
-        "{TOKEN_PREFIX}{}",
-        URL_SAFE_NO_PAD.encode(random_bytes::<32>()?)
-    );
+    mint_with(TOKEN_PREFIX)
+}
+
+/// A new OAuth access token (`fera_` + 32 random bytes as base64url) and its SHA-256 hex.
+pub(crate) fn mint_oauth_bearer() -> Result<(Secret, String), CoreError> {
+    mint_with(OAUTH_TOKEN_PREFIX)
+}
+
+fn mint_with(prefix: &str) -> Result<(Secret, String), CoreError> {
+    let bearer = format!("{prefix}{}", URL_SAFE_NO_PAD.encode(random_bytes::<32>()?));
     let hash = sha256_hex(bearer.as_bytes());
     Ok((Secret::new(bearer), hash))
 }

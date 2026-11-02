@@ -24,7 +24,8 @@ use ferrite_core::{
     },
 };
 use ferrite_domain::{
-    AuditQuery, ClientKind, OAuthClient, OAuthClientId, Role, Timestamp, User, UserStatus,
+    ApiToken, ApiTokenId, AuditQuery, ClientKind, OAuthClient, OAuthClientId, Role, Timestamp,
+    User, UserStatus,
 };
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
@@ -627,18 +628,46 @@ async fn scope_narrowing_on_refresh_never_widens(db: &TestDb) {
     assert_eq!(third.scope, "content:write media:read");
 }
 
+async fn admin_cannot_grant_unused_writes(db: &TestDb) {
+    let e = env(db);
+    let client = registered(&e).await;
+    let (_, admin) = make_user(db, "root", Role::Admin).await;
+    // No MCP tool writes users, imports or the system: those areas offer reading only,
+    // whether the client asks for nothing or for the writes by name.
+    for scope in [
+        None,
+        Some("users:write import:write system:write content:write"),
+    ] {
+        let mut p = params(client.id.as_str(), REDIRECT);
+        p.scope = scope.map(String::from);
+        let id = e.oauth.begin(p).await.unwrap();
+        let view = e.oauth.describe(&admin, id).await.unwrap();
+        for gone in ["users:write", "import:write", "system:write"] {
+            assert!(!view.grantable.contains(&gone.to_owned()), "{gone}");
+            assert!(matches!(
+                e.oauth.approve(&admin, id, vec![gone.into()]).await,
+                Err(CoreError::Forbidden(_))
+            ));
+        }
+        for read in ["users:read", "import:read", "system:read", "content:write"] {
+            assert!(view.grantable.contains(&read.to_owned()), "{read}");
+        }
+    }
+}
+
 async fn contributor_cannot_grant_beyond_role(db: &TestDb) {
     let e = env(db);
     let client = registered(&e).await;
     let (_, actor) = make_user(db, "contrib", Role::Contributor).await;
-    // No `scope`: every scope is requested, the consent view offers the role's.
+    // No `scope`: every OAuth scope is requested, the consent view offers the role's.
     let id = e
         .oauth
         .begin(params(client.id.as_str(), REDIRECT))
         .await
         .unwrap();
     let view = e.oauth.describe(&actor, id).await.unwrap();
-    assert_eq!(view.requested.len(), 22);
+    assert_eq!(view.requested, Scopes::OAUTH.to_strings());
+    assert_eq!(view.requested.len(), 19);
     assert!(!view.verified);
     assert!(view.grantable.contains(&"content:write".to_owned()));
     for beyond in [
@@ -837,7 +866,7 @@ async fn resolve_token_marks_oauth_tokens(db: &TestDb) {
     let client = registered(&e).await;
     let (user, actor) = make_user(db, "marks", Role::Author).await;
     let tokens = connect(&e, &actor, client.id.as_str()).await;
-    assert!(tokens.access_token.expose().starts_with("fer_"));
+    assert!(tokens.access_token.expose().starts_with("fera_"));
     let who = e
         .auth
         .resolve_token(tokens.access_token.expose(), None)
@@ -885,6 +914,68 @@ async fn resolve_token_marks_oauth_tokens(db: &TestDb) {
     // The access token lasts an hour.
     e.clock.advance(HOUR);
     assert!(!resolves(&e, &tokens).await);
+}
+
+/// OAuth access tokens are `fera_…`, personal tokens `fer_…`, and a row whose kind does
+/// not match the presented prefix is refused (design 12 §3.1).
+///
+/// Why the separate prefix: v0.1.0's `resolve_token`
+/// (`git show v0.1.0:crates/ferrite-core/src/auth/service.rs`, line 810) looks a value up
+/// only when `bearer.starts_with(TOKEN_PREFIX)` with `TOKEN_PREFIX = "fer_"` (line 69), and
+/// it has no idea of grants, so a `fer_` OAuth token would work on `/api/v1` of a node
+/// still on v0.1.0 (a mixed-version cluster or a rollback). `fera_` fails that check
+/// before any lookup.
+async fn token_prefix_must_match_its_kind(db: &TestDb) {
+    assert!(!"fera_x".starts_with("fer_"));
+    let e = env(db);
+    let client = registered(&e).await;
+    let (user, actor) = make_user(db, "prefix", Role::Author).await;
+    let tokens = connect(&e, &actor, client.id.as_str()).await;
+    assert!(tokens.access_token.expose().starts_with("fera_"));
+    assert!(resolves(&e, &tokens).await);
+    let grant = e.oauth.grants(&actor, None).await.unwrap()[0].grant.id;
+    let insert = |value: &str, oauth_grant_id| ApiToken {
+        id: ApiTokenId::new(),
+        user_id: user.id,
+        name: "forged".into(),
+        token_hash: sha256_hex(value),
+        scopes: vec!["content:read".into()],
+        created_at: e.clock.now(),
+        last_used_at: None,
+        expires_at: None,
+        oauth_grant_id,
+    };
+    let repos = db.store().read();
+    // `fera_` without a grant, `fer_` with one: both refused.
+    repos
+        .api_tokens()
+        .insert(&insert("fera_no_grant", None))
+        .await
+        .unwrap();
+    repos
+        .api_tokens()
+        .insert(&insert("fer_with_grant", Some(grant)))
+        .await
+        .unwrap();
+    // The control: the same shapes with matching kinds resolve.
+    repos
+        .api_tokens()
+        .insert(&insert("fera_with_grant", Some(grant)))
+        .await
+        .unwrap();
+    repos
+        .api_tokens()
+        .insert(&insert("fer_no_grant", None))
+        .await
+        .unwrap();
+    let resolve = |v: &'static str| {
+        let auth = e.auth.clone();
+        async move { auth.resolve_token(v, None).await.unwrap() }
+    };
+    assert!(resolve("fera_no_grant").await.is_none());
+    assert!(resolve("fer_with_grant").await.is_none());
+    assert_eq!(resolve("fera_with_grant").await.unwrap().oauth, Some(grant));
+    assert_eq!(resolve("fer_no_grant").await.unwrap().oauth, None);
 }
 
 fn sha256_hex(s: &str) -> String {
@@ -1055,9 +1146,11 @@ backend_tests!(
     refresh_rotates_and_replay_revokes,
     scope_narrowing_on_refresh_never_widens,
     contributor_cannot_grant_beyond_role,
+    admin_cannot_grant_unused_writes,
     disconnect_kills_access_tokens,
     disabling_a_user_ends_their_grants,
     resolve_token_marks_oauth_tokens,
+    token_prefix_must_match_its_kind,
     personal_token_limit_ignores_oauth_tokens,
     registration_is_public_only_and_limited,
 );

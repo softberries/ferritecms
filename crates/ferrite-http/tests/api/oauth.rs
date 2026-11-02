@@ -229,13 +229,23 @@ async fn protected_resource_metadata_names_mcp(api: Api) -> Api {
         assert_eq!(doc["resource"], format!("{SITE_URL}/mcp"), "{doc}");
         assert_eq!(doc["authorization_servers"], json!([SITE_URL]));
         assert_eq!(doc["bearer_methods_supported"], json!(["header"]));
-        assert_eq!(doc["scopes_supported"].as_array().unwrap().len(), 22);
+        // Only what a grant can hold: no `users:write`, `import:write`, `system:write`.
+        assert_eq!(doc["scopes_supported"].as_array().unwrap().len(), 19);
         assert!(
             doc["scopes_supported"]
                 .as_array()
                 .unwrap()
                 .contains(&json!("content:write"))
         );
+        for unused in ["users:write", "import:write", "system:write"] {
+            assert!(
+                !doc["scopes_supported"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(unused)),
+                "{unused}"
+            );
+        }
         assert_eq!(doc["resource_name"], SITE_TITLE);
         assert!(
             doc["resource_documentation"]
@@ -294,7 +304,7 @@ async fn as_metadata_lists_endpoints_and_cimd(api: Api) -> Api {
     );
     assert_eq!(doc["client_id_metadata_document_supported"], true);
     assert_eq!(doc["authorization_response_iss_parameter_supported"], true);
-    assert_eq!(doc["scopes_supported"].as_array().unwrap().len(), 22);
+    assert_eq!(doc["scopes_supported"].as_array().unwrap().len(), 19);
     // No path in site.url: no path-inserted copy.
     assert_eq!(
         api.get("/.well-known/oauth-authorization-server/blog")
@@ -558,7 +568,8 @@ async fn full_flow_code_token_refresh_revoke(api: Api) -> Api {
     let (mut c, client_id, access, refresh_token) =
         connected(&api, &["content:read", "content:write"]).await;
     // The token answer.
-    assert!(access.starts_with("fer_"));
+    // OAuth access tokens have their own prefix (12 §3.1).
+    assert!(access.starts_with("fera_"));
     // A personal token's list does not show it.
     let me = c.get(&api, "/api/v1/auth/me").await.json();
     let user_id = me["id"].as_str().unwrap().to_owned();
@@ -690,7 +701,8 @@ async fn full_flow_code_token_refresh_revoke(api: Api) -> Api {
 }
 
 async fn oauth_token_refused_by_rest_api(api: Api) -> Api {
-    let (_, _, access, _) = connected(&api, &["content:read", "users:read"]).await;
+    let (mut c, client_id, access, _) = connected(&api, &["content:read", "users:read"]).await;
+    assert!(access.starts_with("fera_"));
     for path in ["/api/v1/auth/me", "/api/v1/users"] {
         let r = api
             .send(
@@ -729,6 +741,27 @@ async fn oauth_token_refused_by_rest_api(api: Api) -> Api {
     let personal = api.bearer(&plain, &["*"]).await;
     let r = personal.get(&api, "/api/v1/auth/me").await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
+
+    // Defence in depth: even an administrator grants users, imports and the system
+    // read-only, since no MCP tool writes them (12 §3.3).
+    let request = begin(&api, &client_id, "").await;
+    let path = format!("/api/v1/oauth/requests/{request}");
+    let view = c.get(&api, &path).await.json();
+    let grantable = view["grantable"].as_array().unwrap().clone();
+    assert_eq!(grantable.len(), 11, "{grantable:?}");
+    for unused in ["users:write", "import:write", "system:write"] {
+        assert!(!grantable.contains(&json!(unused)), "{unused}");
+        c.post(
+            &api,
+            &format!("{path}/approve"),
+            json!({"scopes": [unused]}),
+        )
+        .await
+        .assert_problem(403, "forbidden");
+    }
+    for read in ["users:read", "import:read", "system:read"] {
+        assert!(grantable.contains(&json!(read)), "{read}");
+    }
     api
 }
 

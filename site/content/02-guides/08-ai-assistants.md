@@ -174,7 +174,8 @@ you sign in first). It shows the app's name, where it returns to, whether the si
 the app's details (**Verified**) or the app named itself (**Self-registered**), and what it
 asks to do, area by area: content, media, terms, menus, comments, users, settings,
 redirects, themes and plugins, import and system. Set each area to **Off**, **Read** or
-**Write**, or choose **Read only**, then **Approve** or **Deny**.
+**Write**, or choose **Read only**, then **Approve** or **Deny**. Users, import and system
+go no higher than **Read**: no assistant tool changes them.
 
 What the assistant may do is always **your role ∩ the areas you approved**:
 
@@ -197,9 +198,9 @@ may do.
 Clients that take a header can use a **personal API token** instead: create one under
 **Account → API tokens**, with the scopes it needs, and send it as
 `Authorization: Bearer fer_…`. A personal token works on `/mcp` and on the
-[REST API](../03-developers/03-rest-api.md). Tokens from the consent screen work only on
-`/mcp`: the REST API refuses them, so a token given to an assistant cannot be used
-anywhere else.
+[REST API](../03-developers/03-rest-api.md). Tokens from the consent screen (they start
+with `fera_`) work only on `/mcp`: the REST API refuses them, so a token given to an
+assistant cannot be used anywhere else.
 
 <figure><img src="../images/admin-connected-apps.webp" alt="Account, Connected apps: My assistant, Self-registered, with the areas it may write, when it was connected and last used, and a Disconnect button"><figcaption>Account → Connected apps: every assistant you connected, and Disconnect.</figcaption></figure>
 

@@ -19,4 +19,4 @@ pub use service::{
     AuthService, Authenticated, Clock, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo,
     TotpSetup, Via,
 };
-pub(crate) use service::{MAX_TOKEN_NAME, mint_bearer, older_than, plus};
+pub(crate) use service::{MAX_TOKEN_NAME, mint_oauth_bearer, older_than, plus};
