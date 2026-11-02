@@ -1,0 +1,167 @@
+{
+  "title": "Webhooks",
+  "description": "Signed POSTs to your own endpoints when content, media, comments, users or imports change: deploy hooks, CDN purges, chat notices.",
+  "list": "Webhooks",
+  "new": "New webhook",
+  "rowMenu": "Actions for {{name}}",
+  "open": "Open",
+  "columns": {
+    "webhook": "Webhook",
+    "events": "Events",
+    "state": "State",
+    "last": "Last delivery",
+    "counts": "Last 24 hours"
+  },
+  "counts": "{{delivered}} delivered, {{failed}} failed",
+  "never": "Never",
+  "empty": {
+    "title": "No webhooks yet",
+    "body": "A webhook calls a URL of yours when something changes on the site, signed so the receiver can check it came from here."
+  },
+  "banner": {
+    "disabled_one": "{{count}} webhook was disabled because its receiver kept failing or asked to stop. Fix the receiver, enable it and redeliver what was missed.",
+    "disabled_other": "{{count}} webhooks were disabled because their receivers kept failing or asked to stop. Fix the receivers, enable them and redeliver what was missed.",
+    "paused_one": "{{count}} webhook is paused: this database was copied or restored. Enable it to send from this site.",
+    "paused_other": "{{count}} webhooks are paused: this database was copied or restored. Enable them to send from this site."
+  },
+  "state": {
+    "active": "Active",
+    "failing": "Failing",
+    "failingSince": "Failing since {{when}}",
+    "disabled": "Disabled",
+    "paused": "Paused: copied"
+  },
+  "reason": {
+    "manual": "disabled by an administrator",
+    "failing": "kept failing for 5 days",
+    "gone": "the receiver answered 410 Gone"
+  },
+  "events": {
+    "all": "All events",
+    "allShort": "All",
+    "group": "{{group}} (all)",
+    "groupCount": "{{group}} ({{count}})",
+    "allInGroup": "All {{group}} events",
+    "label": "Events",
+    "hint": "Choose groups or single events. A whole group also gets the events added to it later.",
+    "groups": {
+      "content": "Content",
+      "media": "Media",
+      "comment": "Comments",
+      "user": "Users",
+      "import": "Imports"
+    }
+  },
+  "form": {
+    "name": "Name",
+    "nameHint": "For you: \"Deploy to Netlify\", \"Purge CDN\".",
+    "url": "URL",
+    "urlHint": "An https:// address. A token in the URL is fine; the audit log keeps only the host.",
+    "contentTypes": "Content types",
+    "contentTypesHint": "Content events only for these types. None checked: every type.",
+    "advanced": "Advanced",
+    "secret": "Own signing secret",
+    "secretHint": "Optional: whsec_ followed by base64. Leave empty to have one made.",
+    "nameRequired": "Enter a name.",
+    "urlRequired": "Enter the URL.",
+    "eventsRequired": "Choose at least one event.",
+    "create": "Create webhook",
+    "creating": "Creating…",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Webhook saved",
+    "failed": "The webhook could not be saved."
+  },
+  "created": {
+    "title": "Webhook created",
+    "description": "Copy the signing secret now: the receiver checks every request with it, and it is not shown again.",
+    "secret": "Signing secret",
+    "done": "Done"
+  },
+  "detail": {
+    "settings": "Settings",
+    "deliveries": "Deliveries",
+    "deliveriesHint": "Every attempt for 30 days. A receiver sees the same webhook-id on every retry and redelivery.",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enabled": "Webhook enabled",
+    "disabledToast": "Webhook disabled",
+    "rotate": "Rotate secret",
+    "delete": "Delete",
+    "rotating": "Old secret valid until {{when}}",
+    "loadFailed": "The webhook could not be loaded."
+  },
+  "test": {
+    "action": "Send test",
+    "sending": "Sending a test…",
+    "delivered": "Delivered: {{code}} in {{ms}} ms",
+    "failed": "Failed: {{error}}",
+    "waiting": "Still waiting; see the deliveries below.",
+    "error": "The test could not be sent."
+  },
+  "rotate": {
+    "title": "Rotate the signing secret of {{name}}?",
+    "body": "A new secret is made now. For 24 hours every request is signed with both, so you can update the receiver without losing a delivery.",
+    "confirm": "Rotate",
+    "rotating": "Rotating…",
+    "cancel": "Cancel",
+    "doneTitle": "New signing secret",
+    "doneDescription": "Copy it now; it is not shown again. The old secret also signs until {{when}}.",
+    "done": "Done"
+  },
+  "delete": {
+    "title": "Delete {{name}}?",
+    "body": "Its delivery log goes with it, and nothing more is sent. This cannot be undone.",
+    "confirm": "Delete",
+    "deleting": "Deleting…",
+    "cancel": "Cancel",
+    "done": "{{name}} was deleted"
+  },
+  "deliveries": {
+    "label": "Deliveries",
+    "status": "Status",
+    "all": "All",
+    "statuses": {
+      "pending": "Pending",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "skipped": "Skipped"
+    },
+    "columns": {
+      "event": "Event",
+      "status": "Status",
+      "created": "Created",
+      "attempts": "Attempts",
+      "code": "Last code",
+      "next": "Next attempt"
+    },
+    "empty": "No deliveries yet.",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
+    "redeliverSince": "Redeliver failed since…"
+  },
+  "sheet": {
+    "title": "Delivery",
+    "event": "Event",
+    "attempts": "Attempts",
+    "attempt": "Attempt {{n}}",
+    "duration": "{{ms}} ms",
+    "noAnswer": "No answer",
+    "excerpt": "Response",
+    "noAttempts": "Not tried yet.",
+    "redeliver": "Redeliver",
+    "redelivered": "Queued again",
+    "redeliveryOf": "A redelivery"
+  },
+  "since": {
+    "title": "Redeliver failed deliveries",
+    "body": "Failed and skipped deliveries created since this time are queued again (at most 1 000), oldest first.",
+    "label": "Since",
+    "confirm": "Redeliver",
+    "running": "Queuing…",
+    "cancel": "Cancel",
+    "done_one": "{{count}} delivery queued again",
+    "done_other": "{{count}} deliveries queued again"
+  }
+}

@@ -330,8 +330,7 @@ pub struct WebhookEventDto {
     #[serde(rename = "type")]
     pub kind: String,
     pub timestamp: DateTime<Utc>,
-    /// The event's `data` as stored (`url` is added at delivery).
-    #[schema(value_type = Object)]
+    /// The event's `data` as stored (`url` is added at delivery): a JSON object.
     pub data: serde_json::Value,
 }
 

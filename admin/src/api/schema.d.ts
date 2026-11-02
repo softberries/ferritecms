@@ -3970,8 +3970,8 @@ export interface components {
         };
         /** @description The event a delivery carries. */
         WebhookEventDto: {
-            /** @description The event's `data` as stored (`url` is added at delivery). */
-            data: Record<string, never>;
+            /** @description The event's `data` as stored (`url` is added at delivery): a JSON object. */
+            data: unknown;
             /** Format: uuid */
             id: string;
             /** Format: date-time */

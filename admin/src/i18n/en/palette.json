@@ -35,7 +35,9 @@
     "redirect": "New redirect",
     "redirectKeywords": "create add new redirect forward moved address url structure",
     "user": "New user",
-    "userKeywords": "create add new user account person invite people"
+    "userKeywords": "create add new user account person invite people",
+    "webhook": "New webhook",
+    "webhookKeywords": "create add new webhook hook deploy notify integration callback"
   },
   "preferences": {
     "light": "Light theme",

@@ -16366,8 +16366,7 @@
         ],
         "properties": {
           "data": {
-            "type": "object",
-            "description": "The event's `data` as stored (`url` is added at delivery)."
+            "description": "The event's `data` as stored (`url` is added at delivery): a JSON object."
           },
           "id": {
             "type": "string",

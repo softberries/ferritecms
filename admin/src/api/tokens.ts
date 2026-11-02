@@ -20,6 +20,7 @@ export const SCOPE_AREAS = [
   "extensions",
   "import",
   "system",
+  "webhooks",
 ] as const;
 export type ScopeArea = (typeof SCOPE_AREAS)[number];
 
