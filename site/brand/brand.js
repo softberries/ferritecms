@@ -92,10 +92,14 @@
     heads.forEach((h) => io.observe(h));
   }
 
-  // Current section in the header ----------------------------------------
+  // Current section in the header: only the longest matching link, so the
+  // "AI" link (/guides/ai-assistants/) wins over "Guides" (/guides/) ------
+  let section = null;
   for (const a of document.querySelectorAll(".bx-nav a")) {
-    if (location.pathname.startsWith(a.pathname)) a.setAttribute("aria-current", "true");
+    if (!location.pathname.startsWith(a.pathname)) continue;
+    if (!section || a.pathname.length > section.pathname.length) section = a;
   }
+  if (section) section.setAttribute("aria-current", "true");
 
   // Landing page tabs ----------------------------------------------------
   const tabs = [...document.querySelectorAll(".bx-tabs [role='tab']")];
