@@ -105,11 +105,6 @@ export function TrustSummary({ trust }: { trust: TrustDto }) {
             </span>
           </p>
         ) : null}
-        {signer && signer.source !== "registry" ? (
-          <p data-slot="trust-claim" className="break-words text-muted-foreground">
-            {t("plugins.trust.claims", { publisher: signer.claimed })}
-          </p>
-        ) : null}
         {ownerLine ? (
           <p
             data-slot="trust-owner"

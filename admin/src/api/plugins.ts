@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { qk } from "./keys";
 import type {
@@ -152,6 +152,8 @@ export function registryQuery(q = "") {
     queryKey: qk.pluginRegistry(q),
     queryFn: () => getRegistry(q || undefined),
     staleTime: 30_000,
+    // A new search keeps the last list (and the search box) until it answers.
+    placeholderData: keepPreviousData,
   });
 }
 

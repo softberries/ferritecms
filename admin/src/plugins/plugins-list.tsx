@@ -9,10 +9,11 @@
 // registry).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
 import {
   ArrowUpCircleIcon,
+  KeyRoundIcon,
   MoreHorizontalIcon,
   PlugIcon,
   PlusIcon,
@@ -31,7 +32,12 @@ import {
   enablePlugin,
   pluginMetricsQuery,
   pluginsQuery,
+  refreshRegistry,
+  registryQuery,
 } from "@/api/plugins";
+import { reportApiError } from "@/api/client";
+import { RelativeTime } from "@/components/kit/relative-time";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/kit/data-table";
 import { type DataTableColumn, dataTableColumns } from "@/components/kit/data-table-features";
 import { EmptyState } from "@/components/kit/empty-state";
@@ -50,10 +56,11 @@ import { DeletePluginDialog } from "./delete-plugin-dialog";
 import { InstallPluginDialog, type RegistrySource } from "./install-flow";
 import { failureCount, forgetPlugin, pluginState } from "./plugin-model";
 import { NodeDots, PluginStateBadge } from "./plugin-parts";
+import { RegistryBrowser } from "./registry-browser";
 import { RetainedData } from "./retained-data";
 import { PublisherLine } from "./trust-summary";
 
-export function PluginsScreen() {
+export function PluginsScreen({ tab = "installed" }: { tab?: "installed" | "registry" }) {
   const { t } = useTranslation("admin");
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -79,6 +86,20 @@ export function PluginsScreen() {
     },
   });
   const open = (p: PluginDto) => void navigate({ to: "/plugins/$name", params: { name: p.name } });
+  const registry = useQuery(registryQuery(""));
+  const meta = registry.data?.registry ?? null;
+  const check = useMutation({
+    mutationFn: refreshRegistry,
+    onSuccess: () => {
+      toast.success(t("plugins.registry.checkedToast"));
+      void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+      refresh();
+    },
+    onError: (error) => {
+      reportApiError(error);
+      void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+    },
+  });
   const columns = useColumns((p) => {
     if (p.trust.update) setFromRegistry({ name: p.name, version: p.trust.update.version });
   });
@@ -90,84 +111,138 @@ export function PluginsScreen() {
           title={t("plugins.title")}
           description={t("plugins.description")}
           actions={
-            <Button onClick={() => setInstalling(true)}>
-              <PlusIcon data-icon="inline-start" />
-              {t("plugins.install.action")}
-            </Button>
+            <>
+              <Button variant="ghost" asChild className="pointer-coarse:min-h-11">
+                <Link to="/plugins/publishers">
+                  <KeyRoundIcon data-icon="inline-start" />
+                  {t("plugins.publishers.link")}
+                </Link>
+              </Button>
+              {meta ? (
+                <Button
+                  variant="outline"
+                  data-slot="registry-check"
+                  disabled={check.isPending}
+                  aria-busy={check.isPending || undefined}
+                  onClick={() => check.mutate()}
+                >
+                  {check.isPending ? t("plugins.registry.checking") : t("plugins.registry.check")}
+                </Button>
+              ) : null}
+              <Button onClick={() => setInstalling(true)}>
+                <PlusIcon data-icon="inline-start" />
+                {t("plugins.install.action")}
+              </Button>
+            </>
           }
         />
-        {plugins.isError && !plugins.data ? (
-          <ErrorState error={plugins.error} retry={() => void plugins.refetch()} />
-        ) : (
-          <DataTable
-            label={t("plugins.list")}
-            columns={columns}
-            data={list}
-            getRowId={(p) => p.name}
-            onRowOpen={open}
-            loading={plugins.isPending}
-            animateRows
-            rowActions={(p) => (
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("plugins.rowMenu", { name: p.name })}
-                  >
-                    <MoreHorizontalIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  {pluginState(p) === "broken" ? null : (
-                    <DropdownMenuItem disabled={toggle.isPending} onSelect={() => toggle.mutate(p)}>
-                      {p.enabled ? <PowerOffIcon /> : <PowerIcon />}
-                      {p.enabled ? t("plugins.disable") : t("plugins.enable")}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void navigate({
-                        to: "/plugins/$name",
-                        params: { name: p.name },
-                        hash: "settings",
-                      })
-                    }
-                  >
-                    <SlidersHorizontalIcon />
-                    {t("plugins.settings.action")}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(p.name)}>
-                    <Trash2Icon />
-                    {t("plugins.delete.action")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+        {meta ? (
+          <p data-slot="registry-checked" className="-mt-2 text-xs text-muted-foreground">
+            {meta.checked_at ? (
+              <>
+                {t("plugins.registry.checked")} <RelativeTime at={meta.checked_at} />
+              </>
+            ) : (
+              t("plugins.registry.neverChecked")
             )}
-            columnClassName={{
-              plugin: "w-full max-w-0 md:w-[46%]",
-              state: "hidden sm:table-cell",
-              failures: "hidden text-right md:table-cell",
-              nodes: "hidden lg:table-cell",
-            }}
-            empty={
-              <EmptyState
-                icon={PlugIcon}
-                title={t("plugins.empty.title")}
-                body={t("plugins.empty.body")}
-                action={
-                  <Button variant="outline" onClick={() => setInstalling(true)}>
-                    {t("plugins.install.action")}
-                  </Button>
+          </p>
+        ) : null}
+        <Tabs
+          value={tab}
+          onValueChange={(v) =>
+            void navigate({ to: "/plugins", search: v === "registry" ? { tab: "registry" } : {} })
+          }
+          className="min-w-0 gap-4"
+        >
+          <TabsList aria-label={t("plugins.registry.tabsLabel")} className="w-max">
+            <TabsTrigger value="installed" className="px-3 pointer-coarse:min-h-11">
+              {t("plugins.registry.installedTab")}
+            </TabsTrigger>
+            <TabsTrigger value="registry" className="px-3 pointer-coarse:min-h-11">
+              {t("plugins.registry.tab")}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="registry">
+            <RegistryBrowser />
+          </TabsContent>
+          <TabsContent value="installed" className="flex flex-col gap-8">
+            {plugins.isError && !plugins.data ? (
+              <ErrorState error={plugins.error} retry={() => void plugins.refetch()} />
+            ) : (
+              <DataTable
+                label={t("plugins.list")}
+                columns={columns}
+                data={list}
+                getRowId={(p) => p.name}
+                onRowOpen={open}
+                loading={plugins.isPending}
+                animateRows
+                rowActions={(p) => (
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("plugins.rowMenu", { name: p.name })}
+                      >
+                        <MoreHorizontalIcon />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      {pluginState(p) === "broken" ? null : (
+                        <DropdownMenuItem
+                          disabled={toggle.isPending}
+                          onSelect={() => toggle.mutate(p)}
+                        >
+                          {p.enabled ? <PowerOffIcon /> : <PowerIcon />}
+                          {p.enabled ? t("plugins.disable") : t("plugins.enable")}
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          void navigate({
+                            to: "/plugins/$name",
+                            params: { name: p.name },
+                            hash: "settings",
+                          })
+                        }
+                      >
+                        <SlidersHorizontalIcon />
+                        {t("plugins.settings.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(p.name)}>
+                        <Trash2Icon />
+                        {t("plugins.delete.action")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                columnClassName={{
+                  plugin: "w-full max-w-0 md:w-[46%]",
+                  state: "hidden sm:table-cell",
+                  failures: "hidden text-right md:table-cell",
+                  nodes: "hidden lg:table-cell",
+                }}
+                empty={
+                  <EmptyState
+                    icon={PlugIcon}
+                    title={t("plugins.empty.title")}
+                    body={t("plugins.empty.body")}
+                    action={
+                      <Button variant="outline" onClick={() => setInstalling(true)}>
+                        {t("plugins.install.action")}
+                      </Button>
+                    }
+                    className="border-0"
+                  />
                 }
-                className="border-0"
               />
-            }
-          />
-        )}
+            )}
+            <RetainedData />
+          </TabsContent>
+        </Tabs>
       </div>
-      <RetainedData />
       <InstallPluginDialog
         open={fromRegistry !== null}
         onOpenChange={(o) => {

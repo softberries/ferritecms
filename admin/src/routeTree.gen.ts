@@ -26,6 +26,7 @@ import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.ind
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppPluginsIndexRouteImport } from './routes/_app/plugins.index'
 import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
+import { Route as AppPluginsPublishersRouteImport } from './routes/_app/plugins.publishers'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
 import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
@@ -126,6 +127,11 @@ const AppPluginsNameRoute = AppPluginsNameRouteImport.update({
   path: '/plugins/$name',
   getParentRoute: () => AppRoute,
 } as any)
+const AppPluginsPublishersRoute = AppPluginsPublishersRouteImport.update({
+  id: '/plugins/publishers',
+  path: '/plugins/publishers',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
@@ -218,6 +224,7 @@ export interface FileRoutesByFullPath {
   '/login/totp': typeof LoginTotpRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
+  '/plugins/publishers': typeof AppPluginsPublishersRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
@@ -251,6 +258,7 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
+  '/plugins/publishers': typeof AppPluginsPublishersRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
@@ -286,6 +294,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/appearance/themes': typeof AppAppearanceThemesRoute
   '/_app/plugins/$name': typeof AppPluginsNameRoute
+  '/_app/plugins/publishers': typeof AppPluginsPublishersRoute
   '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/system/$tab': typeof AppSystemTabRoute
@@ -321,6 +330,7 @@ export interface FileRouteTypes {
     | '/login/totp'
     | '/appearance/themes'
     | '/plugins/$name'
+    | '/plugins/publishers'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
@@ -354,6 +364,7 @@ export interface FileRouteTypes {
     | '/'
     | '/appearance/themes'
     | '/plugins/$name'
+    | '/plugins/publishers'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
@@ -388,6 +399,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/appearance/themes'
     | '/_app/plugins/$name'
+    | '/_app/plugins/publishers'
     | '/_app/settings/$group'
     | '/_app/structure/redirects'
     | '/_app/system/$tab'
@@ -539,6 +551,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPluginsNameRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/plugins/publishers': {
+      id: '/_app/plugins/publishers'
+      path: '/plugins/publishers'
+      fullPath: '/plugins/publishers'
+      preLoaderRoute: typeof AppPluginsPublishersRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/settings/': {
       id: '/_app/settings/'
       path: '/settings'
@@ -655,6 +674,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppPluginsNameRoute: typeof AppPluginsNameRoute
+  AppPluginsPublishersRoute: typeof AppPluginsPublishersRoute
   AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppSystemTabRoute: typeof AppSystemTabRoute
@@ -683,6 +703,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppPluginsNameRoute: AppPluginsNameRoute,
+  AppPluginsPublishersRoute: AppPluginsPublishersRoute,
   AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppSystemTabRoute: AppSystemTabRoute,

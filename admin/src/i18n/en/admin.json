@@ -838,7 +838,6 @@
       "signed": "Signed by a key this site trusts",
       "refused": "This plugin cannot be installed",
       "key": "Key",
-      "claims": "The manifest names the publisher {{publisher}} (not verified).",
       "claim": "This plugin's existing data will be bound to {{owner}}: from now on only updates from that publisher use it.",
       "bind": "Its data will belong to {{owner}}.",
       "unsignedReadsData": "It is unsigned and gets the data of the plugin installed under this name before.",
@@ -868,7 +867,7 @@
       "tabsLabel": "Plugin views",
       "check": "Check for updates",
       "checking": "Checking…",
-      "checked": "Checked {{when}}",
+      "checked": "Registry checked",
       "neverChecked": "Not checked yet",
       "checkedToast": "The registry was checked",
       "searchLabel": "Search the registry",
@@ -920,7 +919,8 @@
       "confirm": "Revoke key",
       "revoking": "Revoking…",
       "revokedToast": "Key {{key}} revoked",
-      "reasonRequired": "Give a reason."
+      "reasonRequired": "Give a reason.",
+      "emptyTitle": "No publisher keys yet"
     }
   },
   "system": {

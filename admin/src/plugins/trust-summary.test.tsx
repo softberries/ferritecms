@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { installedTrust, plugin, trust, verifiedTrust } from "./fixtures";
+import { installedTrust, plugin, report, trust, verifiedTrust } from "./fixtures";
+import { PermissionReport } from "./permission-report";
 import { PublisherLine, TrustSummary } from "./trust-summary";
 
 function block(): HTMLElement {
@@ -44,7 +45,6 @@ test("trust_summary_new_key", () => {
   expect(b.dataset.state).toBe("new_key");
   expect(b).toHaveTextContent("New publisher key");
   expect(b).toHaveTextContent("Approving trusts this key for this plugin's updates.");
-  expect(b).toHaveTextContent("The manifest names the publisher example.dev (not verified).");
   expect(b.className).toContain("warning");
 });
 
@@ -124,18 +124,21 @@ test("list_shows_publisher_state_as_text", () => {
 
 test("hostile_publisher_text_rendered_as_text", () => {
   render(
-    <TrustSummary
-      trust={trust({
-        signature: "verified",
-        signer: {
-          key_id: "5A1C3D0000000000",
-          source: "new",
-          publisher: null,
-          claimed: "<img src=x onerror=alert(1)>",
-        },
+    <PermissionReport
+      report={report({
+        publisher: "<img src=x onerror=alert(1)>",
+        trust: trust({
+          signature: "verified",
+          signer: {
+            key_id: "5A1C3D0000000000",
+            source: "new",
+            publisher: null,
+            claimed: "<img src=x onerror=alert(1)>",
+          },
+        }),
       })}
     />,
   );
-  expect(screen.getByText(/<img src=x onerror=alert\(1\)>/)).toBeVisible();
+  expect(screen.getByText("<img src=x onerror=alert(1)> (not verified)")).toBeVisible();
   expect(document.querySelector("img")).toBeNull();
 });

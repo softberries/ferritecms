@@ -33,7 +33,8 @@
     "content": "Content",
     "new": "New",
     "untitled": "Untitled",
-    "connect": "Connect an app"
+    "connect": "Connect an app",
+    "publishers": "Publisher keys"
   },
   "topBar": {
     "search": "Search or jump to…",

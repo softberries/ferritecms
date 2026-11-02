@@ -30,9 +30,10 @@ export function PermissionReport({ report, markAdded, className }: PermissionRep
   const { t } = useTranslation("admin");
   const shown = shownItems(report, markAdded ?? ("update" in report && report.update));
   const trust = "trust" in report ? report.trust : null;
-  // With a trust part the Publisher block says who made it; the manifest's own claim is
-  // shown there.
-  const publisher = !trust && "publisher" in report ? report.publisher : null;
+  // The manifest's own claim, unless a registry vouches for it (the Publisher block then
+  // names the verified publisher).
+  const publisher =
+    "publisher" in report && trust?.signer?.source !== "registry" ? report.publisher : null;
   return (
     <section data-slot="permission-report" className={cn("flex min-w-0 flex-col gap-4", className)}>
       {trust ? <TrustSummary trust={trust} /> : null}
