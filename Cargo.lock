@@ -1757,6 +1757,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

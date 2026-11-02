@@ -1,6 +1,7 @@
 //! Signature checks for plugins, releases and the registry index (M6-2, design 14 §2.3).
 //! Verify only: no secret key is ever handled here.
 
+use ferrite_domain::plugin_registry::{MAX_INDEX_BYTES, RegistryError, RegistryIndex};
 use ferrite_domain::plugin_trust::{
     KeyError, KeyId, MAX_SIGNATURE_BYTES, MinisigHeader, PublisherKey,
 };
@@ -98,8 +99,58 @@ pub fn verify_bundle(
     Ok(VerifiedSigner { key: key.clone() })
 }
 
+/// Why a registry index was refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IndexError {
+    #[error("the registry index signature: {0}")]
+    Signature(#[from] TrustError),
+    #[error(transparent)]
+    Invalid(#[from] RegistryError),
+}
+
+/// Verifies a registry index's signature with the registry key (signature first, so an
+/// unsigned document is never parsed), then parses and validates it.
+pub fn verify_index(
+    key: &PublisherKey,
+    bytes: &[u8],
+    signature: &str,
+) -> Result<RegistryIndex, IndexError> {
+    if bytes.len() as u64 > MAX_INDEX_BYTES {
+        return Err(RegistryError(format!("larger than {MAX_INDEX_BYTES} bytes")).into());
+    }
+    verify_minisig(key, bytes, signature)?;
+    Ok(RegistryIndex::parse(bytes)?)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn verify_index_refuses_tampered_bytes() {
+        let (kp, pk) = throwaway();
+        let index = br#"{"schema":1,"name":"t","serial":1,"generated_at":"2026-11-20T10:00:00Z"}"#;
+        let sig = sign(&kp, index);
+        let i = verify_index(&pk, index, &sig).unwrap();
+        assert_eq!(i.serial, 1);
+        let tampered =
+            br#"{"schema":1,"name":"t","serial":2,"generated_at":"2026-11-20T10:00:00Z"}"#;
+        assert_eq!(
+            verify_index(&pk, tampered, &sig),
+            Err(IndexError::Signature(TrustError::Mismatch))
+        );
+        let (_, other) = throwaway();
+        assert!(matches!(
+            verify_index(&other, index, &sig),
+            Err(IndexError::Signature(TrustError::UnknownKey(_)))
+        ));
+        // A signed document that is not a valid index.
+        let junk = b"[]";
+        let sig = sign(&kp, junk);
+        assert!(matches!(
+            verify_index(&pk, junk, &sig),
+            Err(IndexError::Invalid(_))
+        ));
+    }
+
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
