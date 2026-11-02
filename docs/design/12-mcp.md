@@ -51,6 +51,9 @@ both speak HTTP), plugins adding MCP tools (later: a WIT extension, see §10).
 - Server info: name `FerriteCMS`, the binary version, and `instructions`: a short text that
   tells the model what the site is (title, URL, content types), how content is written
   (Markdown in, Markdown out), that changes are live, and to ask before destructive steps.
+  The title and the content types' names and labels are an admin's text: control and
+  format characters (bidi overrides, zero-width), newlines and line separators become
+  spaces, and they are cut (title 200, names and labels 80 characters).
 - **Off switch**: the site option `mcp.enabled` (default `true`, Settings → AI
   assistants). When off, `/mcp`, the OAuth endpoints and both metadata documents answer
   `404`, and existing grants stay (they work again when it is turned back on).
