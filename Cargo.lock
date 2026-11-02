@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-cache"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-cluster"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ferrite-domain",
  "ferrite-media",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ammonia",
  "arc-swap",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-import-md"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ferrite-core",
  "ferrite-domain",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-import-wp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-media"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-plugin-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -1937,14 +1937,14 @@ dependencies = [
 
 [[package]]
 name = "ferrite-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "wit-bindgen",
 ]
 
 [[package]]
 name = "ferrite-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-store-postgres"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1977,7 +1977,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-store-sqlite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-store-tests"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2013,7 +2013,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-theme"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "chrono",

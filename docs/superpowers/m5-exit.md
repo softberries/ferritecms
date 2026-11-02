@@ -6,9 +6,9 @@ assistant (Claude, ChatGPT, Claude Code, Cursor, VS Code or any MCP client), sig
 and manage the site with it — as themselves, with their role, audited — and the website,
 docs and README present this as the product's headline feature.
 
-**Result: done** (2026-11-02, branch `m5-mcp`). Nothing is released: `v0.1.0` has no MCP
-code, so the docs and the landing page say "Coming in the next release (0.2.0); build from
-source today" until a release ships it (ROADMAP item lists the files).
+**Result: done** (2026-11-02, branch `m5-mcp`). `v0.1.0` has no MCP code; `v0.2.0` is the release that carries it (the
+release commit dropped the "coming in 0.2.0" caveat from the docs, the landing page and the
+README; the tag follows when that commit is merged).
 
 ## What was built
 
@@ -69,9 +69,9 @@ scoped re-review, and a last hardening commit.
 
 ## For the user
 
-- **Release:** MCP reaches users with the next release. Until then the docs say "coming in
-  0.2.0". Tagging `v0.2.0` is your decision (the release gate of M4-2 applies: the tag
-  ruleset lets only admins create `v*` tags).
+- **Release:** `v0.2.0` is the release that carries M5. It is tagged after the release commit
+  (`release: 0.2.0 — AI assistants over MCP`) is merged; the release gate of M4-2 applies (the
+  tag ruleset lets only admins create `v*` tags).
 - **Social preview:** upload `docs/brand/social-preview.png` under the repository's
   Settings → Social preview.
 - **Hosted clients:** once a site runs on public HTTPS, try Claude's custom connector and

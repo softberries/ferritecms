@@ -830,15 +830,6 @@ pre code { font: inherit; color: inherit; background: none; padding: 0; border: 
   line-height: 1.65;
   text-wrap: pretty;
 }
-.bx-hero__note, .bx-section__caveat {
-  margin: 1rem auto 0;
-  color: var(--subtle);
-  font-size: 0.875rem;
-  text-align: center;
-  text-wrap: balance;
-}
-.bx-hero__note a, .bx-section__caveat a { font-weight: 600; }
-.bx-section__caveat { margin-top: 0.6rem; }
 .bx-hero__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.75rem; margin-top: 2.1rem; }
 .bx-btn {
   display: inline-flex;

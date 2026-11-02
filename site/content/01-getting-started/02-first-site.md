@@ -97,9 +97,6 @@ content, jumps to a screen, creates something or changes a preference.
 
 ## Connect an AI assistant
 
-> Coming in the next release (0.2.0); build from source today ([Install → Build from source](01-install.md#build-from-source)). A 0.1.0
-> binary has no MCP endpoint.
-
 The site is ready to be run from an AI assistant. Its MCP address is the site's URL plus
 `/mcp`: here `http://localhost:8080/mcp`. The dashboard shows it, and
 **Settings → AI assistants** has the steps for each client. On a local site, use an

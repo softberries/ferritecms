@@ -17,10 +17,6 @@ The assistant writes the post, publishes it and puts it in the menu, using the s
 tools. Nothing needs to be installed on the site: the endpoint is part of the `ferrite`
 binary and on by default.
 
-> **Coming in the next release (0.2.0); build from source today**
-> ([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
-> The 0.1.0 release has no MCP endpoint.
-
 The assistant acts **as you**. It signs in through your site's own sign-in and approval
 screen, it can do only what your role allows, within the areas you approve, and its
 changes are recorded in the audit log under the app's name.
