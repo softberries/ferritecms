@@ -545,7 +545,7 @@ rulings" R-c1–R-c3). No migration (the schema stays at 12), no WIT change.
 
 ## M5 — AI assistants (MCP)
 
-Design: [12](design/12-mcp.md). Plan: [`plans/2026-11-01-m5-mcp.md`](superpowers/plans/2026-11-01-m5-mcp.md). Built on branch `m5-mcp`; the exit (Task 11) is still open.
+Design: [12](design/12-mcp.md). Plan: [`plans/2026-11-01-m5-mcp.md`](superpowers/plans/2026-11-01-m5-mcp.md). Done (2026-11-02): [`m5-exit.md`](superpowers/m5-exit.md).
 
 - [x] OAuth storage: migration `0013_oauth` (`oauth_clients`, `oauth_requests`, `oauth_codes`, `oauth_grants`, `api_tokens.oauth_grant_id`) on both backends with contract tests (12 §4).
 - [x] Core `OAuthService`: clients (Client ID Metadata Documents and dynamic registration), pending requests, codes, grants, PKCE S256, refresh rotation with replay detection, revocation, audit `oauth.connect` / `oauth.disconnect`; grant-bound tokens in `AuthService` (12 §3).
@@ -555,7 +555,7 @@ Design: [12](design/12-mcp.md). Plan: [`plans/2026-11-01-m5-mcp.md`](superpowers
 - [x] 56 tools in 13 areas, 2 resources (`ferrite://site`, `ferrite://guide/writing`) and 1 resource template (`ferrite://content/{type}/{id}`), and the prompts `write_post`, `review_seo`, `site_health`, `tidy_media`; successful writes audited as `mcp.<tool>`; no tool for the human-only actions (12 §5).
 - [x] Admin: the consent screen (`/admin/connect`), Account → Connected apps, Users → a user's apps, Settings → AI assistants, the dashboard card, the palette entry (12 §8).
 - [x] Docs, website and README: the guide `site/content/02-guides/08-ai-assistants.md`, the [MCP tools](../site/content/05-reference/02-mcp-tools.md) reference (kept in step with the server by `crates/ferrite-http/tests/api/mcp_reference.rs`), mentions in the Introduction, First site, Concepts and REST API pages, the landing page and the README (12 §9).
-- [ ] Exit: real-client checks (MCP Inspector, a scripted OAuth flow against a release build), the full gates, `docs/superpowers/m5-exit.md` and `rulings/m5.md`, merge to `develop` and the `develop` → `main` pull request.
+- [x] Exit: real-client checks (MCP Inspector, Claude Code, the OAuth flow in the E2E), the full gates, [`m5-exit.md`](superpowers/m5-exit.md) and [`rulings/m5.md`](superpowers/rulings/m5.md).
 - [ ] When 0.2.0 ships, drop the release caveat ("Coming in the next release (0.2.0); build from source today", and "arrive in 0.2.0" in the Introduction's status box) from: `site/brand/landing.html` (the pill, the line under the hero buttons, the quickstart comment lines, the AI section's caveat), `site/content/index.md`, `site/content/01-getting-started/02-first-site.md`, `site/content/01-getting-started/03-concepts.md`, `site/content/02-guides/index.md`, `site/content/02-guides/08-ai-assistants.md`, `site/content/03-developers/03-rest-api.md`, `site/content/05-reference/02-mcp-tools.md` and `README.md` (the intro bullet and the AI section), and the matching `site/VERIFIED.md` row.
 
 Follow-ups (not in M5):
