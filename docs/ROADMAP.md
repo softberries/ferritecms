@@ -568,6 +568,77 @@ Follow-ups (not in M5):
 - Pruning unused `oauth_clients` rows (Task 1 Minor 7); several resources per grant (Task 2 Minor 5).
 - From design 12 §10: plugins contributing tools (a WIT `mcp` interface), a stdio bridge, per-tool allow lists per grant, MCP elicitation for confirmations, the ChatGPT Apps SDK widgets.
 
+## M6 — Editorial platform
+
+What the competitor review of 2026-11-02
+([`research/2026-11-02-cms-competitors.md`](superpowers/research/2026-11-02-cms-competitors.md))
+found missing here, plus what no product offers well and FerriteCMS can build on what it
+has (revisions, the audit log, grant-bound tokens, the job queue, the axe checks). Design:
+13 (to write). Not estimated yet. Migrations are numbered from `0014` in the order the
+parts land. Left out on purpose: a page builder and e-commerce (BRIEF §4), GraphQL (REST
+with OpenAPI and MCP cover headless use).
+
+### M6-1 — Multilingual content
+
+- [ ] Site locales: a default locale and a list of locales in settings (BCP 47 tags); a
+  site with one locale behaves exactly as today.
+- [ ] A locale on every content item and a translation group linking an item's
+  translations (one group per original); terms and menus per locale.
+- [ ] Locale-prefixed permalinks for the non-default locales (`/de/…`), `hreflang` links in
+  the head, sitemap alternates, `<html lang>`, RSS per locale.
+- [ ] Theme helpers: the current locale, `translations()` of an item, a language switcher;
+  the starter themes use them.
+- [ ] Admin: a locale filter on lists, "Translate" (copies the item as a draft in the target
+  locale), side-by-side translation status; the API and the MCP content tools take `locale`.
+- [ ] WordPress import keeps an item's language where the WXR carries one (WPML / Polylang
+  data; what the export holds is checked first, not assumed).
+
+### M6-2 — Plugin trust
+
+- [ ] Publisher keys (minisign, as releases use) and a signature over the plugin bundle;
+  install verifies it and the permission report shows the verified publisher.
+- [ ] Plugin data and sealed secrets keyed by publisher and name, so a same-named plugin from
+  another publisher cannot read them (05 §2, M2a-2a R22).
+- [ ] A registry index (a signed static JSON file, hostable on GitHub Pages):
+  `ferrite plugin search|install NAME`, update checks on the Plugins screen, and the three
+  example plugins published there.
+
+### M6-3 — Editing
+
+- [ ] Live preview beside the editor: the item's unsaved state rendered by the active theme,
+  refreshed on autosave.
+- [ ] Releases: a named set of changes (new revisions, publish, unpublish) applied together in
+  one transaction, now or on a schedule, with a whole-site preview of the site as it will
+  look (menus, listings, page tree, sitemap).
+- [ ] Approval workflows: configurable steps per content type, required approvals before
+  publishing, reviewer assignment and mail notifications (extends submit-for-review).
+
+### M6-4 — Accessibility and content health
+
+- [ ] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
+  vague link text, empty headings, tables without headers; a per-type setting that blocks
+  publishing on errors; the same checks as an MCP tool.
+- [ ] Content health screen, fed by a periodic job: broken internal and external links,
+  orphan pages, missing alt text, redirect chains and loops, items not updated in a year.
+
+### M6-5 — AI change sets
+
+- [ ] Writes through an OAuth grant or a personal token over MCP are grouped into change
+  sets (per grant and session window), with before-images for what has no revisions
+  (terms, menus, settings, redirects).
+- [ ] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
+  one change, refusing where a later edit conflicts.
+
+### M6-6 — Outgoing webhooks
+
+- [ ] Webhooks on content, media, comment, user and release events: HMAC-signed bodies,
+  retries through the job queue, the plugin `http` import's SSRF checks, a delivery log.
+- [ ] Admin screen and API (`/api/v1/webhooks`), test delivery, secrets write-only.
+
+Considered and parked (2026-11-02): OpenTelemetry export (traces and logs over OTLP, for
+example to Tayga; needs spans in the plugin host, renderer, store and jobs first),
+memberships and newsletters, ActivityPub, A/B tests, real-time co-editing.
+
 ## Before v0.1.0
 
 What the first release needs from the user or from a first real run (M4 ruling P66). Nothing
@@ -584,10 +655,9 @@ here is code that can be written and tested locally.
 ## Later
 
 - Multi-site and multi-host sites (cache-key host pinned to `site.url`, M1c-2 R25, M2a P27); read replicas; multi-region.
-- Signed plugin registry with verified publishers.
 - TOTP recovery codes (M2a P9: none; an operator or, since M2b-3, an admin switches TOTP off, M2b P43) and a user agent per session so sessions can be told apart by more than their times (M2b P45; needs a migration).
 - JS/Go/Python plugin SDKs (after checking Component Model toolchain maturity).
-- Built-in forms, i18n/multilingual content, full-text search UI.
+- Built-in forms, full-text search UI (multilingual content is M6-1).
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
