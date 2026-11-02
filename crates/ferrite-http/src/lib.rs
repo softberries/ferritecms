@@ -24,6 +24,7 @@ pub mod oauth_fetch;
 pub mod plugins;
 pub mod route;
 pub mod tls;
+pub mod webhook_send;
 
 pub use app::{
     AppParts, AppState, HttpConfig, LoggedIn, build_app, build_site, client::ClientIp,

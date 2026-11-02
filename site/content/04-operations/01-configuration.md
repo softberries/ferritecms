@@ -15,7 +15,7 @@ touching the database or the media:
 ferrite config check --data ./mysite
 ```
 
-It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…` and
+It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…` and
 exits 0, or lists every problem and exits 1.
 
 ## Values

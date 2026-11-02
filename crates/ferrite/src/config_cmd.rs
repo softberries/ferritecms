@@ -14,7 +14,7 @@ pub enum ConfigCommand {
     /// Load ferrite.toml and FERRITE_* variables exactly as `serve` does, without
     /// touching the database or media.
     ///
-    /// Prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…` and exits 0, or prints every
+    /// Prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…` and exits 0, or prints every
     /// problem to stderr and exits 1.
     Check(DataArg),
 }
@@ -118,7 +118,7 @@ fn summary(config: &Config) -> String {
     format!("ok: {}", summary_fields(config))
 }
 
-/// `mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`.
+/// `mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…`.
 pub(crate) fn summary_fields(config: &Config) -> String {
     let mode = match config.effective_cluster_mode() {
         ClusterMode::Cluster => "cluster",
@@ -143,10 +143,15 @@ pub(crate) fn summary_fields(config: &Config) -> String {
         .metrics_listen
         .map_or_else(|| "off".to_owned(), |at| at.to_string());
     format!(
-        "mode={mode} database={database} media={media} workers={} mail={mail} metrics={metrics} tls={} backup={}",
+        "mode={mode} database={database} media={media} workers={} mail={mail} metrics={metrics} tls={} backup={} webhooks={}",
         config.cluster.workers,
         config.server.tls.mode(),
-        config.backup.schedule.as_str()
+        config.backup.schedule.as_str(),
+        if config.webhooks.local_targets {
+            "local"
+        } else {
+            "off"
+        }
     )
 }
 

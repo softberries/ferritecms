@@ -132,7 +132,7 @@ ferrite config check --data ./mysite
 
 It reads `ferrite.toml` and the `FERRITE_*` variables exactly as `serve` does, without
 opening the database, and prints one line such as
-`ok: mode=solo database=sqlite media=local workers=… mail=off metrics=off tls=off backup=off`,
+`ok: mode=solo database=sqlite media=local workers=… mail=off metrics=off tls=off backup=off webhooks=off`,
 or the list of problems.
 
 ## Next

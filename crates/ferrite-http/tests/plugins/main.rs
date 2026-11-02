@@ -13,6 +13,7 @@ mod mail;
 mod reload;
 mod seo;
 mod settings;
+mod webhook_send;
 
 use common::{HOUR, SITE_URL, Site};
 use ferrite_core::{

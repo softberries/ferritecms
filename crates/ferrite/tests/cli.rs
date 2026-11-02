@@ -971,7 +971,7 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off webhooks=off"
     );
     // `server.metrics_listen` (P34) is reported as its address.
     let out = stdout({
@@ -982,6 +982,17 @@ fn config_check_reports_effective_settings() {
         c
     });
     assert!(out.contains(" metrics=127.0.0.1:9464 "), "{out}");
+    // `[webhooks] local_targets` (M6-6) is reported as `local`, with a warning.
+    let mut c = ferrite();
+    c.args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true");
+    let run = c.output().unwrap();
+    assert!(run.status.success());
+    let out = String::from_utf8_lossy(&run.stdout);
+    assert!(out.trim().ends_with(" webhooks=local"), "{out}");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("webhooks.local_targets"), "{err}");
     // `[server.tls]` (P33) is reported as its mode.
     let out = stdout({
         let mut c = ferrite();
@@ -1029,7 +1040,7 @@ fn config_check_prints_backup() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly"
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly webhooks=off"
     );
     // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
     let out = stdout({
@@ -1039,7 +1050,7 @@ fn config_check_prints_backup() {
             .env("FERRITE_BACKUP__SCHEDULE", "daily");
         c
     });
-    assert!(out.trim().ends_with(" backup=daily"), "{out}");
+    assert!(out.trim().ends_with(" backup=daily webhooks=off"), "{out}");
     std::fs::write(
         data.join("ferrite.toml"),
         "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\n",
@@ -1074,7 +1085,10 @@ fn config_check_prints_backup() {
                 .args(["config", "check", "--data", "."]);
             c
         });
-        assert!(out.trim().ends_with(" backup=daily"), "{to}: {out}");
+        assert!(
+            out.trim().ends_with(" backup=daily webhooks=off"),
+            "{to}: {out}"
+        );
     }
 
     // The same location check as `serve`: a symlink into the data folder and the media
@@ -1139,7 +1153,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off webhooks=off"
     );
 }
 

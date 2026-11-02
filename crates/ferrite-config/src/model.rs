@@ -23,6 +23,8 @@ pub struct Config {
     pub mail: Option<MailConfig>,
     /// `[backup]`: the scheduled backup (M4-1 P15); off by default.
     pub backup: BackupConfig,
+    /// `[webhooks]` (M6-6, design 18 §10.2).
+    pub webhooks: WebhooksConfig,
     /// Valid settings that have no effect (for example `[server.tls]` keys while its
     /// `mode` is `"off"`); `ferrite config check` prints them as warnings.
     pub warnings: Vec<crate::ConfigProblem>,
@@ -399,4 +401,13 @@ fn db_kind(url: &str, data_dir: &Path) -> DbKind {
         data_dir.join(path)
     };
     DbKind::Sqlite { path }
+}
+
+/// `[webhooks]` (M6-6, design 18 §6.1, §10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WebhooksConfig {
+    /// Allow `http` URLs and loopback and private addresses (link-local and cloud
+    /// metadata stay refused): for development only. An operator switch, never an
+    /// admin setting. Default `false`.
+    pub local_targets: bool,
 }

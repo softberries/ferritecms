@@ -67,7 +67,7 @@ ferrite config check --data DIR
 
 Loads `ferrite.toml` and the `FERRITE_*` variables as `serve` does, without opening the
 database or the media. Prints `ok: mode=… database=… media=… workers=… mail=… metrics=…
-tls=… backup=…` and exits 0, or lists the problems and exits 1.
+tls=… backup=… webhooks=…` and exits 0, or lists the problems and exits 1.
 
 ### doctor
 

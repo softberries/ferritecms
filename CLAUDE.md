@@ -203,7 +203,7 @@ and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` 
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…`, exit 1 lists
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
