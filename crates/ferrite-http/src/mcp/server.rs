@@ -185,14 +185,15 @@ impl FerriteMcp {
     }
 }
 
-/// The site title as the instructions quote it: [`instruction_text`] cut to
+/// The site title as the instructions quote it: controls, format characters and line
+/// breaks become spaces, runs of whitespace collapse, cut to
 /// [`MAX_INSTRUCTIONS_TITLE`] characters.
 pub fn instruction_title(title: &str) -> String {
     instruction_text(title, MAX_INSTRUCTIONS_TITLE)
 }
 
-/// A content type as the instructions list it, `name (label)`, both through
-/// [`instruction_text`] and cut to [`MAX_INSTRUCTIONS_LABEL`] characters (labels are an
+/// A content type as the instructions list it, `name (label)`, both cleaned like the title
+/// and cut to [`MAX_INSTRUCTIONS_LABEL`] characters (labels are an
 /// admin's text, design 12 §7).
 pub fn instruction_type(name: &str, label: &str) -> String {
     format!(

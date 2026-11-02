@@ -2,7 +2,7 @@
 //! `comment_reply`.
 //!
 //! Adapters over the REST layer's comment functions (`api::comments::{comment_page,
-//! moderate, submit}`) and [`CommentService`](ferrite_core::CommentService). Core checks
+//! moderate, submit}`) and [`CommentService`](ferrite_core::comments::CommentService). Core checks
 //! every permission (`moderate_comments` with `comments:read` / `comments:write`) and
 //! the comment rules (enabled, public post, parent approved, depth, length). Moderation
 //! is last-write-wins, as in the REST API.
