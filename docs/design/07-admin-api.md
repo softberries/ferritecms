@@ -553,6 +553,33 @@ the HTTP endpoints above since M2a-1):
   another author's published post, and a contributor for those of its own published
   post. WordPress likewise requires `edit_post` on the parent.
 
+### Outside `/api/v1`: OAuth and MCP (M5)
+
+AI assistants use two families of endpoints that design [12](12-mcp.md) specifies; this
+section only lists them.
+
+- **MCP**: `POST /mcp` (Streamable HTTP, stateless, JSON answers; `GET` answers `405`).
+  Bearer tokens only (a personal API token or an OAuth access token), never the session
+  cookie; a foreign `Origin` is refused (`403`); a missing or bad token answers `401` with
+  `WWW-Authenticate: Bearer resource_metadata="<site>/.well-known/oauth-protected-resource/mcp"`.
+  120 tool calls per user per minute (12 §2, §3.1, §5.1).
+- **OAuth 2.1 authorization server** (public clients, PKCE S256): `GET
+  /.well-known/oauth-protected-resource/mcp` (RFC 9728), `GET
+  /.well-known/oauth-authorization-server` (RFC 8414), `GET /oauth/authorize` (303 to the
+  admin's `/admin/connect?request=<id>`), `POST /oauth/token`, `POST /oauth/register` (RFC
+  7591), `POST /oauth/revoke` (RFC 7009) (12 §3.2).
+- **Consent API** (session + CSRF, in the OpenAPI document): `GET
+  /api/v1/oauth/requests/{id}`, `POST …/{id}/approve` (`{scopes}` → `{redirect_to}`),
+  `POST …/{id}/deny`, `GET /api/v1/oauth/grants` (own; `?user=` for admins), `DELETE
+  /api/v1/oauth/grants/{id}` (12 §6).
+- **Audience binding**: an access token issued through OAuth belongs to an OAuth grant
+  and works only on `/mcp`; the REST API answers it `401 invalid_token`. Personal API
+  tokens work on both (12 §3.1). OAuth access tokens are not counted or listed as personal
+  tokens (12 §4).
+- The site option `mcp.enabled` (Settings → AI assistants, default on) answers `404` for
+  `/mcp`, the OAuth endpoints and both metadata documents while off; it can be changed
+  through `PATCH /api/v1/settings`, never through MCP (12 §2, §5.4).
+
 ## 2. Auth
 
 As built in M2a-1 (`ferrite_core::auth`, `ferrite_core::users`, `crates/ferrite-http/src/api/auth.rs`;

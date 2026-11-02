@@ -923,6 +923,173 @@ pre code { font: inherit; color: inherit; background: none; padding: 0; border: 
 .bx-window img { display: block; width: 100%; height: auto; }
 .bx-hero > .bx-window { margin-bottom: -1px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 
+.bx-visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.bx-pill__dot--ai {
+  background: var(--ember);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ember) 24%, transparent);
+}
+
+/* The hero's two panels: an assistant conversation (an illustration) and the quickstart. */
+.bx-hero__panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 27rem), 1fr));
+  gap: 1.25rem;
+  align-items: stretch;
+  max-width: 72rem;
+  margin: 2.75rem auto 0;
+}
+.bx-hero__panels .bx-terminal { max-width: none; margin: 0; }
+.bx-hero__panels .bx-terminal pre { white-space: pre; font-size: 0.78rem; }
+@media (min-width: 62rem) {
+  .bx-hero__panels { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+}
+.bx-comment { color: #79838f; }
+.bx-chat { display: flex; flex-direction: column; }
+.bx-chat .bx-terminal__bar p { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bx-chat__tag {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid #2c333e;
+  border-radius: 999px;
+  color: #8b95a3;
+  font: 500 0.6875rem var(--sans);
+  font-style: normal;
+  letter-spacing: 0.02em;
+}
+.bx-chat__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1.1rem 1.2rem 0.9rem;
+  color: #e6e9ee;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.bx-chat__you {
+  align-self: flex-end;
+  max-width: 88%;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 14px 14px 4px 14px;
+  background: #2a1d16;
+  border: 1px solid #4a2f20;
+  color: #f6e6dc;
+}
+.bx-chat__calls {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #1e232c;
+  border-radius: 10px;
+  background: #11151b;
+  list-style: none;
+  font: 450 0.78rem/1.5 var(--mono);
+}
+.bx-chat__calls li { display: flex; flex-wrap: wrap; gap: 0 0.6rem; color: #8b95a3; }
+.bx-chat__calls li::before { content: "→"; color: #61c554; }
+.bx-chat__calls code { color: #f0915e; font: inherit; }
+.bx-chat__calls b { color: #e6e9ee; font-weight: 600; }
+.bx-chat__ai {
+  align-self: flex-start;
+  max-width: 92%;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 14px 14px 14px 4px;
+  background: #161b23;
+  border: 1px solid #232833;
+}
+.bx-chat__note {
+  padding: 0.65rem 1.2rem 0.9rem;
+  border-top: 1px solid #1e232c;
+  color: #8b95a3;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.bx-chat__note code { color: #b9c1cc; font: 450 0.95em var(--mono); }
+
+/* Run your site from your AI assistant. */
+.bx-section__lead {
+  max-width: 40rem;
+  margin: 1rem auto 0;
+  color: var(--muted);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  text-align: center;
+  text-wrap: pretty;
+}
+.bx-ai__grid {
+  display: grid;
+  gap: 2.5rem;
+  align-items: center;
+  margin-top: 3rem;
+}
+@media (min-width: 62rem) {
+  .bx-ai__grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+}
+.bx-ai__text { min-width: 0; }
+.bx-ai__url {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid color-mix(in oklab, var(--ember) 35%, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--accent-tint);
+}
+.bx-ai__label { color: var(--ember-ink); font-size: 0.75rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+.bx-ai__url code { color: var(--ink); font: 550 1.05rem var(--mono); overflow-wrap: anywhere; }
+.bx-ai__url i { color: var(--muted); font-style: normal; }
+.bx-ai__clients {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.bx-ai__clients li {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  font-weight: 550;
+}
+.bx-ai__clients li:last-child { border-style: dashed; color: var(--muted); }
+.bx-ai__note { margin: 1rem 0 0; color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+.bx-ai__note code { font: 500 0.9em var(--mono); color: var(--ink); }
+.bx-terminal--inline { max-width: none; margin: 0.75rem 0 0; box-shadow: var(--shadow); }
+.bx-terminal--inline pre { padding: 0.7rem 1rem; font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bx-ai__trust { display: grid; gap: 0.75rem; margin: 1.5rem 0 0; padding: 0; list-style: none; }
+.bx-ai__trust li {
+  position: relative;
+  padding-left: 1.6rem;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+.bx-ai__trust li::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0.4rem;
+  width: 0.9rem; height: 0.9rem;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--steel) 22%, transparent);
+  box-shadow: inset 0 0 0 4px color-mix(in oklab, var(--steel) 70%, transparent);
+}
+.bx-ai__trust strong { color: var(--ink); font-weight: 650; }
+.bx-ai__more { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 1.5rem 0 0; font-weight: 600; }
+.bx-ai__more a::after { content: " →"; color: var(--ember); }
+.bx-ai__shot { margin: 0; }
+
 .bx-section { max-width: 76rem; margin: 0 auto; padding: 6rem 1.25rem 0; }
 .bx-eyebrow {
   margin: 0;
@@ -971,6 +1138,17 @@ pre code { font: inherit; color: inherit; background: none; padding: 0; border: 
 .bx-card h3 { margin: 1.1rem 0 0.4rem; color: var(--ink); font-size: 1.0625rem; font-weight: 650; letter-spacing: -0.015em; }
 .bx-card p { margin: 0; color: var(--muted); font-size: 0.9375rem; line-height: 1.6; }
 .bx-card code { font: 500 0.85em var(--mono); color: var(--ink); }
+.bx-card--lead {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  border-color: color-mix(in oklab, var(--ember) 35%, var(--line));
+  background: linear-gradient(120deg, var(--accent-tint), var(--surface) 55%, color-mix(in oklab, var(--steel) 8%, var(--surface)));
+}
+.bx-card--lead h3 { margin-top: 0.2rem; font-size: 1.1875rem; }
+.bx-card--lead p { max-width: 60rem; }
+@media (max-width: 40rem) { .bx-card--lead { flex-direction: column; } .bx-card--lead h3 { margin-top: 0; } }
 
 .bx-tabs {
   display: flex;

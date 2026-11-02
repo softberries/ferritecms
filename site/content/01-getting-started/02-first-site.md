@@ -95,6 +95,25 @@ content, jumps to a screen, creates something or changes a preference.
 
 <figure><img src="../images/admin-palette.webp" alt="The command palette open over the dashboard, listing screens and actions that match the typed text"><figcaption>The command palette: type to find a screen, an action or content.</figcaption></figure>
 
+## Connect an AI assistant
+
+The site is ready to be run from an AI assistant. Its MCP address is the site's URL plus
+`/mcp`: here `http://localhost:8080/mcp`. The dashboard shows it, and
+**Settings → AI assistants** has the steps for each client. On a local site, use an
+assistant that runs on your computer, such as Claude Code:
+
+```sh
+claude mcp add --transport http ferrite http://localhost:8080/mcp
+```
+
+Then run `/mcp` in Claude Code, pick `ferrite` and choose **Authenticate**. Your browser
+opens the site's consent screen: approve, and ask Claude Code something like "List the
+drafts on my site" or "Write a short post about our opening hours, as a draft". Claude
+(claude.ai and Claude Desktop) and ChatGPT connect from their own servers, so they need
+the site on a public `https` address. See [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
+
+<figure><img src="../images/admin-dashboard-ai.webp" alt="The dashboard with the card Manage this site with AI: the MCP URL with a Copy button, a Set up button and the notes your login, your role, audited"><figcaption>Until an assistant is connected, the dashboard shows the address to paste.</figcaption></figure>
+
 ## Stop the server for maintenance commands
 
 With SQLite, `serve` holds a lock on the data folder. While it runs, commands that open the
@@ -115,4 +134,5 @@ or the list of problems.
 
 ## Next
 
-Read the [concepts](03-concepts.md), then start [writing](../02-guides/01-writing.md).
+Read the [concepts](03-concepts.md), then start [writing](../02-guides/01-writing.md), in
+the admin or [from your AI assistant](../02-guides/08-ai-assistants.md).

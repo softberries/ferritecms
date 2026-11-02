@@ -16,6 +16,9 @@
 A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in a
 **WebAssembly sandbox** and can only do what it declared.
 
+- **Run it from your AI assistant**: every site serves an MCP endpoint. Connect Claude,
+  ChatGPT, Claude Code, Cursor or VS Code and ask it to write, publish, organise and check
+  your site, as you, with your permissions, every change audited.
 - **Single binary, single folder**: web server, admin, themes, plugin runtime and SQLite
   are compiled in (Postgres and S3 are optional, for several nodes). Back up or move a site
   by copying one folder.
@@ -28,6 +31,43 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
   menus and 301 redirects from a WXR export.
 
 **Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)** · Built by [SOFTBERRIES](https://softberries.dev)
+
+## Manage your site with AI
+
+Every FerriteCMS site serves a [Model Context Protocol](https://modelcontextprotocol.io)
+endpoint at its address plus `/mcp`. Connect your assistant, sign in to your site once,
+approve what it may do, and ask:
+
+> Publish a post about our spring opening hours and add it to the main menu.
+
+The two quickest ways to connect:
+
+- **Claude Code**, which also works with a site on `localhost`:
+
+  ```sh
+  claude mcp add --transport http ferrite http://localhost:8080/mcp
+  ```
+
+  then run `/mcp` in Claude Code, pick `ferrite` and choose **Authenticate**; your browser
+  opens the site's consent screen.
+- **Claude** (claude.ai, Claude Desktop) or **ChatGPT**, for a site on public HTTPS: add
+  `https://your-site/mcp` as a custom connector (Claude) or as a developer-mode connector
+  with OAuth (ChatGPT), then sign in and approve.
+
+Cursor, VS Code and any other MCP client work too; a personal API token in an
+`Authorization` header replaces the sign-in for scripts. 56 tools cover posts and pages,
+media, terms, menus, content types, redirects, comments, settings, themes, plugins and the
+site's health. The assistant acts as you: through your site's own sign-in and consent
+screen, with your role narrowed to the areas you approve, and every change it makes is in
+the audit log under its name. Installing plugins, managing users and tokens, imports and
+backups stay with people. The endpoint is new since `0.1.0`: build from source (below)
+until the next release.
+[Guide](https://softberries.github.io/ferritecms/guides/ai-assistants/) ·
+[Every tool](https://softberries.github.io/ferritecms/reference/mcp-tools/)
+
+| Connecting an assistant | Settings → AI assistants |
+|---|---|
+| <img src="site/content/images/admin-consent.webp" alt="The consent screen: the app's name, where it returns to and the permissions per area"> | <img src="site/content/images/admin-ai-settings.webp" alt="Settings, AI assistants: the switch, the MCP URL and the steps per client"> |
 
 <p align="center">
   <img src="site/content/images/admin-dashboard.webp" alt="The FerriteCMS admin dashboard" width="900">

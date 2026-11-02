@@ -8,6 +8,14 @@ Rust binary. The web server, the REST API, the admin interface, the built-in the
 plugin runtime are compiled into it. Every plugin runs in a WebAssembly sandbox and can only use what its
 manifest declares.
 
+**Run it from your AI assistant.** Every site serves a Model Context Protocol (MCP)
+endpoint at its address plus `/mcp`. Paste that address into Claude, ChatGPT, Claude Code,
+Cursor or VS Code, sign in to your site once and approve what the assistant may do; then
+ask it to write and publish posts, organise media, edit menus, fix redirects, moderate
+comments or check the site's health. It acts as you: with your role, within the areas you
+approved, and every change is in the audit log. See
+[AI assistants (MCP)](02-guides/08-ai-assistants.md).
+
 FerriteCMS imports WordPress content (a WXR export file) but does not run WordPress PHP
 plugins or themes.
 
@@ -16,6 +24,10 @@ plugins or themes.
 
 ## Principles
 
+- **Managed by AI, as you.** The MCP endpoint is built in and on by default. An assistant
+  signs in through the site's own consent screen and works through the same permission
+  checks and audit log as the admin; a few actions (installing extensions, managing users
+  and tokens, backups) stay with a person.
 - **One binary, one data folder.** A site on the default setup needs no other service: the
   database is SQLite in the data folder and media files sit next to it. Postgres and
   S3-compatible storage are optional.
@@ -50,4 +62,6 @@ Postgres database, shared media storage and the same site key on every node.
 
 - [Getting started](01-getting-started/index.md): install the binary, create a site, learn
   the main ideas.
+- [AI assistants (MCP)](02-guides/08-ai-assistants.md): connect an assistant and manage
+  the site by asking.
 - [Guides](02-guides/index.md): writing, media, content types, themes, plugins and imports.

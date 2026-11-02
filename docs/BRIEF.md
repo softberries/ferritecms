@@ -194,6 +194,19 @@ Example:
 - MVP screens: dashboard, posts/pages list + editor, media library, content types,
   taxonomies, menus, users, themes, plugins (with permission view), settings, import.
 
+### 5.6a AI management (M5)
+
+Running a site from an AI assistant is a headline feature, not an add-on. Every site
+serves a Model Context Protocol endpoint at `<site.url>/mcp`, built into the binary and on
+by default. A user pastes that address into Claude, ChatGPT, Claude Code, Cursor, VS Code
+or any MCP client, signs in once through the site's own OAuth consent screen (or uses a
+personal API token), and can then ask the assistant to write and publish content,
+organise media, edit menus, terms and redirects, moderate comments, change settings or
+check the site's health. The assistant acts as that user: the same role, narrowed to the
+areas approved, the same capability checks in core and the same audit log as the admin
+and the REST API. Installing extensions, managing users and tokens, imports and backups
+stay with people. Design: [`design/12-mcp.md`](design/12-mcp.md).
+
 ### 5.7 WordPress migration
 
 ```

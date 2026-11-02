@@ -1,5 +1,5 @@
 +++
-description = "Content types, items, terms, menus, media, themes, plugins and roles."
+description = "Content types, items, terms, menus, media, themes, plugins, roles and AI assistants."
 +++
 
 # Concepts
@@ -77,6 +77,16 @@ Every account has one role:
 | admin | everything, including users, settings, themes, plugins, imports, redirects and the system screens |
 
 Each role includes what the roles above it in this table can do.
+
+## AI assistants
+
+An **AI assistant** (Claude, ChatGPT, Claude Code, Cursor, VS Code or another MCP client)
+connects to the site's MCP endpoint, `/mcp`, and manages the site through **tools**: one
+per job, such as `content_create`, `menu_set` or `comment_moderate`. It signs in as a
+user, through the site's consent screen, and gets that user's role narrowed to the areas
+the user approved. Its changes go through the same checks as the admin's and are recorded
+in the audit log under the app's name. Connected apps are listed under
+**Account → Connected apps**. See [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 ## The data folder
 

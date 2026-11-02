@@ -2,29 +2,48 @@
   <section class="bx-hero" aria-labelledby="bx-hero-title">
     <div class="bx-hero__glow" aria-hidden="true"></div>
     <div class="bx-hero__inner">
-      <a class="bx-pill" href="https://github.com/softberries/ferritecms/releases">
-        <span class="bx-pill__dot" aria-hidden="true"></span>
-        The first release is out: signed binaries and a Docker image
+      <a class="bx-pill" href="/guides/ai-assistants/">
+        <span class="bx-pill__dot bx-pill__dot--ai" aria-hidden="true"></span>
+        New: manage your site from Claude, ChatGPT, Cursor or VS Code
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
       </a>
-      <h1 id="bx-hero-title" class="bx-hero__title">The content management system<br>that ships as <span class="bx-gradient">one binary</span>.</h1>
-      <p class="bx-hero__lead">FerriteCMS is a WordPress-style CMS written in Rust: posts, pages, media, menus, themes and a fast, keyboard-first admin. Every plugin runs in a WebAssembly sandbox and gets only what its manifest declares.</p>
+      <h1 id="bx-hero-title" class="bx-hero__title">The CMS you run <br>from your <span class="bx-gradient">AI assistant</span>.</h1>
+      <p class="bx-hero__lead">Connect your assistant to your site and ask: it writes and publishes posts, organises media and menus, moderates comments and checks the site's health. It works as you, within the permissions you approve, and every change is audited. FerriteCMS is a WordPress-style CMS in one Rust binary, with every plugin in a WebAssembly sandbox.</p>
       <div class="bx-hero__actions">
         <a class="bx-btn bx-btn--primary" href="/getting-started/install/">Get started
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
-        <a class="bx-btn" href="/getting-started/first-site/">Build your first site</a>
+        <a class="bx-btn" href="/guides/ai-assistants/">Connect an assistant</a>
         <a class="bx-btn bx-btn--ghost" href="https://github.com/softberries/ferritecms">
           <svg viewBox="0 0 16 16" aria-hidden="true" class="bx-fill"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
           GitHub</a>
       </div>
-      <div class="bx-terminal" aria-label="Create and start a site">
+    </div>
+    <div class="bx-hero__panels">
+      <figure class="bx-terminal bx-chat" aria-labelledby="bx-chat-title">
+        <div class="bx-terminal__bar"><span></span><span></span><span></span><p id="bx-chat-title">Your assistant, connected to your site</p><em class="bx-chat__tag">Illustration</em></div>
+        <div class="bx-chat__body">
+          <p class="bx-chat__you"><span class="bx-visually-hidden">You: </span>Publish a post about our spring opening hours and add it to the main menu.</p>
+          <ol class="bx-chat__calls" aria-label="Tool calls">
+            <li><code>content_create</code><span>post “Spring opening hours” · draft</span></li>
+            <li><code>content_publish</code><span>live at /spring-opening-hours/</span></li>
+            <li><code>menu_get</code><span>primary · 4 entries</span></li>
+            <li><code>menu_set</code><span>primary · Home, About, News, <b>Opening hours</b>, Contact</span></li>
+          </ol>
+          <p class="bx-chat__ai"><span class="bx-visually-hidden">Assistant: </span>Done. “Spring opening hours” is live at /spring-opening-hours/ and sits in the main menu between News and Contact.</p>
+        </div>
+        <figcaption class="bx-chat__note">Each step ran as you and is in the audit log as <code>mcp.content_create</code>, <code>mcp.content_publish</code> and <code>mcp.menu_set</code>.</figcaption>
+      </figure>
+      <div class="bx-terminal" role="group" aria-label="Create and start a site">
         <div class="bx-terminal__bar"><span></span><span></span><span></span><p>Four commands to a running site</p>
           <button type="button" class="bx-copy" data-copy-target="bx-quickstart">Copy</button></div>
 <pre id="bx-quickstart"><code><span class="bx-prompt">$</span> ferrite init --data mysite --url http://localhost:8080
 <span class="bx-prompt">$</span> ferrite seed demo --data mysite --profile business
 <span class="bx-prompt">$</span> ferrite user create --data mysite --login me --email me@example.com
 <span class="bx-prompt">$</span> ferrite serve --data mysite
-<span class="bx-out">Listening on http://127.0.0.1:8080</span></code></pre>
+<span class="bx-out">Listening on http://127.0.0.1:8080</span>
+
+<span class="bx-comment"># Then connect an assistant to http://localhost:8080/mcp</span>
+<span class="bx-comment"># and sign in from it: no keys to copy.</span></code></pre>
       </div>
     </div>
     <figure class="bx-window">
@@ -36,10 +55,48 @@
     </figure>
   </section>
 
+  <section class="bx-section bx-ai" aria-labelledby="bx-ai-title">
+    <p class="bx-eyebrow">AI assistants, over MCP</p>
+    <h2 id="bx-ai-title" class="bx-section__title">Run your site from your AI assistant</h2>
+    <p class="bx-section__lead">Every site serves a Model Context Protocol endpoint. Paste one address into your assistant, sign in to your site, approve what it may do, and ask.</p>
+    <div class="bx-ai__grid">
+      <div class="bx-ai__text">
+        <div class="bx-ai__url">
+          <span class="bx-ai__label">The address to paste</span>
+          <code>https://<i>your-site</i>/mcp</code>
+        </div>
+        <ul class="bx-ai__clients" aria-label="Clients">
+          <li>Claude</li><li>ChatGPT</li><li>Claude Code</li><li>Cursor</li><li>VS Code</li><li>any MCP client</li>
+        </ul>
+        <p class="bx-ai__note">Claude and ChatGPT connect from their own servers, so they need your site on public HTTPS. Claude Code, Cursor and VS Code also work with a site on <code>localhost</code>:</p>
+        <div class="bx-terminal bx-terminal--inline" role="group" aria-label="Connect Claude Code">
+<pre id="bx-claude-code"><code><span class="bx-prompt">$</span> claude mcp add --transport http ferrite http://localhost:8080/mcp</code></pre>
+        </div>
+        <ul class="bx-ai__trust">
+          <li><strong>Your login.</strong> The assistant signs in through your site's own sign-in and consent screen. No passwords or keys to copy.</li>
+          <li><strong>Your role.</strong> It can do only what you can, in the areas you approve: read only, or write to content but not settings.</li>
+          <li><strong>Audited.</strong> Every change it makes is in the audit log under its name. Disconnect it at any time, or turn assistants off for the whole site.</li>
+        </ul>
+        <p class="bx-ai__more"><a href="/guides/ai-assistants/">Connect an assistant</a><a href="/reference/mcp-tools/">See all 56 tools</a></p>
+      </div>
+      <figure class="bx-window bx-ai__shot">
+        <div class="bx-window__bar" aria-hidden="true"><span></span><span></span><span></span><p>Settings · AI assistants</p></div>
+        <img src="/brand/shots/admin-ai-settings.webp" alt="Settings, AI assistants: the Allow AI assistants switch, notes on your login, your role and the audit log, the MCP URL with a Copy button and tabs for Claude, ChatGPT, Claude Code, Cursor and VS Code" width="2880" height="1800" loading="lazy">
+      </figure>
+    </div>
+  </section>
+
   <section class="bx-section" aria-labelledby="bx-features-title">
     <p class="bx-eyebrow">Why FerriteCMS</p>
     <h2 id="bx-features-title" class="bx-section__title">Familiar to WordPress users.<br>Built like modern infrastructure.</h2>
     <div class="bx-features">
+      <article class="bx-card bx-card--lead">
+        <span class="bx-card__icon bx-card__icon--ember"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4m2-2h-4M4 17v2m1-1H3"/></svg></span>
+        <div>
+          <h3>Managed by AI</h3>
+          <p>Connect Claude, ChatGPT, Claude Code, Cursor or VS Code over MCP. 56 tools write, publish and schedule content, upload media and set alt text, edit menus, terms and redirects, moderate comments, change settings and check the site's health, as you and within the permissions you approve. Installing plugins, managing users and backups stay with people.</p>
+        </div>
+      </article>
       <article class="bx-card">
         <span class="bx-card__icon bx-card__icon--ember"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg></span>
         <h3>One binary, one data folder</h3>
@@ -77,14 +134,20 @@
     <p class="bx-eyebrow">A tour</p>
     <h2 id="bx-showcase-title" class="bx-section__title">An admin you will enjoy using</h2>
     <div class="bx-tabs" role="tablist" aria-label="Screens">
-      <button role="tab" type="button" aria-selected="true" aria-controls="bx-tab-editor" id="bx-t-editor">Editor</button>
+      <button role="tab" type="button" aria-selected="true" aria-controls="bx-tab-ai" id="bx-t-ai">AI assistants</button>
+      <button role="tab" type="button" aria-selected="false" aria-controls="bx-tab-editor" id="bx-t-editor" tabindex="-1">Editor</button>
       <button role="tab" type="button" aria-selected="false" aria-controls="bx-tab-media" id="bx-t-media" tabindex="-1">Media</button>
       <button role="tab" type="button" aria-selected="false" aria-controls="bx-tab-palette" id="bx-t-palette" tabindex="-1">Command palette</button>
       <button role="tab" type="button" aria-selected="false" aria-controls="bx-tab-plugins" id="bx-t-plugins" tabindex="-1">Plugins</button>
       <button role="tab" type="button" aria-selected="false" aria-controls="bx-tab-site" id="bx-t-site" tabindex="-1">Your site</button>
     </div>
     <div class="bx-panels">
-      <figure role="tabpanel" id="bx-tab-editor" aria-labelledby="bx-t-editor" class="bx-window bx-panel">
+      <figure role="tabpanel" id="bx-tab-ai" aria-labelledby="bx-t-ai" class="bx-window bx-panel">
+        <div class="bx-window__bar" aria-hidden="true"><span></span><span></span><span></span><p>Connect an assistant</p></div>
+        <img src="/brand/shots/admin-consent.webp" alt="The consent screen: Connect My assistant, the app's name with a Self-registered badge, the address it returns to, and the permissions per area with Off, Read and Write" width="2880" height="1800" loading="lazy">
+        <figcaption>When an assistant connects, you sign in and choose, area by area, what it may read or change.</figcaption>
+      </figure>
+      <figure role="tabpanel" id="bx-tab-editor" aria-labelledby="bx-t-editor" class="bx-window bx-panel" hidden>
         <div class="bx-window__bar" aria-hidden="true"><span></span><span></span><span></span><p>Editor</p></div>
         <img src="/brand/shots/admin-editor.webp" alt="The editor with a page open and its settings panel: status, slug, excerpt and featured image" width="2880" height="1800" loading="lazy">
         <figcaption>Write in blocks; the side panel holds status, slug, excerpt, featured image, SEO fields and revisions.</figcaption>

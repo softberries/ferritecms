@@ -5,13 +5,33 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 
 # MCP tools
 
-An AI assistant connected to a site's `/mcp` endpoint sees the tools below. Each tool runs
-as the person who connected the assistant, so it can do only what that person's role and
-the connection's scopes allow; the scope column names the one a tool needs, and a missing
-scope comes back as an error that names it. Tools that write are recorded in the audit log
-as `mcp.<tool>` with the assistant's name. Installing or removing plugins and themes,
-managing users, tokens and sessions, switching the MCP endpoint, imports, backups,
-restores and retrying jobs are not offered: they stay with a person in the admin.
+These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
+56 of them, in 13 areas. To connect an assistant, see
+[AI assistants (MCP)](../02-guides/08-ai-assistants.md).
+
+How to read the tables:
+
+- **Scope** is the permission a tool needs. A tool runs as the person who connected the
+  assistant, so it can do only what that person's role allows *and* what the connection
+  was approved for (the areas on the consent screen, or a personal token's scopes). A
+  `write` scope includes `read`. A call without the permission comes back as an error that
+  names what is missing.
+- **Access** says whether a tool only reads or also changes the site. Writing tools are
+  annotated for the client: the ones that remove or replace something (trash, unpublish,
+  delete, moderating a comment, replacing a menu, changing settings or a content type,
+  turning a plugin off) are marked destructive, so clients can ask you first. Changes
+  are live as soon as the tool returns.
+- Bodies are Markdown both ways (`body_markdown`); an image in a body is
+  `![alt](ferrite:media/<id>)`, and anything Markdown cannot express travels as a
+  `ferrite-block` fence that the assistant keeps as it is. Updates take the `version` the
+  assistant read, so a change made meanwhile by someone else is never overwritten.
+- Every successful write is recorded in the audit log as `mcp.<tool>` with the
+  assistant's name.
+- Each user can make 120 tool calls a minute.
+
+Installing or removing plugins and themes, managing users, tokens, sessions and connected
+apps, switching the MCP endpoint, imports, backups, restores and retrying jobs are not
+offered: they stay with a person in the admin.
 
 ## Site
 
@@ -133,3 +153,23 @@ restores and retrying jobs are not offered: they stay with a person in the admin
 | `system_status` | Reports versions, mode, backends, schema state, job counts and nodes. | `system:read` | read |
 | `jobs_list` | Lists background jobs, with filters by state and kind. | `system:read` | read |
 | `audit_list` | Reads the audit log, with filters by actor, action and target. | `system:read` | read |
+
+## Resources and prompts
+
+Besides tools, the server offers **resources**, which an assistant reads as Markdown:
+
+- `ferrite://site`: the site overview (the same facts as `site_overview`);
+- `ferrite://content/{type}/{id}`: one item as Markdown, with its fields in TOML front
+  matter;
+- `ferrite://guide/writing`: the site's writing guide: how Markdown maps to blocks, the
+  active theme's image sizes, titles, the SEO fields and publishing.
+
+And **prompts**, ready-made requests a client can offer you (in many clients as slash
+commands):
+
+- `write_post` (`topic`, optional `tone`): drafts a post and saves it as a draft for you
+  to review;
+- `review_seo` (`item`): reviews one item's title, description and headings, with
+  suggestions;
+- `site_health`: sums up the site's status, failed jobs and plugin failures;
+- `tidy_media`: finds images without alt text and proposes some.
