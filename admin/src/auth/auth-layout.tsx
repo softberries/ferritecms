@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, CircleAlertIcon, InfoIcon, TimerIcon } from "lucide-react";
 import { cn } from "cn";
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { metaQuery } from "@/api/meta";
 import { FerriteMark } from "@/components/kit/ferrite-mark";
@@ -37,18 +37,40 @@ export interface AuthLayoutProps {
   footer?: ReactNode;
   /** An icon badge above the title, for status screens (sent, done, expired). */
   icon?: ReactNode;
+  /** A wider card (32 rem) for a screen with a list of choices (the consent screen). */
+  wide?: boolean;
+  /**
+   * Moves the focus to the title when the screen mounts (a state the user's action led
+   * to, such as the consent screen's result): the title takes `tabIndex=-1`.
+   */
+  focusTitle?: boolean;
 }
 
-export function AuthLayout({ title, description, children, footer, icon }: AuthLayoutProps) {
+export function AuthLayout({
+  title,
+  description,
+  children,
+  footer,
+  icon,
+  wide = false,
+  focusTitle = false,
+}: AuthLayoutProps) {
   const { t } = useTranslation("auth");
   const site = useSite();
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusTitle) titleRef.current?.focus();
+  }, [focusTitle]);
   return (
     <div className="relative isolate flex min-h-svh flex-col overflow-hidden bg-background">
       <Backdrop />
       <div className="flex flex-1 flex-col items-center px-4 pt-10 pb-8 sm:justify-center sm:px-6 sm:py-16">
         <main
           id="main"
-          className="flex w-full max-w-[25rem] flex-col gap-6 duration-(--dur-base) ease-out animate-in fade-in slide-in-from-bottom-1"
+          className={cn(
+            "flex w-full flex-col gap-6 duration-(--dur-base) ease-out animate-in fade-in slide-in-from-bottom-1",
+            wide ? "max-w-[32rem]" : "max-w-[25rem]",
+          )}
         >
           <header className="flex items-center gap-3 px-1 sm:px-0">
             <FerriteMark />
@@ -75,7 +97,12 @@ export function AuthLayout({ title, description, children, footer, icon }: AuthL
                   {icon}
                 </span>
               ) : null}
-              <h1 id="auth-title" className="text-2xl text-balance">
+              <h1
+                id="auth-title"
+                ref={titleRef}
+                tabIndex={focusTitle ? -1 : undefined}
+                className="text-2xl text-balance break-words outline-none"
+              >
                 {title}
               </h1>
               {description ? (

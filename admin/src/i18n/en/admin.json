@@ -39,7 +39,7 @@
   },
   "account": {
     "title": "Account",
-    "description": "Your profile, how you sign in, API tokens and the sessions signed in as you.",
+    "description": "Your profile, how you sign in, API tokens, connected AI assistants and the sessions signed in as you.",
     "wrongPassword": "Wrong password.",
     "passwordRequired": "Enter your password.",
     "sections": {
@@ -58,6 +58,10 @@
       "tokens": {
         "title": "API tokens",
         "description": "For scripts and other programs. A token can do only what its scopes and your role allow."
+      },
+      "apps": {
+        "title": "Connected apps",
+        "description": "AI assistants you connected through MCP. Each acts as you, with the permissions you approved."
       },
       "sessions": {
         "title": "Sessions",
@@ -322,7 +326,8 @@
       "tokenUsed": "Used",
       "created": "Member since",
       "danger": "Delete user",
-      "dangerBody": "Removes the account for good. Content they wrote is kept and moves to another user."
+      "dangerBody": "Removes the account for good. Content they wrote is kept and moves to another user.",
+      "apps": "Connected apps"
     },
     "access": {
       "roleTitle": "Make {{name}} {{role}}?",
@@ -436,6 +441,10 @@
       "mail": {
         "title": "Mail",
         "description": "Outgoing e-mail for password resets and plugin notices."
+      },
+      "aiAssistants": {
+        "title": "AI assistants",
+        "description": "Let Claude, ChatGPT, Cursor and other assistants manage this site through MCP, as the person who connects them."
       }
     },
     "general": {

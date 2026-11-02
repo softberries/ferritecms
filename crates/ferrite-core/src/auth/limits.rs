@@ -1,6 +1,8 @@
 //! Login, TOTP and bad-token rate limits (P5), the password-reset limits (M2a-2 P19:
 //! 5/min per IP, 3/h per account input), the test-mail limit (M2b-3 P49: 3 per 10
-//! minutes per user), and the caller-scoped limits of
+//! minutes per user), the OAuth limits (design 12 §3.2: 10 registrations per IP and
+//! hour, 30 token requests per IP and minute), the MCP limit (§5.1: 120 tool calls per
+//! user and minute), and the caller-scoped limits of
 //! [`AuthService::hit_limit`](super::AuthService::hit_limit) (plugin routes, M2a-2 P16):
 //! fixed windows (one minute for the auth limits, except the hourly reset one) counted
 //! in the database by [`RateLimitRepo::hit`](ferrite_store::RateLimitRepo::hit), so
@@ -50,6 +52,15 @@ pub(crate) const MAIL_TEST_PER_USER: u32 = 3;
 /// The window of [`MAIL_TEST_PER_USER`]: ten minutes.
 pub(crate) const MAIL_TEST_WINDOW: Duration = Duration::from_secs(600);
 
+/// Dynamic client registrations per IP and [`OAUTH_REGISTER_WINDOW`] (design 12 §3.2).
+pub(crate) const OAUTH_REGISTER_PER_IP: u32 = 10;
+/// The window of [`OAUTH_REGISTER_PER_IP`]: an hour.
+pub(crate) const OAUTH_REGISTER_WINDOW: Duration = Duration::from_secs(3600);
+/// OAuth token endpoint requests per IP and [`WINDOW`] (design 12 §3.2).
+pub(crate) const OAUTH_TOKEN_PER_IP: u32 = 30;
+/// MCP tool calls per user and [`WINDOW`] (design 12 §5.1).
+pub(crate) const MCP_PER_USER: u32 = 120;
+
 /// Subkey label for the login bucket ids.
 const LOGIN_BUCKET_LABEL: &str = "ferrite:login-bucket:v1";
 /// Subkey label for the password-reset bucket ids.
@@ -91,6 +102,21 @@ pub(crate) fn totp_user(user: UserId) -> String {
 /// `mail-test:user:<id>`.
 pub(crate) fn mail_test_user(user: UserId) -> String {
     format!("mail-test:user:{user}")
+}
+
+/// `oauth-register:ip:<hash>` (`…:ip:none` without an address).
+pub(crate) fn oauth_register_ip(key: &SiteKey, ip: Option<IpAddr>) -> String {
+    scoped(key, "oauth-register", ip)
+}
+
+/// `oauth-token:ip:<hash>` (`…:ip:none` without an address).
+pub(crate) fn oauth_token_ip(key: &SiteKey, ip: Option<IpAddr>) -> String {
+    scoped(key, "oauth-token", ip)
+}
+
+/// `mcp:user:<id>`.
+pub(crate) fn mcp_user(user: UserId) -> String {
+    format!("mcp:user:{user}")
 }
 
 /// `token:ip:<hash>`.

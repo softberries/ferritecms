@@ -1,8 +1,9 @@
-// The dashboard (07 §3, M2b P16/P17, M4 P36): post count tiles, publishing activity, the
-// actor's recent drafts, what needs attention, site health and site traffic. Every card
-// loads and fails on its own; a card the actor may not see is not rendered, so its data
-// is never requested. There is no route loader: the header's site title comes from the settings
-// query the sidebar also reads, and without it the greeting names no site.
+// The dashboard (07 §3, M2b P16/P17, M4 P36): post count tiles, AI assistants (12 §8),
+// publishing activity, the actor's recent drafts, what needs attention, site health and
+// site traffic. Every card loads and fails on its own; a card the actor may not see is
+// not rendered, so its data is never requested. There is no route loader: the header's
+// site title comes from the settings query the sidebar also reads, and without it the
+// greeting names no site.
 
 import { createFileRoute } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
@@ -14,6 +15,7 @@ import { useMe } from "@/auth/session";
 import { PageHeader } from "@/components/kit/page-header";
 import { Button } from "@/components/ui/button";
 import { ActivityChart } from "@/dashboard/activity-chart";
+import { AiCard } from "@/dashboard/ai-card";
 import { NeedsAttention } from "@/dashboard/needs-attention";
 import { attentionAccess, hasAttention } from "@/dashboard/queries";
 import { RecentDrafts } from "@/dashboard/recent-drafts";
@@ -58,6 +60,7 @@ function Dashboard() {
       />
       <Tiles />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <AiCard me={me.id} canSettings={caps.includes("manage_settings")} />
         <ActivityChart canWrite={canWrite} />
         <RecentDrafts me={me.id} canWrite={canWrite} />
         {attention ? (

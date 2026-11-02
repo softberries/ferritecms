@@ -82,8 +82,10 @@ use ferrite_core::mail::MailQueue;
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
-    SwappablePermalinks, SystemService, TaxonomyService, UserService, comments::CommentService,
+    SwappablePermalinks, SystemService, TaxonomyService, UserService,
+    comments::CommentService,
     import::ImportService,
+    oauth::{ClientMetadataFetcher, OAuthService},
 };
 use ferrite_domain::{NodeId, Timestamp};
 use ferrite_http::{
@@ -98,6 +100,7 @@ use ferrite_http::{
     mail::SmtpMailer,
     media::{Uploader, variant_specs},
     metrics::{Metrics, metrics_router},
+    oauth_fetch::{NoFetcher, OAuthFetcher},
     plugins::egress::Egress,
 };
 use ferrite_media::MediaStore;
@@ -552,9 +555,19 @@ async fn boot(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
             .context("cannot start the plugin installer")?,
     );
+    // The OAuth authorization server (design 12 §3.2): its issuer is `site.url`; client
+    // metadata documents come through the SSRF-checked egress rules.
+    let issuer = url::Url::parse(&state.config.site_url).context("site.url")?;
+    let oauth = Arc::new(OAuthService::new(
+        store.clone(),
+        auth.clone(),
+        metadata_fetcher(OAuthFetcher::new(env!("CARGO_PKG_VERSION"))),
+        issuer,
+    ));
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
+            oauth,
             auth,
             comments,
             system: Arc::new(SystemService::new(store.clone())),
@@ -1199,6 +1212,18 @@ fn plugin_egress(built: Result<Egress, String>) -> Option<Arc<Egress>> {
         Err(e) => {
             tracing::error!(error = %e, "plugin http is unavailable: the outbound client could not be built");
             None
+        }
+    }
+}
+
+/// The node's metadata-document fetcher, or one that fetches nothing when no outbound
+/// client could be built (logged; boot goes on, as for plugin `http`, ruling R19).
+fn metadata_fetcher(built: Result<OAuthFetcher, String>) -> Arc<dyn ClientMetadataFetcher> {
+    match built {
+        Ok(fetcher) => Arc::new(fetcher),
+        Err(e) => {
+            tracing::error!(error = %e, "OAuth client metadata documents cannot be fetched: the outbound client could not be built");
+            Arc::new(NoFetcher)
         }
     }
 }

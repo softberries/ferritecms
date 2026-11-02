@@ -4,8 +4,8 @@ use ferrite_store_tests::{
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
     menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
-    plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*, tx::*,
-    user::*, user_filters::*,
+    oauth::*, plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*,
+    tx::*, user::*, user_filters::*,
 };
 
 backend_tests!(
@@ -21,7 +21,22 @@ backend_tests!(
     migration_0009_roundtrip,
     migration_0010_roundtrip,
     migration_0012_roundtrip,
+    migration_0013_roundtrip,
     migrate_up_reports_snapshot,
+);
+
+backend_tests!(
+    oauth_client_upsert_get_touch,
+    oauth_request_is_taken_once,
+    oauth_code_expires,
+    grant_rotation_keeps_previous_hash,
+    deleting_grant_deletes_its_tokens,
+    personal_token_counts_ignore_oauth_tokens,
+    prune_removes_expired_oauth_rows,
+    deleting_user_cascades_grants,
+    delete_codes_for_user_leaves_used_and_foreign_codes,
+    export_leaves_out_oauth_tokens,
+    import_refuses_oauth_token_rows,
 );
 
 backend_tests!(

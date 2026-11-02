@@ -466,7 +466,7 @@ pub async fn import_writer_round_trip(db: &TestDb) {
         [row(json!({"key": "site_id", "value": "site-rich"}))]
     );
     for (name, rows) in &first {
-        if spec(name).export == Export::Rows {
+        if matches!(spec(name).export, Export::Rows | Export::RowsWithout(_)) {
             assert!(!rows.is_empty(), "{name} is empty in the rich site");
         }
     }

@@ -34,6 +34,7 @@ test("own_row_hides_controls", async () => {
   stubRoutes({
     [`/api/v1/users/${ME.id}`]: () => json(SELF),
     [`/api/v1/users/${ME.id}/tokens`]: () => json({ items: [TOKEN], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
   });
   renderWithRouter(<UserSheet id={ME.id} me={ME} onClose={() => {}} onDeleted={() => {}} />);
   const sheet = await screen.findByRole("dialog");
@@ -56,6 +57,7 @@ test("other_row_has_the_controls", async () => {
   stubRoutes({
     [`/api/v1/users/${grace.id}`]: () => json(grace),
     [`/api/v1/users/${grace.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
   });
   renderWithRouter(<UserSheet id={grace.id} me={ME} onClose={() => {}} onDeleted={() => {}} />);
   const sheet = await screen.findByRole("dialog");
@@ -81,6 +83,7 @@ test("last_admin_refusal_is_shown", async () => {
       return json(other);
     },
     [`/api/v1/users/${other.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
   });
   renderWithRouter(<UserSheet id={other.id} me={ME} onClose={() => {}} onDeleted={() => {}} />);
   const sheet = await screen.findByRole("dialog");
@@ -114,6 +117,7 @@ test("disable_confirm_says_tokens_are_revoked", async () => {
       return json(grace);
     },
     [`/api/v1/users/${grace.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
   });
   renderWithRouter(<UserSheet id={grace.id} me={ME} onClose={() => {}} onDeleted={() => {}} />);
   const sheet = await screen.findByRole("dialog");
@@ -140,6 +144,7 @@ test("profile_edit_asks_when_changed_by_someone_else", async () => {
       return json(stored);
     },
     [`/api/v1/users/${grace.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
   });
   renderWithRouter(<UserSheet id={grace.id} me={ME} onClose={() => {}} onDeleted={() => {}} />);
   const sheet = await screen.findByRole("dialog");
@@ -162,6 +167,7 @@ test("set_password_says_they_must_change_it", async () => {
   stubRoutes({
     [`/api/v1/users/${grace.id}`]: () => json(grace),
     [`/api/v1/users/${grace.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
     [`/api/v1/users/${grace.id}/password`]: async (_url, req) => {
       posts.push(await req.json());
       return noContent();
@@ -185,6 +191,7 @@ test("turn_off_two_factor_confirms", async () => {
   stubRoutes({
     [`/api/v1/users/${grace.id}`]: () => json(grace),
     [`/api/v1/users/${grace.id}/tokens`]: () => json({ items: [], next_cursor: null }),
+    "/api/v1/oauth/grants": () => json({ items: [] }),
     [`/api/v1/users/${grace.id}/totp/disable`]: (_url, req) => {
       calls.push(req.method);
       return noContent();

@@ -33,6 +33,7 @@ pub mod migrations;
 pub mod node;
 pub mod node_metrics;
 pub mod notify;
+pub mod oauth;
 pub mod plugin;
 pub mod plugin_failure;
 pub mod pool;

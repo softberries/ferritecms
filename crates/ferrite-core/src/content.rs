@@ -28,7 +28,8 @@ mod lifecycle;
 pub mod seo;
 
 pub use admin::{
-    AdminQuery, AuthorRef, AutosaveDraft, ContentRef, MAX_REFS, MAX_REVISIONS_LISTED, StatusCounts,
+    AdminQuery, AuthorRef, AutosaveDraft, ContentRef, MAX_REFS, MAX_REVISIONS_LISTED, SiteSearch,
+    StatusCounts,
 };
 pub use allowed::{AllowedActions, allowed_actions};
 pub(crate) use lifecycle::reclaim_path;

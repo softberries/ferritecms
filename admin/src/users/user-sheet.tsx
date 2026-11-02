@@ -1,6 +1,7 @@
 // One user, in a sheet over the users list (`?id=`; `manage_users`). For another user:
 // the profile (display name, e-mail), role and status, Set password, Turn off two-factor,
-// their API tokens (list and revoke; new tokens are made in Account only) and Delete.
+// their API tokens (list and revoke; new tokens are made in Account only), their
+// connected apps (AI assistants, with Disconnect; 12 §8) and Delete.
 // Accounts are last-write-wins (P11), so every edit goes through `staleGuard` (P31): the
 // account is read again and, if it changed since the sheet opened, the admin chooses
 // Reload or Overwrite. A role change or a disable asks first and says what it ends
@@ -53,6 +54,7 @@ import { useRoleLabel } from "./role-label";
 import { SetPasswordDialog } from "./set-password-dialog";
 import { TotpOffDialog } from "./totp-off-dialog";
 import { RoleBadge, TwoFactorBadge, UserAvatar, UserStatusBadge } from "./user-parts";
+import { UserApps } from "./user-apps";
 import { UserTokens } from "./user-tokens";
 import { ROLES, STATUSES } from "./users-search";
 
@@ -295,6 +297,10 @@ function SheetBody({
 
         <Section title={t("users.sheet.tokens")}>
           <UserTokens userId={base.id} own={own} />
+        </Section>
+
+        <Section title={t("users.sheet.apps")}>
+          <UserApps userId={base.id} userName={base.display_name || base.login} own={own} />
         </Section>
 
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg bg-muted/60 px-4 py-3">

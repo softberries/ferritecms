@@ -2005,7 +2005,7 @@ impl PgSchema {
                         id: ferrite_domain::NodeId::new(),
                         name,
                         version,
-                        schema_version: 12,
+                        schema_version: 13,
                         meta,
                     })
                     .await

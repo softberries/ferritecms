@@ -281,6 +281,54 @@ impl SystemService {
         require_reader(actor, Capability::ManageSystem)?;
         Ok(self.store.read().themes().active().await?.map(|t| t.name))
     }
+
+    /// Appends the audit row of a successful MCP write tool (design 12 §5.1): action
+    /// `mcp.<tool>`, the actor as `actor_id`, `details` (an object; anything else is
+    /// stored under `value`) with `client` set to the AI client's name. Any actor may
+    /// record its own MCP calls, nothing else: the action is always under `mcp.`, and
+    /// `tool` must be a tool name (`snake_case` ASCII, 1..=64 bytes), else `Invalid`.
+    /// The write the tool made is already committed, so this is a separate statement.
+    pub async fn audit_mcp(
+        &self,
+        actor: &Actor,
+        tool: &str,
+        target: (&str, Option<String>),
+        client: &str,
+        details: Value,
+    ) -> Result<(), CoreError> {
+        if !is_tool_name(tool) {
+            return Err(CoreError::Invalid(format!("not a tool name: {tool:?}")));
+        }
+        let mut details = match details {
+            Value::Object(map) => map,
+            Value::Null => serde_json::Map::new(),
+            other => serde_json::Map::from_iter([("value".to_owned(), other)]),
+        };
+        details.insert("client".to_owned(), Value::String(client.to_owned()));
+        let (target_kind, target_id) = target;
+        self.store
+            .read()
+            .audit()
+            .append(&NewAudit {
+                actor_id: Some(actor.user),
+                action: format!("mcp.{tool}"),
+                target_kind: target_kind.to_owned(),
+                target_id,
+                details: Value::Object(details),
+            })
+            .await?;
+        Ok(())
+    }
+}
+
+/// Whether `name` is an MCP tool name: 1..=64 bytes of `a-z`, `0-9` and `_`, starting
+/// with a letter.
+fn is_tool_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 async fn retry_in(repos: &dyn Repos, actor: &Actor, id: JobId) -> Result<Job, CoreError> {

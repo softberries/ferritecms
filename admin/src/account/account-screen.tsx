@@ -1,7 +1,8 @@
 // /admin/account (every role; 07 §3 Account): the signed-in user's profile, password,
-// two-factor authentication, API tokens and sessions. A `must_reset` session never gets
-// here: the `_app` guard sends it to the forced change first. Created and last sign-in
-// times come from `GET /users/{me}` (`MeDto` lacks them).
+// two-factor authentication, API tokens, connected apps (AI assistants, 12 §8) and
+// sessions. A `must_reset` session never gets here: the `_app` guard sends it to the
+// forced change first. Created and last sign-in times come from `GET /users/{me}`
+// (`MeDto` lacks them).
 
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -11,6 +12,7 @@ import { ErrorState } from "@/components/kit/error-state";
 import { PageHeader } from "@/components/kit/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConnectedAppsCard } from "./connected-apps-card";
 import { PasswordCard } from "./password-card";
 import { ProfileCard } from "./profile-card";
 import { SessionsCard } from "./sessions-card";
@@ -21,7 +23,7 @@ import { TotpCard } from "./totp-card";
 export function AccountScreen({ me }: { me: MeDto }) {
   const { t } = useTranslation("admin");
   const user = useQuery(userQuery(me.id));
-  const section = (id: "profile" | "password" | "totp" | "tokens" | "sessions") => ({
+  const section = (id: "profile" | "password" | "totp" | "tokens" | "apps" | "sessions") => ({
     id,
     title: t(`account.sections.${id}.title`),
     description: t(`account.sections.${id}.description`),
@@ -56,6 +58,9 @@ export function AccountScreen({ me }: { me: MeDto }) {
         </AccountSection>
         <AccountSection {...section("tokens")}>
           <TokensCard me={me} />
+        </AccountSection>
+        <AccountSection {...section("apps")}>
+          <ConnectedAppsCard me={me} />
         </AccountSection>
         <AccountSection {...section("sessions")}>
           <SessionsCard />

@@ -1,0 +1,239 @@
+{
+  "client": {
+    "verified": "Verified",
+    "registered": "Self-registered",
+    "verifiedHint": "This site read the app's details from a document the app publishes at its own web address.",
+    "registeredHint": "The app registered itself and chose its own name; nothing has checked it."
+  },
+  "level": {
+    "none": "Off",
+    "read": "Read",
+    "write": "Write"
+  },
+  "areas": {
+    "content": {
+      "label": "Content",
+      "read": "Read posts, pages, their revisions and content types.",
+      "write": "Write, publish, schedule and trash posts and pages."
+    },
+    "media": {
+      "label": "Media",
+      "read": "Browse the media library.",
+      "write": "Upload images and files, edit alt text, trash media."
+    },
+    "terms": {
+      "label": "Terms",
+      "read": "See categories, tags and other terms.",
+      "write": "Create, rename and delete terms."
+    },
+    "menus": {
+      "label": "Menus",
+      "read": "See the site's menus.",
+      "write": "Add, remove and reorder menu items."
+    },
+    "comments": {
+      "label": "Comments",
+      "read": "Read comments, including those waiting for moderation.",
+      "write": "Approve, mark as spam, trash and reply to comments."
+    },
+    "users": {
+      "label": "Users",
+      "read": "See users and their roles.",
+      "write": "Nothing more than reading: managing users stays in the admin."
+    },
+    "settings": {
+      "label": "Settings",
+      "read": "Read the site's settings.",
+      "write": "Change the site's settings and content types."
+    },
+    "redirects": {
+      "label": "Redirects",
+      "read": "See redirects.",
+      "write": "Add, change and delete redirects."
+    },
+    "extensions": {
+      "label": "Themes and plugins",
+      "read": "See the installed themes and plugins and their settings.",
+      "write": "Switch themes, turn plugins on or off and change their settings."
+    },
+    "import": {
+      "label": "Import",
+      "read": "No assistant tool uses this yet: imports stay in the admin.",
+      "write": "No assistant tool uses this yet: imports stay in the admin."
+    },
+    "system": {
+      "label": "System",
+      "read": "See site health, background jobs and the audit log.",
+      "write": "Nothing more than reading: jobs and backups stay in the admin."
+    },
+    "off": "Not allowed."
+  },
+  "consent": {
+    "loadingTitle": "Connect an AI assistant",
+    "loading": "Loading the connection request",
+    "title": "Connect {{client}}",
+    "description": "{{client}} is asking to manage {{site}} for you.",
+    "thisSite": "this site",
+    "returnsTo": "Returns to",
+    "verifiedFrom": "Its details come from {{host}}.",
+    "registeredWarning": "This app named itself. Approve only if you just started connecting it from your assistant.",
+    "permissions": "What it can do",
+    "permissionsHint": "Preselected from what it asked for and your role allows. Write includes reading.",
+    "readOnly": "Read only",
+    "readOnlyHint": "Allow reading only",
+    "reset": "As requested",
+    "resetHint": "Allow what the app asked for",
+    "noneChosen": "Choose at least one permission.",
+    "beyondRole_one": "It also asked for {{areas}}, which your role does not allow. It will not get it.",
+    "beyondRole_other": "It also asked for {{areas}}, which your role does not allow. It will not get them.",
+    "nothingGrantable": "Your role allows none of what this app asked for, so it cannot be connected. Deny the request, or ask an administrator.",
+    "actsAsYou": "{{client}} acts as you, {{name}}, with your role ({{role}}). It can never do more than you can, and every change it makes is recorded in the audit log under its name.",
+    "disconnectAnyTime": "You can disconnect it at any time in Account, Connected apps.",
+    "approve": "Approve",
+    "approving": "Connecting…",
+    "deny": "Deny",
+    "denying": "Denying…",
+    "signedInAs": "Signed in as {{login}}.",
+    "notYou": "Not you? Sign out",
+    "failed": "That did not work. Try again.",
+    "forbidden": "Your account cannot connect apps.",
+    "expired": {
+      "title": "This request has expired",
+      "body": "A connection request lasts ten minutes and works once. Go back to your assistant and start connecting again.",
+      "dashboard": "Go to the dashboard"
+    },
+    "missing": {
+      "title": "No connection request",
+      "body": "This page is where your AI assistant sends you to approve a connection. Start connecting from the assistant.",
+      "setup": "How to connect an assistant"
+    },
+    "approved": {
+      "title": "Connected",
+      "body": "Returning you to {{client}}. If nothing happens, go back to it; you can close this tab."
+    },
+    "denied": {
+      "title": "Not connected",
+      "body": "{{client}} was not connected. You can close this tab."
+    },
+    "loadFailed": {
+      "title": "Could not load the request",
+      "retry": "Try again"
+    },
+    "redirectRefused": {
+      "title": "We couldn't return you to the app",
+      "body": "You can close this tab; the decision was saved."
+    }
+  },
+  "apps": {
+    "label": "Connected apps",
+    "connected": "Connected",
+    "lastUsed": "Last used",
+    "readOnly": "Read only",
+    "areas_one": "{{count}} area",
+    "areas_other": "{{count}} areas",
+    "writeAreas": "Writes {{areas}}",
+    "disconnect": "Disconnect",
+    "disconnectLabel": "Disconnect {{name}}",
+    "disconnectTitle": "Disconnect {{name}}?",
+    "disconnectBody": "It loses access to this site at once. To use it again, connect it again from the assistant.",
+    "disconnectOther": "It loses access to {{user}}'s account on this site at once.",
+    "disconnecting": "Disconnecting…",
+    "disconnected": "Disconnected",
+    "disconnectFailed": "Could not disconnect",
+    "cancel": "Cancel",
+    "emptyTitle": "No connected apps",
+    "emptyBody": "Connect Claude, ChatGPT, Cursor or another assistant, and manage this site by asking.",
+    "emptyOther": "This user has not connected any AI assistants.",
+    "connectAction": "Connect an assistant",
+    "guide": "Read the guide",
+    "paused": "AI assistants are turned off on this site, so connected apps are paused until an administrator turns them back on.",
+    "emptyOwn": "You have not connected any AI assistants."
+  },
+  "settings": {
+    "enabled": "Allow AI assistants",
+    "enabledHint": "When off, the MCP endpoint and the assistants' sign-in answer “not found”. Connected apps are paused, not removed, and work again when you turn this back on.",
+    "connect": {
+      "title": "Connect an assistant",
+      "description": "Paste this address into any assistant that speaks MCP. It asks you to sign in here and approve what it may do; no keys to copy.",
+      "url": "MCP URL",
+      "off": "AI assistants are turned off. Turn them on and save before connecting.",
+      "clients": "Clients",
+      "guide": "Full guide: every client, permissions and troubleshooting",
+      "cloudNote": "Claude and ChatGPT connect from their own servers, so this site must be reachable over public HTTPS. A site on localhost works with Claude Code, Cursor and VS Code."
+    },
+    "clients": {
+      "claude": {
+        "tab": "Claude",
+        "lead": "On claude.ai or in Claude Desktop:",
+        "body": "Add a custom connector (in Claude, under Customize → Connectors), paste the URL, then sign in and approve."
+      },
+      "chatgpt": {
+        "tab": "ChatGPT",
+        "lead": "In ChatGPT:",
+        "body": "In ChatGPT's settings, turn on developer mode and create a connector with this URL and OAuth sign-in."
+      },
+      "claudeCode": {
+        "tab": "Claude Code",
+        "lead": "In a terminal:",
+        "command": "Command",
+        "then": "Then run /mcp in Claude Code, choose ferrite and follow the browser sign-in: approve the connection there.",
+        "token": "Or connect with a personal API token (Account, API tokens) instead of signing in:",
+        "tokenCommand": "Command with a token"
+      },
+      "cursor": {
+        "tab": "Cursor",
+        "lead": "Add the server to Cursor's MCP configuration:",
+        "then": "The first time Cursor connects, a browser window opens; sign in and approve."
+      },
+      "vscode": {
+        "tab": "VS Code",
+        "lead": "Add the server to your workspace's MCP configuration:",
+        "then": "The first time VS Code starts the server, a browser window opens; sign in and approve."
+      }
+    },
+    "can": {
+      "title": "What an assistant can do",
+      "description": "It works through the same rules as the admin: as the person who connected it, with their role, within the permissions they approved.",
+      "content": "Write, edit, publish and schedule posts and pages in Markdown",
+      "media": "Upload images from a link or a file and set alt text",
+      "structure": "Manage terms, menus, content types and redirects",
+      "comments": "Moderate comments and reply",
+      "site": "Change settings, switch themes and configure plugins",
+      "system": "Check site health, background jobs and the audit log"
+    },
+    "human": {
+      "title": "What stays with people",
+      "body": "No assistant can install or remove plugins or themes, manage users, roles, passwords, tokens or connected apps, run imports, backups or restores, retry jobs, or change this switch."
+    },
+    "safety": {
+      "login": {
+        "short": "Your login",
+        "body": "Your login: an assistant connects through this site's own sign-in and approval screen."
+      },
+      "role": {
+        "short": "Your role",
+        "body": "Your role: it can do only what you can, in the areas you approve."
+      },
+      "audited": {
+        "short": "Audited",
+        "body": "Audited: every change it makes is in the audit log, under the app's name."
+      }
+    }
+  },
+  "dashboard": {
+    "title": "Manage this site with AI",
+    "description": "Ask Claude, ChatGPT or Cursor to write, publish and tidy up your site. Paste this URL into the assistant to connect it.",
+    "url": "MCP URL",
+    "setup": "Set up",
+    "guide": "How it works",
+    "connectedTitle": "AI assistants",
+    "connected_one": "{{count}} connected app",
+    "connected_other": "{{count}} connected apps",
+    "connectedBody": "Your assistants can manage this site as you. Review or disconnect them in Account.",
+    "manage": "Manage",
+    "offTitle": "AI assistants are off",
+    "offBody": "The MCP endpoint is turned off for this site.",
+    "offAction": "Turn on",
+    "offPaused": "Connected apps are paused until it is turned back on."
+  }
+}

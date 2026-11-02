@@ -84,6 +84,12 @@ pub enum RouteClass {
     Plugin,
     /// `/_preview/…` (first segment `_preview` in any case or encoding).
     Preview,
+    /// The OAuth authorization server: `/oauth/…` and the
+    /// `/.well-known/oauth-protected-resource…` and `/.well-known/oauth-authorization-server…`
+    /// metadata documents.
+    OAuth,
+    /// The MCP endpoint, `/mcp` (and anything under it).
+    Mcp,
     /// Health checks (`/healthz`, `/readyz`): load-balancer noise, left out of the
     /// dashboard's requests (ruling R3).
     Other,
@@ -91,13 +97,15 @@ pub enum RouteClass {
 
 impl RouteClass {
     /// Every class, in label order.
-    pub const ALL: [RouteClass; 7] = [
+    pub const ALL: [RouteClass; 9] = [
         RouteClass::Page,
         RouteClass::Api,
         RouteClass::Admin,
         RouteClass::Media,
         RouteClass::Plugin,
         RouteClass::Preview,
+        RouteClass::OAuth,
+        RouteClass::Mcp,
         RouteClass::Other,
     ];
 
@@ -118,6 +126,13 @@ impl RouteClass {
             RouteClass::Plugin
         } else if is_preview_path(path) {
             RouteClass::Preview
+        } else if under("/oauth")
+            || path.starts_with("/.well-known/oauth-protected-resource")
+            || path.starts_with("/.well-known/oauth-authorization-server")
+        {
+            RouteClass::OAuth
+        } else if under("/mcp") {
+            RouteClass::Mcp
         } else if path == "/healthz" || path == "/readyz" {
             RouteClass::Other
         } else {
@@ -134,6 +149,8 @@ impl RouteClass {
             RouteClass::Media => "media",
             RouteClass::Plugin => "plugin",
             RouteClass::Preview => "preview",
+            RouteClass::OAuth => "oauth",
+            RouteClass::Mcp => "mcp",
             RouteClass::Other => "other",
         }
     }
@@ -780,6 +797,25 @@ mod tests {
             (&Method::POST, "/_p/router/echo", RouteClass::Plugin),
             (&get, "/_preview/x", RouteClass::Preview),
             (&get, "/%5FPreview/x", RouteClass::Preview),
+            (&get, "/oauth/authorize", RouteClass::OAuth),
+            (&Method::POST, "/oauth/token", RouteClass::OAuth),
+            (&get, "/oauth", RouteClass::OAuth),
+            (&get, "/oauthx", RouteClass::Page),
+            (&Method::POST, "/mcp", RouteClass::Mcp),
+            (&get, "/mcp", RouteClass::Mcp),
+            (&get, "/mcp/x", RouteClass::Mcp),
+            (&get, "/mcpx", RouteClass::Page),
+            (
+                &get,
+                "/.well-known/oauth-protected-resource/mcp",
+                RouteClass::OAuth,
+            ),
+            (
+                &get,
+                "/.well-known/oauth-authorization-server",
+                RouteClass::OAuth,
+            ),
+            (&get, "/.well-known/security.txt", RouteClass::Page),
             (&get, "/healthz", RouteClass::Other),
             (&get, "/readyz", RouteClass::Other),
             (&Method::POST, "/healthz", RouteClass::Other),

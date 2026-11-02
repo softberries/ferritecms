@@ -18,6 +18,7 @@ pub mod jobs;
 pub mod mail;
 mod media;
 mod menu;
+pub mod oauth;
 mod options;
 pub mod permalink;
 mod redirects;
@@ -36,12 +37,14 @@ pub const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
     Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
-    require_reader, role_can_edit,
+    require_reader, role_can_edit, role_scopes,
 };
 pub use auth::{
     AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,
 };
-pub use content::{AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED};
+pub use content::{
+    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, SiteSearch,
+};
 pub use error::{CoreError, RowError};
 pub use extensions::{
     EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,

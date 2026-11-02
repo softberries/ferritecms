@@ -2,10 +2,11 @@
 
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, Comment, CommentId,
-    ContentId, ContentItem, ContentType, Event, InstalledPlugin, InstalledTheme, Job, JobId, Media,
-    MenuItem, MenuItemId, Node, NodeId, OptionEntry, Redirect, RedirectId, Revision, RevisionId,
-    Secret, Session, Taxonomy, Term, TermId, User, UserId,
+    ApiToken, ApiTokenId, Artifact, ArtifactHash, AuditEntry, AuditId, ClientKind, Comment,
+    CommentId, ContentId, ContentItem, ContentType, Event, InstalledPlugin, InstalledTheme, Job,
+    JobId, Media, MenuItem, MenuItemId, Node, NodeId, OAuthClient, OAuthClientId, OAuthCode,
+    OAuthGrant, OAuthGrantId, OAuthRequest, OAuthRequestId, OptionEntry, Redirect, RedirectId,
+    Revision, RevisionId, Secret, Session, Taxonomy, Term, TermId, User, UserId,
 };
 use ferrite_store::StoreError;
 use sqlx::{Row, postgres::PgRow, types::Json};
@@ -403,7 +404,7 @@ pub(crate) fn session(row: &PgRow) -> Result<Session, StoreError> {
 }
 
 pub(crate) const API_TOKEN_COLUMNS: &str =
-    "id, user_id, name, token_hash, scopes, created_at, last_used_at, expires_at";
+    "id, user_id, name, token_hash, scopes, created_at, last_used_at, expires_at, oauth_grant_id";
 
 /// Maps a row selected with [`API_TOKEN_COLUMNS`].
 pub(crate) fn api_token(row: &PgRow) -> Result<ApiToken, StoreError> {
@@ -413,6 +414,7 @@ pub(crate) fn api_token(row: &PgRow) -> Result<ApiToken, StoreError> {
     let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_db_err)?;
     let last_used_at: Option<DateTime<Utc>> = row.try_get("last_used_at").map_err(map_db_err)?;
     let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at").map_err(map_db_err)?;
+    let grant: Option<Uuid> = row.try_get("oauth_grant_id").map_err(map_db_err)?;
     Ok(ApiToken {
         id: ApiTokenId::from_uuid(id),
         user_id: UserId::from_uuid(user),
@@ -422,6 +424,104 @@ pub(crate) fn api_token(row: &PgRow) -> Result<ApiToken, StoreError> {
         created_at: created_at.into(),
         last_used_at: last_used_at.map(Into::into),
         expires_at: expires_at.map(Into::into),
+        oauth_grant_id: grant.map(OAuthGrantId::from_uuid),
+    })
+}
+
+fn ts(row: &PgRow, column: &str) -> Result<ferrite_domain::Timestamp, StoreError> {
+    let at: DateTime<Utc> = row.try_get(column).map_err(map_db_err)?;
+    Ok(at.into())
+}
+
+fn ts_opt(row: &PgRow, column: &str) -> Result<Option<ferrite_domain::Timestamp>, StoreError> {
+    let at: Option<DateTime<Utc>> = row.try_get(column).map_err(map_db_err)?;
+    Ok(at.map(Into::into))
+}
+
+fn string_list(row: &PgRow, column: &str) -> Result<Vec<String>, StoreError> {
+    let list: Json<Vec<String>> = row.try_get(column).map_err(map_db_err)?;
+    Ok(list.0)
+}
+
+pub(crate) const OAUTH_CLIENT_COLUMNS: &str =
+    "id, kind, name, redirect_uris, client_uri, logo_uri, created_at, fetched_at, last_used_at";
+
+/// Maps a row selected with [`OAUTH_CLIENT_COLUMNS`].
+pub(crate) fn oauth_client(row: &PgRow) -> Result<OAuthClient, StoreError> {
+    let id: String = row.try_get("id").map_err(map_db_err)?;
+    let kind: String = row.try_get("kind").map_err(map_db_err)?;
+    Ok(OAuthClient {
+        id: OAuthClientId::new(id),
+        kind: ClientKind::parse(&kind)
+            .ok_or_else(|| StoreError::Database(format!("corrupt oauth client kind {kind}")))?,
+        name: row.try_get("name").map_err(map_db_err)?,
+        redirect_uris: string_list(row, "redirect_uris")?,
+        client_uri: row.try_get("client_uri").map_err(map_db_err)?,
+        logo_uri: row.try_get("logo_uri").map_err(map_db_err)?,
+        created_at: ts(row, "created_at")?,
+        fetched_at: ts_opt(row, "fetched_at")?,
+        last_used_at: ts_opt(row, "last_used_at")?,
+    })
+}
+
+pub(crate) const OAUTH_REQUEST_COLUMNS: &str =
+    "id, client_id, redirect_uri, scopes, state, code_challenge, resource, created_at, expires_at";
+
+/// Maps a row selected with [`OAUTH_REQUEST_COLUMNS`].
+pub(crate) fn oauth_request(row: &PgRow) -> Result<OAuthRequest, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let client: String = row.try_get("client_id").map_err(map_db_err)?;
+    Ok(OAuthRequest {
+        id: OAuthRequestId::from_uuid(id),
+        client_id: OAuthClientId::new(client),
+        redirect_uri: row.try_get("redirect_uri").map_err(map_db_err)?,
+        scopes: string_list(row, "scopes")?,
+        state: row.try_get("state").map_err(map_db_err)?,
+        code_challenge: row.try_get("code_challenge").map_err(map_db_err)?,
+        resource: row.try_get("resource").map_err(map_db_err)?,
+        created_at: ts(row, "created_at")?,
+        expires_at: ts(row, "expires_at")?,
+    })
+}
+
+pub(crate) const OAUTH_CODE_COLUMNS: &str = "code_hash, client_id, user_id, redirect_uri, scopes, \
+     code_challenge, resource, created_at, expires_at, grant_id";
+
+/// Maps a row selected with [`OAUTH_CODE_COLUMNS`].
+pub(crate) fn oauth_code(row: &PgRow) -> Result<OAuthCode, StoreError> {
+    let client: String = row.try_get("client_id").map_err(map_db_err)?;
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    let grant: Option<Uuid> = row.try_get("grant_id").map_err(map_db_err)?;
+    Ok(OAuthCode {
+        code_hash: row.try_get("code_hash").map_err(map_db_err)?,
+        client_id: OAuthClientId::new(client),
+        user_id: UserId::from_uuid(user),
+        redirect_uri: row.try_get("redirect_uri").map_err(map_db_err)?,
+        scopes: string_list(row, "scopes")?,
+        code_challenge: row.try_get("code_challenge").map_err(map_db_err)?,
+        resource: row.try_get("resource").map_err(map_db_err)?,
+        created_at: ts(row, "created_at")?,
+        expires_at: ts(row, "expires_at")?,
+        grant_id: grant.map(OAuthGrantId::from_uuid),
+    })
+}
+
+pub(crate) const OAUTH_GRANT_COLUMNS: &str =
+    "id, client_id, user_id, scopes, created_at, last_used_at, expires_at";
+
+/// Maps a row selected with [`OAUTH_GRANT_COLUMNS`]; the refresh hashes are not selected.
+pub(crate) fn oauth_grant(row: &PgRow) -> Result<OAuthGrant, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let client: String = row.try_get("client_id").map_err(map_db_err)?;
+    let user: Uuid = row.try_get("user_id").map_err(map_db_err)?;
+    Ok(OAuthGrant {
+        id: OAuthGrantId::from_uuid(id),
+        client_id: OAuthClientId::new(client),
+        user_id: UserId::from_uuid(user),
+        scopes: string_list(row, "scopes")?,
+        created_at: ts(row, "created_at")?,
+        last_used_at: ts(row, "last_used_at")?,
+        expires_at: ts(row, "expires_at")?,
     })
 }
 

@@ -189,19 +189,38 @@ pub async fn update_redirect(
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(patch): ApiJson<RedirectPatch>,
 ) -> Result<Json<RedirectDto>, Problem> {
-    let actor = &who.actor;
-    let current = api.redirects.get(actor, RedirectId::from_uuid(id)).await?;
-    let saved = api
-        .redirects
+    let saved = merge_redirect(
+        &api,
+        &who.actor,
+        RedirectId::from_uuid(id),
+        patch.source.as_deref(),
+        patch.target.as_deref(),
+        patch.code,
+    )
+    .await?;
+    Ok(Json(saved.into()))
+}
+
+/// Merges the members sent into redirect `id` as read now and saves the result
+/// (`PATCH /redirects/{id}`, MCP `redirect_update`).
+pub(crate) async fn merge_redirect(
+    api: &ApiState,
+    actor: &ferrite_core::Actor,
+    id: RedirectId,
+    source: Option<&str>,
+    target: Option<&str>,
+    code: Option<u16>,
+) -> Result<ferrite_domain::Redirect, CoreError> {
+    let current = api.redirects.get(actor, id).await?;
+    api.redirects
         .update(
             actor,
             current.id,
-            patch.source.as_deref().unwrap_or(&current.source_path),
-            patch.target.as_deref().unwrap_or(&current.target),
-            patch.code.unwrap_or(current.code),
+            source.unwrap_or(&current.source_path),
+            target.unwrap_or(&current.target),
+            code.unwrap_or(current.code),
         )
-        .await?;
-    Ok(Json(saved.into()))
+        .await
 }
 
 #[utoipa::path(

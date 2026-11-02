@@ -31,6 +31,7 @@ use ferrite_core::{
     comments::CommentService,
     import::ImportService,
     mail::{MailQueue, MemoryMailer},
+    oauth::{ClientMetadataFetcher, OAuthService},
 };
 use ferrite_domain::{ArtifactHash, InstalledTheme, NodeId, Role, Secret, Timestamp, User};
 use ferrite_http::{
@@ -41,6 +42,7 @@ use ferrite_http::{
     import_blobs::MediaArtifacts,
     load_route_table,
     media::Uploader,
+    oauth_fetch::OAuthFetcher,
 };
 use ferrite_media::{Backend, MediaConfig, MediaStore, PublicUrlMode, S3Config};
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -60,7 +62,7 @@ use tower::ServiceExt;
 #[path = "../../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;
 
-pub use test_support::plugin_wasm;
+pub use test_support::{plugin_wasm, repo_root};
 
 pub const SITE_URL: &str = "https://example.com";
 pub const SITE_TITLE: &str = "Test Site";
@@ -286,6 +288,9 @@ impl Api {
         let routes = load_route_table(store.as_ref(), &PermalinkRules::default())
             .await
             .expect("route table");
+        let auth = Arc::new(
+            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
+        );
         let app = Arc::new(
             AppState::new(AppParts {
                 store: store.clone(),
@@ -298,19 +303,19 @@ impl Api {
                 config: HttpConfig::new(SITE_URL, SITE_TITLE, "en"),
                 migrations_ok: true,
             })
-            .expect("app state"),
+            .expect("app state")
+            // Sessions are resolved for `/_preview/<id>`.
+            .with_auth(auth.clone()),
         );
         let mailer = Arc::new(MemoryMailer::new());
         let content = Arc::new(ContentService::new(
             store.clone(),
             Arc::new(PermalinkRules::default()),
         ));
-        let auth = Arc::new(
-            AuthService::new(store.clone(), key.clone()).with_site_title(SITE_TITLE.into()),
-        );
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
+                oauth: oauth_service(store.clone(), auth.clone(), SITE_URL, default_fetcher()),
                 comments: Arc::new(CommentService::new(
                     store.clone(),
                     auth.clone(),
@@ -411,6 +416,30 @@ impl Api {
         })
     }
 
+    /// The whole site again, with the same store and services but another `site.url`
+    /// for the API and the OAuth issuer.
+    pub fn router_for_oauth_site(&self, site_url: &str) -> Router {
+        self.router_with(ApiParts {
+            site_url: site_url.into(),
+            oauth: oauth_service(
+                self.store.clone(),
+                self.api.auth.clone(),
+                site_url,
+                default_fetcher(),
+            ),
+            ..self.same_parts()
+        })
+    }
+
+    /// The whole site again, with the same store and services but an OAuth service whose
+    /// metadata documents come from `fetcher`.
+    pub fn router_with_fetcher(&self, fetcher: Arc<dyn ClientMetadataFetcher>) -> Router {
+        self.router_with(ApiParts {
+            oauth: oauth_service(self.store.clone(), self.api.auth.clone(), SITE_URL, fetcher),
+            ..self.same_parts()
+        })
+    }
+
     /// The whole site again, with the same store and services but no `[mail]`.
     pub fn router_without_mail(&self) -> Router {
         self.router_with(ApiParts {
@@ -468,6 +497,7 @@ impl Api {
         let a = &self.api;
         ApiParts {
             store: a.store.clone(),
+            oauth: a.oauth.clone(),
             auth: a.auth.clone(),
             users: a.users.clone(),
             content: a.content.clone(),
@@ -508,6 +538,7 @@ impl Api {
         let api = Arc::new(
             ApiState::new(ApiParts {
                 store: store.clone(),
+                oauth: oauth_service(store.clone(), auth.clone(), SITE_URL, default_fetcher()),
                 comments: Arc::new(CommentService::new(
                     store.clone(),
                     auth.clone(),
@@ -562,6 +593,39 @@ impl Api {
         ferrite_store_tests::window::in_one_window(self.store.as_ref(), WINDOW, need, scenario)
             .await;
     }
+}
+
+impl Api {
+    /// [`Api::in_one_window`] for a limit whose window is `window` (not a minute).
+    pub async fn in_one_window_of<F, Fut>(&self, window: Duration, need: Duration, scenario: F)
+    where
+        F: FnMut(u32) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        ferrite_store_tests::window::in_one_window(self.store.as_ref(), window, need, scenario)
+            .await;
+    }
+}
+
+/// The OAuth service of a harness API: issuer `site_url`, documents from `fetcher`.
+fn oauth_service(
+    store: Arc<dyn Store>,
+    auth: Arc<AuthService>,
+    site_url: &str,
+    fetcher: Arc<dyn ClientMetadataFetcher>,
+) -> Arc<OAuthService> {
+    Arc::new(OAuthService::new(
+        store,
+        auth,
+        fetcher,
+        url::Url::parse(site_url).expect("site url"),
+    ))
+}
+
+/// The production metadata fetcher (public addresses only): tests that need documents
+/// use [`Api::router_with_fetcher`].
+fn default_fetcher() -> Arc<dyn ClientMetadataFetcher> {
+    Arc::new(OAuthFetcher::new("0.0.0").expect("metadata fetcher"))
 }
 
 /// The password of every account [`Api::user`] creates.

@@ -572,6 +572,51 @@ pub(crate) fn media_client(allow_ip: fn(IpAddr) -> bool) -> Result<reqwest::Clie
     )
 }
 
+/// The client the OAuth metadata-document fetcher uses
+/// ([`OAuthFetcher`](crate::oauth_fetch::OAuthFetcher)): the plugin client's checked
+/// resolver with [`is_public_ip`], no redirects (the fetcher follows them itself), no
+/// proxy, no cookie store, no `Referer`, `https` only, [`TIMEOUT`], the platform roots
+/// with the `webpki-roots` fallback.
+pub(crate) fn metadata_client() -> Result<reqwest::Client, String> {
+    with_fallback(
+        || build(Lookup::System, is_public_ip, Roots::Platform, true, TIMEOUT),
+        || {
+            build(
+                Lookup::System,
+                is_public_ip,
+                Roots::WebPki(Vec::new()),
+                true,
+                TIMEOUT,
+            )
+        },
+    )
+}
+
+/// Test seam: [`metadata_client`] with `overrides`' resolver, roots (empty: the platform
+/// roots) and address rule.
+#[cfg(feature = "test-seams")]
+pub(crate) fn metadata_client_for_tests(
+    overrides: EgressOverrides,
+) -> Result<reqwest::Client, String> {
+    let EgressOverrides {
+        resolver,
+        roots,
+        allow_ip,
+    } = overrides;
+    let roots = if roots.is_empty() {
+        Roots::Platform
+    } else {
+        Roots::Only(roots)
+    };
+    build(Lookup::Custom(resolver), allow_ip, roots, true, TIMEOUT)
+}
+
+/// Whether `e` failed because the resolver refused an address ([`is_public_ip`] or the
+/// test rule).
+pub(crate) fn address_refused(e: &reqwest::Error) -> bool {
+    in_chain::<Refused>(e)
+}
+
 /// A client with the checked resolver, no redirects, no proxy and no `Referer`.
 fn build(
     lookup: Lookup,

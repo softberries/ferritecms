@@ -123,7 +123,7 @@ pub struct ContentListParams {
 }
 
 impl ContentListParams {
-    fn into_query(self, kind: &str) -> Result<AdminQuery, Problem> {
+    pub(crate) fn into_query(self, kind: &str) -> Result<AdminQuery, Problem> {
         let mut query = AdminQuery::new(kind);
         if let Some(list) = &self.status {
             query.statuses = list
@@ -185,7 +185,7 @@ pub struct RevisionParams {
 }
 
 /// `404` for the types not served here.
-fn served(kind: &str) -> Result<(), Problem> {
+pub(crate) fn served(kind: &str) -> Result<(), Problem> {
     if kind == MEDIA_KIND {
         Err(Problem::not_found())
     } else {
@@ -194,7 +194,12 @@ fn served(kind: &str) -> Result<(), Problem> {
 }
 
 /// Item `id`, if it is of type `kind` (else `404`).
-async fn load(api: &ApiState, actor: &Actor, kind: &str, id: Uuid) -> Result<ContentItem, Problem> {
+pub(crate) async fn load(
+    api: &ApiState,
+    actor: &Actor,
+    kind: &str,
+    id: Uuid,
+) -> Result<ContentItem, Problem> {
     served(kind)?;
     let item = api.content.get_for(actor, ContentId::from_uuid(id)).await?;
     if item.kind != kind {
@@ -204,7 +209,11 @@ async fn load(api: &ApiState, actor: &Actor, kind: &str, id: Uuid) -> Result<Con
 }
 
 /// `item` with its terms, permalink, author, allowed actions and SEO meta.
-async fn dto(api: &ApiState, actor: &Actor, item: ContentItem) -> Result<ContentDto, Problem> {
+pub(crate) async fn dto(
+    api: &ApiState,
+    actor: &Actor,
+    item: ContentItem,
+) -> Result<ContentDto, Problem> {
     let (terms, seo) = api.content.extras_for(actor, &item).await?;
     let permalink = api.content.permalink(item.id).await?;
     let author = author_of(api, actor, item.author_id).await?;
@@ -215,7 +224,7 @@ async fn dto(api: &ApiState, actor: &Actor, item: ContentItem) -> Result<Content
 }
 
 /// The authors of `ids` (one lookup), keyed by id.
-async fn authors(
+pub(crate) async fn authors(
     api: &ApiState,
     actor: &Actor,
     ids: impl IntoIterator<Item = UserId>,
@@ -226,7 +235,7 @@ async fn authors(
 
 /// Author `id` from `map`. Items and revisions reference existing users (foreign
 /// keys), so a miss is a `500`.
-fn pick(map: &HashMap<UserId, AuthorRef>, id: UserId) -> Result<AuthorRef, Problem> {
+pub(crate) fn pick(map: &HashMap<UserId, AuthorRef>, id: UserId) -> Result<AuthorRef, Problem> {
     map.get(&id).cloned().ok_or_else(|| {
         tracing::error!(user = %id, "author not found");
         Problem::internal()
@@ -234,7 +243,11 @@ fn pick(map: &HashMap<UserId, AuthorRef>, id: UserId) -> Result<AuthorRef, Probl
 }
 
 /// The author of one item or revision.
-async fn author_of(api: &ApiState, actor: &Actor, id: UserId) -> Result<AuthorRef, Problem> {
+pub(crate) async fn author_of(
+    api: &ApiState,
+    actor: &Actor,
+    id: UserId,
+) -> Result<AuthorRef, Problem> {
     pick(&authors(api, actor, [id]).await?, id)
 }
 
@@ -527,11 +540,29 @@ pub async fn delete_content(
 
 /// A status transition without a body.
 #[derive(Debug, Clone, Copy)]
-enum Transition {
+pub(crate) enum Transition {
     Publish,
     Unpublish,
     Submit,
     Restore,
+}
+
+/// Runs transition `t` on item `id` at `version` (the REST endpoints and the MCP tools
+/// share it; core checks the permission and the version).
+pub(crate) async fn apply_transition(
+    api: &ApiState,
+    actor: &Actor,
+    id: ContentId,
+    version: i64,
+    t: Transition,
+) -> Result<ContentItem, CoreError> {
+    let svc = &api.content;
+    match t {
+        Transition::Publish => svc.publish(actor, id, version).await,
+        Transition::Unpublish => svc.unpublish(actor, id, version).await,
+        Transition::Submit => svc.submit(actor, id, version).await,
+        Transition::Restore => svc.restore(actor, id, version).await,
+    }
 }
 
 async fn transition(
@@ -544,13 +575,7 @@ async fn transition(
 ) -> Result<Response, Problem> {
     let actor = &who.0.actor;
     let id = load(api, actor, kind, id).await?.id;
-    let svc = &api.content;
-    let result = match t {
-        Transition::Publish => svc.publish(actor, id, version).await,
-        Transition::Unpublish => svc.unpublish(actor, id, version).await,
-        Transition::Submit => svc.submit(actor, id, version).await,
-        Transition::Restore => svc.restore(actor, id, version).await,
-    };
+    let result = apply_transition(api, actor, id, version, t).await;
     written(api, actor, id, result).await
 }
 

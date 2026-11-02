@@ -19,17 +19,17 @@ use ferrite_cluster::{
     builtin,
 };
 use ferrite_domain::{
-    ApiToken, ApiTokenId, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin, IdempotencyKey, Job,
-    JobId, JobLease, JobQuery, JobStatus, NewEvent, NewJob, NewNode, NodeId, Page, Secret, Session,
-    Timestamp,
+    ApiToken, ApiTokenId, ClientKind, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin,
+    IdempotencyKey, Job, JobId, JobLease, JobQuery, JobStatus, NewEvent, NewJob, NewNode, NodeId,
+    OAuthClient, OAuthClientId, OAuthGrant, OAuthGrantId, Page, Secret, Session, Timestamp,
 };
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OAuthRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use ferrite_store_tests::{
     TestDb, backend_tests_spawning, fixtures::fixture_user, window::in_one_window,
@@ -691,6 +691,9 @@ impl Repos for FaultyRepos {
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self.inner.read().node_metrics()
     }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self.inner.read().oauth()
+    }
 }
 
 #[async_trait]
@@ -1244,8 +1247,8 @@ async fn backdate_bucket(db: &TestDb, bucket: &str, hours: i64) {
 }
 
 /// P23: `sessions.prune` deletes sessions past their absolute end or idle for longer
-/// than `SESSION_IDLE`, tokens past `expires_at` and rate-limit rows whose window
-/// started over an hour ago; fresh rows of each stay.
+/// than `SESSION_IDLE`, tokens past `expires_at`, expired OAuth grants (design 12 §4) and
+/// rate-limit rows whose window started over an hour ago; fresh rows of each stay.
 pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
     let store = db.shared_store();
     let repos = store.read();
@@ -1306,6 +1309,7 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
         created_at: ago(40 * day),
         last_used_at: None,
         expires_at,
+        oauth_grant_id: None,
     };
     let tokens = repos.api_tokens();
     tokens
@@ -1317,6 +1321,32 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
         .insert(&token("ahead", Some(plus(now, day))))
         .await
         .unwrap();
+
+    let oauth = repos.oauth();
+    let client = OAuthClient {
+        id: OAuthClientId::new("ferc_prune_client_00000001"),
+        kind: ClientKind::Registered,
+        name: "Prune".into(),
+        redirect_uris: vec!["http://127.0.0.1/cb".into()],
+        client_uri: None,
+        logo_uri: None,
+        created_at: ago(40 * day),
+        fetched_at: None,
+        last_used_at: None,
+    };
+    oauth.upsert_client(&client).await.unwrap();
+    let grant = |expires_at: Timestamp| OAuthGrant {
+        id: OAuthGrantId::new(),
+        client_id: client.id.clone(),
+        user_id: user.id,
+        scopes: vec!["content:read".into()],
+        created_at: ago(40 * day),
+        last_used_at: ago(31 * day),
+        expires_at,
+    };
+    let (ended, alive) = (grant(ago(day)), grant(plus(now, day)));
+    oauth.insert_grant(&ended, "refresh-ended").await.unwrap();
+    oauth.insert_grant(&alive, "refresh-alive").await.unwrap();
 
     let limits = repos.rate_limits();
     let minute = Duration::from_secs(60);
@@ -1389,6 +1419,8 @@ pub async fn sessions_prune_job_deletes_expired_and_idle(db: Arc<TestDb>) {
     // A second run finds nothing more.
     handler.run(&get(store.as_ref(), id).await).await.unwrap();
     assert_eq!(sessions.list_for_user(user.id).await.unwrap().len(), 1);
+    assert_eq!(oauth.get_grant(ended.id).await.unwrap(), None);
+    assert_eq!(oauth.get_grant(alive.id).await.unwrap(), Some(alive));
 }
 
 /// P10: `sessions.prune` deletes idempotency keys older than `IDEMPOTENCY_RETENTION`

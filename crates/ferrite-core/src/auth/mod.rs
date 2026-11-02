@@ -10,6 +10,7 @@ mod seal;
 mod service;
 mod totp;
 
+pub(crate) use key::sha256_hex;
 pub use key::{
     COMMENT_IP_LABEL, IP_HASH_LABEL, PLUGIN_IP_LABEL, SEAL_LABEL, SiteKey, ip_hash, random_bytes,
 };
@@ -18,3 +19,4 @@ pub use service::{
     AuthService, Authenticated, Clock, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo,
     TotpSetup, Via,
 };
+pub(crate) use service::{MAX_TOKEN_NAME, mint_oauth_bearer, older_than, plus};

@@ -1,7 +1,7 @@
 // /admin/settings/<group> (`manage_settings`; 07 §3 Settings): one page with a rail of
 // groups (a scrolling row of tabs on phones). General, Reading, Permalinks and Comments
 // edit `GET/PATCH /settings`, each saving only its own keys; Media sizes and Mail are
-// read-only (P50, P49).
+// read-only (P50, P49). AI assistants (12 §8) saves `mcp.enabled` and shows how to connect.
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -16,6 +16,7 @@ import { TAB_LIST, tabLinkClass } from "@/components/kit/tab-styles";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "cn";
+import { AiAssistantsGroup } from "./ai-assistants";
 import { CommentsGroup } from "./comments";
 import { GeneralGroup } from "./general";
 import { GROUP_ICONS, GROUP_KEYS, SETTINGS_GROUPS, type SettingsGroup } from "./groups";
@@ -63,6 +64,8 @@ function GroupBody({ group, me }: { group: SettingsGroup; me: MeDto }) {
       return <PermalinksGroup settings={settings.data} />;
     case "comments":
       return <CommentsGroup settings={settings.data} />;
+    case "ai-assistants":
+      return <AiAssistantsGroup settings={settings.data} />;
   }
 }
 

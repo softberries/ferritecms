@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ferrite_domain::{
-    ApiToken, ApiTokenId, AuditEntry, AuditId, AuditQuery, NewAudit, Page, RateHit, Session,
-    Timestamp, UserId,
+    ApiToken, ApiTokenId, AuditEntry, AuditId, AuditQuery, NewAudit, OAuthGrantId, Page, RateHit,
+    Session, Timestamp, UserId,
 };
 use ferrite_store::{
     ApiTokenRepo, AuditRepo, MAX_AUTH_LIST, RateLimitRepo, SessionRepo, StoreError,
@@ -151,7 +151,8 @@ impl ApiTokenRepo for PgRepos {
         check_token(token)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO api_tokens (id, user_id, name, token_hash, scopes, created_at, \
-             last_used_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+             last_used_at, expires_at, oauth_grant_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         )
         .bind(token.id.as_uuid())
         .bind(token.user_id.as_uuid())
@@ -161,6 +162,7 @@ impl ApiTokenRepo for PgRepos {
         .bind(pg_ts(token.created_at))
         .bind(token.last_used_at.map(pg_ts))
         .bind(token.expires_at.map(pg_ts))
+        .bind(token.oauth_grant_id.map(|g| g.as_uuid()))
         .execute(e))?;
         Ok(())
     }
@@ -177,8 +179,8 @@ impl ApiTokenRepo for PgRepos {
 
     async fn list_for_user(&self, user: UserId) -> Result<Vec<ApiToken>, StoreError> {
         let rows = run!(&self.exec, |e| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {API_TOKEN_COLUMNS} FROM api_tokens WHERE user_id = $1 \
-             ORDER BY created_at, id LIMIT $2"
+            "SELECT {API_TOKEN_COLUMNS} FROM api_tokens \
+             WHERE user_id = $1 AND oauth_grant_id IS NULL ORDER BY created_at, id LIMIT $2"
         )))
         .bind(user.as_uuid())
         .bind(i64::from(MAX_AUTH_LIST))
@@ -188,7 +190,7 @@ impl ApiTokenRepo for PgRepos {
 
     async fn count_for_user(&self, user: UserId) -> Result<u64, StoreError> {
         let n: i64 = run!(&self.exec, |e| sqlx::query_scalar(
-            "SELECT COUNT(*) FROM api_tokens WHERE user_id = $1"
+            "SELECT COUNT(*) FROM api_tokens WHERE user_id = $1 AND oauth_grant_id IS NULL"
         )
         .bind(user.as_uuid())
         .fetch_one(e))?;
@@ -222,6 +224,15 @@ impl ApiTokenRepo for PgRepos {
             "DELETE FROM api_tokens WHERE user_id = $1"
         )
         .bind(user.as_uuid())
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
+    async fn delete_for_grant(&self, grant: OAuthGrantId) -> Result<u64, StoreError> {
+        let done = run!(&self.exec, |e| sqlx::query(
+            "DELETE FROM api_tokens WHERE oauth_grant_id = $1"
+        )
+        .bind(grant.as_uuid())
         .execute(e))?;
         Ok(done.rows_affected())
     }

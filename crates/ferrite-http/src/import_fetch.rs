@@ -18,6 +18,10 @@
 //! A file that cannot be fetched (refused, unreachable, not 2xx, too many redirects) is
 //! missing (`Ok(None)`): the import reports it and keeps the old URL in the items. The
 //! size cap is the import's (`max`), also enforced while staging.
+//!
+//! The MCP `media_upload` tool fetches a URL with the same client and rules but `https`
+//! only ([`HttpSource::for_upload`]): `http` is refused as the first URL and a redirect
+//! to it as any other refused hop.
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -35,37 +39,81 @@ use crate::plugins::egress::{self, MAX_REDIRECTS, MEDIA_TIMEOUT, is_public_ip};
 pub struct HttpSource {
     client: reqwest::Client,
     allow_ip: fn(IpAddr) -> bool,
+    /// Plain `http` is refused (uploads by URL); the import allows it.
+    https_only: bool,
     /// `ferrite/<version> import`.
     agent: String,
+    /// Log lines name the host only, never the URL (uploads by URL: a URL given by an
+    /// assistant may carry a token in its path or query). The import logs full URLs.
+    host_only_logs: bool,
 }
 
 impl HttpSource {
     /// The production source: only public addresses.
     pub fn new(version: &str) -> Result<Self, String> {
-        Self::with_rule(version, is_public_ip)
+        Self::with_rule(version, is_public_ip, false)
+    }
+
+    /// The source of uploads by URL (MCP `media_upload`): only public addresses and
+    /// only `https`.
+    pub fn for_upload(version: &str) -> Result<Self, String> {
+        Self::with_rule(version, is_public_ip, true)
     }
 
     /// Test seam: every address allowed, so tests can serve files from 127.0.0.1.
     #[cfg(feature = "test-seams")]
     pub fn allowing_private(version: &str) -> Result<Self, String> {
-        Self::with_rule(version, |_| true)
+        Self::with_rule(version, |_| true, false)
     }
 
-    fn with_rule(version: &str, allow_ip: fn(IpAddr) -> bool) -> Result<Self, String> {
+    fn with_rule(
+        version: &str,
+        allow_ip: fn(IpAddr) -> bool,
+        https_only: bool,
+    ) -> Result<Self, String> {
         Ok(Self {
             client: egress::media_client(allow_ip)?,
             allow_ip,
+            https_only,
             agent: format!("ferrite/{version} import"),
+            host_only_logs: https_only,
         })
+    }
+
+    /// Log lines name the host only (see the field). `for_upload` sources already do.
+    #[cfg(feature = "test-seams")]
+    pub fn with_host_only_logs(mut self) -> Self {
+        self.host_only_logs = true;
+        self
+    }
+
+    /// What log lines say about `url`: the URL, or only its host.
+    fn shown(&self, url: &Url) -> String {
+        if self.host_only_logs {
+            url.host_str().unwrap_or("?").to_owned()
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// `e` for a log line: reqwest errors carry the URL, which host-only logs drop.
+    fn shown_error(&self, e: reqwest::Error) -> String {
+        if self.host_only_logs {
+            e.without_url().to_string()
+        } else {
+            e.to_string()
+        }
     }
 
     /// Whether `url` may be requested: `http(s)`, no credentials, a host, and an IP
     /// literal only when the address rule allows it.
     fn allowed(&self, url: &Url) -> bool {
-        if !matches!(url.scheme(), "http" | "https")
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
+        let scheme_ok = match url.scheme() {
+            "https" => true,
+            "http" => !self.https_only,
+            _ => false,
+        };
+        if !scheme_ok || !url.username().is_empty() || url.password().is_some() {
             return false;
         }
         match url.host() {
@@ -101,7 +149,7 @@ impl MediaSource for HttpSource {
         let deadline = Instant::now() + MEDIA_TIMEOUT;
         for _ in 0..=MAX_REDIRECTS {
             if !self.allowed(&url) {
-                tracing::warn!(url = %url, "attachment URL refused (address or scheme rule)");
+                tracing::warn!(url = %self.shown(&url), "attachment URL refused (address or scheme rule)");
                 return Ok(None);
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -118,14 +166,14 @@ impl MediaSource for HttpSource {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!(url = %url, error = %e, "attachment fetch failed");
+                    tracing::debug!(url = %self.shown(&url), error = %self.shown_error(e), "attachment fetch failed");
                     return Ok(None);
                 }
             };
             if let Some(peer) = response.remote_addr()
                 && !(self.allow_ip)(peer.ip())
             {
-                tracing::warn!(url = %url, "attachment fetch connected to a refused address");
+                tracing::warn!(url = %self.shown(&url), "attachment fetch connected to a refused address");
                 return Ok(None);
             }
             let status = response.status();
@@ -141,13 +189,13 @@ impl MediaSource for HttpSource {
                         continue;
                     }
                     _ => {
-                        tracing::warn!(url = %url, "attachment redirect refused");
+                        tracing::warn!(url = %self.shown(&url), "attachment redirect refused");
                         return Ok(None);
                     }
                 }
             }
             if !status.is_success() {
-                tracing::debug!(url = %url, %status, "attachment not fetched");
+                tracing::debug!(url = %self.shown(&url), %status, "attachment not fetched");
                 return Ok(None);
             }
             if response.content_length().is_some_and(|n| n > max) {
@@ -163,7 +211,7 @@ impl MediaSource for HttpSource {
             });
             return Ok(Some(Box::pin(body)));
         }
-        tracing::debug!(url = %url, "attachment fetch: too many redirects");
+        tracing::debug!(url = %self.shown(&url), "attachment fetch: too many redirects");
         Ok(None)
     }
 }
@@ -173,6 +221,27 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// Upload sources log the host only; the import's source logs full URLs.
+    #[test]
+    fn upload_logs_name_the_host_only() {
+        let u = Url::parse("https://cdn.example.org/a/b.png?token=secret").unwrap();
+        let upload = HttpSource::for_upload("0.0.0").unwrap();
+        assert_eq!(upload.shown(&u), "cdn.example.org");
+        let import = HttpSource::new("0.0.0").unwrap();
+        assert_eq!(import.shown(&u), u.as_str());
+    }
+
+    /// An upload source refuses plain `http` as well; the import's source does not.
+    #[test]
+    fn upload_urls_are_https_only() {
+        let source = HttpSource::for_upload("0.0.0").unwrap();
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(source.allowed(&u("https://cdn.example.org/a.png")));
+        assert!(!source.allowed(&u("http://cdn.example.org/a.png")));
+        assert!(!source.allowed(&u("https://127.0.0.1/a.png")));
+        assert!(!source.allowed(&u("https://user:pw@example.org/a.png")));
+    }
 
     #[test]
     fn urls_follow_the_address_and_scheme_rules() {

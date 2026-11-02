@@ -423,6 +423,19 @@ pub fn comment_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
     micros_cursor(COMMENT_CURSOR_TAG, cursor)
 }
 
+/// Cursor tag of the OAuth grant listing (see [`encode_grant_cursor`]).
+pub const GRANT_CURSOR_TAG: &str = "og:created";
+
+/// Encodes the grant-listing cursor pointing just after the row (`created_at`, `id`).
+pub fn encode_grant_cursor(created_at: Timestamp, id: Uuid) -> String {
+    Cursor::encode(GRANT_CURSOR_TAG, &json!(created_at.as_micros()), id)
+}
+
+/// Decodes a cursor made by [`encode_grant_cursor`] into (`created_at` micros, `id`).
+pub fn grant_cursor(cursor: &str) -> Result<(i64, Uuid), StoreError> {
+    micros_cursor(GRANT_CURSOR_TAG, cursor)
+}
+
 /// Cursor tag of the job listing (see [`encode_job_cursor`]).
 pub const JOB_CURSOR_TAG: &str = "j:created";
 

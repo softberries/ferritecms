@@ -91,6 +91,9 @@ fn page_sql(table: &TableSpec, after: bool) -> String {
         let marks = vec!["?"; values.len()].join(", ");
         conds.push(format!("{key} IN ({marks})"));
     }
+    if let Export::RowsWithout(column) = table.export {
+        conds.push(format!("{} IS NULL", quote(column)));
+    }
     let filter = if conds.is_empty() {
         String::new()
     } else {

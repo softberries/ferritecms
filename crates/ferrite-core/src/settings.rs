@@ -15,6 +15,7 @@
 //! | `comments.enabled` | boolean (default `true`, [`COMMENTS_ENABLED_DEFAULT`](crate::comments::COMMENTS_ENABLED_DEFAULT)) |
 //! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
 //! | `comments.per_page` | integer 1..=100 (default 50, [`COMMENTS_PER_PAGE_DEFAULT`](crate::comments::COMMENTS_PER_PAGE_DEFAULT)): top-level comment threads per public page |
+//! | `mcp.enabled` | boolean (default `true`, [`MCP_ENABLED_DEFAULT`]): the MCP endpoint, the OAuth endpoints and their metadata documents (design 12 §2) |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
@@ -125,7 +126,27 @@ pub const SETTINGS: &[SettingDef] = &[
             max: MAX_COMMENTS_PER_PAGE as i64,
         },
     },
+    SettingDef {
+        key: MCP_ENABLED,
+        kind: SettingKind::Bool,
+    },
 ];
+
+/// The option that switches the MCP endpoint and the OAuth authorization server on and
+/// off (design 12 §2).
+pub const MCP_ENABLED: &str = "mcp.enabled";
+/// [`MCP_ENABLED`] when unset: on.
+pub const MCP_ENABLED_DEFAULT: bool = true;
+
+/// Whether the MCP endpoint and the OAuth endpoints answer: [`MCP_ENABLED`] when it holds
+/// a boolean, else [`MCP_ENABLED_DEFAULT`]. Read from the store, so a change applies at
+/// once on every node.
+pub async fn mcp_enabled(store: &dyn Store) -> Result<bool, CoreError> {
+    let stored = store.read().options().get(MCP_ENABLED).await?;
+    Ok(stored
+        .and_then(|e| e.value.as_bool())
+        .unwrap_or(MCP_ENABLED_DEFAULT))
+}
 
 /// The allowlisted setting `key`.
 pub fn def(key: &str) -> Option<&'static SettingDef> {

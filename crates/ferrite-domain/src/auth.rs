@@ -1,11 +1,11 @@
 //! Authentication records (design 07 §2, rulings P5, P7, P22, P23): login sessions, API
 //! tokens, fixed-window rate-limit counters and the audit log.
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use serde_json::Value;
 
-use crate::{ApiTokenId, AuditId, NodeId, Secret, Timestamp, UserId};
+use crate::{ApiTokenId, AuditId, NodeId, OAuthGrantId, OAuthRequestId, Secret, Timestamp, UserId};
 
 /// A session ends after this long without a request (P7).
 pub const SESSION_IDLE: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -44,6 +44,10 @@ pub struct ApiToken {
     pub created_at: Timestamp,
     pub last_used_at: Option<Timestamp>,
     pub expires_at: Option<Timestamp>,
+    /// The OAuth grant this access token was issued for (design 12 §3.2); `None` for a
+    /// personal token. Personal-token rules (the 50-token limit, the Account list) ignore
+    /// rows with a grant, and deleting the grant deletes the token.
+    pub oauth_grant_id: Option<OAuthGrantId>,
 }
 
 /// The result of one rate-limit hit (P5, F6): the bucket's count in the current window,
@@ -138,4 +142,127 @@ pub enum IdemBegin {
     InProgress,
     /// The key was used for another method or path.
     Mismatch,
+}
+
+/// An OAuth client's `client_id`: an `https` URL (a Client ID Metadata Document) or a
+/// random `ferc_…` id (dynamic registration, design 12 §3.2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OAuthClientId(String);
+
+impl OAuthClientId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OAuthClientId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How a client became known (design 12 §3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKind {
+    /// Fetched from its Client ID Metadata Document URL.
+    Metadata,
+    /// Registered with `POST /oauth/register`.
+    Registered,
+}
+
+impl ClientKind {
+    /// The stored text.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Metadata => "metadata",
+            Self::Registered => "registered",
+        }
+    }
+
+    /// Parses the stored text.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "metadata" => Some(Self::Metadata),
+            "registered" => Some(Self::Registered),
+            _ => None,
+        }
+    }
+}
+
+/// A known OAuth client (public clients only: no secret).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthClient {
+    pub id: OAuthClientId,
+    pub kind: ClientKind,
+    pub name: String,
+    pub redirect_uris: Vec<String>,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+    pub created_at: Timestamp,
+    /// When a metadata document was last fetched; `None` for a registered client.
+    pub fetched_at: Option<Timestamp>,
+    pub last_used_at: Option<Timestamp>,
+}
+
+/// A validated authorization request waiting for the user's consent (10 minutes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthRequest {
+    pub id: OAuthRequestId,
+    pub client_id: OAuthClientId,
+    pub redirect_uri: String,
+    /// The requested area scopes.
+    pub scopes: Vec<String>,
+    /// The client's `state`, kept as given.
+    pub state: Option<String>,
+    /// The PKCE S256 challenge.
+    pub code_challenge: String,
+    pub resource: Option<String>,
+    pub created_at: Timestamp,
+    pub expires_at: Timestamp,
+}
+
+/// An authorization code (60 seconds, single use). Only the SHA-256 hex of the code is
+/// stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthCode {
+    /// Lowercase hex SHA-256 of the code.
+    pub code_hash: String,
+    pub client_id: OAuthClientId,
+    pub user_id: UserId,
+    pub redirect_uri: String,
+    /// The approved scopes.
+    pub scopes: Vec<String>,
+    pub code_challenge: String,
+    pub resource: Option<String>,
+    pub created_at: Timestamp,
+    pub expires_at: Timestamp,
+    /// The grant made from the code once it was used, so a replay revokes that grant.
+    pub grant_id: Option<OAuthGrantId>,
+}
+
+/// A user's authorization of a client (the refresh token's record). The refresh token's
+/// hashes are never part of this type; the repository takes and compares them by value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthGrant {
+    pub id: OAuthGrantId,
+    pub client_id: OAuthClientId,
+    pub user_id: UserId,
+    /// The granted area scopes.
+    pub scopes: Vec<String>,
+    pub created_at: Timestamp,
+    pub last_used_at: Timestamp,
+    /// The end of the refresh token (30 days, sliding).
+    pub expires_at: Timestamp,
+}
+
+/// What one `OAuthRepo::prune_expired` call deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OAuthPruned {
+    pub requests: u64,
+    pub codes: u64,
+    pub grants: u64,
 }

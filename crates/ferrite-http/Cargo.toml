@@ -16,6 +16,7 @@ test-seams = ["ferrite-core/test-seams"]
 [dependencies]
 arc-swap.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
@@ -23,6 +24,7 @@ ferrite-cache = { path = "../ferrite-cache" }
 ferrite-config = { path = "../ferrite-config" }
 ferrite-core = { path = "../ferrite-core" }
 ferrite-domain = { path = "../ferrite-domain" }
+ferrite-import-md = { path = "../ferrite-import-md" }
 ferrite-import-wp = { path = "../ferrite-import-wp" }
 ferrite-media = { path = "../ferrite-media" }
 ferrite-plugin-host = { path = "../ferrite-plugin-host" }
@@ -34,8 +36,10 @@ ipnet.workspace = true
 lettre.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
+rmcp.workspace = true
 rust-embed.workspace = true
 rustls.workspace = true
+schemars.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

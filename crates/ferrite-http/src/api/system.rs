@@ -84,21 +84,27 @@ pub async fn system_status(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
 ) -> Result<Json<SystemStatusDto>, Problem> {
+    Ok(Json(status(&api, &who.actor).await?))
+}
+
+/// Versions, mode, backends, schema verdict, active theme, job and node counts. Shared
+/// with the MCP `system_status` tool.
+pub(crate) async fn status(api: &ApiState, actor: &Actor) -> Result<SystemStatusDto, Problem> {
     let binary = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
         tracing::error!(error = %e, "the crate version is not semver");
         Problem::internal()
     })?;
-    let migration = api.system.migration_status(&who.actor, &binary).await?;
-    let counts = api.system.job_counts(&who.actor).await?;
-    let active = api.system.active_theme(&who.actor).await?;
-    let (nodes, now) = nodes_now(&api, &who.actor).await?;
+    let migration = api.system.migration_status(actor, &binary).await?;
+    let counts = api.system.job_counts(actor).await?;
+    let active = api.system.active_theme(actor).await?;
+    let (nodes, now) = nodes_now(api, actor).await?;
     let (live, stale): (Vec<&Node>, Vec<&Node>) = nodes.iter().partition(|n| is_live(n, now));
     let fallback_nodes = live
         .iter()
         .filter(|n| n.meta["theme"]["fallback"].as_bool() == Some(true))
         .map(|n| n.name.clone())
         .collect();
-    Ok(Json(SystemStatusDto {
+    Ok(SystemStatusDto {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         site_url: api.site_url.clone(),
         mode: api.node.mode.to_owned(),
@@ -131,7 +137,7 @@ pub async fn system_status(
             configured: api.mail.is_some(),
             from: api.mail.as_ref().map(|m| m.from.clone()),
         },
-    }))
+    })
 }
 
 #[utoipa::path(
@@ -183,13 +189,23 @@ pub async fn list_audit(
     Authed(who): Authed,
     ApiQuery(params): ApiQuery<AuditListParams>,
 ) -> Result<Json<AuditList>, Problem> {
+    Ok(Json(audit_page(&api, &who.actor, params).await?))
+}
+
+/// One page of the audit log for `params` (every filter, `limit` and `cursor` checked
+/// here). Shared with the MCP `audit_list` tool.
+pub(crate) async fn audit_page(
+    api: &ApiState,
+    actor: &Actor,
+    params: AuditListParams,
+) -> Result<AuditList, Problem> {
     let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
     if let Some(c) = &params.cursor
         && ferrite_store::audit_cursor(c).is_err()
     {
         return Err(invalid_cursor());
     }
-    let actor = params
+    let by = params
         .actor
         .as_deref()
         .map(|a| {
@@ -214,14 +230,14 @@ pub async fn list_audit(
         }
     }
     let query = AuditQuery {
-        actor,
+        actor: by,
         action: params.action,
         target_kind: params.target_kind,
         target_id: params.target_id,
         limit,
         cursor: params.cursor,
     };
-    let found = api.system.audit(&who.actor, &query).await?;
+    let found = api.system.audit(actor, &query).await?;
     // At most `limit` (≤ 200 = MAX_ID_FILTER) distinct actors.
     let mut ids: Vec<UserId> = found.items.iter().filter_map(|e| e.actor_id).collect();
     ids.sort();
@@ -246,10 +262,10 @@ pub async fn list_audit(
             AuditDto::new(e, login)
         })
         .collect();
-    Ok(Json(AuditList {
+    Ok(AuditList {
         items,
         next_cursor: found.next_cursor,
-    }))
+    })
 }
 
 /// Longest `action` or `target_kind` filter of `GET /system/audit`, in characters.
@@ -311,6 +327,17 @@ pub async fn list_jobs(
     ApiQuery(params): ApiQuery<JobListParams>,
 ) -> Result<Json<JobList>, Problem> {
     let limit = check_limit(params.limit, DEFAULT_LIMIT, MAX_PAGE)?;
+    Ok(Json(job_page(&api, &who.actor, params, limit).await?))
+}
+
+/// One page of jobs for `params` (`status`, `kind` and `cursor` checked here; `limit` is
+/// already checked). Shared with the MCP `jobs_list` tool.
+pub(crate) async fn job_page(
+    api: &ApiState,
+    actor: &Actor,
+    params: JobListParams,
+    limit: u32,
+) -> Result<JobList, Problem> {
     let status = params
         .status
         .as_deref()
@@ -341,7 +368,7 @@ pub async fn list_jobs(
     let page = api
         .system
         .jobs(
-            &who.actor,
+            actor,
             JobQuery {
                 status,
                 kind: params.kind,
@@ -350,8 +377,8 @@ pub async fn list_jobs(
             },
         )
         .await?;
-    let handled = handled_kinds(&api).await?;
-    Ok(Json(JobList {
+    let handled = handled_kinds(api).await?;
+    Ok(JobList {
         items: page
             .items
             .into_iter()
@@ -361,7 +388,7 @@ pub async fn list_jobs(
             })
             .collect(),
         next_cursor: page.next_cursor,
-    }))
+    })
 }
 
 #[utoipa::path(

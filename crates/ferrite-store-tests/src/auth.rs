@@ -48,6 +48,7 @@ fn token(user: &User, hash: &str, created_at: Timestamp) -> ApiToken {
         created_at,
         last_used_at: None,
         expires_at: Some(plus(created_at, 90 * DAY)),
+        oauth_grant_id: None,
     }
 }
 

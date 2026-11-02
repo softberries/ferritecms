@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use axum::http::Uri;
 use ferrite_core::{
-    AuthService, ContentService, ContentTypeService, ExtensionAdmin, MediaService, MenuService,
-    OptionService, RedirectService, SystemService, TaxonomyService, UserService,
-    comments::CommentService, import::ImportService, mail::MailQueue,
+    AuthService, ContentService, ContentTypeService, CoreError, ExtensionAdmin, MediaService,
+    MenuService, OptionService, RedirectService, SystemService, TaxonomyService, UserService,
+    comments::CommentService, import::ImportService, mail::MailQueue, oauth::OAuthService,
 };
 use ferrite_media::MediaStore;
 use ferrite_store::Store;
@@ -28,6 +28,8 @@ pub struct ApiMail {
 pub struct ApiParts {
     pub store: Arc<dyn Store>,
     pub auth: Arc<AuthService>,
+    /// The OAuth authorization server (design 12 §3.2); its issuer is `site.url`.
+    pub oauth: Arc<OAuthService>,
     pub users: Arc<UserService>,
     pub content: Arc<ContentService>,
     pub types: Arc<ContentTypeService>,
@@ -67,6 +69,8 @@ pub struct ApiParts {
 pub struct ApiState {
     pub store: Arc<dyn Store>,
     pub auth: Arc<AuthService>,
+    /// The OAuth authorization server (`/oauth/*`, the consent API).
+    pub oauth: Arc<OAuthService>,
     pub users: Arc<UserService>,
     pub content: Arc<ContentService>,
     pub types: Arc<ContentTypeService>,
@@ -121,6 +125,7 @@ impl ApiState {
         let ApiParts {
             store,
             auth,
+            oauth,
             users,
             content,
             types,
@@ -147,6 +152,7 @@ impl ApiState {
         Ok(Self {
             store,
             auth,
+            oauth,
             users,
             content,
             types,
@@ -171,6 +177,15 @@ impl ApiState {
             origin,
             cookie_secure,
         })
+    }
+}
+
+impl ApiState {
+    /// Whether the MCP endpoint and the OAuth endpoints answer (the `mcp.enabled`
+    /// option, read from the store on every call so a change applies on every node at
+    /// once; design 12 §2).
+    pub async fn mcp_enabled(&self) -> Result<bool, CoreError> {
+        ferrite_core::settings::mcp_enabled(self.store.as_ref()).await
     }
 }
 

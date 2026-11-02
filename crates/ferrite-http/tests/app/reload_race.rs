@@ -20,10 +20,10 @@ use ferrite_http::{AppParts, AppState, HttpConfig, RouteTable, build_app, load_r
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, Channel, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LockGuard,
-    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo,
-    SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo,
+    MediaRepo, MenuRepo, MetaRepo, MigrationStatus, NodeMetricsRepo, NodeRepo, OAuthRepo,
+    OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo, RateLimitRepo, RedirectRepo, Repos,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, StoreError, Subscription,
+    TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
 };
 use serde_json::json;
 
@@ -186,6 +186,9 @@ impl Repos for HookRepos {
     }
     fn node_metrics(&self) -> &dyn NodeMetricsRepo {
         self.inner.read().node_metrics()
+    }
+    fn oauth(&self) -> &dyn OAuthRepo {
+        self.inner.read().oauth()
     }
 }
 

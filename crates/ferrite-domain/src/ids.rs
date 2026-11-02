@@ -63,7 +63,9 @@ uuid_id!(
     ApiTokenId,
     AuditId,
     CommentId,
-    ImportRunId
+    ImportRunId,
+    OAuthRequestId,
+    OAuthGrantId
 );
 
 /// SHA-256 content hash: exactly 64 lowercase hex characters.

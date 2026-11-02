@@ -20,7 +20,13 @@ async fn admin(api: &Api) -> (User, Bearer) {
 }
 
 /// A post titled `title` with slug `slug` by `owner`, published when `publish`.
-async fn post(api: &Api, owner: &User, title: &str, slug: &str, publish: bool) -> ContentId {
+pub(crate) async fn post(
+    api: &Api,
+    owner: &User,
+    title: &str,
+    slug: &str,
+    publish: bool,
+) -> ContentId {
     let actor = Actor::new(owner.id, owner.role);
     let item = api
         .api
@@ -55,7 +61,7 @@ async fn post(api: &Api, owner: &User, title: &str, slug: &str, publish: bool) -
 
 /// Stores a guest comment on `item` with `status` (the store directly: a held comment
 /// on a draft cannot come through the public submit).
-async fn comment(api: &Api, item: ContentId, status: CommentStatus) -> CommentId {
+pub(crate) async fn comment(api: &Api, item: ContentId, status: CommentStatus) -> CommentId {
     let c = Comment {
         id: CommentId::new(),
         item_id: item,

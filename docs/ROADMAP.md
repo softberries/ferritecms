@@ -543,6 +543,30 @@ rulings" R-c1–R-c3). No migration (the schema stays at 12), no WIT change.
 - [x] Deferred from M2a-2a: a GC grace period for staged artifacts with the artifacts GC, which closes the same-bytes concurrent-install race (`Installer::discard_staged`; Task 4 review round 1). Done in M4-1: `discard_staged` is gone, failed installs leave their bytes to the GC (03 §6).
 - [x] Performance, from the M1c-2 final review: sitemaps no longer walk every public row (M4-4 P76: `ContentRepo::file_bounds`, one query per type for the index's files and `lastmod`; a kind file seeks to its cursor; both backends).
 
+## M5 — AI assistants (MCP)
+
+Design: [12](design/12-mcp.md). Plan: [`plans/2026-11-01-m5-mcp.md`](superpowers/plans/2026-11-01-m5-mcp.md). Done (2026-11-02): [`m5-exit.md`](superpowers/m5-exit.md).
+
+- [x] OAuth storage: migration `0013_oauth` (`oauth_clients`, `oauth_requests`, `oauth_codes`, `oauth_grants`, `api_tokens.oauth_grant_id`) on both backends with contract tests (12 §4).
+- [x] Core `OAuthService`: clients (Client ID Metadata Documents and dynamic registration), pending requests, codes, grants, PKCE S256, refresh rotation with replay detection, revocation, audit `oauth.connect` / `oauth.disconnect`; grant-bound tokens in `AuthService` (12 §3).
+- [x] OAuth HTTP endpoints (`/.well-known/…`, `/oauth/authorize|token|register|revoke`), the consent API under `/api/v1/oauth/`, the REST audience rule (an OAuth token is refused by `/api/v1`), the `mcp.enabled` off switch (12 §2, §3, §6).
+- [x] Markdown in and out: `ferrite_core::blocks::markdown` and the importer's `markdown_to_body`, with `ferrite-block` fences for what Markdown cannot express (12 §5.3).
+- [x] The `/mcp` endpoint (`rmcp`, Streamable HTTP, stateless): the guard (off switch, `405`, Origin, bearer, `401` challenge), 120 tool calls per user per minute, server instructions (12 §2, §5.1).
+- [x] 56 tools in 13 areas, 2 resources (`ferrite://site`, `ferrite://guide/writing`) and 1 resource template (`ferrite://content/{type}/{id}`), and the prompts `write_post`, `review_seo`, `site_health`, `tidy_media`; successful writes audited as `mcp.<tool>`; no tool for the human-only actions (12 §5).
+- [x] Admin: the consent screen (`/admin/connect`), Account → Connected apps, Users → a user's apps, Settings → AI assistants, the dashboard card, the palette entry (12 §8).
+- [x] Docs, website and README: the guide `site/content/02-guides/08-ai-assistants.md`, the [MCP tools](../site/content/05-reference/02-mcp-tools.md) reference (kept in step with the server by `crates/ferrite-http/tests/api/mcp_reference.rs`), mentions in the Introduction, First site, Concepts and REST API pages, the landing page and the README (12 §9).
+- [x] Exit: real-client checks (MCP Inspector, Claude Code, the OAuth flow in the E2E), the full gates, [`m5-exit.md`](superpowers/m5-exit.md) and [`rulings/m5.md`](superpowers/rulings/m5.md).
+- [ ] When 0.2.0 ships, drop the release caveat ("Coming in the next release (0.2.0); build from source today", and "arrive in 0.2.0" in the Introduction's status box) from: `site/brand/landing.html` (the pill, the line under the hero buttons, the quickstart comment lines, the AI section's caveat), `site/content/index.md`, `site/content/01-getting-started/02-first-site.md`, `site/content/01-getting-started/03-concepts.md`, `site/content/02-guides/index.md`, `site/content/02-guides/08-ai-assistants.md`, `site/content/03-developers/03-rest-api.md`, `site/content/05-reference/02-mcp-tools.md` and `README.md` (the intro bullet and the AI section), and the matching `site/VERIFIED.md` row.
+
+Follow-ups (not in M5):
+
+- Checks with the hosted clients themselves (Claude custom connectors, ChatGPT developer mode), which need a public HTTPS site; Claude Code was checked against a local site (a personal token connected; without one it asked to authenticate).
+- Firefox and WebKit runs of `admin/e2e/mcp.spec.ts`, and the consent path for an account that must change its password (Task 9 rulings).
+- A failed audit append after a committed write only logs (the write may go unaudited; Task 5 ruling).
+- `content_preview_link` needs the human's admin session: no signed, expiring preview links for the model (Task 6 ruling).
+- Pruning unused `oauth_clients` rows (Task 1 Minor 7); several resources per grant (Task 2 Minor 5).
+- From design 12 §10: plugins contributing tools (a WIT `mcp` interface), a stdio bridge, per-tool allow lists per grant, MCP elicitation for confirmations, the ChatGPT Apps SDK widgets.
+
 ## Before v0.1.0
 
 What the first release needs from the user or from a first real run (M4 ruling P66). Nothing

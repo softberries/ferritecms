@@ -19,6 +19,24 @@ curl -s http://localhost:8080/api/v1/openapi.json
 
 `GET /api/v1/meta` (also open) answers `{"api":"v1","version":…,"site_url":…}`.
 
+## REST API or MCP
+
+The REST API is for programs you write: scripts, integrations, another front end. To
+manage a site from an AI assistant, use its MCP endpoint, `/mcp`, instead: it offers the
+same operations as tools an assistant understands, runs them through the same services,
+permission checks and audit log, and signs the assistant in with OAuth
+([AI assistants (MCP)](../02-guides/08-ai-assistants.md),
+[MCP tools](../05-reference/02-mcp-tools.md)). Coming in the next release (0.2.0); build from source today
+([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
+
+The two share personal API tokens: a `fer_…` token made under **Account → API tokens** works
+on both. A token an assistant gets from the consent screen (OAuth) is bound to `/mcp`: the
+REST API answers it with `401` and `WWW-Authenticate: Bearer error="invalid_token"`, so a
+token handed to an assistant cannot be replayed against `/api/v1`. The OAuth endpoints
+(`/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/revoke` and the
+`/.well-known/` metadata) are outside `/api/v1`; the consent screen's own endpoints
+(`/api/v1/oauth/requests/{id}` and `/api/v1/oauth/grants`) are in the OpenAPI document.
+
 ## Two ways to authenticate
 
 - **A session**, as the admin uses: sign in with a login and password, then send the
@@ -74,7 +92,7 @@ curl -s -b cookies.txt \
 Here `$CSRF` is the login answer's `csrf_token` and `$USER_ID` its `user.id`. The answer
 holds `token` (`fer_` and 43 more characters), shown only this once; the site
 stores only its hash. `expires_at` (optional) sets an end. A user can hold at most 50
-tokens. Tokens are also managed in the admin under **Account**. Use one as `$TOKEN`:
+tokens (connected AI assistants do not count). Tokens are also managed in the admin under **Account**. Use one as `$TOKEN`:
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/api/v1/content/post?limit=2'

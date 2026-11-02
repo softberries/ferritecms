@@ -21,6 +21,7 @@ const STORED: SettingsDto = {
   "comments.enabled": null,
   "comments.moderation": null,
   "comments.per_page": null,
+  "mcp.enabled": null,
 };
 
 /** `/api/v1/settings`: `GET` answers `theirs`; `PATCH` bodies are collected. */

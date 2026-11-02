@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode};
-use ferrite_core::{CoreError, menu_locations};
+use ferrite_core::{Actor, CoreError, menu_locations};
 use ferrite_domain::{Menu, MenuItem};
 
 use super::{
@@ -36,7 +36,13 @@ pub async fn list_menus(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
 ) -> Result<Json<MenuList>, Problem> {
-    let menus = api.menus.list_for(&who.actor).await?;
+    Ok(Json(menu_list(&api, &who.actor).await?))
+}
+
+/// Every menu and the locations of the theme this node serves (`GET /menus`, MCP
+/// `menus_list`).
+pub(crate) async fn menu_list(api: &ApiState, actor: &Actor) -> Result<MenuList, CoreError> {
+    let menus = api.menus.list_for(actor).await?;
     let theme = api.site.theme.load();
     let locations = menu_locations(
         theme
@@ -46,14 +52,14 @@ pub async fn list_menus(
             .map(|(name, label)| (name.as_str(), label.as_str())),
         &menus,
     );
-    Ok(Json(MenuList {
+    Ok(MenuList {
         items: menus
             .into_iter()
             .map(|(name, label)| MenuSummary { name, label })
             .collect(),
         next_cursor: None,
         locations: locations.into_iter().map(Into::into).collect(),
-    }))
+    })
 }
 
 #[utoipa::path(

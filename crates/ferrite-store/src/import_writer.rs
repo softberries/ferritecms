@@ -288,6 +288,14 @@ fn prepare(table: &'static TableSpec, row: &Row) -> Result<Prepared, StoreError>
             )));
         }
     }
+    if let Export::RowsWithout(column) = table.export
+        && row.get(column).is_some_and(|v| !v.is_null())
+    {
+        return Err(StoreError::Invalid(format!(
+            "{}: rows with {column} set are not loaded",
+            table.name
+        )));
+    }
     Ok(Prepared { columns, cells })
 }
 

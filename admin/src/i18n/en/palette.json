@@ -15,7 +15,9 @@
     "shortcuts": "Keyboard shortcuts",
     "keywords": "go to open screen",
     "account": "Account",
-    "accountKeywords": "profile password security 2fa tokens sessions"
+    "accountKeywords": "profile password security 2fa tokens sessions",
+    "connectAi": "Connect an AI assistant",
+    "connectAiKeywords": "ai claude chatgpt cursor vs code assistant agent connect llm mcp"
   },
   "create": {
     "post": "New post",

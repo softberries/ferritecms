@@ -46,6 +46,11 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "node_metrics_pkey",
     ),
     ("nodes.id", "nodes_pkey"),
+    ("oauth_clients.id", "oauth_clients_pkey"),
+    ("oauth_codes.code_hash", "oauth_codes_pkey"),
+    ("oauth_grants.id", "oauth_grants_pkey"),
+    ("oauth_grants.refresh_hash", "oauth_grants_refresh_hash_uq"),
+    ("oauth_requests.id", "oauth_requests_pkey"),
     ("options.key", "options_pkey"),
     (
         "plugin_failures.plugin, plugin_failures.hook, plugin_failures.bucket_start",

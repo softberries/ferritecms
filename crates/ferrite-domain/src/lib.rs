@@ -24,8 +24,9 @@ mod url;
 mod user;
 
 pub use auth::{
-    ApiToken, AuditEntry, AuditQuery, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE, IdemBegin,
-    IdempotencyKey, NewAudit, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
+    ApiToken, AuditEntry, AuditQuery, ClientKind, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE,
+    IdemBegin, IdempotencyKey, NewAudit, OAuthClient, OAuthClientId, OAuthCode, OAuthGrant,
+    OAuthPruned, OAuthRequest, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
     Session,
 };
 pub use comment::{Comment, CommentQuery, CommentStatus};
@@ -37,7 +38,7 @@ pub use event::{Event, NewEvent};
 pub use hex::to_hex;
 pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, ImportRunId, JobId, MenuItemId,
-    NodeId, RedirectId, RevisionId, TermId, UserId,
+    NodeId, OAuthGrantId, OAuthRequestId, RedirectId, RevisionId, TermId, UserId,
 };
 pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};

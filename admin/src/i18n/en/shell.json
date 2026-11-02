@@ -32,7 +32,8 @@
     "notFound": "Not found",
     "content": "Content",
     "new": "New",
-    "untitled": "Untitled"
+    "untitled": "Untitled",
+    "connect": "Connect an app"
   },
   "topBar": {
     "search": "Search or jump to…",

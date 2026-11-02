@@ -9,6 +9,7 @@ use ferrite_core::{
     fields::{self, FieldDef, FieldKind},
 };
 use ferrite_domain::{ContentType, Taxonomy, Term};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -16,7 +17,7 @@ use uuid::Uuid;
 use super::content::{nullable, present};
 
 /// The kind of a custom field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldKindDto {
     /// A string of at most 65 536 characters.
@@ -73,7 +74,7 @@ impl From<FieldKindDto> for FieldKind {
 /// One field of a content type's schema. Names match `[a-z][a-z0-9_]{0,63}` and are
 /// unique per level; at most 100 fields per level; `featured_image` is a core field that
 /// every schema allows and none may define.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct FieldDefDto {
     pub name: String,
     #[serde(default)]

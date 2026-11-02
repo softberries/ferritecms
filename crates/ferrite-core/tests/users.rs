@@ -104,6 +104,7 @@ async fn add_token(store: &dyn Store, user: UserId, hash: &str) {
             created_at: Timestamp::now(),
             last_used_at: None,
             expires_at: None,
+            oauth_grant_id: None,
         })
         .await
         .unwrap();
