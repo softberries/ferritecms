@@ -99,8 +99,10 @@ pub struct ApproveInput {
 /// Where the browser goes next (approve and deny): the client's redirect URI with
 /// `code` (or `error=access_denied`), `state` and `iss`. Navigate there with
 /// `window.location`; never fetch it.
+// Not `RedirectDto`: that is the site redirects' schema, and two schemas of one name
+// overwrite each other in the OpenAPI document.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct RedirectDto {
+pub struct ConsentRedirectDto {
     pub redirect_to: String,
 }
 

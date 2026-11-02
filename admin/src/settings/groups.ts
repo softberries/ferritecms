@@ -7,6 +7,7 @@ import {
   MailIcon,
   MessageSquareIcon,
   SlidersHorizontalIcon,
+  SparklesIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,6 +18,7 @@ export const SETTINGS_GROUPS = [
   "comments",
   "media-sizes",
   "mail",
+  "ai-assistants",
 ] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
@@ -30,6 +32,7 @@ export const GROUP_ICONS: Record<SettingsGroup, LucideIcon> = {
   comments: MessageSquareIcon,
   "media-sizes": ImageIcon,
   mail: MailIcon,
+  "ai-assistants": SparklesIcon,
 };
 
 /** The group's key under `settings.groups` (i18n keys cannot hold `-`). */
@@ -40,4 +43,5 @@ export const GROUP_KEYS = {
   comments: "comments",
   "media-sizes": "mediaSizes",
   mail: "mail",
+  "ai-assistants": "aiAssistants",
 } as const satisfies Record<SettingsGroup, string>;

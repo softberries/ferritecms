@@ -676,6 +676,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/oauth/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_oauth_grants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/grants/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_oauth_grant"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_oauth_request"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approve_oauth_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/requests/{id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["deny_oauth_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/openapi.json": {
         parameters: {
             query?: never;
@@ -1312,6 +1392,11 @@ export interface components {
             trash_undoable: boolean;
             unpublish: boolean;
         };
+        /** @description `POST /oauth/requests/{id}/approve`. */
+        ApproveInput: {
+            /** @description At least one, each in the request's `grantable`. */
+            scopes: string[];
+        };
         /** @description Who wrote an audit row. */
         AuditActorDto: {
             /** Format: uuid */
@@ -1441,6 +1526,11 @@ export interface components {
              */
             misses: number;
         };
+        /**
+         * @description How a client is known.
+         * @enum {string}
+         */
+        ClientKindDto: "metadata" | "registered";
         /** @description `GET /comments/counts`: comments per status. */
         CommentCountsDto: {
             /** Format: int64 */
@@ -1557,6 +1647,43 @@ export interface components {
             parent_id?: string | null;
             /** @description Leave empty (a field people never see; anything in it drops the comment). */
             website?: string | null;
+        };
+        /**
+         * @description `GET /oauth/requests/{id}`: a pending authorization request (10 minutes) as the
+         *     consent screen shows it.
+         */
+        ConsentDto: {
+            client: components["schemas"]["OAuthClientDto"];
+            /**
+             * @description The requested scopes this user can grant (preselect these); `<area>:write`
+             *     implies `<area>:read`.
+             */
+            grantable: string[];
+            /**
+             * Format: uuid
+             * @description The request's id (the `request` query parameter of `/admin/connect`).
+             */
+            id: string;
+            /**
+             * @description Where the browser goes back to: the host of an `http(s)` redirect URI,
+             *     `scheme://host` for another scheme, the whole URI when it has no host.
+             */
+            redirect_host: string;
+            /** @description The requested scopes (all 22 when the client named none). */
+            requested: string[];
+            /**
+             * @description `true` when the client is known by a metadata document, `false` when it
+             *     registered itself.
+             */
+            verified: boolean;
+        };
+        /**
+         * @description Where the browser goes next (approve and deny): the client's redirect URI with
+         *     `code` (or `error=access_denied`), `state` and `iss`. Navigate there with
+         *     `window.location`; never fetch it.
+         */
+        ConsentRedirectDto: {
+            redirect_to: string;
         };
         /**
          * @description `GET /content/{type}/counts`: items per status that the caller may read (the same
@@ -1844,6 +1971,35 @@ export interface components {
          * @enum {string}
          */
         FieldKindDto: "text" | "rich_text" | "number" | "date" | "bool" | "select" | "relation" | "media" | "repeater";
+        /** @description A connected app: one grant of a user to a client. */
+        GrantDto: {
+            client: components["schemas"]["OAuthClientDto"];
+            /**
+             * Format: date-time
+             * @description When the user connected the app.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the connection ends unless used again (30 days after its last use).
+             */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When the app last refreshed its access (about hourly while in use).
+             */
+            last_used_at: string;
+            /** @description The granted area scopes. */
+            scopes: string[];
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description `GET /oauth/grants`: a user's connected apps, newest first. */
+        GrantList: {
+            items: components["schemas"]["GrantDto"][];
+        };
         /**
          * @description A permission report: what a manifest asks for in plain language, against a grant
          *     (P3, P6).
@@ -2510,6 +2666,24 @@ export interface components {
         NodeThemeOrigin: string | {
             artifact: string;
         };
+        /**
+         * @description An OAuth client as the consent screen and the connected apps show it (no redirect
+         *     URIs).
+         */
+        OAuthClientDto: {
+            /** @description The client's home page (`http(s)`), as it declared. */
+            client_uri?: string | null;
+            /** @description The `client_id`: `ferc_…`, or the metadata document's URL. */
+            id: string;
+            kind: components["schemas"]["ClientKindDto"];
+            /** @description The client's logo; only ever an `https` URL. */
+            logo_uri?: string | null;
+            /**
+             * @description Control and format characters removed, at most 100 characters; written by the
+             *     client, so show it as text.
+             */
+            name: string;
+        };
         /** @description `POST /auth/password`. */
         PasswordChange: {
             /** Format: password */
@@ -3048,6 +3222,11 @@ export interface components {
              */
             "comments.per_page"?: number | null;
             /**
+             * @description Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer
+             *     (default `true`); when off they answer `404` and existing connections stay.
+             */
+            "mcp.enabled"?: boolean | null;
+            /**
              * @description The page permalink structure (default `/%parent_path%/%slug%/`; needs
              *     `%parent_path%`).
              */
@@ -3479,6 +3658,7 @@ export interface components {
     pathItems: never;
 }
 export type SchemaAllowedActionsDto = components['schemas']['AllowedActionsDto'];
+export type SchemaApproveInput = components['schemas']['ApproveInput'];
 export type SchemaAuditActorDto = components['schemas']['AuditActorDto'];
 export type SchemaAuditDto = components['schemas']['AuditDto'];
 export type SchemaAuditList = components['schemas']['AuditList'];
@@ -3486,6 +3666,7 @@ export type SchemaAuthorRefDto = components['schemas']['AuthorRefDto'];
 export type SchemaAutosaveDto = components['schemas']['AutosaveDto'];
 export type SchemaAutosaveInput = components['schemas']['AutosaveInput'];
 export type SchemaCacheStatsDto = components['schemas']['CacheStatsDto'];
+export type SchemaClientKindDto = components['schemas']['ClientKindDto'];
 export type SchemaCommentCountsDto = components['schemas']['CommentCountsDto'];
 export type SchemaCommentDto = components['schemas']['CommentDto'];
 export type SchemaCommentItemDto = components['schemas']['CommentItemDto'];
@@ -3493,6 +3674,8 @@ export type SchemaCommentList = components['schemas']['CommentList'];
 export type SchemaCommentModeration = components['schemas']['CommentModeration'];
 export type SchemaCommentPublicDto = components['schemas']['CommentPublicDto'];
 export type SchemaCommentSubmit = components['schemas']['CommentSubmit'];
+export type SchemaConsentDto = components['schemas']['ConsentDto'];
+export type SchemaConsentRedirectDto = components['schemas']['ConsentRedirectDto'];
 export type SchemaContentCountsDto = components['schemas']['ContentCountsDto'];
 export type SchemaContentDto = components['schemas']['ContentDto'];
 export type SchemaContentInput = components['schemas']['ContentInput'];
@@ -3510,6 +3693,8 @@ export type SchemaFailureBucketDto = components['schemas']['FailureBucketDto'];
 export type SchemaFieldDefDto = components['schemas']['FieldDefDto'];
 export type SchemaFieldError = components['schemas']['FieldError'];
 export type SchemaFieldKindDto = components['schemas']['FieldKindDto'];
+export type SchemaGrantDto = components['schemas']['GrantDto'];
+export type SchemaGrantList = components['schemas']['GrantList'];
 export type SchemaGrantReportDto = components['schemas']['GrantReportDto'];
 export type SchemaHookStatsDto = components['schemas']['HookStatsDto'];
 export type SchemaImportCountsDto = components['schemas']['ImportCountsDto'];
@@ -3551,6 +3736,7 @@ export type SchemaNodeMetaDto = components['schemas']['NodeMetaDto'];
 export type SchemaNodePluginDto = components['schemas']['NodePluginDto'];
 export type SchemaNodeThemeDto = components['schemas']['NodeThemeDto'];
 export type SchemaNodeThemeOrigin = components['schemas']['NodeThemeOrigin'];
+export type SchemaOAuthClientDto = components['schemas']['OAuthClientDto'];
 export type SchemaPasswordChange = components['schemas']['PasswordChange'];
 export type SchemaPasswordChanged = components['schemas']['PasswordChanged'];
 export type SchemaPasswordResetConfirm = components['schemas']['PasswordResetConfirm'];
@@ -7032,6 +7218,274 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetaDto"];
+                };
+            };
+        };
+    };
+    list_oauth_grants: {
+        parameters: {
+            query?: {
+                /** @description Another user's id (needs `manage_users`); default: the request's own user. */
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's connected apps (unexpired grants), newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantList"];
+                };
+            };
+            /** @description `malformed-query` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (another user: `manage_users`; `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_oauth_grant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A grant's `id` from `GET /oauth/grants` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected: the grant and its access tokens are gone; audited `oauth.disconnect` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`users:write`; another user's: `manage_users`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such grant, or another user's without `manage_users` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_oauth_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The `request` query parameter of `/admin/connect` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pending authorization request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (an API token, or `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: unknown, expired or already decided; or `mcp.enabled` is off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    approve_oauth_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveInput"];
+            };
+        };
+        responses: {
+            /** @description Approved: the request is used up and a 60-second code was made; audited `oauth.connect`. Send the browser to `redirect_to` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentRedirectDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (an API token, `users:write`, or a scope that is not grantable; the request stays), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: unknown, expired or already decided; or `mcp.enabled` is off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: no scope chosen, or an unknown one (`errors[0].field` = `scopes`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    deny_oauth_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Denied: the request is used up. Send the browser to `redirect_to` (`error=access_denied`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentRedirectDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (an API token, `users:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: unknown, expired or already decided; or `mcp.enabled` is off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
         };

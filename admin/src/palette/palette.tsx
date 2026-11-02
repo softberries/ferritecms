@@ -1,9 +1,10 @@
 // The ⌘K command palette (plan Task 11; docs/design/11-admin-ui.md §7): a shadcn
 // `CommandDialog` opened by `mod+k` and the top bar's trigger. Groups: Recent (the
 // viewer's last 8 screens and items, only before anything is typed), Go to (every nav
-// item and the `?` sheet), Create (one per content type the nav shows, with
-// `edit_own`, Upload media with `upload_media`, New content type when the nav has
-// Content types, New taxonomy when it has Taxonomies and the viewer has
+// item, Account, Connect an AI assistant (Settings → AI assistants for those who manage
+// settings, else Account's connected apps) and the `?` sheet), Create (one per content
+// type the nav shows, with `edit_own`, Upload media with `upload_media`, New content type
+// when the nav has Content types, New taxonomy when it has Taxonomies and the viewer has
 // `manage_settings`, New menu when it has Menus and New redirect when it has
 // Redirects), Content (live search, from 2 characters) and Preferences (theme, density).
 // cmdk's own filter ranks the rows inside the static groups; content hits come from the
@@ -28,6 +29,7 @@ import {
   SearchXIcon,
   ShapesIcon,
   SignpostIcon,
+  SparklesIcon,
   SunIcon,
   TagsIcon,
   UploadIcon,
@@ -319,6 +321,19 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
               icon={UserRoundIcon}
               label={t("goTo.account")}
               onSelect={() => go("/account")}
+            />
+            <Row
+              value={t("goTo.connectAi")}
+              keywords={[t("goTo.connectAiKeywords")]}
+              icon={SparklesIcon}
+              label={t("goTo.connectAi")}
+              onSelect={() =>
+                go(
+                  me.capabilities.includes("manage_settings")
+                    ? "/settings/ai-assistants"
+                    : "/account",
+                )
+              }
             />
             <Row
               value={t("goTo.shortcuts")}

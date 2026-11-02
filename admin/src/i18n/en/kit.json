@@ -33,5 +33,12 @@
     "reload": "Reload",
     "overwrite": "Overwrite",
     "cancel": "Cancel"
+  },
+  "copy": {
+    "copy": "Copy",
+    "copied": "Copied",
+    "copiedSr": "Copied to the clipboard.",
+    "failed": "Could not copy. Select the text and copy it yourself.",
+    "copyLabel": "Copy {{label}}"
   }
 }

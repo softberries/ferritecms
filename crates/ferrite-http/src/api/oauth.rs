@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use super::{
     ApiState, Authed,
-    dto::oauth::{ApproveInput, ConsentDto, GrantList, GrantParams, RedirectDto},
+    dto::oauth::{ApproveInput, ConsentDto, ConsentRedirectDto, GrantList, GrantParams},
     extract::{ApiJson, ApiPath, ApiQuery},
     problem::{Problem, ProblemDocument},
 };
@@ -89,7 +89,7 @@ pub async fn get_oauth_request(
     params(("id" = Uuid, Path)),
     request_body = ApproveInput,
     responses(
-        (status = 200, description = "Approved: the request is used up and a 60-second code was made; audited `oauth.connect`. Send the browser to `redirect_to`", body = RedirectDto),
+        (status = 200, description = "Approved: the request is used up and a 60-second code was made; audited `oauth.connect`. Send the browser to `redirect_to`", body = ConsentRedirectDto),
         (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (an API token, `users:write`, or a scope that is not grantable; the request stays), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -102,14 +102,14 @@ pub async fn approve_oauth_request(
     Authed(who): Authed,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(input): ApiJson<ApproveInput>,
-) -> Result<Json<RedirectDto>, Problem> {
+) -> Result<Json<ConsentRedirectDto>, Problem> {
     session_only(&who)?;
     enabled(&api).await?;
     let to = api
         .oauth
         .approve(&who.actor, OAuthRequestId::from_uuid(id), input.scopes)
         .await?;
-    Ok(Json(RedirectDto {
+    Ok(Json(ConsentRedirectDto {
         redirect_to: to.into(),
     }))
 }
@@ -122,7 +122,7 @@ pub async fn approve_oauth_request(
     security(("session" = [])),
     params(("id" = Uuid, Path)),
     responses(
-        (status = 200, description = "Denied: the request is used up. Send the browser to `redirect_to` (`error=access_denied`)", body = RedirectDto),
+        (status = 200, description = "Denied: the request is used up. Send the browser to `redirect_to` (`error=access_denied`)", body = ConsentRedirectDto),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (an API token, `users:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: unknown, expired or already decided; or `mcp.enabled` is off", body = ProblemDocument, content_type = "application/problem+json"),
@@ -132,14 +132,14 @@ pub async fn deny_oauth_request(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     ApiPath(id): ApiPath<Uuid>,
-) -> Result<Json<RedirectDto>, Problem> {
+) -> Result<Json<ConsentRedirectDto>, Problem> {
     session_only(&who)?;
     enabled(&api).await?;
     let to = api
         .oauth
         .deny(&who.actor, OAuthRequestId::from_uuid(id))
         .await?;
-    Ok(Json(RedirectDto {
+    Ok(Json(ConsentRedirectDto {
         redirect_to: to.into(),
     }))
 }

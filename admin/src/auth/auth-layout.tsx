@@ -37,9 +37,18 @@ export interface AuthLayoutProps {
   footer?: ReactNode;
   /** An icon badge above the title, for status screens (sent, done, expired). */
   icon?: ReactNode;
+  /** A wider card (32 rem) for a screen with a list of choices (the consent screen). */
+  wide?: boolean;
 }
 
-export function AuthLayout({ title, description, children, footer, icon }: AuthLayoutProps) {
+export function AuthLayout({
+  title,
+  description,
+  children,
+  footer,
+  icon,
+  wide = false,
+}: AuthLayoutProps) {
   const { t } = useTranslation("auth");
   const site = useSite();
   return (
@@ -48,7 +57,10 @@ export function AuthLayout({ title, description, children, footer, icon }: AuthL
       <div className="flex flex-1 flex-col items-center px-4 pt-10 pb-8 sm:justify-center sm:px-6 sm:py-16">
         <main
           id="main"
-          className="flex w-full max-w-[25rem] flex-col gap-6 duration-(--dur-base) ease-out animate-in fade-in slide-in-from-bottom-1"
+          className={cn(
+            "flex w-full flex-col gap-6 duration-(--dur-base) ease-out animate-in fade-in slide-in-from-bottom-1",
+            wide ? "max-w-[32rem]" : "max-w-[25rem]",
+          )}
         >
           <header className="flex items-center gap-3 px-1 sm:px-0">
             <FerriteMark />
@@ -75,7 +87,7 @@ export function AuthLayout({ title, description, children, footer, icon }: AuthL
                   {icon}
                 </span>
               ) : null}
-              <h1 id="auth-title" className="text-2xl text-balance">
+              <h1 id="auth-title" className="text-2xl text-balance break-words">
                 {title}
               </h1>
               {description ? (

@@ -4953,7 +4953,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedirectDto"
+                  "$ref": "#/components/schemas/ConsentRedirectDto"
                 }
               }
             }
@@ -5039,7 +5039,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedirectDto"
+                  "$ref": "#/components/schemas/ConsentRedirectDto"
                 }
               }
             }
@@ -10567,6 +10567,18 @@
           "verified": {
             "type": "boolean",
             "description": "`true` when the client is known by a metadata document, `false` when it\nregistered itself."
+          }
+        }
+      },
+      "ConsentRedirectDto": {
+        "type": "object",
+        "description": "Where the browser goes next (approve and deny): the client's redirect URI with\n`code` (or `error=access_denied`), `state` and `iss`. Navigate there with\n`window.location`; never fetch it.",
+        "required": [
+          "redirect_to"
+        ],
+        "properties": {
+          "redirect_to": {
+            "type": "string"
           }
         }
       },

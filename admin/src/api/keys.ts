@@ -126,6 +126,10 @@ export const qk = {
   tokens: (userId: string) => ["users", "item", userId, "tokens"] as const,
   /** The signed-in user's sessions. */
   sessions: ["sessions"] as const,
+  /** A user's connected apps (OAuth grants); under the user, like the tokens. */
+  grants: (userId: string) => ["users", "item", userId, "grants"] as const,
+  /** A pending OAuth authorization request (the consent screen). */
+  oauthRequest: (id: string) => ["oauth", "request", id] as const,
   themes: ["themes"] as const,
   themeSettings: (name: string) => ["themes", name, "settings"] as const,
   /** Every plugin key: the list, each plugin, its metrics and settings. */
