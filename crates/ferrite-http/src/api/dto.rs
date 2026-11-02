@@ -20,6 +20,7 @@ pub mod site;
 pub mod system;
 pub mod types;
 pub mod users;
+pub mod webhooks;
 
 /// A password in a request body (M2a-2b P24): deserialised through a `String` that is
 /// wiped when the value is dropped, and redacted in `Debug`. In the OpenAPI document a

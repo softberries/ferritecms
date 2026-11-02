@@ -580,7 +580,7 @@ async fn site_overview_reflects_role_and_scopes(api: Api) -> Api {
         .find(|t| t["name"] == "post")
         .unwrap();
     assert_eq!(post["counts"]["draft"], 1, "{post}");
-    assert_eq!(o["caller"]["scopes"].as_array().unwrap().len(), 22, "{o}");
+    assert_eq!(o["caller"]["scopes"].as_array().unwrap().len(), 24, "{o}");
     // A token without `content:read` still gets the site and caller sections.
     let none = api.bearer(&ed, &["media:read"]).await;
     let r = tool(&api, &none.0, "site_overview", json!({})).await;

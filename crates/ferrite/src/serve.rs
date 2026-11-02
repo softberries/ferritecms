@@ -576,6 +576,28 @@ async fn boot(
         metadata_fetcher(OAuthFetcher::new(env!("CARGO_PKG_VERSION"))),
         issuer,
     ));
+    // Outgoing webhooks (design 18): one service per node, the SSRF-checked client (or
+    // one that sends nothing when no TLS client can be built; boot goes on).
+    let local_targets = config.webhooks.local_targets;
+    let webhooks = WebhookService::new(
+        store.clone(),
+        keys::site_key(config)?,
+        UrlPolicy {
+            local_targets,
+            allow_ip: webhook_ip_rule(local_targets),
+        },
+    );
+    #[cfg(feature = "test-seams")]
+    let webhooks = match opts.webhook_schedule.clone() {
+        Some(schedule) => webhooks.with_schedule(schedule),
+        None => webhooks,
+    };
+    let webhooks = Arc::new(webhooks);
+    if local_targets {
+        tracing::warn!(
+            "[webhooks] local_targets is on: webhooks may call http and private addresses"
+        );
+    }
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
@@ -613,31 +635,10 @@ async fn boot(
                 }),
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
+            webhooks: webhooks.clone(),
         })
         .context("site.url")?,
     );
-    // Outgoing webhooks (design 18): one service per node, the SSRF-checked client (or
-    // one that sends nothing when no TLS client can be built; boot goes on).
-    let local_targets = config.webhooks.local_targets;
-    let webhooks = WebhookService::new(
-        store.clone(),
-        keys::site_key(config)?,
-        UrlPolicy {
-            local_targets,
-            allow_ip: webhook_ip_rule(local_targets),
-        },
-    );
-    #[cfg(feature = "test-seams")]
-    let webhooks = match opts.webhook_schedule.clone() {
-        Some(schedule) => webhooks.with_schedule(schedule),
-        None => webhooks,
-    };
-    let webhooks = Arc::new(webhooks);
-    if local_targets {
-        tracing::warn!(
-            "[webhooks] local_targets is on: webhooks may call http and private addresses"
-        );
-    }
     let webhook_transport: Arc<dyn WebhookTransport> = match WebhookClient::new(
         env!("CARGO_PKG_VERSION"),
         local_targets,
