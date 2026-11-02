@@ -19,7 +19,7 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
 - **Run it from your AI assistant**: every site serves an MCP endpoint. Connect Claude,
   ChatGPT, Claude Code, Cursor or VS Code and ask it to write, publish, organise and check
   your site, as you, with your permissions; changes are recorded in the audit log under
-  the app's name. Coming in the next release (0.2.0); build from source today.
+  the app's name.
 - **Single binary, single folder**: web server, admin, themes, plugin runtime and SQLite
   are compiled in (Postgres and S3 are optional, for several nodes). Back up or move a site
   by copying one folder.
@@ -61,8 +61,7 @@ media, terms, menus, content types, redirects, comments, settings, themes, plugi
 site's health. The assistant acts as you: through your site's own sign-in and consent
 screen, with your role narrowed to the areas you approve, and its changes are recorded in
 the audit log under the app's name. Installing plugins, managing users and tokens, imports
-and backups stay with people. Coming in the next release (0.2.0); build from source today
-([From source](#from-source)).
+and backups stay with people.
 [Guide](https://softberries.github.io/ferritecms/guides/ai-assistants/) ·
 [Every tool](https://softberries.github.io/ferritecms/reference/mcp-tools/)
 
@@ -86,7 +85,7 @@ Download a release for your platform from
 [Releases](https://github.com/softberries/ferritecms/releases), unpack it and start a site:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 TARGET=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, *-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/ferrite-$VERSION-$TARGET.tar.gz
 tar -xzf ferrite-$VERSION-$TARGET.tar.gz
@@ -107,7 +106,7 @@ shows how to check a download.
 ### Docker
 
 ```sh
-IMAGE=ghcr.io/softberries/ferritecms:0.1.0
+IMAGE=ghcr.io/softberries/ferritecms:0.2.0
 docker run --rm -v ferrite-data:/data $IMAGE init --data /data --url http://localhost:8080
 docker run --rm -v ferrite-data:/data $IMAGE user create --data /data --login me --email me@example.com
 docker run -d --name ferrite -p 8080:8080 -v ferrite-data:/data \
@@ -139,7 +138,16 @@ downloads the media from the old site instead. The import writes a report of eve
 it converted, skipped or redirected. The admin's Import screen does the same while the
 site runs. See [Import from WordPress](https://softberries.github.io/ferritecms/guides/import-wordpress/).
 
-## What's in 0.1.0
+## What's in 0.2.0
+
+New in 0.2.0:
+
+- AI assistants over MCP: an endpoint at `/mcp` on every site, OAuth sign-in through the
+  site's own consent screen, 56 tools, and the admin's consent screen, Connected apps list
+  and AI assistants settings.
+- A redesigned documentation site with search, hosted on GitHub Pages.
+
+From 0.1.0, the first release:
 
 - The public site with three starter themes (`blog`, `docs`, `business`), RSS feeds,
   sitemaps and a page cache.

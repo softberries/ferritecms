@@ -104,7 +104,7 @@ reproducible release archives (`repro-tar.sh`); no migration. `v0.1.0` is releas
 contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub Pages
 (`.github/workflows/pages.yml`, `site/export-static.sh` + `site/rewrite-static.py`). What is
 still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. M5 (AI
-assistants over MCP) is done (`m5-exit.md`; not yet released — the docs say "coming in 0.2.0"): every site
+assistants over MCP) is done and released in `v0.2.0` (2026-11-02; `m5-exit.md`; the current release; `v0.1.0` was the first): every site
 serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) with 56 tools,
 2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`

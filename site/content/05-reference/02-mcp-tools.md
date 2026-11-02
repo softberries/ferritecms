@@ -9,8 +9,6 @@ These are the tools an AI assistant sees when it connects to a site's `/mcp` end
 56 of them, in 13 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
-> Coming in the next release (0.2.0); build from source today ([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
-
 How to read the tables:
 
 - **Scope** is the permission a tool needs. A tool runs as the person who connected the

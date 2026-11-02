@@ -14,15 +14,13 @@ Cursor or VS Code, sign in to your site once and approve what the assistant may 
 ask it to write and publish posts, organise media, edit menus, fix redirects, moderate
 comments or check the site's health. It acts as you: with your role, within the areas you
 approved, and its changes are recorded in the audit log under the app's name. See
-[AI assistants (MCP)](02-guides/08-ai-assistants.md). Coming in the next release (0.2.0); build from source today ([Install → Build from
-source](01-getting-started/01-install.md#build-from-source)).
+[AI assistants (MCP)](02-guides/08-ai-assistants.md).
 
 FerriteCMS imports WordPress content (a WXR export file) but does not run WordPress PHP
 plugins or themes.
 
-> **Status:** early. The first release is 0.1.0: signed binaries for Linux and macOS and
-> a Docker image ([Install](01-getting-started/01-install.md)); AI assistants (MCP) arrive
-> in 0.2.0. Expect changes before 1.0.
+> **Status:** early; current release 0.2.0 (signed binaries for Linux and macOS and a
+> Docker image, see [Install](01-getting-started/01-install.md)). Expect changes before 1.0.
 
 ## Principles
 
