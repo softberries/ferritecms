@@ -165,7 +165,7 @@
       "claude": {
         "tab": "Claude",
         "lead": "On claude.ai or in Claude Desktop:",
-        "body": "Add a custom connector (in Claude's settings, under Connectors), paste the URL, then sign in and approve."
+        "body": "Add a custom connector (in Claude, under Customize → Connectors), paste the URL, then sign in and approve."
       },
       "chatgpt": {
         "tab": "ChatGPT",
@@ -176,7 +176,7 @@
         "tab": "Claude Code",
         "lead": "In a terminal:",
         "command": "Command",
-        "then": "Then run /mcp in Claude Code, pick ferrite and choose Authenticate: a browser window opens; sign in and approve.",
+        "then": "Then run /mcp in Claude Code, choose ferrite and follow the browser sign-in: approve the connection there.",
         "token": "Or connect with a personal API token (Account, API tokens) instead of signing in:",
         "tokenCommand": "Command with a token"
       },

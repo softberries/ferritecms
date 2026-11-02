@@ -67,7 +67,7 @@ test("client_tabs_show_each_clients_steps", async () => {
   ).toEqual(["Claude", "ChatGPT", "Claude Code", "Cursor", "VS Code"]);
   const claude = screen.getByRole("tabpanel");
   expect(claude).toHaveTextContent(
-    "Add a custom connector (in Claude's settings, under Connectors)",
+    "Add a custom connector (in Claude, under Customize → Connectors)",
   );
   expect(claude).toHaveTextContent("must be reachable over public HTTPS");
 
@@ -81,7 +81,9 @@ test("client_tabs_show_each_clients_steps", async () => {
     `claude mcp add --transport http ferrite ${URL_} --header "Authorization: Bearer <token>"`,
   );
 
-  expect(code).toHaveTextContent("run /mcp in Claude Code, pick ferrite and choose Authenticate");
+  expect(code).toHaveTextContent(
+    "run /mcp in Claude Code, choose ferrite and follow the browser sign-in",
+  );
 
   await user.click(within(tabs).getByRole("tab", { name: "ChatGPT" }));
   expect(screen.getByRole("tabpanel")).toHaveTextContent("turn on developer mode");
