@@ -151,8 +151,10 @@ cannot grant write scopes; a contributor still can connect (their role limits th
 **Grants** belong to a user; the user sees them under Account → Connected apps (client,
 permissions, first connected, last used) and can disconnect one, which deletes the grant
 and, through the foreign key, its access tokens. An administrator can see and revoke all
-grants on Users → user. A user who is disabled or deleted loses their grants (cascade, and
-`resolve_token` already refuses inactive users).
+grants on Users → user. A user who is disabled or deleted loses their grants: a disable
+deletes them in the same transaction (one `oauth.disconnect` audit row per grant, reason
+`user_disabled`), so re-enabling the user revives no connection; a delete cascades.
+`resolve_token` refuses inactive users either way.
 
 ### 3.3 Scopes
 

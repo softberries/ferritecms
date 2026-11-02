@@ -1057,33 +1057,69 @@ impl OAuthService {
     ) -> Result<bool, CoreError> {
         let tx = self.store.begin().await?;
         let done = async {
-            let oauth = tx.oauth();
-            let Some(grant) = oauth.get_grant(id).await? else {
+            let Some(grant) = tx.oauth().get_grant(id).await? else {
                 return Ok(false);
             };
-            let client = oauth.get_client(&grant.client_id).await?;
-            if !oauth.delete_grant(id).await? {
-                return Ok(false);
-            }
-            let name = client.map_or_else(|| grant.client_id.to_string(), |c| c.name);
-            tx.audit()
-                .append(&NewAudit {
-                    actor_id: actor,
-                    action: "oauth.disconnect".to_owned(),
-                    target_kind: "oauth_grant".to_owned(),
-                    target_id: Some(id.to_string()),
-                    details: json!({
-                        "client": name,
-                        "user": grant.user_id.to_string(),
-                        "reason": reason,
-                    }),
-                })
-                .await?;
-            Ok(true)
+            delete_audited(tx.as_ref(), &grant, actor, reason).await
         }
         .await;
         finish(tx, done).await
     }
+}
+
+/// Ends every grant of `user` (and so their access tokens) inside the caller's `Tx`, one
+/// `oauth.disconnect` row per grant with `reason`; returns how many ended. Used when a
+/// user is disabled (design 12 §3.2: a disabled user loses their grants).
+pub(crate) async fn end_user_grants(
+    repos: &dyn Repos,
+    actor: Option<UserId>,
+    user: UserId,
+    reason: &str,
+) -> Result<u64, CoreError> {
+    let mut ended = 0;
+    // `grants_for_user` returns a bounded page; every pass deletes what it listed.
+    loop {
+        let grants = repos.oauth().grants_for_user(user).await?;
+        if grants.is_empty() {
+            return Ok(ended);
+        }
+        for grant in &grants {
+            if delete_audited(repos, grant, actor, reason).await? {
+                ended += 1;
+            }
+        }
+    }
+}
+
+/// Deletes `grant` and audits `oauth.disconnect` (`{client, user, reason}`); `false` when
+/// it was already gone (nothing audited).
+async fn delete_audited(
+    repos: &dyn Repos,
+    grant: &OAuthGrant,
+    actor: Option<UserId>,
+    reason: &str,
+) -> Result<bool, CoreError> {
+    let oauth = repos.oauth();
+    let client = oauth.get_client(&grant.client_id).await?;
+    if !oauth.delete_grant(grant.id).await? {
+        return Ok(false);
+    }
+    let name = client.map_or_else(|| grant.client_id.to_string(), |c| c.name);
+    repos
+        .audit()
+        .append(&NewAudit {
+            actor_id: actor,
+            action: "oauth.disconnect".to_owned(),
+            target_kind: "oauth_grant".to_owned(),
+            target_id: Some(grant.id.to_string()),
+            details: json!({
+                "client": name,
+                "user": grant.user_id.to_string(),
+                "reason": reason,
+            }),
+        })
+        .await?;
+    Ok(true)
 }
 
 /// What `actor` can grant: the role's scopes ([`role_scopes`]) within the credential's.

@@ -12,8 +12,10 @@
 //!   see the other still active and both succeed, leaving none (P16, accepted).
 //! * Nobody changes their own role or status, or deletes themselves.
 //! * A role change, disable or delete removes the user's sessions; disable and delete
-//!   also remove their API tokens (delete through the `ON DELETE CASCADE`), so the next
-//!   request on any node is refused.
+//!   also remove their API tokens and OAuth grants (delete through the `ON DELETE
+//!   CASCADE`; a disable audits one `oauth.disconnect` per grant, reason
+//!   `user_disabled`), so the next request on any node is refused and re-enabling the
+//!   user revives no connection.
 //! * Every write appends an audit row (`user.create`, `user.update`, `user.password`,
 //!   `user.password_reset`, `user.delete`, `user.totp_disable`) in the same `Tx`,
 //!   without secrets. A create also enqueues the `user.created` action jobs there
@@ -34,7 +36,7 @@ use crate::{
     Actor, CoreError, actions,
     actor::{Area, Capability, Scope, can, require, require_scope},
     auth::password::{self, Verified},
-    events,
+    events, oauth,
     tx::finish,
 };
 
@@ -286,6 +288,9 @@ impl UserService {
             }
             if disabled {
                 tx.api_tokens().delete_for_user(id).await?;
+                // Connected apps end too, so re-enabling the user does not revive them
+                // (design 12 §3.2).
+                oauth::end_user_grants(tx.as_ref(), Some(actor.user), id, "user_disabled").await?;
             }
             if new.display_name != old.display_name || new.status != old.status {
                 tx.events()

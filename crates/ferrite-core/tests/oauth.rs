@@ -16,14 +16,16 @@ use std::{
 
 use async_trait::async_trait;
 use ferrite_core::{
-    Actor, CoreError, NewAccount, Scopes, UserService,
+    Actor, CoreError, NewAccount, Scopes, UserPatch, UserService,
     auth::{AuthService, SiteKey, Via},
     oauth::{
         AuthorizeError, AuthorizeParams, ClientMetadataFetcher, ClientRegistration, FetchError,
         OAuthError, OAuthService, TokenRequest, TokenResponse,
     },
 };
-use ferrite_domain::{AuditQuery, ClientKind, OAuthClient, OAuthClientId, Role, Timestamp, User};
+use ferrite_domain::{
+    AuditQuery, ClientKind, OAuthClient, OAuthClientId, Role, Timestamp, User, UserStatus,
+};
 use ferrite_store_tests::{TestDb, backend_tests};
 use serde_json::json;
 use url::Url;
@@ -775,6 +777,59 @@ async fn disconnect_kills_access_tokens(db: &TestDb) {
     assert_eq!(e.oauth.grants(&actor, None).await.unwrap().len(), 1);
 }
 
+async fn disabling_a_user_ends_their_grants(db: &TestDb) {
+    let e = env(db);
+    let client = registered(&e).await;
+    let (user, actor) = make_user(db, "gone", Role::Editor).await;
+    let (_, admin) = make_user(db, "chief", Role::Admin).await;
+    let tokens = connect(&e, &actor, client.id.as_str()).await;
+    let grant = e.oauth.grants(&actor, None).await.unwrap()[0].grant.id;
+    let users = UserService::new(db.shared_store());
+    let status = |s| UserPatch {
+        status: Some(s),
+        ..UserPatch::default()
+    };
+    users
+        .update(&admin, user.id, status(UserStatus::Disabled))
+        .await
+        .unwrap();
+    users
+        .update(&admin, user.id, status(UserStatus::Active))
+        .await
+        .unwrap();
+    // Re-enabling revives nothing: the grant is gone with its tokens.
+    assert!(!resolves(&e, &tokens).await);
+    invalid_grant(
+        e.oauth
+            .exchange(refresh_request(client.id.as_str(), &tokens), ip(1))
+            .await,
+    );
+    assert!(
+        db.store()
+            .read()
+            .oauth()
+            .get_grant(grant)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(e.oauth.grants(&actor, None).await.unwrap().is_empty());
+    let rows = db
+        .store()
+        .read()
+        .audit()
+        .list(&AuditQuery {
+            action: Some("oauth.disconnect".into()),
+            ..AuditQuery::first(10)
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows.items.len(), 1);
+    assert_eq!(rows.items[0].details["reason"], "user_disabled");
+    assert_eq!(rows.items[0].details["user"], user.id.to_string());
+    assert_eq!(rows.items[0].actor_id, Some(admin.user));
+}
+
 // ---- grant-bound tokens ----------------------------------------------------------------
 
 async fn resolve_token_marks_oauth_tokens(db: &TestDb) {
@@ -1001,6 +1056,7 @@ backend_tests!(
     scope_narrowing_on_refresh_never_widens,
     contributor_cannot_grant_beyond_role,
     disconnect_kills_access_tokens,
+    disabling_a_user_ends_their_grants,
     resolve_token_marks_oauth_tokens,
     personal_token_limit_ignores_oauth_tokens,
     registration_is_public_only_and_limited,
