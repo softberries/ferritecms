@@ -22,6 +22,7 @@ pub mod metrics;
 pub mod oauth;
 pub mod oauth_fetch;
 pub mod plugins;
+pub mod registry_fetch;
 pub mod route;
 pub mod tls;
 

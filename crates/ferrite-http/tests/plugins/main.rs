@@ -10,6 +10,7 @@ mod contact_form;
 mod egress;
 mod install;
 mod mail;
+mod registry_fetch;
 mod reload;
 mod seo;
 mod settings;

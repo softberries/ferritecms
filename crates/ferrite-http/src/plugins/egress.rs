@@ -611,6 +611,61 @@ pub(crate) fn metadata_client_for_tests(
     build(Lookup::Custom(resolver), allow_ip, roots, true, TIMEOUT)
 }
 
+/// The longest fetch of one registry file ([`registry_client`]); each request sets its
+/// own, shorter deadline.
+pub const REGISTRY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The client the plugin registry fetcher uses
+/// ([`HttpsRegistry`](crate::registry_fetch::HttpsRegistry), M6-2): as
+/// [`metadata_client`] (checked resolver with [`is_public_ip`], no redirects, no proxy,
+/// no cookies, no `Referer`, `https` only), with [`REGISTRY_TIMEOUT`].
+pub(crate) fn registry_client() -> Result<reqwest::Client, String> {
+    with_fallback(
+        || {
+            build(
+                Lookup::System,
+                is_public_ip,
+                Roots::Platform,
+                true,
+                REGISTRY_TIMEOUT,
+            )
+        },
+        || {
+            build(
+                Lookup::System,
+                is_public_ip,
+                Roots::WebPki(Vec::new()),
+                true,
+                REGISTRY_TIMEOUT,
+            )
+        },
+    )
+}
+
+/// Test seam: [`registry_client`] with `overrides`' resolver, roots and address rule.
+#[cfg(feature = "test-seams")]
+pub(crate) fn registry_client_for_tests(
+    overrides: EgressOverrides,
+) -> Result<reqwest::Client, String> {
+    let EgressOverrides {
+        resolver,
+        roots,
+        allow_ip,
+    } = overrides;
+    let roots = if roots.is_empty() {
+        Roots::Platform
+    } else {
+        Roots::Only(roots)
+    };
+    build(
+        Lookup::Custom(resolver),
+        allow_ip,
+        roots,
+        true,
+        REGISTRY_TIMEOUT,
+    )
+}
+
 /// Whether `e` failed because the resolver refused an address ([`is_public_ip`] or the
 /// test rule).
 pub(crate) fn address_refused(e: &reqwest::Error) -> bool {
