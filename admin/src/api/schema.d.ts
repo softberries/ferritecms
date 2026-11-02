@@ -804,6 +804,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugins/publishers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_plugin_publishers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/publishers/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revoke_plugin_publisher"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_plugin_registry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["inspect_registry_plugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["install_registry_plugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh_plugin_registry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins/retained": {
         parameters: {
             query?: never;
@@ -2218,6 +2314,18 @@ export interface components {
              */
             wxr: string;
         };
+        /** @description An installed plugin's trust (design 14 §7.1). */
+        InstalledTrustDto: {
+            owner?: components["schemas"]["OwnerDto"] | null;
+            signer?: components["schemas"]["SignerDto"] | null;
+            source?: components["schemas"]["SourceDto"] | null;
+            /**
+             * @description `verified` (a registry publisher's key), `signed` (a key of this site),
+             *     `unsigned`, or `revoked` (its signing key is revoked).
+             */
+            state: string;
+            update?: components["schemas"]["UpdateDto"] | null;
+        };
         /** @description Jobs per status. */
         JobCountsDto: {
             /** Format: int64 */
@@ -2685,6 +2793,27 @@ export interface components {
              */
             name: string;
         };
+        /** @description What an install does to the owner of the plugin name's data. */
+        OwnerChangeDto: {
+            /** @description `bind`, `bind_unsigned`, `same`, `claim` or `unsigned_update`. */
+            change: string;
+            /**
+             * @description The current owner (`reg:<key>:<publisher>` or `key:<key>`); `null` when unsigned
+             *     or none.
+             */
+            current?: string | null;
+            /** @description The owner after the install. */
+            next?: string | null;
+            /** @description `next` in words ("FerriteCMS (registry)", "key 5A1C…"). */
+            next_label?: string | null;
+        };
+        /** @description The owner of an installed plugin's data. */
+        OwnerDto: {
+            /** @description `reg:<registry key>:<publisher>` or `key:<key id>`. */
+            id: string;
+            /** @description In words: "FerriteCMS (registry)" or "key 5A1C…". */
+            label: string;
+        };
         /** @description `POST /auth/password`. */
         PasswordChange: {
             /** Format: password */
@@ -2760,6 +2889,8 @@ export interface components {
             license?: string | null;
             /** @description The manifest's `plugin.publisher` (text, unverified). */
             publisher?: string | null;
+            /** @description Who signed it and whose data it gets (M6-2, design 14 §7.2). */
+            trust: components["schemas"]["TrustDto"];
             /** @description Whether a plugin of this name is installed: `added` is then against its grant. */
             update: boolean;
         };
@@ -2788,13 +2919,16 @@ export interface components {
             /** @description The stored manifest's `plugin.publisher` (text, unverified). */
             publisher?: string | null;
             report?: components["schemas"]["GrantReportDto"] | null;
+            /** @description Who signed it, whose data it holds, and an update the registry offers (M6-2). */
+            trust: components["schemas"]["InstalledTrustDto"];
             /** Format: date-time */
             updated_at: string;
             version: string;
         };
         /**
          * @description `POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads
-         *     the parts itself). Every part is required; an unknown or repeated one is refused.
+         *     the parts itself). `manifest` and `component` are required; an unknown or repeated
+         *     part is refused.
          */
         PluginInspectUpload: {
             /**
@@ -2804,6 +2938,16 @@ export interface components {
             component: string;
             /** @description `ferrite-plugin.toml` (UTF-8, at most 64 KiB). */
             manifest: string;
+            /**
+             * @description `ferrite-plugin.pub`: the publisher's minisign public key (at most 1 KiB), for a
+             *     key this site does not know yet.
+             */
+            publisher_key?: string | null;
+            /**
+             * @description `ferrite-plugin.minisig`: the publisher's minisign signature over the signing
+             *     payload (UTF-8, at most 4 KiB).
+             */
+            signature?: string | null;
         };
         /** @description `GET /plugins`: every installed plugin, by name. */
         PluginList: {
@@ -2877,8 +3021,8 @@ export interface components {
             failures: number;
         };
         /**
-         * @description `POST /plugins` (`multipart/form-data`; the schema only). Every part is required;
-         *     an unknown or repeated one is refused.
+         * @description `POST /plugins` (`multipart/form-data`; the schema only). `manifest`, `component`
+         *     and `approve` are required; an unknown or repeated part is refused.
          */
         PluginUpload: {
             /**
@@ -2893,6 +3037,10 @@ export interface components {
             component: string;
             /** @description `ferrite-plugin.toml` (UTF-8, at most 64 KiB). */
             manifest: string;
+            /** @description `ferrite-plugin.pub` (at most 1 KiB). */
+            publisher_key?: string | null;
+            /** @description `ferrite-plugin.minisig` (UTF-8, at most 4 KiB). */
+            signature?: string | null;
         };
         /** @description The body of a problem response (the OpenAPI schema `ProblemDocument`). */
         ProblemDocument: {
@@ -2912,6 +3060,41 @@ export interface components {
             title: string;
             /** @description `/api/v1/problems/<slug>`. */
             type: string;
+        };
+        /**
+         * @description A publisher key this site knows: its own (approved, operator), the configured
+         *     registry's, and every revocation.
+         */
+        PublisherKeyDto: {
+            compromised: boolean;
+            key_id: string;
+            label: string;
+            /** @description The installed or retained plugins whose current version it signed. */
+            plugins: string[];
+            /** @description The minisign public key (base64 line). */
+            public_key: string;
+            registry_publisher?: components["schemas"]["PublisherRefDto"] | null;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            revoked_reason?: string | null;
+            /** @description `approved`, `operator` or `registry`. */
+            source: string;
+            /**
+             * Format: date-time
+             * @description When this site trusted it; `null` for a registry key with no row here.
+             */
+            trusted_at?: string | null;
+        };
+        /** @description `GET /plugins/publishers`. */
+        PublisherKeyList: {
+            items: components["schemas"]["PublisherKeyDto"][];
+            /** @description `[plugins] signatures`. */
+            policy: string;
+        };
+        /** @description A registry publisher as the index names it. */
+        PublisherRefDto: {
+            id: string;
+            name: string;
         };
         /** @description A redirect. */
         RedirectDto: {
@@ -2960,6 +3143,78 @@ export interface components {
             code?: number;
             source?: string;
             target?: string;
+        };
+        /** @description `GET /plugins/registry`. */
+        RegistryDto: {
+            /** @description The cached index's plugins matching `q`, by name (at most 50). */
+            plugins: components["schemas"]["RegistryPluginDto"][];
+            registry?: components["schemas"]["RegistryMetaDto"] | null;
+        };
+        /** @description `POST /plugins/registry/inspect`. */
+        RegistryInspectRequest: {
+            name: string;
+            /** @description Default: the newest version this binary runs, not yanked. */
+            version?: string | null;
+        };
+        /** @description `POST /plugins/registry/install`. */
+        RegistryInstallRequest: {
+            /** @description The `fingerprint` of the report `POST /plugins/registry/inspect` gave. */
+            approve: string;
+            name: string;
+            version: string;
+        };
+        /** @description A registry plugin that is installed here. */
+        RegistryInstalledDto: {
+            /**
+             * @description The registry publisher owns this plugin's data (`false`: unsigned-owned, an
+             *     update binds its data to the registry publisher).
+             */
+            publisher_matches: boolean;
+            /** @description A newer version this binary runs is listed (and may be installed over it). */
+            update_available: boolean;
+            version: string;
+        };
+        /** @description The configured registry and its cached copy. */
+        RegistryMetaDto: {
+            /**
+             * Format: date-time
+             * @description The last successful check.
+             */
+            checked_at?: string | null;
+            /** Format: date-time */
+            generated_at?: string | null;
+            /** @description The last failed check's error, cleared by a successful one. */
+            last_error?: string | null;
+            /** Format: date-time */
+            last_error_at?: string | null;
+            /** @description The index's `name`; `null` before the first successful check. */
+            name?: string | null;
+            /** Format: int64 */
+            serial?: number | null;
+            /** @description The index URL. */
+            url: string;
+        };
+        /** @description One plugin of the registry. */
+        RegistryPluginDto: {
+            description: string;
+            homepage?: string | null;
+            installed?: components["schemas"]["RegistryInstalledDto"] | null;
+            /** @description The newest version this binary runs, not yanked; `null` when none. */
+            latest?: string | null;
+            license?: string | null;
+            name: string;
+            publisher: components["schemas"]["PublisherRefDto"];
+            /** @description Every listed version, newest first (yanked ones included). */
+            versions: components["schemas"]["RegistryVersionDto"][];
+        };
+        /** @description One listed version. */
+        RegistryVersionDto: {
+            /** Format: date-time */
+            published_at?: string | null;
+            version: string;
+            world: string;
+            /** @description Why it was yanked; `null` when it is not. */
+            yanked?: string | null;
         };
         /** @description A deleted plugin whose KV and settings are still kept (M2b-3 P47). */
         RetainedPluginDto: {
@@ -3012,6 +3267,13 @@ export interface components {
             /** @description `restored from <revision id>` for a restore; else `null`. */
             note?: string | null;
             title: string;
+        };
+        /** @description `POST /plugins/publishers/{key_id}/revoke`. */
+        RevokeKeyRequest: {
+            /** @description The key was stolen or leaked: every installed plugin it signed is disabled. */
+            compromised?: boolean;
+            /** @description Why (1..=500 characters; shown with the key and on disabled plugins). */
+            reason: string;
         };
         /**
          * @description A robots directive of an item's page.
@@ -3259,6 +3521,28 @@ export interface components {
          *     default (for a secret: deletes it). Keys not in the body stay as they are.
          */
         SettingsPatch: Record<string, never>;
+        /** @description The key that signed a plugin. */
+        SignerDto: {
+            /** @description The manifest's `plugin.publisher` (text; verified only when `publisher` is set). */
+            claimed: string;
+            /** @description 16 uppercase hex digits, as minisign prints it. */
+            key_id: string;
+            publisher?: components["schemas"]["PublisherRefDto"] | null;
+            /**
+             * @description `registry` (listed by the configured registry), `approved` (approved at an earlier
+             *     install), `operator` (`ferrite plugin keys trust`) or `new` (approving trusts it).
+             */
+            source: string;
+        };
+        /** @description How a plugin arrives. */
+        SourceDto: {
+            /** @description `upload`, `folder` or `registry`. */
+            kind: string;
+            /** @description The registry index URL, for `registry`. */
+            url?: string | null;
+            /** @description The registry version, for `registry`. */
+            version?: string | null;
+        };
         /** @description `GET /system/status`. */
         SystemStatusDto: {
             /** @description `sqlite` or `postgres`. */
@@ -3578,6 +3862,34 @@ export interface components {
             otpauth_url: string;
             secret_base32: string;
         };
+        /** @description The trust part of a permission report (design 14 §7.2). */
+        TrustDto: {
+            owner?: components["schemas"]["OwnerChangeDto"] | null;
+            /** @description `[plugins] signatures`: `any`, `signed` or `trusted`. */
+            policy: string;
+            refusal?: components["schemas"]["TrustRefusalDto"] | null;
+            /** @description `verified` (a signature verified) or `unsigned`. */
+            signature: string;
+            signer?: components["schemas"]["SignerDto"] | null;
+            source: components["schemas"]["SourceDto"];
+            /** @description `unsigned`, `new_key`, `unsigned_data_claimed`, `unsigned_reads_data`. */
+            warnings: string[];
+        };
+        /** @description A trust refusal (the install would be refused with this `422`). */
+        TrustRefusalDto: {
+            /** @description `signature` or `publisher`. */
+            field: string;
+            message: string;
+        };
+        /** @description An update the cached registry index offers for an installed plugin. */
+        UpdateDto: {
+            /**
+             * @description Whether the registry's publisher is this plugin's owner (`false` for an
+             *     unsigned-owned plugin: updating binds its data to that publisher).
+             */
+            publisher_matches: boolean;
+            version: string;
+        };
         /**
          * @description A user account. Only the user themselves and accounts with `manage_users` can read
          *     one, so `email` is never shown to anyone else.
@@ -3705,6 +4017,7 @@ export type SchemaImportReportDto = components['schemas']['ImportReportDto'];
 export type SchemaImportRunDto = components['schemas']['ImportRunDto'];
 export type SchemaImportRunPageDto = components['schemas']['ImportRunPageDto'];
 export type SchemaImportStartUpload = components['schemas']['ImportStartUpload'];
+export type SchemaInstalledTrustDto = components['schemas']['InstalledTrustDto'];
 export type SchemaJobCountsDto = components['schemas']['JobCountsDto'];
 export type SchemaJobDto = components['schemas']['JobDto'];
 export type SchemaJobList = components['schemas']['JobList'];
@@ -3738,6 +4051,8 @@ export type SchemaNodePluginDto = components['schemas']['NodePluginDto'];
 export type SchemaNodeThemeDto = components['schemas']['NodeThemeDto'];
 export type SchemaNodeThemeOrigin = components['schemas']['NodeThemeOrigin'];
 export type SchemaOAuthClientDto = components['schemas']['OAuthClientDto'];
+export type SchemaOwnerChangeDto = components['schemas']['OwnerChangeDto'];
+export type SchemaOwnerDto = components['schemas']['OwnerDto'];
 export type SchemaPasswordChange = components['schemas']['PasswordChange'];
 export type SchemaPasswordChanged = components['schemas']['PasswordChanged'];
 export type SchemaPasswordResetConfirm = components['schemas']['PasswordResetConfirm'];
@@ -3754,16 +4069,27 @@ export type SchemaPluginSettingsDto = components['schemas']['PluginSettingsDto']
 export type SchemaPluginTotalsDto = components['schemas']['PluginTotalsDto'];
 export type SchemaPluginUpload = components['schemas']['PluginUpload'];
 export type SchemaProblemDocument = components['schemas']['ProblemDocument'];
+export type SchemaPublisherKeyDto = components['schemas']['PublisherKeyDto'];
+export type SchemaPublisherKeyList = components['schemas']['PublisherKeyList'];
+export type SchemaPublisherRefDto = components['schemas']['PublisherRefDto'];
 export type SchemaRedirectDto = components['schemas']['RedirectDto'];
 export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
 export type SchemaRedirectOriginDto = components['schemas']['RedirectOriginDto'];
 export type SchemaRedirectPatch = components['schemas']['RedirectPatch'];
+export type SchemaRegistryDto = components['schemas']['RegistryDto'];
+export type SchemaRegistryInspectRequest = components['schemas']['RegistryInspectRequest'];
+export type SchemaRegistryInstallRequest = components['schemas']['RegistryInstallRequest'];
+export type SchemaRegistryInstalledDto = components['schemas']['RegistryInstalledDto'];
+export type SchemaRegistryMetaDto = components['schemas']['RegistryMetaDto'];
+export type SchemaRegistryPluginDto = components['schemas']['RegistryPluginDto'];
+export type SchemaRegistryVersionDto = components['schemas']['RegistryVersionDto'];
 export type SchemaRetainedPluginDto = components['schemas']['RetainedPluginDto'];
 export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList'];
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
+export type SchemaRevokeKeyRequest = components['schemas']['RevokeKeyRequest'];
 export type SchemaRobotsDto = components['schemas']['RobotsDto'];
 export type SchemaRoleDto = components['schemas']['RoleDto'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
@@ -3779,6 +4105,8 @@ export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
+export type SchemaSignerDto = components['schemas']['SignerDto'];
+export type SchemaSourceDto = components['schemas']['SourceDto'];
 export type SchemaSystemStatusDto = components['schemas']['SystemStatusDto'];
 export type SchemaTaxonomyDto = components['schemas']['TaxonomyDto'];
 export type SchemaTaxonomyInput = components['schemas']['TaxonomyInput'];
@@ -3805,6 +4133,9 @@ export type SchemaTotpConfirm = components['schemas']['TotpConfirm'];
 export type SchemaTotpDisable = components['schemas']['TotpDisable'];
 export type SchemaTotpLoginRequest = components['schemas']['TotpLoginRequest'];
 export type SchemaTotpSetupDto = components['schemas']['TotpSetupDto'];
+export type SchemaTrustDto = components['schemas']['TrustDto'];
+export type SchemaTrustRefusalDto = components['schemas']['TrustRefusalDto'];
+export type SchemaUpdateDto = components['schemas']['UpdateDto'];
 export type SchemaUserDto = components['schemas']['UserDto'];
 export type SchemaUserInput = components['schemas']['UserInput'];
 export type SchemaUserList = components['schemas']['UserList'];
@@ -7716,6 +8047,378 @@ export interface operations {
             };
             /** @description `busy`: every upload slot of this node is taken (`Retry-After`) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_plugin_publishers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's keys, the cached registry's keys and every revocation, by key id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublisherKeyList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_plugin_publisher: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 16 hex digits */
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked (audited `plugin.publisher.revoke`): installs and updates signed by it are refused; with `compromised` its plugins are disabled on every node */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublisherKeyDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such key here or in the cached registry */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `reason` empty or over 500 characters */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_plugin_registry: {
+        parameters: {
+            query?: {
+                /** @description Matches name, description and publisher name (case-insensitive). */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configured registry and its cached plugins matching `q` (at most 50); `registry: null` when none is configured. Nothing is fetched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    inspect_registry_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description The permission report of the registry version; nothing is stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionReportDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry is configured, or no such plugin or version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-invalid` (a file does not match the index, another world, not signed by its publisher) or `validation` (`signature`, `publisher`; the body's `report` is the version's report) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable`: a file could not be fetched */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    install_registry_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Installed (`Location`), as an upload */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry, plugin or version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description As for the inspection; or `validation` with `errors[0].field` = `approve` when `approve` is not the fingerprint of this version's report (a file that changed in between changes it) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable` */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    refresh_plugin_registry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fetched, verified and stored (revocations applied); the registry as `GET` answers it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-invalid`: the index's signature, schema or serial (a rollback) is refused; the cached copy stays */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: one refresh per minute per site (`Retry-After`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable`: the index could not be fetched; the cached copy stays */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

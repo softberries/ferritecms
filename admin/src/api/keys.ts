@@ -139,6 +139,11 @@ export const qk = {
   pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
   /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */
   pluginsRetained: ["pluginsRetained"] as const,
+  /** The cached plugin registry, per search (M6-2; its own root). */
+  pluginRegistry: (q: string) => ["pluginRegistry", q] as const,
+  pluginRegistryAll: ["pluginRegistry"] as const,
+  /** The publisher keys (M6-2). */
+  pluginPublishers: ["pluginPublishers"] as const,
   import: {
     /** The runs table's pages (`useInfiniteQuery` over `next_cursor`). */
     runs: ["import", "runs"] as const,

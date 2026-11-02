@@ -6,8 +6,13 @@ import type {
   SchemaPluginDto,
   SchemaPluginMetricsDto,
   SchemaPluginSettingsDto,
+  SchemaPublisherKeyDto,
+  SchemaPublisherKeyList,
+  SchemaRegistryDto,
+  SchemaRegistryPluginDto,
   SchemaRetainedPluginDto,
   SchemaSettingsPatch,
+  SchemaTrustDto,
 } from "./schema";
 
 export type PluginDto = SchemaPluginDto;
@@ -15,6 +20,11 @@ export type PluginMetricsDto = SchemaPluginMetricsDto;
 export type PluginSettingsDto = SchemaPluginSettingsDto;
 export type PermissionReportDto = SchemaPermissionReportDto;
 export type RetainedPluginDto = SchemaRetainedPluginDto;
+export type TrustDto = SchemaTrustDto;
+export type RegistryDto = SchemaRegistryDto;
+export type RegistryPluginDto = SchemaRegistryPluginDto;
+export type PublisherKeyDto = SchemaPublisherKeyDto;
+export type PublisherKeyList = SchemaPublisherKeyList;
 
 /** `GET /plugins` (`manage_plugins`): every installed plugin, by name (one page). */
 export async function listPlugins(): Promise<PluginDto[]> {
@@ -53,10 +63,16 @@ export function pluginQuery(name: string) {
   });
 }
 
-/** The two files of a plugin upload: `ferrite-plugin.toml` and its component. */
+/**
+ * The files of a plugin upload: `ferrite-plugin.toml`, its component and, for a signed
+ * plugin, `ferrite-plugin.minisig` and (for a key the site does not know yet)
+ * `ferrite-plugin.pub` (M6-2).
+ */
 export interface PluginFiles {
   manifest: Blob;
   component: Blob;
+  signature?: Blob | null;
+  publisherKey?: Blob | null;
 }
 
 export function enablePlugin(name: string): Promise<PluginDto> {
@@ -122,6 +138,70 @@ export function patchPluginSettings(
       params: { path: { name } },
       // `SettingsPatch` is an open object the generator types as `Record<string, never>`.
       body: patch as SchemaSettingsPatch,
+    }),
+  );
+}
+
+/** `GET /plugins/registry?q=`: the configured registry and its cached plugins (no fetch). */
+export function getRegistry(q?: string): Promise<RegistryDto> {
+  return unwrap(api.GET("/api/v1/plugins/registry", { params: { query: q ? { q } : {} } }));
+}
+
+export function registryQuery(q = "") {
+  return queryOptions({
+    queryKey: qk.pluginRegistry(q),
+    queryFn: () => getRegistry(q || undefined),
+    staleTime: 30_000,
+  });
+}
+
+/** `POST /plugins/registry/refresh`: fetches and verifies the index now (1 per minute). */
+export function refreshRegistry(): Promise<RegistryDto> {
+  return unwrap(api.POST("/api/v1/plugins/registry/refresh"));
+}
+
+/** `POST /plugins/registry/inspect`: a registry version's permission report. */
+export function inspectRegistryPlugin(
+  name: string,
+  version?: string,
+): Promise<PermissionReportDto> {
+  return unwrap(
+    api.POST("/api/v1/plugins/registry/inspect", {
+      body: { name, ...(version ? { version } : {}) },
+    }),
+  );
+}
+
+/** `POST /plugins/registry/install`: installs it when `approve` is that report's fingerprint. */
+export function installRegistryPlugin(
+  name: string,
+  version: string,
+  approve: string,
+): Promise<PluginDto> {
+  return unwrap(api.POST("/api/v1/plugins/registry/install", { body: { name, version, approve } }));
+}
+
+/** `GET /plugins/publishers`: the site's keys, the registry's keys and the revocations. */
+export function listPublishers(): Promise<PublisherKeyList> {
+  return unwrap(api.GET("/api/v1/plugins/publishers"));
+}
+
+export const publishersQuery = queryOptions({
+  queryKey: qk.pluginPublishers,
+  queryFn: listPublishers,
+  staleTime: 30_000,
+});
+
+/** `POST /plugins/publishers/{key_id}/revoke`. */
+export function revokePublisher(
+  keyId: string,
+  reason: string,
+  compromised: boolean,
+): Promise<PublisherKeyDto> {
+  return unwrap(
+    api.POST("/api/v1/plugins/publishers/{key_id}/revoke", {
+      params: { path: { key_id: keyId } },
+      body: { reason, compromised },
     }),
   );
 }

@@ -14,6 +14,7 @@ import type { SchemaGrantReportDto, SchemaLimitItemDto } from "@/api/schema";
 import { Badge } from "@/components/ui/badge";
 import { uiLocale } from "@/lib/locale";
 import { type ShownItem, formatMemory, shownItems } from "./plugin-model";
+import { TrustSummary } from "./trust-summary";
 
 export interface PermissionReportProps {
   report: SchemaGrantReportDto | PermissionReportDto;
@@ -28,9 +29,13 @@ export interface PermissionReportProps {
 export function PermissionReport({ report, markAdded, className }: PermissionReportProps) {
   const { t } = useTranslation("admin");
   const shown = shownItems(report, markAdded ?? ("update" in report && report.update));
-  const publisher = "publisher" in report ? report.publisher : null;
+  const trust = "trust" in report ? report.trust : null;
+  // With a trust part the Publisher block says who made it; the manifest's own claim is
+  // shown there.
+  const publisher = !trust && "publisher" in report ? report.publisher : null;
   return (
     <section data-slot="permission-report" className={cn("flex min-w-0 flex-col gap-4", className)}>
+      {trust ? <TrustSummary trust={trust} /> : null}
       <div
         role="group"
         aria-label={t("plugins.report.factsLabel")}

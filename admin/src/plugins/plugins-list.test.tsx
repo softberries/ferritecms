@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { expect, test } from "vitest";
 import type { PluginMetricsDto } from "@/api/plugins";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
-import { NODE_A, NODE_B, plugin } from "./fixtures";
+import { NODE_A, NODE_B, installedTrust, plugin } from "./fixtures";
 import { PluginsScreen } from "./plugins-list";
 
 const metrics = (failures: { hook: string; count: number }[]): PluginMetricsDto => ({
@@ -93,7 +93,7 @@ test("manifest_text_is_text", async () => {
   renderWithRouter(<PluginsScreen />);
   await screen.findByText("<img src=x onerror=alert(1)>");
   await waitFor(() => expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeVisible());
-  expect(screen.getByText("By <script>alert(1)</script> (not verified)")).toBeVisible();
+  expect(screen.getByText("<script>alert(1)</script> · Unsigned")).toBeVisible();
   expect(document.querySelector("img")).toBeNull();
 });
 
@@ -118,4 +118,30 @@ test("retained_data_lists_and_offers_erase", async () => {
   expect(
     within(section).getByRole("button", { name: "Erase the data of old-seo now" }),
   ).toBeVisible();
+});
+
+test("list_shows_update_chip", async () => {
+  stubRoutes({
+    "/api/v1/plugins": () =>
+      json({
+        items: [
+          plugin({
+            name: "seo",
+            version: "0.2.0",
+            trust: installedTrust({
+              state: "verified",
+              update: { version: "0.3.0", publisher_matches: true },
+            }),
+          }),
+          plugin({ name: "plain" }),
+        ],
+      }),
+    "/api/v1/plugins/retained": () => json({ items: [] }),
+    "/api/v1/plugins/seo/metrics": () => json(metrics([])),
+    "/api/v1/plugins/plain/metrics": () => json(metrics([])),
+  });
+  renderWithRouter(<PluginsScreen />);
+  const chip = await screen.findByRole("button", { name: "Update seo to 0.3.0" });
+  expect(chip).toHaveTextContent("Update 0.3.0");
+  expect(within(row("plain")).queryByText(/Update/)).toBeNull();
 });

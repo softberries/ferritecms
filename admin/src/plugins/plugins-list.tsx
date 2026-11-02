@@ -4,11 +4,15 @@
 // stored manifest or grant no longer parses, H-P2), its failures over 24 hours (every
 // node's buckets) and a dot per live node; row actions Enable or Disable, Settings and
 // Delete; Install plugin (the three-step flow); and Retained data below (P47).
+// M6-2: the publisher as words (verified, signed, unsigned, key revoked) and an Update
+// chip when the registry offers a newer version (the same report step, fed by the
+// registry).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
 import {
+  ArrowUpCircleIcon,
   MoreHorizontalIcon,
   PlugIcon,
   PlusIcon,
@@ -43,10 +47,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { uiLocale } from "@/lib/locale";
 import { DeletePluginDialog } from "./delete-plugin-dialog";
-import { InstallPluginDialog } from "./install-flow";
+import { InstallPluginDialog, type RegistrySource } from "./install-flow";
 import { failureCount, forgetPlugin, pluginState } from "./plugin-model";
 import { NodeDots, PluginStateBadge } from "./plugin-parts";
 import { RetainedData } from "./retained-data";
+import { PublisherLine } from "./trust-summary";
 
 export function PluginsScreen() {
   const { t } = useTranslation("admin");
@@ -58,6 +63,7 @@ export function PluginsScreen() {
     [plugins.data],
   );
   const [installing, setInstalling] = useState(false);
+  const [fromRegistry, setFromRegistry] = useState<RegistrySource | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.plugins });
@@ -73,7 +79,9 @@ export function PluginsScreen() {
     },
   });
   const open = (p: PluginDto) => void navigate({ to: "/plugins/$name", params: { name: p.name } });
-  const columns = useColumns();
+  const columns = useColumns((p) => {
+    if (p.trust.update) setFromRegistry({ name: p.name, version: p.trust.update.version });
+  });
 
   return (
     <div data-slot="plugins-screen" className="mx-auto flex w-full max-w-6xl flex-col gap-8">
@@ -161,6 +169,18 @@ export function PluginsScreen() {
       </div>
       <RetainedData />
       <InstallPluginDialog
+        open={fromRegistry !== null}
+        onOpenChange={(o) => {
+          if (!o) setFromRegistry(null);
+        }}
+        registry={fromRegistry}
+        onInstalled={(p) => {
+          toast.success(t("plugins.install.installed", { name: p.name }));
+          refresh();
+          void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+        }}
+      />
+      <InstallPluginDialog
         open={installing}
         onOpenChange={setInstalling}
         onInstalled={(p) => {
@@ -208,7 +228,30 @@ function FailureCell({ name }: { name: string }) {
   );
 }
 
-function useColumns(): DataTableColumn<PluginDto>[] {
+/** The Update chip: the registry offers a newer version of this plugin. */
+export function UpdateChip({ plugin, onUpdate }: { plugin: PluginDto; onUpdate: () => void }) {
+  const { t } = useTranslation("admin");
+  const update = plugin.trust.update;
+  if (!update) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      data-slot="plugin-update"
+      className="h-7 w-fit gap-1 rounded-full px-2.5 text-xs pointer-coarse:min-h-11"
+      aria-label={t("plugins.trust.updateLabel", { name: plugin.name, version: update.version })}
+      onClick={(e) => {
+        e.stopPropagation();
+        onUpdate();
+      }}
+    >
+      <ArrowUpCircleIcon aria-hidden="true" className="size-3.5" />
+      {t("plugins.trust.update", { version: update.version })}
+    </Button>
+  );
+}
+
+function useColumns(onUpdate: (p: PluginDto) => void): DataTableColumn<PluginDto>[] {
   const { t } = useTranslation("admin");
   return useMemo(() => {
     const col = dataTableColumns<PluginDto>();
@@ -218,7 +261,6 @@ function useColumns(): DataTableColumn<PluginDto>[] {
         header: () => t("plugins.columns.plugin"),
         cell: (c) => {
           const p = c.row.original;
-          const by = p.publisher ? t("plugins.by", { publisher: p.publisher }) : null;
           return (
             <div className="flex min-w-0 flex-col gap-0.5 py-2">
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
@@ -240,15 +282,8 @@ function useColumns(): DataTableColumn<PluginDto>[] {
                   {p.description}
                 </span>
               ) : null}
-              {by ? (
-                <span
-                  data-slot="plugin-publisher"
-                  className="truncate text-xs text-muted-foreground"
-                  title={by}
-                >
-                  {by}
-                </span>
-              ) : null}
+              <PublisherLine plugin={p} />
+              {p.trust.update ? <UpdateChip plugin={p} onUpdate={() => onUpdate(p)} /> : null}
               {/* Below `sm` the State column is hidden: the badge goes here. */}
               <span className="mt-1 sm:hidden">
                 <PluginStateBadge plugin={p} />
@@ -293,5 +328,5 @@ function useColumns(): DataTableColumn<PluginDto>[] {
         cell: (c) => <NodeDots plugin={c.row.original} />,
       }),
     ];
-  }, [t]);
+  }, [t, onUpdate]);
 }
