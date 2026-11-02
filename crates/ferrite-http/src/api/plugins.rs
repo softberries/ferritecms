@@ -644,7 +644,7 @@ pub(crate) fn dto(
         .iter()
         .filter_map(|n| PluginNodeState::of(n, &row.name))
         .collect();
-    let trust = InstalledTrustDto::of(trust, &row.name);
+    let trust = InstalledTrustDto::of(trust, &row);
     PluginDto::new(row, report, states, trust)
 }
 

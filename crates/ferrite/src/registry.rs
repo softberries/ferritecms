@@ -46,9 +46,23 @@ fn configured_with(
 
 /// The install pipeline's trust settings for this configuration.
 pub fn trust_settings(cfg: &PluginTrustConfig) -> Result<TrustSettings> {
+    let registry = configured(cfg)?;
+    let source = match &registry {
+        None => None,
+        Some(t) => {
+            match ferrite_http::registry_fetch::source_for(&t.url, env!("CARGO_PKG_VERSION")) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot build the registry client; registry checks fail on this node");
+                    None
+                }
+            }
+        }
+    };
     Ok(TrustSettings {
         policy: cfg.signatures,
-        registry: configured(cfg)?,
+        registry,
+        source,
     })
 }
 

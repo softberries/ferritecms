@@ -10,7 +10,10 @@ mod contact_form;
 mod egress;
 mod install;
 mod mail;
+mod registry;
 mod registry_fetch;
+#[path = "../support/registry_fixture.rs"]
+mod registry_fixture;
 mod reload;
 mod seo;
 mod settings;

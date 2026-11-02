@@ -15,6 +15,7 @@ use ferrite_domain::plugin_trust::{
 use ferrite_plugin_host::trust::{TrustError, verify_bundle, verify_index};
 
 use super::{ExtensionError, Installer, RegistryTarget};
+use crate::registry_fetch::RegistrySource;
 
 /// A signature sent with a plugin: the minisig text and, optionally, the publisher's
 /// public key file (trust on first use).
@@ -58,12 +59,25 @@ impl BundleSignature {
 }
 
 /// The operator's trust configuration as the pipeline uses it.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct TrustSettings {
     /// `[plugins] signatures`.
     pub policy: SignaturePolicy,
     /// The configured registry, if any.
     pub registry: Option<RegistryTarget>,
+    /// Where the registry's files are fetched from (`None`: no registry, or no client
+    /// could be built on this node; refreshes and registry installs then fail).
+    pub source: Option<Arc<dyn RegistrySource>>,
+}
+
+impl std::fmt::Debug for TrustSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrustSettings")
+            .field("policy", &self.policy)
+            .field("registry", &self.registry)
+            .field("source", &self.source.is_some())
+            .finish()
+    }
 }
 
 /// What a listing needs to describe installed plugins' trust: the owner rows, the site's

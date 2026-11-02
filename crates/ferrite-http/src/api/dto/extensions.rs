@@ -365,15 +365,24 @@ pub struct InstalledTrustDto {
 
 impl InstalledTrustDto {
     /// From the listing's [`TrustContext`](crate::extensions::TrustContext).
-    pub fn of(ctx: &crate::extensions::TrustContext, name: &str) -> Self {
+    pub fn of(ctx: &crate::extensions::TrustContext, row: &InstalledPlugin) -> Self {
+        let name = row.name.as_str();
         let registry = ctx.registry.as_ref();
+        let update = registry.and_then(|r| {
+            crate::extensions::update_for(&r.index, &r.registry_key, row, ctx.owner(name)).map(
+                |(version, publisher_matches)| UpdateDto {
+                    version,
+                    publisher_matches,
+                },
+            )
+        });
         let Some(o) = ctx.owner(name) else {
             return Self {
                 state: "unsigned".into(),
                 owner: None,
                 signer: None,
                 source: None,
-                update: None,
+                update,
             };
         };
         let listed = |id| registry.and_then(|r| r.index.publisher_of_key(id));
@@ -425,7 +434,7 @@ impl InstalledTrustDto {
                 url: o.registry_url.clone(),
                 version: None,
             }),
-            update: None,
+            update,
         }
     }
 }

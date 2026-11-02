@@ -446,7 +446,7 @@ async fn garbage_key_part_422(api: Api) -> Api {
 async fn policy_signed_refuses_unsigned_upload(api: Api) -> Api {
     let router = api.router_with_trust(TrustSettings {
         policy: SignaturePolicy::Signed,
-        registry: None,
+        ..Default::default()
     });
     let mut c = admin(&api).await;
     let (m, w) = hello();

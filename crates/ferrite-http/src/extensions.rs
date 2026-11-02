@@ -31,6 +31,7 @@
 //! in the request: a concurrent install of the same bytes that has uploaded them but not
 //! yet recorded its rows would lose its blob.
 
+mod registry;
 mod trust;
 
 use std::sync::Arc;
@@ -60,6 +61,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::api::Problem;
 
+pub use registry::{
+    InstalledState, MAX_REGISTRY_RESULTS, RegistryMeta, RegistryPluginView, RegistryView,
+    update_for,
+};
 pub use trust::{BundleSignature, TrustContext, TrustSettings};
 
 /// Largest plugin component accepted (plan "Exact values"): 32 MiB.
@@ -120,6 +125,17 @@ pub enum ExtensionError {
     /// The `publisher_key` part (or `ferrite-plugin.pub`) is not a minisign public key.
     #[error("the publisher key is not a minisign public key: {0}")]
     PublisherKey(String),
+    /// No registry is configured (or this node has no client for it).
+    #[error("no plugin registry is configured")]
+    NoRegistry,
+    /// The registry could not be fetched (network, status, a missing file); the cache
+    /// stays.
+    #[error("{0}")]
+    RegistryUnavailable(String),
+    /// The registry's index or a file does not verify, validate or match (signature,
+    /// schema, serial rollback, size or sha256); the cache stays.
+    #[error("{0}")]
+    RegistryInvalid(String),
     /// A blocking task panicked or was cancelled (runtime shutdown).
     #[error("internal error: {0}")]
     Task(String),
@@ -188,6 +204,23 @@ impl From<ExtensionError> for Problem {
                 let detail = e.to_string();
                 Self::validation(detail.clone()).with_error(Some("publisher_key"), detail)
             }
+            ExtensionError::NoRegistry => {
+                let mut p = Self::not_found();
+                p.detail = "no plugin registry is configured ([plugins] registry)".to_owned();
+                p
+            }
+            ExtensionError::RegistryUnavailable(m) => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "registry-unavailable",
+                "Registry unavailable",
+                m,
+            ),
+            ExtensionError::RegistryInvalid(m) => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "registry-invalid",
+                "Registry invalid",
+                m,
+            ),
             ExtensionError::TooLarge { limit } => Self::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "too-large",
