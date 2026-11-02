@@ -279,6 +279,11 @@ async fn authorize(
         Err(AuthorizeError::ShowPage(message)) => {
             error_page(StatusCode::BAD_REQUEST, "Cannot connect", &message)
         }
+        Err(AuthorizeError::Busy) => error_page(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Busy",
+            "This site is busy checking other apps' details. Try again in a moment.",
+        ),
         Err(AuthorizeError::Server(e)) => {
             tracing::error!(error = %e, "oauth authorization request failed");
             server_error_page()

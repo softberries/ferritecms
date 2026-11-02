@@ -45,4 +45,5 @@ zeroize.workspace = true
 ferrite-core = { path = ".", features = ["test-seams"] }
 ferrite-media = { path = "../ferrite-media" }
 ferrite-store-tests = { path = "../ferrite-store-tests" }
+futures.workspace = true
 tempfile.workspace = true

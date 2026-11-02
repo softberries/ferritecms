@@ -466,7 +466,7 @@ async fn authorize_redirects_to_admin_consent(api: Api) -> Api {
         assert_eq!(view["client"]["name"], "Test Assistant");
         assert_eq!(view["client"]["kind"], "registered");
         assert_eq!(view["verified"], false);
-        assert_eq!(view["redirect_host"], "127.0.0.1");
+        assert_eq!(view["redirect_host"], "127.0.0.1:33418");
         assert_eq!(view["requested"], json!(["content:read", "media:write"]));
         // An author can upload media: both are grantable.
         assert_eq!(view["grantable"], json!(["content:read", "media:write"]));

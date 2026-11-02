@@ -20,7 +20,7 @@ use ferrite_core::{
     auth::{AuthService, SiteKey, Via},
     oauth::{
         AuthorizeError, AuthorizeParams, ClientMetadataFetcher, ClientRegistration, FetchError,
-        OAuthError, OAuthService, TokenRequest, TokenResponse,
+        MAX_METADATA_FETCHES, OAuthError, OAuthService, TokenRequest, TokenResponse,
     },
 };
 use ferrite_domain::{
@@ -291,7 +291,7 @@ async fn metadata_document_must_name_itself(db: &TestDb) {
     assert!(view.verified);
     assert_eq!(view.client.kind, ClientKind::Metadata);
     assert_eq!(view.client.name, "App");
-    assert_eq!(view.redirect_host, "127.0.0.1");
+    assert_eq!(view.redirect_host, "127.0.0.1:33418");
 }
 
 async fn metadata_document_cached_24h_and_kept_7d_on_failure(db: &TestDb) {
@@ -338,6 +338,60 @@ async fn metadata_document_cached_24h_and_kept_7d_on_failure(db: &TestDb) {
 }
 
 // ---- authorization requests ----------------------------------------------------------
+
+/// Lets fetches in only once opened; counts those waiting.
+struct GateFetcher {
+    entered: AtomicU32,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl ClientMetadataFetcher for GateFetcher {
+    async fn fetch(&self, _url: &Url) -> Result<Vec<u8>, FetchError> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        let _pass = self.gate.acquire().await.unwrap();
+        Err(FetchError::Failed("connection refused".into()))
+    }
+}
+
+async fn metadata_fetches_are_capped_per_node(db: &TestDb) {
+    let e = env(db);
+    let gate = Arc::new(GateFetcher {
+        entered: AtomicU32::new(0),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let oauth = OAuthService::new(
+        db.shared_store(),
+        e.auth.clone(),
+        gate.clone(),
+        Url::parse(&format!("{SITE}/")).unwrap(),
+    );
+    let doc = |n: usize| format!("https://app{n}.example/oauth/client.json");
+    let slow = (0..MAX_METADATA_FETCHES).map(|n| oauth.begin(params(&doc(n), REDIRECT)));
+    let one_more = async {
+        while (gate.entered.load(Ordering::SeqCst) as usize) < MAX_METADATA_FETCHES {
+            tokio::task::yield_now().await;
+        }
+        // Every slot is taken: a page, no redirect and no fetch.
+        let busy = oauth.begin(params(&doc(99), REDIRECT)).await;
+        assert!(matches!(busy, Err(AuthorizeError::Busy)), "{busy:?}");
+        assert_eq!(
+            gate.entered.load(Ordering::SeqCst) as usize,
+            MAX_METADATA_FETCHES
+        );
+        gate.gate.add_permits(100);
+    };
+    let (slow, ()) = tokio::join!(futures::future::join_all(slow), one_more);
+    for r in slow {
+        assert!(matches!(r, Err(AuthorizeError::ShowPage(_))), "{r:?}");
+    }
+    // The slots are free again.
+    let later = oauth.begin(params(&doc(99), REDIRECT)).await;
+    assert!(
+        matches!(later, Err(AuthorizeError::ShowPage(_))),
+        "{later:?}"
+    );
+}
 
 async fn loopback_redirect_port_may_differ(db: &TestDb) {
     let e = env(db);
@@ -469,11 +523,13 @@ async fn code_single_use_and_reuse_revokes_grant(db: &TestDb) {
     assert_eq!(e.oauth.grants(&actor, None).await.unwrap().len(), 1);
 
     // The second use fails and revokes the grant the first one made.
-    invalid_grant(
-        e.oauth
-            .exchange(code_request(client.id.as_str(), &code), ip(1))
-            .await,
-    );
+    let reused = e
+        .oauth
+        .exchange(code_request(client.id.as_str(), &code), ip(1))
+        .await
+        .unwrap_err();
+    assert_eq!(reused.as_code(), "invalid_grant");
+    assert!(reused.description().contains("already used"), "{reused}");
     assert!(!resolves(&e, &first).await);
     assert!(e.oauth.grants(&actor, None).await.unwrap().is_empty());
     invalid_grant(
@@ -482,16 +538,19 @@ async fn code_single_use_and_reuse_revokes_grant(db: &TestDb) {
             .await,
     );
 
-    // A wrong verifier burns the code: the right one no longer works.
+    // A wrong verifier burns the code: the right one no longer works. No grant was made
+    // from it, so that is "unknown or expired", not a revoked connection.
     let code = approve_code(&e, &actor, client.id.as_str(), None).await;
     let mut wrong = code_request(client.id.as_str(), &code);
     wrong.code_verifier = Some("x".repeat(43));
     invalid_grant(e.oauth.exchange(wrong, ip(1)).await);
-    invalid_grant(
-        e.oauth
-            .exchange(code_request(client.id.as_str(), &code), ip(1))
-            .await,
-    );
+    let burnt = e
+        .oauth
+        .exchange(code_request(client.id.as_str(), &code), ip(1))
+        .await
+        .unwrap_err();
+    assert_eq!(burnt.as_code(), "invalid_grant");
+    assert_eq!(burnt.description(), "the code is unknown or expired");
 
     // A code expires after 60 seconds.
     let code = approve_code(&e, &actor, client.id.as_str(), None).await;
@@ -1140,6 +1199,7 @@ backend_tests!(
     metadata_document_must_name_itself,
     metadata_document_cached_24h_and_kept_7d_on_failure,
     loopback_redirect_port_may_differ,
+    metadata_fetches_are_capped_per_node,
     redirect_mismatch_is_a_page_not_a_redirect,
     resource_trailing_slash_ok_other_refused,
     code_single_use_and_reuse_revokes_grant,

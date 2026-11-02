@@ -87,6 +87,9 @@ pub const GRANT_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 const METADATA_FRESH: Duration = Duration::from_secs(24 * 3600);
 /// While fetches fail, a cached document is used up to this long after its last fetch.
 const METADATA_STALE: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Client metadata documents fetched at once by this node; an authorization request that
+/// would need one more is answered [`AuthorizeError::Busy`] (or with a cached copy).
+pub const MAX_METADATA_FETCHES: usize = 4;
 /// Longest `state` kept, in bytes.
 const MAX_STATE: usize = 1024;
 /// Longest code or token looked up, in bytes.
@@ -176,9 +179,9 @@ pub struct ConsentView {
     pub client: OAuthClient,
     /// Known by a metadata document (not self-registered).
     pub verified: bool,
-    /// Where the browser goes back to: the host of an `http(s)` redirect URI,
-    /// `scheme://host` for another scheme with a host, the whole URI without one (so
-    /// `cursor://example.com/…` cannot pass for `example.com`).
+    /// Where the browser goes back to: the host (and a non-default port) of an `http(s)`
+    /// redirect URI, `scheme://host` for another scheme with a host, the whole URI without
+    /// one (so `cursor://example.com/…` cannot pass for `example.com`).
     pub redirect_host: String,
     /// The requested scopes (all of [`Scopes::OAUTH`] when the client sent no `scope`).
     pub requested: Vec<String>,
@@ -287,6 +290,10 @@ pub enum AuthorizeError {
         description: String,
         state: Option<String>,
     },
+    /// [`MAX_METADATA_FETCHES`] client metadata fetches are already running on this node
+    /// and no cached copy is usable: show a "busy, try again" page (`503`), never
+    /// redirect.
+    Busy,
     /// Storage failed (`500`).
     Server(CoreError),
 }
@@ -295,6 +302,8 @@ pub enum AuthorizeError {
 enum Lookup {
     /// Not a client we can serve; the text says why.
     Unknown(String),
+    /// Every metadata fetch slot is taken.
+    Busy,
     Store(CoreError),
 }
 
@@ -313,6 +322,9 @@ pub struct OAuthService {
     issuer: String,
     /// `<issuer>/mcp`.
     resource: String,
+    /// Caps concurrent metadata fetches ([`MAX_METADATA_FETCHES`]): `/oauth/authorize` is
+    /// unauthenticated, so it must not be able to fan out without bound.
+    fetch_slots: tokio::sync::Semaphore,
 }
 
 impl OAuthService {
@@ -331,6 +343,7 @@ impl OAuthService {
             fetcher,
             issuer,
             resource,
+            fetch_slots: tokio::sync::Semaphore::new(MAX_METADATA_FETCHES),
         }
     }
 
@@ -440,6 +453,12 @@ impl OAuthService {
         {
             return Ok(c.clone());
         }
+        let Ok(_slot) = self.fetch_slots.try_acquire() else {
+            // All slots busy: a cached copy still does, as when a fetch fails.
+            return cached
+                .filter(|c| fetched_within(c, METADATA_STALE))
+                .ok_or(Lookup::Busy);
+        };
         match self.fetcher.fetch(&url).await {
             Ok(bytes) => {
                 let fields = metadata::parse_document(&url, &bytes).map_err(|why| {
@@ -489,6 +508,7 @@ impl OAuthService {
         let client = match self.known_client(client_id).await {
             Ok(c) => c,
             Err(Lookup::Unknown(why)) => return Err(AuthorizeError::ShowPage(why)),
+            Err(Lookup::Busy) => return Err(AuthorizeError::Busy),
             Err(Lookup::Store(e)) => return Err(AuthorizeError::Server(e)),
         };
         let redirect_uri = req
@@ -858,18 +878,24 @@ impl OAuthService {
                     .oauth()
                     .code_by_hash_any(&code_hash)
                     .await?;
-                match used.and_then(|c| c.grant_id) {
-                    Some(grant) => {
-                        if self.end_grant(grant, None, "code_reuse").await? {
-                            tracing::warn!(%grant, "authorization code reused: grant revoked");
-                        }
-                        Err(OAuthError::InvalidGrant(
-                            "the code was already used; the connection was revoked".into(),
-                        ))
-                    }
-                    None => Err(OAuthError::InvalidGrant(
+                // A code burnt by a wrong client, redirect URI or verifier names a grant
+                // that was never made: that is no reuse, just a code that is gone.
+                let revoked = match used.and_then(|c| c.grant_id) {
+                    Some(grant) => self
+                        .end_grant(grant, None, "code_reuse")
+                        .await?
+                        .then_some(grant),
+                    None => None,
+                };
+                if let Some(grant) = revoked {
+                    tracing::warn!(%grant, "authorization code reused: grant revoked");
+                    Err(OAuthError::InvalidGrant(
+                        "the code was already used; the connection was revoked".into(),
+                    ))
+                } else {
+                    Err(OAuthError::InvalidGrant(
                         "the code is unknown or expired".into(),
-                    )),
+                    ))
                 }
             }
         }
@@ -1198,10 +1224,14 @@ async fn active(repos: &dyn Repos, user: UserId) -> Result<bool, CoreError> {
         .is_some_and(|u| u.status == UserStatus::Active))
 }
 
-/// The consent screen's redirect host ([`ConsentView::redirect_host`]).
+/// The consent screen's redirect host ([`ConsentView::redirect_host`]): for `http(s)` the
+/// host with a non-default port (`app.example:8443`).
 fn redirect_host(uri: &Url) -> String {
     match (uri.scheme(), uri.host_str()) {
-        ("http" | "https", Some(host)) => host.to_owned(),
+        ("http" | "https", Some(host)) => match uri.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        },
         (scheme, Some(host)) => format!("{scheme}://{host}"),
         (_, None) => uri.as_str().to_owned(),
     }
@@ -1233,7 +1263,10 @@ mod tests {
     fn redirect_hosts_show_custom_schemes() {
         let host = |u: &str| redirect_host(&Url::parse(u).unwrap());
         assert_eq!(host("https://app.example/cb"), "app.example");
-        assert_eq!(host("http://127.0.0.1:5000/cb"), "127.0.0.1");
+        assert_eq!(host("https://app.example:443/cb"), "app.example");
+        assert_eq!(host("https://app.example:8443/cb"), "app.example:8443");
+        assert_eq!(host("http://127.0.0.1:5000/cb"), "127.0.0.1:5000");
+        assert_eq!(host("http://[::1]:8080/cb"), "[::1]:8080");
         assert_eq!(host("cursor://app.example/cb"), "cursor://app.example");
         assert_eq!(host("com.example.app:/oauth"), "com.example.app:/oauth");
     }

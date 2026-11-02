@@ -1733,6 +1733,7 @@ dependencies = [
  "ferrite-media",
  "ferrite-store",
  "ferrite-store-tests",
+ "futures",
  "getrandom 0.4.3",
  "hmac 0.13.0",
  "html-escape",

@@ -173,7 +173,7 @@ test("connect_narrow_approve_list_and_disconnect", async ({
   await expect(page).toHaveURL(/\/admin\/connect\?request=[0-9a-f-]{36}$/);
   await expect(page.getByRole("heading", { level: 1, name: `Connect ${flow.name}` })).toBeVisible();
   await expect(page.getByText("Self-registered")).toBeVisible();
-  await expect(page.locator("[data-slot=consent-redirect]")).toHaveText("127.0.0.1");
+  await expect(page.locator("[data-slot=consent-redirect]")).toHaveText("127.0.0.1:47123");
   // An author can write content: preselected as asked (all areas, within the role).
   await expect(permission(page, "Content").getByRole("radio", { name: "Write" })).toBeChecked();
   await expectAccessible(page);

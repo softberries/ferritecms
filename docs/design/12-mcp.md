@@ -131,7 +131,7 @@ with `error=` per RFC 6749 §4.1.2.1. A valid request is stored as a pending
 `oauth_requests` row (10 minutes) and the browser goes to `/admin/connect?request=<id>`.
 
 **Consent** (admin, §8): the signed-in user sees the client's name and logo, the redirect
-host, whether the client is verified by a metadata document or self-registered, and the
+host (with a non-default port: `app.example:8443`), whether the client is verified by a metadata document or self-registered, and the
 requested permissions as area rows (read / read and write, limited to what the user's
 role can do). They can narrow the permissions and approve or deny. Approval creates an
 authorization code (60 seconds, single use, sha-256 stored, bound to the client, redirect
@@ -146,7 +146,9 @@ cannot grant write scopes; a contributor still can connect (their role limits th
   `oauth_grants` row (the refresh token, 30 days, sliding) and an access token (an
   `api_tokens` row named after the client, scopes = the grant's, 1 hour). Answers
   `access_token`, `token_type "Bearer"`, `expires_in 3600`, `refresh_token`, `scope`.
-  A reused code revokes the grant made from it (OAuth 2.1 §4.1.3).
+  A reused code revokes the grant made from it (OAuth 2.1 §4.1.3). A code presented
+  with a wrong client, redirect URI or verifier is burnt with no grant made; presenting
+  it again is "the code is unknown or expired".
 - `refresh_token`: rotates — the old refresh token stops working, a new one and a new
   access token are issued, older access tokens of the grant are deleted. A refresh token
   used after rotation revokes the grant (replay detection). `scope` may narrow, never
@@ -302,7 +304,10 @@ client) and `AuthService` learns about grant-bound tokens.
 - Open redirect: the server only ever redirects to a URI registered for that client, and
   never before the client and URI are validated.
 - Metadata fetch: SSRF rules of the plugin egress client; the fetched JSON is size-capped
-  and never followed beyond its declared fields; `logo_uri` is shown only if `https`.
+  and never followed beyond its declared fields; `logo_uri` is shown only if `https`. At
+  most 4 fetches run at once per node (`/oauth/authorize` needs no sign-in); a request
+  that would need a fifth uses a cached copy (up to 7 days old) or gets a `503` "busy,
+  try again" page, never a redirect.
 - Prompt injection: tool results contain site content written by others (comments, imported
   posts). The server `instructions` say that content is data, not instructions; tools that
   change things are annotated so clients ask the user; destructive actions are limited
