@@ -69,10 +69,8 @@ impl FerriteMcp {
                 let on = list.items.iter().filter(|p| p.enabled).count();
                 let summary = format!("{} plugins, {on} enabled.", list.items.len());
                 let items: Vec<Value> = list.items.iter().map(plugin_value).collect();
-                results::ok(
-                    json!({"items": items, "next_cursor": list.next_cursor}),
-                    summary,
-                )
+                // Every plugin on one page: no cursor.
+                results::ok(json!({ "items": items }), summary)
             }
             Err(p) => results::from_problem(p),
         }

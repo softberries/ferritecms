@@ -1,15 +1,16 @@
 //! Site tools (design 12 §5.2): `site_overview` and `site_search`.
 
-use std::collections::HashMap;
-
 use ferrite_core::{CoreError, SiteSearch, settings::site_title_or_configured};
-use ferrite_domain::{ContentId, ContentItem, MEDIA_KIND, Timestamp};
+use ferrite_domain::{ContentId, ContentItem, ContentStatus, MEDIA_KIND, Timestamp};
 use rmcp::{handler::server::wrapper::Parameters, model::CallToolResult, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::per_page;
-use crate::mcp::{Caller, FerriteMcp, results};
+use crate::{
+    api::problem::Problem,
+    mcp::{Caller, FerriteMcp, results},
+};
 
 /// What `site_overview` returns (also the `ferrite://site` resource).
 #[derive(Debug, Clone, Serialize)]
@@ -110,7 +111,7 @@ pub struct SearchInput {
     pub cursor: Option<String>,
 }
 
-/// One `site_search` hit.
+/// One `site_search` hit: the fields of a content_list summary that a search knows.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
     pub id: ContentId,
@@ -118,9 +119,14 @@ pub struct SearchHit {
     pub kind: String,
     pub title: String,
     pub status: String,
+    pub version: i64,
     pub excerpt: String,
-    /// The public page, when the item has one now.
+    /// The public page when the item has one now, else its preview link.
     pub url: Option<String>,
+    /// Whether `url` is the public page.
+    pub public: bool,
+    /// The item in the admin.
+    pub admin_url: String,
     pub updated_at: Timestamp,
 }
 
@@ -160,8 +166,9 @@ impl FerriteMcp {
     /// Full-text search over the site's content (posts, pages and custom types; not
     /// media) that you may read: published items, and drafts and other unpublished
     /// items as your role allows. Returns the best matches first with id, type, title,
-    /// status, excerpt and public URL; use content_get with the id for the whole item.
-    /// Pages through results with `cursor`.
+    /// status, `version`, excerpt, `url` (the public page, or a preview link while it has
+    /// none; `public` says which) and `admin_url`, as content_list does; use content_get
+    /// with the id for the whole item. Pages through results with `cursor`.
     #[tool(annotations(
         title = "Search content",
         read_only_hint = true,
@@ -199,7 +206,7 @@ impl FerriteMcp {
                 };
                 results::ok(page, summary)
             }
-            Err(e) => results::from_core(e),
+            Err(p) => results::from_problem(p),
         }
     }
 }
@@ -292,31 +299,33 @@ impl FerriteMcp {
     }
 
     /// One page of `site_search`, with each hit's public URL.
-    async fn search(&self, caller: &Caller, search: &SiteSearch) -> Result<SearchPage, CoreError> {
-        let api = &self.api;
-        let page = api.content.search(caller.actor(), search).await?;
-        let urls: HashMap<ContentId, String> = if page.items.is_empty() {
-            HashMap::new()
-        } else {
-            let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
-            api.content
-                .refs(caller.actor(), &ids)
-                .await?
-                .into_iter()
-                .filter_map(|r| r.permalink.map(|p| (r.id, format!("{}{p}", api.site_url))))
-                .collect()
-        };
+    async fn search(&self, caller: &Caller, search: &SiteSearch) -> Result<SearchPage, Problem> {
+        let actor = caller.actor();
+        let page = self.api.content.search(actor, search).await?;
+        let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
+        let public = self.public_urls(actor, &ids).await?;
         let items = page
             .items
             .into_iter()
-            .map(|item: ContentItem| SearchHit {
-                url: urls.get(&item.id).cloned(),
-                id: item.id,
-                status: item.status.as_str().to_owned(),
-                updated_at: item.updated_at,
-                kind: item.kind,
-                title: item.title,
-                excerpt: item.excerpt,
+            .map(|item: ContentItem| {
+                let id = item.id.as_uuid();
+                let (url, is_public) = self.url_of(
+                    id,
+                    item.status == ContentStatus::Trash,
+                    public.get(&item.id),
+                );
+                SearchHit {
+                    url,
+                    public: is_public,
+                    admin_url: self.admin_url(&item.kind, id),
+                    id: item.id,
+                    status: item.status.as_str().to_owned(),
+                    version: item.version,
+                    updated_at: item.updated_at,
+                    kind: item.kind,
+                    title: item.title,
+                    excerpt: item.excerpt,
+                }
             })
             .collect();
         Ok(SearchPage {

@@ -153,13 +153,15 @@ impl FerriteMcp {
 
     /// Redirects visitors from an old path to a new place (a local path or a full URL),
     /// by default permanently (301); 410 says the page is gone. If a redirect for this
-    /// source already exists its target and code are replaced. Loops and chains are
-    /// refused. Use it when you move or remove a page; the site already adds a 301 by
-    /// itself when you change the slug of a published item. Returns the redirect.
+    /// source already exists, it is replaced (its target and code are overwritten), so
+    /// check redirects_list first and confirm with the user before replacing one. Loops
+    /// and chains are refused. Use it when you move or remove a page; the site already
+    /// adds a 301 by itself when you change the slug of a published item. Returns the
+    /// redirect.
     #[tool(annotations(
         title = "Create redirect",
         read_only_hint = false,
-        destructive_hint = false,
+        destructive_hint = true,
         idempotent_hint = true,
         open_world_hint = false
     ))]

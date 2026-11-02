@@ -640,6 +640,26 @@ async fn site_search_finds_only_readable_content(api: Api) -> Api {
         hit["url"].as_str().is_some_and(|u| u.starts_with(SITE_URL)),
         "{hit}"
     );
+    // The same fields as a content_list summary: version, public, admin_url.
+    assert_eq!(hit["public"], true, "{hit}");
+    assert_eq!(hit["version"], public.version + 1, "{hit}");
+    assert_eq!(
+        hit["admin_url"],
+        format!("{SITE_URL}/admin/content/page/{}", public.id),
+        "{hit}"
+    );
+    let draft_hit = r["structuredContent"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == secret.id.to_string())
+        .unwrap();
+    assert_eq!(draft_hit["public"], false, "{draft_hit}");
+    assert_eq!(
+        draft_hit["url"],
+        format!("{SITE_URL}/_preview/{}", secret.id),
+        "{draft_hit}"
+    );
     // An author (no `edit_others`) does not find the admin's draft.
     let author = api.user("ann", Role::Author, false).await;
     let t = api.bearer(&author, &["*"]).await;

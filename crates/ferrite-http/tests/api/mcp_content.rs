@@ -847,6 +847,18 @@ async fn revisions_and_restore_revision(api: Api) -> Api {
     )
     .await;
     assert_eq!(problem(&r)["status"], 404, "{r}");
+    // `per_page` has its own range, 1..=50, whatever is out of it.
+    for n in [0, 51, 101] {
+        let r = tool(
+            &api,
+            &t.0,
+            "content_revisions",
+            json!({"type": "post", "id": id, "per_page": n}),
+        )
+        .await;
+        assert_eq!(problem(&r)["errors"][0]["field"], "per_page", "{r}");
+        assert!(text(&r).contains("1..=50"), "{n}: {r}");
+    }
     api
 }
 

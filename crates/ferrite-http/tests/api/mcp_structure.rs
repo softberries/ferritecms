@@ -551,6 +551,14 @@ async fn media_trash_restore_and_list(api: Api) -> Api {
     let r = tool(&api, &t.0, "media_trash", json!({"id": id, "version": v})).await;
     let trashed = ok(&r);
     assert_eq!(trashed["status"], "trash", "{trashed}");
+    // The whole item, as media_restore answers.
+    assert_eq!(
+        trashed["reference"],
+        format!("ferrite:media/{id}"),
+        "{trashed}"
+    );
+    assert!(trashed["mime"].is_string(), "{trashed}");
+    assert!(trashed.get("note").is_none(), "{trashed}");
     let version = trashed["version"].as_i64().unwrap();
 
     // Gone from the default list, found with `trash`.
@@ -1327,14 +1335,15 @@ async fn structure_tools_are_annotated(api: Api) -> Api {
         "term_create",
         "term_update",
         "content_type_create",
-        "redirect_create",
         "redirect_update",
     ];
+    // `redirect_create` replaces an existing redirect from the same source.
     let destructive = [
         "media_trash",
         "term_delete",
         "menu_set",
         "content_type_update",
+        "redirect_create",
         "redirect_delete",
     ];
     for name in reads {

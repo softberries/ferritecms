@@ -353,7 +353,7 @@ impl FerriteMcp {
 
     /// Moves a media item to the trash: its file stops being served, so pages that show
     /// it lose the picture. It can be brought back with media_restore, but ask the user
-    /// first. Send the `version` you last read.
+    /// first. Send the `version` you last read. Returns the item.
     #[tool(annotations(
         title = "Trash media",
         read_only_hint = false,
@@ -378,14 +378,33 @@ impl FerriteMcp {
                     json!({"version": item.version}),
                 )
                 .await;
-                let value = json!({
-                    "id": item.id.as_uuid(),
-                    "title": item.title,
-                    "status": item.status.as_str(),
-                    "version": item.version,
-                    "note": "In the trash; media_restore brings it back.",
-                });
-                results::ok(value, format!("Trashed {:?}.", item.title))
+                // The whole item, as media_restore and content_trash answer.
+                let summary = format!(
+                    "Moved {:?} to the trash (version {}); media_restore brings it back.",
+                    item.title, item.version
+                );
+                let value = match self.api.store.read().media().get(id).await {
+                    Ok(Some(media)) => {
+                        self.media_written(actor, MediaItem { item, media })
+                            .await
+                            .value
+                    }
+                    found => {
+                        if let Err(e) = found {
+                            tracing::warn!(error = %e, item = %id, "trashed media row unreadable");
+                        }
+                        json!({
+                            "id": item.id.as_uuid(),
+                            "title": item.title,
+                            "status": item.status.as_str(),
+                            "version": item.version,
+                            "reference": format!("ferrite:media/{}", item.id.as_uuid()),
+                            "note": "The item is in the trash, but the full item could not \
+                                     be built; call media_get for it.",
+                        })
+                    }
+                };
+                results::ok(value, summary)
             }
             Err(e) => results::from_problem(self.media_problem(actor, id, e).await),
         }

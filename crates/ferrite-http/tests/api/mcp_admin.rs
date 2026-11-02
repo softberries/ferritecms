@@ -660,6 +660,8 @@ async fn plugin_secret_settings_are_write_only(api: Api) -> Api {
     assert!(!everything(&r).contains(SECRET), "{r}");
     let r = tool(&api, &t.0, "plugins_list", json!({})).await;
     assert!(!everything(&r).contains(SECRET), "{r}");
+    // One page, so no cursor field at all.
+    assert!(ok(&r).get("next_cursor").is_none(), "{r}");
     let r = tool(&api, &t.0, "audit_list", json!({"per_page": 100})).await;
     assert!(!everything(&r).contains(SECRET), "{r}");
     let rows = mcp_rows(&api).await;

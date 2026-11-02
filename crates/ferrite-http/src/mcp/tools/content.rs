@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::per_page;
+use super::{PER_PAGE, per_page};
 use crate::{
     api::{
         content::{
@@ -760,15 +760,16 @@ impl FerriteMcp {
         caller: Caller,
         Parameters(input): Parameters<RevisionsInput>,
     ) -> CallToolResult {
-        let limit = match per_page(input.per_page) {
-            Ok(n) if n <= MAX_REVISIONS_LISTED => n,
-            Ok(_) => {
+        // Its own range: at most the 50 revisions kept, not the usual 100.
+        let limit = match input.per_page {
+            None => PER_PAGE.min(MAX_REVISIONS_LISTED),
+            Some(n) if (1..=MAX_REVISIONS_LISTED).contains(&n) => n,
+            Some(_) => {
                 return results::invalid(
                     Some("per_page"),
                     format!("per_page must be 1..={MAX_REVISIONS_LISTED}"),
                 );
             }
-            Err(e) => return e,
         };
         match self.revisions(&caller, input, limit).await {
             Ok(Either::List(out)) => {
@@ -984,7 +985,7 @@ async fn known_type(api: &crate::api::ApiState, actor: &Actor, kind: &str) -> Re
 
 impl FerriteMcp {
     /// The public paths of `ids` (those with a live page), prefixed with the site URL.
-    async fn public_urls(
+    pub(crate) async fn public_urls(
         &self,
         actor: &Actor,
         ids: &[ContentId],
@@ -1004,7 +1005,12 @@ impl FerriteMcp {
     }
 
     /// `(url, public)` of an item: its page, else its preview link (none when trashed).
-    fn url_of(&self, id: Uuid, trashed: bool, public: Option<&String>) -> (Option<String>, bool) {
+    pub(crate) fn url_of(
+        &self,
+        id: Uuid,
+        trashed: bool,
+        public: Option<&String>,
+    ) -> (Option<String>, bool) {
         match public {
             Some(url) => (Some(url.clone()), true),
             None if trashed => (None, false),
@@ -1012,7 +1018,7 @@ impl FerriteMcp {
         }
     }
 
-    fn admin_url(&self, kind: &str, id: Uuid) -> String {
+    pub(crate) fn admin_url(&self, kind: &str, id: Uuid) -> String {
         format!("{}/admin/content/{kind}/{id}", self.api.site_url)
     }
 

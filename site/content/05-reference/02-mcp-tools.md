@@ -20,8 +20,8 @@ How to read the tables:
   names what is missing.
 - **Access** says whether a tool only reads or also changes the site. Writing tools are
   annotated for the client: the ones that remove or replace something (trash, unpublish,
-  delete, moderating a comment, replacing a menu, changing settings or a content type,
-  turning a plugin off) are marked destructive, so clients can ask you first. Changes
+  delete, moderating a comment, replacing a menu or a redirect, changing settings or a
+  content type, turning a plugin off) are marked destructive, so clients can ask you first. Changes
   are live as soon as the tool returns.
 - Bodies are Markdown both ways (`body_markdown`); an image in a body is
   `![alt](ferrite:media/<id>)`, and anything Markdown cannot express travels as a
@@ -102,7 +102,7 @@ offered: they stay with a person in the admin.
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
 | `redirects_list` | Lists redirects, with a text filter and paging. | `redirects:read` | read |
-| `redirect_create` | Redirects an old path to a new place, permanently by default. | `redirects:write` | write |
+| `redirect_create` | Redirects an old path to a new place, permanently by default; replaces an existing redirect from the same path. | `redirects:write` | write |
 | `redirect_update` | Changes a redirect's source, target or status code. | `redirects:write` | write |
 | `redirect_delete` | Deletes a redirect. | `redirects:write` | write |
 
@@ -172,5 +172,6 @@ commands):
   to review;
 - `review_seo` (`item`): reviews one item's title, description and headings, with
   suggestions;
-- `site_health`: sums up the site's status, failed jobs and plugin failures;
+- `site_health`: sums up the site's status, dead jobs and queued ones with a last error,
+  and plugin failures;
 - `tidy_media`: finds images without alt text and proposes some.

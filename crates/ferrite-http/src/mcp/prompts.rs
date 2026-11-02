@@ -76,13 +76,15 @@ impl FerriteMcp {
         ))
     }
 
-    /// Summarise the site's health: status, failing jobs and plugin failures.
+    /// Summarise the site's health: status, dead jobs and queued ones with a last error,
+    /// and plugin failures.
     #[prompt(name = "site_health")]
     pub async fn site_health(&self) -> Vec<PromptMessage> {
         user(
             "Check the health of this site and summarise it for me.\n\n\
              Call system_status (versions, database schema, nodes, job counts), jobs_list \
-             for failed and dead jobs, and plugins_list for plugins with recent failures. \
+             for dead jobs, and queued ones with a last error, and plugins_list for plugins \
+             with recent failures. \
              Report what is fine, what needs attention and what I can do about it (the admin \
              screen to use). Do not retry jobs or change plugins; just report."
                 .to_owned(),
