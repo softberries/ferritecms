@@ -468,7 +468,7 @@ rulings" R-b1–R-b17). M4-3 as a whole: [`m4-3-exit.md`](superpowers/m4-3-exit.
 - [x] Example plugins: SEO, privacy-friendly analytics, contact form (M4-3a P42–P47: `plugins/examples/{seo,analytics,contact-form}` with a README each, SDK helpers, one host change for `options.get("site.url"|"site.title")` (X1), core percent-encoding of `request.served` paths (X5), analytics' two storage tiers under the 10 MiB KV quota (`detail_days`, X7, from the final review); shipped as the release asset `ferrite-plugins-<version>.tar.gz` made by `.github/scripts/package-plugins.sh`; 05 §10 and §12, 09 §7).
 - [x] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b P54–P62: heading ids by GitHub's rule and `post.toc`; `SiteReader::tree` and the `page_tree()` helper with breadcrumbs and previous/next; `query(order="menu")`; `themes/docs` and `themes/business`, each under 150 KB; `seed demo --profile business`; `ferrite import markdown` in the new crate `ferrite-import-md`; code blocks as `<pre tabindex="0">` (R-b17); 06 §4 and §8, 08 §8, 09 §8).
 - [x] Docs site (built with FerriteCMS itself; M4-3b P63: `site/content/` (26 pages), `site/build.sh`, `site/VERIFIED.md` with every claim and how it was checked, `crates/ferrite/tests/docs_site.rs`; axe checks on all three starter themes, P64, in the `public-themes-chromium` Playwright project). Hosting it is the user's decision (`m4-3b-exit.md` "For the user").
-- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order, exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order (26 with M6-6's `webhooks.endpoints`), exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
 
 ### M4-4 — follow-ups (done)
 
@@ -631,9 +631,11 @@ with OpenAPI and MCP cover headless use).
 
 ### M6-6 — Outgoing webhooks
 
-- [ ] Webhooks on content, media, comment, user and release events: HMAC-signed bodies,
-  retries through the job queue, the plugin `http` import's SSRF checks, a delivery log.
-- [ ] Admin screen and API (`/api/v1/webhooks`), test delivery, secrets write-only.
+- [x] Webhooks on content, media, comment, user and release events: HMAC-signed bodies,
+  retries through the job queue, the plugin `http` import's SSRF checks, a delivery log
+  (M6-6, [`m6-6-exit.md`](superpowers/m6-6-exit.md); migration `0016_webhooks`; `release.*`
+  is reserved for M6-3, which adds and emits it).
+- [x] Admin screen and API (`/api/v1/webhooks`), test delivery, secrets write-only (M6-6).
 
 Considered and parked (2026-11-02): OpenTelemetry export (traces and logs over OTLP, for
 example to Tayga; needs spans in the plugin host, renderer, store and jobs first),
@@ -660,6 +662,12 @@ here is code that can be written and tested locally.
 - Built-in forms, full-text search UI (multilingual content is M6-1).
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
+- Webhooks (design 18 §12, M6-6): inbound webhooks; per-endpoint custom headers; `v1a`
+  (ed25519) signatures; payload version 2; filters beyond the content type (term, author);
+  per-endpoint rate limits and FIFO ordering; a dashboard card; events for terms, menus,
+  settings, themes and plugins; plugin-defined events (a new WIT world); a signing helper in
+  the guest SDK; the official `standardwebhooks` libraries run against a real delivery (the
+  by-hand checks were); real Netlify/Vercel deploy hooks and a real CDN purge.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
 - Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
 - Docs and themes, later (M4-3b, left out on purpose): syntax highlighting in the `docs` theme (code blocks are plain, the language is only a `language-x` class), search snippets and section-scoped search, a static export (`ferrite site export --html`), versioned docs, admonitions, footnotes and task lists in Markdown import, YAML front matter (TOML only; the error says how to convert), per-menu-item attributes, and content types shipped by a theme.

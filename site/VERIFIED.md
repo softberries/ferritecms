@@ -524,3 +524,34 @@ Run on 2026-11-02 on the release commit of branch `m5-mcp` (`develop` at 6f774f7
 | first-site, cli | `seed demo` creates `admin` without a password and, while it has none, ends by printing how to set one (`user reset-password --login admin`) or create an account (`user create`) | `crates/ferrite/src/seed.rs` (`sign_in_hint`, `Summary::admin_has_password`); tests `seed_default_profile_is_unchanged`, `seed_business_profile`, `seed_hint_goes_once_admin_has_a_password` (both backends) | Verified |
 | README, upgrades | `ferrite self-update` moves a 0.1.0 binary to 0.2.0 | Run 2026-11-02: the published `ferrite-0.1.0-aarch64-apple-darwin` binary, `self-update --check` → "a newer release is available: 0.2.0" (exit 2), `self-update --yes` → "updated … from 0.1.0 to 0.2.0; the previous binary is kept at ….prev", then `--version` → `ferrite 0.2.0` | Verified |
 
+
+## Webhooks, M6-6 (2026-11-03)
+
+Runs on 2026-11-03 with a release build of branch `m6-6-webhooks` (the scripts and their
+output are in the exit's §4), a fresh site at `http://127.0.0.1:8197`, `serve` with
+`FERRITE_WEBHOOKS__LOCAL_TARGETS=true` and a Python receiver on `127.0.0.1:9197`.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| webhooks | Webhooks need `manage_webhooks`, held by administrators only | `crates/ferrite-core/src/actor.rs` (`can`, `webhooks_are_admin_only_and_never_oauth`); `tests/webhooks.rs` `editor_and_scoped_tokens_refused`; API `non_admin_and_scopes_refused` | Verified |
+| webhooks | Screen under Administration, `g` then `w`; New webhook, name, URL, events by group, content types with content events, secret shown once, Send test | `admin/src/shell/nav.ts`; `webhooks.test.tsx`; E2E `webhook_end_to_end` (Chromium SQLite and Postgres, Firefox, WebKit) | Verified |
+| webhooks | At most 20 webhooks | `MAX_ENDPOINTS`; tests `twentieth_plus_one_is_refused`, `twenty_one_is_422` | Verified |
+| webhooks | The event table (types and when they fire); not sent for terms, menus, settings, page views, import items, `seed demo` | `crates/ferrite-core/src/webhooks/catalogue.rs`; `tests/webhooks_emit.rs` (one test per group); run: `media.uploaded`, `user.created`, `content.created`, `content.published`, `comment.created` received | Verified |
+| webhooks | Request headers `content-type`, `user-agent: ferrite/<v> webhooks`, `webhook-id`, `webhook-timestamp`, `webhook-signature`; body fields `id`, `type`, `timestamp`, `version`, `site.url`, `data` | run (headers of one hit printed); `render_body`; `deliver_success_records_attempt` | Verified (the sample in the page has made-up ids and signature, as it says) |
+| webhooks | Thin payload: no body, fields, SEO, e-mail; comment text at most 2 000 characters, no e-mail or URL; title 300; `url` null when not public | `payload_has_no_body_fields_or_email`, `comment_submit_moderate_delete`, `user_create_update_delete`; run: the comment hit held no `email` | Verified |
+| webhooks | Signature `v1,` + base64 HMAC-SHA256 of `<id>.<timestamp>.<body>` with the base64-decoded key after `whsec_` | `signature_known_answer` (the Standard Webhooks libraries' vector); `local_receiver_verifies_signature` (independent HMAC) | Verified |
+| webhooks | The by-hand Node.js and Python snippets verify a real delivery | run: the page's two functions (`verify.mjs`, `verify.py`) on every hit: all `true` | Verified |
+| webhooks | The `standardwebhooks` JS and Python snippets | Not run: the libraries were not installed (no downloads in this run); the calls follow the libraries' documented API | Not verified |
+| webhooks | Rotation: 24 hours, two signatures, current first | `rotation_signs_with_both`; E2E (both verified with the sink's own HMAC) | Verified |
+| webhooks | `2xx` success; redirects not followed; 15 s timeout | `result_of`; `redirect_not_followed`, `slow_headers_time_out` (with a short seam), `WEBHOOK_TIMEOUT` | Verified (15 s itself only by constant) |
+| webhooks | Retries after 5 s, 5 min, 30 min, 2, 5, 10, 14 h with jitter: 8 attempts, about 31.5 h; `Retry-After` on 429/503, at most a day | `schedule_and_jitter_bounds`, `retry_after_raises_but_caps_24h`; run: attempt 1 at +0.5 s, attempt 2 at +6.5 s, next at +5 min | Verified (first two steps run; the rest by unit test) |
+| webhooks | At least once, no order; same `webhook-id` on retries and redeliveries | run: both attempts carried one id; `receiver_down_retries_on_schedule`, `redeliver_and_since_cap` | Verified |
+| webhooks | `410` disables at once; 5 days and 10 failures disable; admins are mailed; banner; doctor warns | `gone_disables_at_once`, `five_days_and_ten_failures_auto_disable`, `gone_disables_and_mails_admins` (a recording mailer); run: `state disabled reason gone`, audit `webhook.auto_disabled` with the host, doctor `warn … was disabled automatically (gone)` | Verified (the mail through a real SMTP server not run) |
+| webhooks | The log keeps 30 days | `RETENTION`, `prune_deletes_old_events` | Verified |
+| webhooks | A copy made with `import-site` (and `restore`, `db copy`) is paused | run: `export` + `import-site` into a fresh folder, doctor `… is paused: this database was copied or restored`; `paused_copy_skips` | Verified for `import-site`; `restore` and `db copy` by the install-id rule (M4-1), not run |
+| webhooks | Only public `https` targets; `local_targets` allows `http`, loopback and private, never link-local or metadata; `config check` prints `webhooks=local`; doctor warns | `tests/plugins/webhook_send.rs` (12 hostile cases), `local_rule_keeps_metadata_refused`; run: doctor `webhooks=local` and the warning | Verified |
+| webhooks | Netlify, Vercel and Cloudflare Pages offer deploy hooks that build on a `POST` | General knowledge of those hosts; no hook was called | Not verified |
+| rest-api | Area `webhooks`; `system:write`/`settings:write` do not include it | `SCOPE_NAMES`; API `non_admin_and_scopes_refused` | Verified |
+| monitoring, cli | 26 doctor checks, `webhooks.endpoints` in the database group | `tests/doctor.rs` `ORDER`; run | Verified |
+| configuration | `[webhooks] local_targets`, default `false`, env `FERRITE_WEBHOOKS__LOCAL_TARGETS` | `ferrite-config` `webhooks_local_targets` | Verified |
+| upgrades | Old nodes in a rolling upgrade emit no webhook events and claim no delivery jobs | design 18 §10.4; the runner claims only handled kinds (`ferrite-cluster`) | Not run (no mixed-version cluster with webhooks) |

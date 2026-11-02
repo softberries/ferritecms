@@ -88,13 +88,13 @@ the release lookup). The database is still opened, which on Postgres is a networ
 connection, and a running node's own listeners are still probed (`net.listen`).
 
 It prints one line per check, `<status>  <check>  <detail>`, the status one of `ok`,
-`info`, `warn`, `error` or `skip`, and then a summary line. The 25 checks:
+`info`, `warn`, `error` or `skip`, and then a summary line. The 26 checks:
 
 | Area | Checks |
 |---|---|
 | Binary and config | `version.binary`, `config.load` |
 | Files | `fs.data_dir`, `fs.config_file`, `fs.secret_key`, `fs.database_files`, `fs.backups_dir`, `fs.themes_dir` |
-| Database | `db.lock_state`, `db.connect`, `db.schema`, `db.identity` |
+| Database | `db.lock_state`, `db.connect`, `db.schema`, `db.identity`, `webhooks.endpoints` |
 | Upgrades | `upgrade.record` |
 | Media | `media.store`, `media.owner` |
 | Clock and cluster | `clock.db_skew`, `clock.peers`, `cluster.versions`, `cluster.site_url` |
@@ -107,6 +107,11 @@ It prints one line per check, `<status>  <check>  <detail>`, the status one of `
 | 1 | at least one check is an error |
 | 2 | at least one check is a warning |
 | 0 | none of the above |
+
+`webhooks.endpoints` warns when a webhook was disabled automatically (its receiver
+answered `410` or kept failing for 5 days), has been failing for more than 24 hours or is
+paused on a copied database, and when `[webhooks] local_targets` is on; it names webhooks
+and hosts only, never a URL's path ([Webhooks](../02-guides/09-webhooks.md)).
 
 For example, a data folder that others can read gives `warn  fs.data_dir … chmod o-rwx
 (0750 is recommended)`, and a `ferrite.toml` readable by others gives `warn

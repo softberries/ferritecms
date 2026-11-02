@@ -90,6 +90,12 @@ so these commands run next to live nodes.
 on a cluster it is informational only (no snapshot on Postgres, and other nodes write
 none). Do not roll a cluster back from it.
 
+
+Webhooks (M6-6, design 18 §10.4): a node older than the webhooks release emits no
+webhook events for the writes it serves and does not claim `webhook.deliver` jobs (it has
+no handler). The writes served by old nodes during the deploy record no event, so there is
+nothing to redeliver for them later: keep the mixed window short.
+
 ## 3. After the deploy
 
 - `ferrite migrate status --data /data` with the new image: exit 0, "up to date".

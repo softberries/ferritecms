@@ -126,6 +126,8 @@ export async function startSite(opts: {
         FERRITE_SERVER__TRUSTED_PROXIES: '["127.0.0.1/32"]',
         FERRITE_MAIL__SMTP_URL: `smtp://127.0.0.1:${sink.port}`,
         FERRITE_MAIL__FROM: "FerriteCMS <admin@example.test>",
+        // The webhooks spec's sink listens on loopback over http (M6-6).
+        FERRITE_WEBHOOKS__LOCAL_TARGETS: "true",
       }),
       stdio: ["ignore", "pipe", "pipe"],
     });

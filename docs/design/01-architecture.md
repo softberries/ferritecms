@@ -65,6 +65,9 @@ ferritecms/
 │   │                             #   M4-3b: heading ids and `TocEntry` (`blocks/anchor.rs`),
 │   │                             #   `SiteReader::tree` (`site/tree.rs`), `ListOrder`, the
 │   │                             #   Markdown import's map key (`import.md.id`).
+│   │                             #   M6-6: `webhooks/` (catalogue, signing, sealed secrets,
+│   │                             #   URL rules, schedule, `WebhookService`, `emit` from the
+│   │                             #   write paths, the `WebhookTransport` trait).
 │   │                             #   Depends on domain + store only
 │   ├── ferrite-cache/            # (built, M1c-2) page cache (moka) + dependency index + outbox
 │   │                             #   invalidation loop
@@ -89,7 +92,9 @@ ferritecms/
 │   │                             #   M3-2: the `/import` endpoints and `import_blobs::MediaArtifacts`,
 │   │                             #   core's report storage over the media store; M4-2: the
 │   │                             #   metrics registry and `/metrics` text (`metrics`), HSTS
-│   │                             #   and the redirect app (`tls`), the series endpoint))
+│   │                             #   and the redirect app (`tls`), the series endpoint;
+│   │                             #   M6-6: `webhook_send::WebhookClient` over the egress
+│   │                             #   resolver and the `/webhooks` endpoints))
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`

@@ -75,7 +75,7 @@ tls=… backup=… webhooks=…` and exits 0, or lists the problems and exits 1.
 ferrite doctor --data DIR [--offline]
 ```
 
-Runs 25 checks and changes nothing ([Monitoring](../04-operations/05-monitoring.md)).
+Runs 26 checks and changes nothing ([Monitoring](../04-operations/05-monitoring.md)).
 `--offline` skips the checks that reach other services (S3, SMTP, the ACME directory,
 the release lookup); the database is still opened. Exit 3 when the schema is newer than
 this binary allows, else 1 when a check is an error, else 2 when one is a warning, else
