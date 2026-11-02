@@ -1,0 +1,89 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>My Site</title>
+<meta property="og:title" content="My Site">
+<meta property="og:url" content="http://127.0.0.1:8080/">
+<meta property="og:type" content="website">
+<link rel="canonical" href="http://127.0.0.1:8080/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+<script src="&#x2f;_theme&#x2f;<hash>&#x2f;docs.js" defer></script>
+
+<style>:root{--accent:#2563eb}</style>
+</head>
+<body class="is-search">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="site-title" href="/" rel="home">My Site</a>
+    <form class="search-form search-form--compact" role="search" aria-label="Site" method="get" action="/">
+  <label class="search-form__label visually-hidden" for="search">Search the documentation</label>
+  <div class="search-form__row">
+    <input type="search" id="search" name="s" value="install" placeholder="Search" autocomplete="off" required>
+    <button type="submit">Search</button>
+  </div>
+</form>
+  </div>
+</header>
+<div class="docs-layout">
+
+<div class="docs-sidebar">
+<details class="docs-pages-toggle"><summary aria-controls="nav">Pages</summary></details>
+<nav class="docs-nav" id="nav" aria-label="Pages">
+<ul class="tree" role="list">
+<li class="tree__item tree__item--parent">
+<a class="tree__link" href="&#x2f;guide&#x2f;">Guide</a>
+<details class="tree__section"><summary class="tree__toggle"><span class="visually-hidden">Pages in Guide</span></summary>
+<ul class="tree" role="list">
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;guide&#x2f;first&#x2f;">First steps</a>
+</li>
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;guide&#x2f;second&#x2f;">Second steps</a>
+</li>
+</ul>
+</details>
+</li>
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;">Introduction</a>
+</li>
+</ul>
+</nav>
+</div>
+<main id="content" class="docs-main" tabindex="-1">
+
+<div class="docs-listing">
+  <h1 class="docs-title">Search results for “install”</h1>
+  <form class="search-form" role="search" aria-label="Search again" method="get" action="/">
+  <label class="search-form__label" for="docs-search-page">Search the documentation</label>
+  <div class="search-form__row">
+    <input type="search" id="docs-search-page" name="s" value="install" placeholder="Search" autocomplete="off" required>
+    <button type="submit">Search</button>
+  </div>
+</form>
+  <p class="search-count" role="status">1 result</p>
+  
+<ul class="docs-list" role="list">
+  <li class="docs-list__item">
+    <h2 class="docs-list__title"><a href="&#x2f;guide&#x2f;first&#x2f;">First steps</a></h2>
+    <p class="docs-list__excerpt">Install and run.</p>
+  </li>
+</ul>
+</div>
+
+</main>
+</div>
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <p class="site-credit">My Site. Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>
