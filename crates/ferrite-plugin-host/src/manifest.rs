@@ -12,8 +12,12 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 /// Plugin names that are refused because a static admin API path takes them
 /// (`/api/v1/plugins/<name>` would hit that route instead; ruling R9). A new static
-/// segment under `/plugins/` goes here.
-pub const RESERVED_PLUGIN_NAMES: &[&str] = &["inspect", "retained"];
+/// segment under `/plugins/` goes here. Names added after rows could be stored with them
+/// (`registry`, `publishers`, M6-2) are refused for uploads only, so such a row still loads.
+pub const RESERVED_PLUGIN_NAMES: &[&str] = &["inspect", "retained", "registry", "publishers"];
+
+/// The reserved names refused even for stored rows (they were reserved from the start).
+const ALWAYS_RESERVED: &[&str] = &["inspect", "retained"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
@@ -497,7 +501,9 @@ fn parse_plugin(cx: &mut Cx, t: &mut toml::Table) -> Option<PluginMeta> {
     if let Some(n) = &name {
         if !ferrite_domain::valid_plugin_name(n) {
             cx.push("plugin.name", "must match [a-z0-9-]{2,48}");
-        } else if RESERVED_PLUGIN_NAMES.contains(&n.as_str()) {
+        } else if ALWAYS_RESERVED.contains(&n.as_str())
+            || (cx.upload && RESERVED_PLUGIN_NAMES.contains(&n.as_str()))
+        {
             cx.push("plugin.name", format!("`{n}` is reserved"));
         }
     }
@@ -1073,6 +1079,20 @@ world = "ferrite:plugin/plugin@0.1.0"
         // A name that only contains a reserved word is fine.
         let src = MINIMAL.replace("\"mini\"", "\"inspector\"");
         assert!(Manifest::parse(&src).is_ok());
+    }
+
+    /// M6-2: `registry` and `publishers` are refused for uploads, but a row stored under
+    /// one of them before M6-2 still loads.
+    #[test]
+    fn reserved_name_row_still_loads() {
+        for name in ["registry", "publishers"] {
+            let src = MINIMAL.replace("\"mini\"", &format!("\"{name}\""));
+            assert!(Manifest::parse(&src).is_err(), "{name}");
+            let table: toml::Table = src.parse().unwrap();
+            let json = serde_json::to_value(table).unwrap();
+            let m = Manifest::from_json(&json).expect(name);
+            assert_eq!(m.plugin.name, name);
+        }
     }
 
     /// M2b-3: an uploaded manifest's homepage must be `http(s)://`; a stored row that

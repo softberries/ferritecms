@@ -88,7 +88,8 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   on an update they are never in `added` and they do not change the fingerprint.
   The `fingerprint` is the lowercase hex SHA-256 of the compact JSON `{"artifact",
   "grant", "plugin", "version"}` (`grant` = `Grant::of(manifest).to_json()`; serde_json
-  maps are sorted and a unit test pins one value). `POST /plugins` and `ferrite plugin
+  maps are sorted and a unit test pins one value), plus `"signer": "<KEY_ID>"` when the
+  bundle is signed (M6-2, design 14 §3.5: unsigned fingerprints are unchanged). `POST /plugins` and `ferrite plugin
   install` install only when the approval is the fingerprint of *this* upload, so an
   approval never covers other bytes or another grant; a mismatch is `422 validation`
   with `errors[0].field = "approve"` and the upload's report, and nothing changes.
