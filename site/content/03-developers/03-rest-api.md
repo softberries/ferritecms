@@ -26,7 +26,8 @@ manage a site from an AI assistant, use its MCP endpoint, `/mcp`, instead: it of
 same operations as tools an assistant understands, runs them through the same services,
 permission checks and audit log, and signs the assistant in with OAuth
 ([AI assistants (MCP)](../02-guides/08-ai-assistants.md),
-[MCP tools](../05-reference/02-mcp-tools.md)).
+[MCP tools](../05-reference/02-mcp-tools.md)). Coming in the next release (0.2.0); build from source today
+([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
 
 The two share personal API tokens: a `fer_…` token made under **Account → API tokens** works
 on both. A token an assistant gets from the consent screen (OAuth) is bound to `/mcp`: the

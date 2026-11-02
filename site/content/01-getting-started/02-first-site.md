@@ -97,6 +97,9 @@ content, jumps to a screen, creates something or changes a preference.
 
 ## Connect an AI assistant
 
+> Coming in the next release (0.2.0); build from source today ([Install → Build from source](01-install.md#build-from-source)). A 0.1.0
+> binary has no MCP endpoint.
+
 The site is ready to be run from an AI assistant. Its MCP address is the site's URL plus
 `/mcp`: here `http://localhost:8080/mcp`. The dashboard shows it, and
 **Settings → AI assistants** has the steps for each client. On a local site, use an
@@ -106,8 +109,8 @@ assistant that runs on your computer, such as Claude Code:
 claude mcp add --transport http ferrite http://localhost:8080/mcp
 ```
 
-Then run `/mcp` in Claude Code, pick `ferrite` and choose **Authenticate**. Your browser
-opens the site's consent screen: approve, and ask Claude Code something like "List the
+Then run `/mcp` in Claude Code, choose the `ferrite` server and follow the browser
+sign-in. Your browser opens the site's consent screen: approve, and ask Claude Code something like "List the
 drafts on my site" or "Write a short post about our opening hours, as a draft". Claude
 (claude.ai and Claude Desktop) and ChatGPT connect from their own servers, so they need
 the site on a public `https` address. See [AI assistants (MCP)](../02-guides/08-ai-assistants.md).

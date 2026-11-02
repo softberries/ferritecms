@@ -106,7 +106,7 @@ contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub
 still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. M5 (AI
 assistants over MCP) is built on branch `m5-mcp`; its exit (Task 11) is still open: every site
 serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) with 56 tools,
-3 resources and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
+2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
 card; migration `0013_oauth`; design 12, roadmap "M5". Work top-down in
@@ -191,7 +191,7 @@ Ctrl-C/SIGTERM). The admin is at `http://localhost:8080/admin/`; for admin work 
 http://localhost:8080` header, then send the cookie plus `X-CSRF-Token` on writes, or use a
 bearer token from `POST /api/v1/users/{id}/tokens`. AI assistants (M5): the MCP endpoint is
 `http://localhost:8080/mcp`; connect Claude Code with `claude mcp add --transport http ferrite
-http://localhost:8080/mcp`, then `/mcp` → `ferrite` → Authenticate (browser consent at
+http://localhost:8080/mcp`, then `/mcp`, choose `ferrite` and follow the browser sign-in (consent at
 `/admin/connect`), or add `--header "Authorization: Bearer fer_…"` with a personal token; Cursor
 and VS Code take the URL in `mcp.json` (guide `site/content/02-guides/08-ai-assistants.md`);
 Claude.ai/Desktop connectors and ChatGPT connect from the vendor's cloud and need the site on

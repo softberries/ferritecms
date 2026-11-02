@@ -9,6 +9,8 @@ These are the tools an AI assistant sees when it connects to a site's `/mcp` end
 56 of them, in 13 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
+> Coming in the next release (0.2.0); build from source today ([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
+
 How to read the tables:
 
 - **Scope** is the permission a tool needs. A tool runs as the person who connected the
@@ -25,8 +27,7 @@ How to read the tables:
   `![alt](ferrite:media/<id>)`, and anything Markdown cannot express travels as a
   `ferrite-block` fence that the assistant keeps as it is. Updates take the `version` the
   assistant read, so a change made meanwhile by someone else is never overwritten.
-- Every successful write is recorded in the audit log as `mcp.<tool>` with the
-  assistant's name.
+- Successful writes are recorded in the audit log as `mcp.<tool>` under the app's name.
 - Each user can make 120 tool calls a minute.
 
 Installing or removing plugins and themes, managing users, tokens, sessions and connected

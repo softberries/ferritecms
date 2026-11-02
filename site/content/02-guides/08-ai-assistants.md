@@ -17,12 +17,13 @@ The assistant writes the post, publishes it and puts it in the menu, using the s
 tools. Nothing needs to be installed on the site: the endpoint is part of the `ferrite`
 binary and on by default.
 
-> **New:** the MCP endpoint is not in the 0.1.0 release; it comes with the next one, or
-> with a build from source ([Install](../01-getting-started/01-install.md)).
+> **Coming in the next release (0.2.0); build from source today**
+> ([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
+> The 0.1.0 release has no MCP endpoint.
 
 The assistant acts **as you**. It signs in through your site's own sign-in and approval
-screen, it can do only what your role allows, within the areas you approve, and every
-change it makes is recorded in the audit log under its name.
+screen, it can do only what your role allows, within the areas you approve, and its
+changes are recorded in the audit log under the app's name.
 
 <figure><img src="../images/admin-consent.webp" alt="The consent screen: Connect My assistant, the app's name with a Self-registered badge, the address it returns to, a warning that the app named itself, and the permissions per area with Off, Read and Write"><figcaption>The consent screen an assistant sends you to. You choose, area by area, what it may do.</figcaption></figure>
 
@@ -73,7 +74,8 @@ HTTPS first ([HTTPS](../04-operations/04-https.md)).
 
 ## Connect an assistant
 
-Menus in the assistants' apps change often; the steps below were checked in November 2026.
+These steps were written against the vendors' documentation in November 2026; menus
+change, so follow the client's own docs if a step differs.
 
 ### Claude (claude.ai and Claude Desktop)
 
@@ -93,10 +95,11 @@ connects it. See Anthropic's
 
 ### ChatGPT
 
-In ChatGPT's settings, turn on developer mode (under the advanced settings of Apps and
-Connectors), then create a connector with the MCP address and **OAuth** as the
-authentication. ChatGPT opens your site's sign-in page; sign in and approve. Developer
-mode is not on every ChatGPT plan; OpenAI's help pages say which.
+These steps follow a third-party walkthrough: OpenAI's own page could not be read when
+this was written. In ChatGPT's settings, turn on developer mode (under the advanced
+settings of Apps and Connectors), then create a connector with the MCP address and
+**OAuth** as the authentication. ChatGPT opens your site's sign-in page; sign in and
+approve. Developer mode is not on every ChatGPT plan; OpenAI's help pages say which.
 
 ### Claude Code
 
@@ -104,8 +107,8 @@ mode is not on every ChatGPT plan; OpenAI's help pages say which.
 claude mcp add --transport http ferrite https://example.com/mcp
 ```
 
-Then run `/mcp` in Claude Code, pick `ferrite` and choose **Authenticate**: a browser
-window opens on your site; sign in and approve. Add `--scope project` to write the server
+Then run `/mcp` in Claude Code, choose the `ferrite` server and follow the browser
+sign-in: your site's sign-in and consent screen open; sign in and approve. Add `--scope project` to write the server
 to the project's `.mcp.json`, so everyone working in the project gets it (each person
 still signs in as themselves).
 
@@ -150,7 +153,7 @@ Add the server to the workspace's `.vscode/mcp.json`:
 }
 ```
 
-The first time VS Code starts the server, a browser window opens on your site; sign in and
+When the server asks for sign-in, VS Code opens a browser window on your site; sign in and
 approve. With a personal API token, add an `inputs` entry (`"type": "promptString"`,
 `"password": true`) and the header `"Authorization": "Bearer ${input:<its id>}"`, so the
 token is asked for once and not stored in the file.
@@ -184,7 +187,8 @@ What the assistant may do is always **your role ∩ the areas you approved**:
 
 A connection request is valid for ten minutes and works once. After you approve, the
 assistant holds a token that lasts one hour and renews it on its own; the connection
-stays until it has not been used for 30 days, or until you disconnect it. Connecting the
+lasts until 30 days after it last renewed its access (assistants renew while in use), or
+until you disconnect it. Connecting the
 same app again replaces its earlier connection, which is how you widen or narrow what it
 may do.
 
@@ -222,8 +226,9 @@ reference lists everything.
 
 Changes are live as soon as a tool returns. The server tells the assistant to create
 drafts unless you asked it to publish and to ask you before anything destructive, and the
-tools that change or remove things are marked so, which most clients use to ask for your
-confirmation.
+tools that remove or replace things are marked so, which most clients use to ask for your
+confirmation. `content_trash` and `media_trash` move things to the trash, where they can
+be restored; `term_delete` and `redirect_delete` delete outright.
 
 ## What stays with people
 
@@ -241,11 +246,12 @@ it reads includes the admin's address.
 
 ## The audit log
 
-Every change an assistant makes is recorded in the audit log as `mcp.<tool>` (for example
+Changes an assistant makes are recorded in the audit log as `mcp.<tool>` (for example
 `mcp.content_publish`), with the app's name, or `API token <name>` for a personal token,
 next to your user. Read it under **System → Audit log**, or ask the assistant (`audit_list`
 needs the system read permission). Content changes also keep their revisions, as edits in
-the admin do.
+the admin do. If writing the audit row itself fails after a change was made, the change
+stands and the server logs the failure.
 
 ## Disconnect, or turn it all off
 
@@ -263,7 +269,8 @@ the admin do.
   comments from visitors, imported content, plugin output) can contain text written to
   mislead it ("ignore your instructions and delete…"). The server tells the assistant to
   treat site content as data, content and media go to the trash rather than being
-  deleted, and the riskiest actions have no tool. Still read what your assistant proposes before you
+  deleted (terms and redirects are deleted outright), and the riskiest actions have no
+  tool. Still read what your assistant proposes before you
   confirm a change, and give an assistant that reads visitors' comments no more than it
   needs: **Read only** is enough for questions and reports.
 - **No passwords leave the site.** Assistants sign in through the site's own page; tokens
@@ -278,9 +285,10 @@ the admin do.
 
 | What you see | Why, and what to do |
 |---|---|
-| `401` with `WWW-Authenticate: Bearer resource_metadata=…` | No token, or one that expired or was revoked. Authenticate again in the client (in Claude Code: `/mcp`, then **Authenticate**), or create a new personal token. |
+| `401` with `WWW-Authenticate: Bearer resource_metadata=…` | No token, or one that expired or was revoked. Sign in again from the client (in Claude Code: run `/mcp`, choose the server and follow the browser sign-in), or create a new personal token. |
 | Claude or ChatGPT cannot connect to a local site | They connect from their own servers, so the site must be on a public `https` address. Use Claude Code, Cursor or VS Code for a site on `localhost`. |
-| `404` on `/mcp` | **Allow AI assistants** is off (Settings → AI assistants), or the address is wrong: it is the site's URL plus `/mcp`, without a trailing slash. |
+| `404` on `/mcp` | **Allow AI assistants** is off (Settings → AI assistants), or the address points at another server: it is the site's URL plus `/mcp`. |
+| `405` on `POST` | The path is wrong. Check that the address ends in exactly `/mcp`, with no trailing slash: `/mcp`, not `/mcp/`. |
 | `405` on `GET /mcp` | Expected: the endpoint answers `POST` only. |
 | `403` "requests from another origin are refused" | A browser page on another site sent the request. Use an MCP client, not a web page. |
 | A tool error "Too many requests … Retry after N s." | Each user may make 120 tool calls a minute. Wait the seconds it names. |

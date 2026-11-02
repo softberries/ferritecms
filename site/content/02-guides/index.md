@@ -4,7 +4,8 @@ Task-oriented guides for running a site day to day.
 
 - [AI assistants (MCP)](08-ai-assistants.md): connect Claude, ChatGPT, Claude Code,
   Cursor or VS Code and run the site by asking: write and publish, organise media and
-  menus, moderate comments, check the site's health.
+  menus, moderate comments, check the site's health. Coming in the next release (0.2.0); build from source today
+  ([Install → Build from source](../01-getting-started/01-install.md#build-from-source)).
 - [Writing and publishing](01-writing.md): the editor, publishing and scheduling,
   autosave, revisions and previews.
 - [Media](02-media.md): uploads, image sizes, featured and inline images.

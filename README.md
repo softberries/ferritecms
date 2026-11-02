@@ -18,7 +18,8 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
 
 - **Run it from your AI assistant**: every site serves an MCP endpoint. Connect Claude,
   ChatGPT, Claude Code, Cursor or VS Code and ask it to write, publish, organise and check
-  your site, as you, with your permissions, every change audited.
+  your site, as you, with your permissions; changes are recorded in the audit log under
+  the app's name. Coming in the next release (0.2.0); build from source today.
 - **Single binary, single folder**: web server, admin, themes, plugin runtime and SQLite
   are compiled in (Postgres and S3 are optional, for several nodes). Back up or move a site
   by copying one folder.
@@ -48,8 +49,8 @@ The two quickest ways to connect:
   claude mcp add --transport http ferrite http://localhost:8080/mcp
   ```
 
-  then run `/mcp` in Claude Code, pick `ferrite` and choose **Authenticate**; your browser
-  opens the site's consent screen.
+  then run `/mcp` in Claude Code, choose the `ferrite` server and follow the browser
+  sign-in; your browser opens the site's consent screen.
 - **Claude** (claude.ai, Claude Desktop) or **ChatGPT**, for a site on public HTTPS: add
   `https://your-site/mcp` as a custom connector (Claude) or as a developer-mode connector
   with OAuth (ChatGPT), then sign in and approve.
@@ -58,10 +59,10 @@ Cursor, VS Code and any other MCP client work too; a personal API token in an
 `Authorization` header replaces the sign-in for scripts. 56 tools cover posts and pages,
 media, terms, menus, content types, redirects, comments, settings, themes, plugins and the
 site's health. The assistant acts as you: through your site's own sign-in and consent
-screen, with your role narrowed to the areas you approve, and every change it makes is in
-the audit log under its name. Installing plugins, managing users and tokens, imports and
-backups stay with people. The endpoint is new since `0.1.0`: build from source (below)
-until the next release.
+screen, with your role narrowed to the areas you approve, and its changes are recorded in
+the audit log under the app's name. Installing plugins, managing users and tokens, imports
+and backups stay with people. Coming in the next release (0.2.0); build from source today
+([From source](#from-source)).
 [Guide](https://softberries.github.io/ferritecms/guides/ai-assistants/) ·
 [Every tool](https://softberries.github.io/ferritecms/reference/mcp-tools/)
 

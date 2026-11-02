@@ -87,6 +87,7 @@ user, through the site's consent screen, and gets that user's role narrowed to t
 the user approved. Its changes go through the same checks as the admin's and are recorded
 in the audit log under the app's name. Connected apps are listed under
 **Account → Connected apps**. See [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
+Coming in the next release (0.2.0); build from source today ([Install → Build from source](01-install.md#build-from-source)).
 
 ## The data folder
 
