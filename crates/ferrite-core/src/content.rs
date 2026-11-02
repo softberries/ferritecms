@@ -141,9 +141,22 @@ impl ContentService {
         // One set of rules for the whole write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = self
+        let done = match self
             .create_in(tx.as_ref(), rules.as_ref(), actor, draft)
-            .await;
+            .await
+        {
+            // Here, not in `create_in`: `seed demo` and uploads create through that.
+            Ok(saved) => crate::webhooks::emit_content(
+                tx.as_ref(),
+                rules.as_ref(),
+                "content.created",
+                &saved,
+                Some(actor.user),
+            )
+            .await
+            .map(|_| saved),
+            Err(e) => Err(e),
+        };
         finish(tx, done).await
     }
 
@@ -365,6 +378,8 @@ impl ContentService {
         );
         keys.extend(redirect_keys(redirected));
         after_save(tx, actor, &saved, keys, note).await?;
+        crate::webhooks::emit_content(tx, permalinks, "content.updated", &saved, Some(actor.user))
+            .await?;
         // A real save supersedes the actor's own autosave; other users' slots stay.
         tx.autosaves().delete(id, actor.user).await?;
         Ok(saved)

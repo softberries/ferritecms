@@ -7,6 +7,7 @@ use std::time::Duration;
 
 pub mod catalogue;
 mod deliver;
+mod emit;
 pub mod schedule;
 pub mod secret;
 mod service;
@@ -16,6 +17,7 @@ pub mod url;
 
 pub use catalogue::{EVENT_TYPES, EventTypeInfo, PAYLOAD_VERSION, PING, check_patterns, matches};
 pub use deliver::{Delivered, render_body};
+pub use emit::{NewWebhookEvent, emit, emit_comment, emit_content};
 pub use service::{
     DeliveryDetail, PAUSED, WebhookInput, WebhookPatch, WebhookService, WebhookState, WebhookView,
 };

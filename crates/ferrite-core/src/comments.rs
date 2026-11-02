@@ -612,6 +612,9 @@ impl CommentService {
                     .append(&events::invalidate([post_key(comment.item_id)]))
                     .await?;
             }
+            let by = user.map(|a| a.user);
+            crate::webhooks::emit_comment(tx.as_ref(), "comment.created", &comment, None, by)
+                .await?;
             Ok(())
         }
         .await;
@@ -762,11 +765,18 @@ impl CommentService {
         require(actor, Capability::ModerateComments)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let previous = tx.comments().get(id).await?.map(|c| c.status);
             let comment = tx
                 .comments()
                 .set_status(id, status)
                 .await?
                 .ok_or(CoreError::NotFound)?;
+            if let Some(previous) = previous.filter(|p| *p != comment.status) {
+                let by = Some(actor.user);
+                let kind = "comment.moderated";
+                crate::webhooks::emit_comment(tx.as_ref(), kind, &comment, Some(previous), by)
+                    .await?;
+            }
             tx.events()
                 .append(&events::invalidate([post_key(comment.item_id)]))
                 .await?;
@@ -798,6 +808,9 @@ impl CommentService {
             if !tx.comments().delete(id).await? {
                 return Err(CoreError::NotFound);
             }
+            let by = Some(actor.user);
+            crate::webhooks::emit_comment(tx.as_ref(), "comment.deleted", &comment, None, by)
+                .await?;
             tx.events()
                 .append(&events::invalidate([post_key(comment.item_id)]))
                 .await?;
