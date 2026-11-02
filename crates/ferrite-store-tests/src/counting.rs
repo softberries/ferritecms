@@ -219,6 +219,9 @@ impl Repos for CountingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.read().plugin_trust()
+    }
 }
 
 #[async_trait]
@@ -655,6 +658,9 @@ impl Repos for CountingTx {
     }
     fn oauth(&self) -> &dyn OAuthRepo {
         self.tx.oauth()
+    }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.tx.plugin_trust()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

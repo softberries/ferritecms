@@ -275,6 +275,25 @@ pub fn rich_site() -> Dump {
             ]),
         ),
         (
+            "plugin_publishers",
+            rows(vec![json!({
+                "key_id": "0102030405060708",
+                "public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                "label": "example.dev", "source": "approved", "trusted_at": T_NOW,
+                "revoked_at": T_EDGE, "revoked_reason": "rotated", "compromised": false})]),
+        ),
+        (
+            "plugin_owners",
+            rows(vec![
+                json!({"plugin": "seo", "owner": "key:0102030405060708",
+                       "signer_key": "0102030405060708", "signature": "untrusted comment: x\n",
+                       "publisher": "example.dev", "source": "upload",
+                       "bound_at": T_NOW, "updated_at": T_NOW}),
+                json!({"plugin": "old", "publisher": "x", "source": "folder",
+                       "bound_at": T_PRE_1970, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
             "themes",
             rows(vec![json!({
                 "name": "blog", "version": "0.1.0", "artifact_hash": h('d'),

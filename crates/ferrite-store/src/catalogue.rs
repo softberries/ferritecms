@@ -751,6 +751,61 @@ pub static TABLES: &[TableSpec] = &[
         self_ref: None,
         nullable: &[],
         export: Export::Skip,
+    }, // M6-2 (0015): publisher keys and owner bindings move with the site; the registry
+    // cache is refetched.
+    TableSpec {
+        name: "plugin_publishers",
+        columns: &[
+            ("key_id", Text),
+            ("public_key", Text),
+            ("label", Text),
+            ("source", Text),
+            ("trusted_at", Ts),
+            ("revoked_at", Ts),
+            ("revoked_reason", Text),
+            ("compromised", Bool),
+        ],
+        key: &["key_id"],
+        self_ref: None,
+        nullable: &["revoked_at", "revoked_reason"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "plugin_owners",
+        columns: &[
+            ("plugin", Text),
+            ("owner", Text),
+            ("signer_key", Text),
+            ("signature", Text),
+            ("publisher", Text),
+            ("source", Text),
+            ("registry_url", Text),
+            ("bound_at", Ts),
+            ("updated_at", Ts),
+        ],
+        key: &["plugin"],
+        self_ref: None,
+        nullable: &["owner", "signer_key", "signature", "registry_url"],
+        export: Export::Rows,
+    },
+    // A cache, refetched.
+    TableSpec {
+        name: "plugin_registry",
+        columns: &[
+            ("url", Text),
+            ("serial", Int),
+            ("index_json", Text),
+            ("signature", Text),
+            ("generated_at", Ts),
+            ("fetched_at", Ts),
+            ("checked_at", Ts),
+            ("last_error", Text),
+            ("last_error_at", Ts),
+        ],
+        key: &["url"],
+        self_ref: None,
+        nullable: &["last_error", "last_error_at"],
+        export: Export::Skip,
     },
 ];
 
@@ -933,7 +988,7 @@ mod tests {
                 assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 39);
+        assert_eq!(TABLES.len(), 42);
     }
 
     #[test]
@@ -959,6 +1014,7 @@ mod tests {
                 "rate_limits",
                 "idempotency_keys",
                 "node_metrics",
+                "plugin_registry",
             ]
         );
         assert_eq!(

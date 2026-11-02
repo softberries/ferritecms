@@ -178,6 +178,9 @@ impl Repos for FailingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.store.read().oauth()
     }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.store.read().plugin_trust()
+    }
 }
 
 #[async_trait]

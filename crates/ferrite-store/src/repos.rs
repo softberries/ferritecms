@@ -199,6 +199,8 @@ pub trait Repos: Send + Sync {
     fn imports(&self) -> &dyn ImportRepo;
     fn node_metrics(&self) -> &dyn NodeMetricsRepo;
     fn oauth(&self) -> &dyn OAuthRepo;
+    /// Plugin trust (M6-2): publisher keys, owners, the registry cache.
+    fn plugin_trust(&self) -> &dyn crate::PluginTrustRepo;
 }
 
 /// Per-node minute metrics (`node_metrics`, M4-2 P35).

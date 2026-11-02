@@ -898,6 +898,9 @@ impl Repos for FailingTx {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.oauth()
     }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.plugin_trust()
+    }
 }
 
 #[async_trait]

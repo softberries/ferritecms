@@ -190,6 +190,9 @@ impl Repos for HookRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.read().plugin_trust()
+    }
 }
 
 #[async_trait]
