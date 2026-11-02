@@ -9,7 +9,11 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::{Map, Value, json};
 
-use super::{ExtensionService, RetainedPluginData, append_audit, finish_locked};
+use ferrite_domain::plugin_trust::{KeySource, PluginOwner, PublisherKey, Revocation, TrustedKey};
+
+use super::{
+    ExtensionService, InstallTrust, RetainedPluginData, TrustDecision, append_audit, finish_locked,
+};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
@@ -147,9 +151,98 @@ impl ExtensionAdmin {
             "granted": row.granted,
         });
         let audit = audit(actor, "plugin.install", "plugin", &row.name, details);
+        let trust = InstallTrust::unsigned(super::manifest_publisher(&row.manifest));
         self.service
-            .install_plugin_with(artifact, row, Some(audit))
+            .install_plugin_with(artifact, row, &trust, Some(audit))
             .await
+            .map(|_| ())
+    }
+
+    /// [`ExtensionService::install_plugin_trusted`] with audit `plugin.install` `{name,
+    /// version, artifact, granted, signer, owner, source}`.
+    pub async fn install_plugin_trusted(
+        &self,
+        actor: &Actor,
+        artifact: &Artifact,
+        row: &InstalledPlugin,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        if !row.granted.is_object() {
+            return Err(CoreError::invalid_field("approve", "a grant is required"));
+        }
+        let details = json!({
+            "name": row.name,
+            "version": row.version,
+            "artifact": artifact.hash.as_str(),
+            "granted": row.granted,
+        });
+        let audit = audit(actor, "plugin.install", "plugin", &row.name, details);
+        self.service
+            .install_plugin_with(artifact, row, trust, Some(audit))
+            .await
+    }
+
+    /// The trust decision for a report ([`ExtensionService::trust_preview`]).
+    pub async fn trust_preview(
+        &self,
+        actor: &Actor,
+        name: &str,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        self.service.trust_preview(name, trust).await
+    }
+
+    /// [`ExtensionService::revoke_key`] with audit `plugin.publisher.revoke` `{key_id,
+    /// reason, compromised, disabled}`.
+    pub async fn revoke_key(
+        &self,
+        actor: &Actor,
+        key: &PublisherKey,
+        revocation: &Revocation,
+        label_if_new: &str,
+        source_if_new: KeySource,
+    ) -> Result<Vec<String>, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        let details = json!({
+            "key_id": key.key_id.to_string(),
+            "reason": revocation.reason,
+            "compromised": revocation.compromised,
+        });
+        let audit = audit(
+            actor,
+            "plugin.publisher.revoke",
+            "publisher",
+            &key.key_id.to_string(),
+            details,
+        );
+        self.service
+            .revoke_key_with(key, revocation, label_if_new, source_if_new, Some(audit))
+            .await
+    }
+
+    /// The site's publisher key rows.
+    pub async fn publishers(&self, actor: &Actor) -> Result<Vec<TrustedKey>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.list_keys().await
+    }
+
+    /// The plugin owner rows.
+    pub async fn owners(&self, actor: &Actor) -> Result<Vec<PluginOwner>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.owners().await
+    }
+
+    /// The owner row of `name`.
+    pub async fn owner(&self, actor: &Actor, name: &str) -> Result<Option<PluginOwner>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.owner(name).await
+    }
+
+    /// The system service behind this facade (registry refreshes are system writes).
+    pub fn service(&self) -> &ExtensionService {
+        &self.service
     }
 
     /// [`ExtensionService::set_plugin_enabled`] with audit `plugin.enable` or

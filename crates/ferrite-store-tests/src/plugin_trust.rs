@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// A syntactically valid minisign public key with key number `n` (no private half).
-pub(crate) fn key(n: u64) -> PublisherKey {
+pub fn key(n: u64) -> PublisherKey {
     use base64::Engine;
     let mut bin = b"Ed".to_vec();
     bin.extend_from_slice(&n.to_le_bytes());
