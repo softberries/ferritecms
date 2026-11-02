@@ -116,6 +116,8 @@ fn item(wp_id: i64, slug: &str, author: UserId) -> ImportContent {
         terms: Vec::new(),
         seo: None,
         meta: Vec::new(),
+        locale: None,
+        translation_group: None,
     }
 }
 

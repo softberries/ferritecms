@@ -178,7 +178,10 @@ pub async fn list_terms(
     Authed(who): Authed,
     ApiPath(taxonomy): ApiPath<String>,
 ) -> Result<Json<TermList>, Problem> {
-    let terms = api.taxonomy.list_terms_for(&who.actor, &taxonomy).await?;
+    let terms = api
+        .taxonomy
+        .list_terms_for(&who.actor, &taxonomy, None)
+        .await?;
     Ok(Json(TermList {
         items: terms.into_iter().map(TermDto::from).collect(),
         next_cursor: None,

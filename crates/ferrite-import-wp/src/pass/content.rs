@@ -860,6 +860,8 @@ async fn prepare(
         terms,
         seo,
         meta: wp_meta,
+        locale: None,
+        translation_group: None,
     };
     content.hash = content_hash(&content)?;
     Ok(Some(Prepared {

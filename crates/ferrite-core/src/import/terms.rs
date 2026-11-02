@@ -87,6 +87,7 @@ impl ImportBatch<'_> {
                 slug,
                 t.parent,
                 &t.description,
+                crate::taxonomy::TermPlacement::default(),
             )
             .await?;
             self.keys.extend(keys);

@@ -246,7 +246,7 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     store.read().content().update(&future).await.unwrap();
 
     assert_eq!(
-        svc.counts(&author, "post").await.unwrap(),
+        svc.counts(&author, "post", None).await.unwrap(),
         StatusCounts {
             draft: 2,
             pending: 0,
@@ -257,7 +257,7 @@ pub async fn counts_respect_can_read(db: &TestDb) {
         }
     );
     assert_eq!(
-        svc.counts(&editor, "post").await.unwrap(),
+        svc.counts(&editor, "post", None).await.unwrap(),
         StatusCounts {
             draft: 5,
             pending: 1,
@@ -269,24 +269,24 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     );
     // A contributor with nothing of its own sees only the publicly visible item.
     assert_eq!(
-        svc.counts(&contributor, "post").await.unwrap(),
+        svc.counts(&contributor, "post", None).await.unwrap(),
         StatusCounts {
             published: 1,
             ..StatusCounts::default()
         }
     );
     assert_eq!(
-        svc.counts(&editor, "page").await.unwrap(),
+        svc.counts(&editor, "page", None).await.unwrap(),
         StatusCounts::default()
     );
     assert!(matches!(
-        svc.counts(&editor, "nope").await,
+        svc.counts(&editor, "nope", None).await,
         Err(CoreError::NotFound)
     ));
     let no_scope =
         editor.with_scopes(ferrite_core::Scopes::from_strs(&["users:read".to_owned()]).unwrap());
     assert!(matches!(
-        svc.counts(&no_scope, "post").await,
+        svc.counts(&no_scope, "post", None).await,
         Err(CoreError::Forbidden(_))
     ));
 }

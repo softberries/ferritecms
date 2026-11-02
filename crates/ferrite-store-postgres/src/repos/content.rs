@@ -206,7 +206,7 @@ impl ContentRepo for PgRepos {
         let ids: Vec<Uuid> = groups.iter().map(|g| g.as_uuid()).collect();
         let rows = run!(&self.exec, |e| sqlx::query(
             "SELECT id, coalesce(translation_group, id) AS grp, type, locale, status, slug, \
-             parent_id, published_at, title FROM content_items \
+             parent_id, published_at, title, author_id FROM content_items \
              WHERE translation_group = ANY($1) OR (translation_group IS NULL AND id = ANY($1)) \
              ORDER BY grp, locale, id"
         )

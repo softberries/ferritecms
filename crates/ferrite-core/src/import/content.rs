@@ -71,6 +71,11 @@ pub struct ImportContent {
     pub seo: Option<SeoPatch>,
     /// Extra meta (`wp.<name>` and the like); the keys [`ImportBatch::meta`] accepts.
     pub meta: Vec<(String, Value)>,
+    /// The item's locale, one of the site's (`None`: the default); a created item takes
+    /// it, an updated one keeps its own (M6-1).
+    pub locale: Option<String>,
+    /// The translation group a created item joins (`None`: its own).
+    pub translation_group: Option<ContentId>,
 }
 
 /// What [`ImportBatch::content`] did with an item (P4).
@@ -378,11 +383,22 @@ impl ImportBatch<'_> {
             c.parent.map(|p| (p, None)),
         )
         .await?;
+        let locales = crate::locales::read(repos).await?;
+        let locale = match &c.locale {
+            None => locales.default.tag.clone(),
+            Some(l) if locales.contains(l) => l.clone(),
+            Some(l) => {
+                return Err(CoreError::invalid_field(
+                    "locale",
+                    format!("{l:?} is not one of the site's locales"),
+                ));
+            }
+        };
         let root = root_namespace(
             repos,
             self.rules.as_ref(),
             &types,
-            &c.kind,
+            (&c.kind, &locale),
             c.parent,
             false,
             &base,
@@ -405,8 +421,8 @@ impl ImportBatch<'_> {
             scheduled_at: dates.scheduled_at,
             created_at: Some(c.created_at),
             updated_at: Some(c.updated_at),
-            locale: crate::locales::read(repos).await?.default.tag,
-            translation_group: None,
+            locale,
+            translation_group: c.translation_group,
         });
         let saved = save_with_free_slug(self.tx.as_ref(), row, &base, None, &root).await?;
         set_terms(repos, saved.id, &dedup(&c.terms)).await?;
@@ -454,7 +470,7 @@ impl ImportBatch<'_> {
                 repos,
                 self.rules.as_ref(),
                 &types,
-                &c.kind,
+                (&c.kind, &current.locale),
                 c.parent,
                 false,
                 &base,

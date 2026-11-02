@@ -88,6 +88,8 @@ fn post(wp_id: i64, slug: &str, status: ContentStatus, author: UserId) -> Import
         terms: Vec::new(),
         seo: None,
         meta: Vec::new(),
+        locale: None,
+        translation_group: None,
     }
 }
 

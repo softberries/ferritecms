@@ -46,6 +46,8 @@ pub struct AdminQuery {
     pub limit: u32,
     /// `next_cursor` of the previous page of the same query.
     pub cursor: Option<String>,
+    /// Only items in this locale (M6-1); `None`: every locale.
+    pub locale: Option<String>,
 }
 
 impl AdminQuery {
@@ -61,6 +63,7 @@ impl AdminQuery {
             order: ContentOrder::UpdatedDesc,
             limit: 50,
             cursor: None,
+            locale: None,
         }
     }
 
@@ -216,6 +219,7 @@ impl ContentService {
                     order: query.order,
                     limit: query.limit,
                     cursor: query.cursor.clone(),
+                    locale: query.locale.clone(),
                     ..ContentQuery::default()
                 })
                 .await?);
@@ -234,7 +238,7 @@ impl ContentService {
                 readable_by,
                 limit: query.limit,
                 cursor: query.cursor.clone(),
-                locale: None,
+                locale: query.locale.clone(),
             })
             .await?;
         // An empty id set short-circuits (M1c-1 R3).
@@ -597,7 +601,12 @@ impl ContentService {
     /// How many items of type `kind` are in each status, counting only what `actor` may
     /// read, with the same `readable_by` filter as [`list`](Self::list) (needs
     /// `require_read(Content)`; an unknown type is `NotFound`). One count per status.
-    pub async fn counts(&self, actor: &Actor, kind: &str) -> Result<StatusCounts, CoreError> {
+    pub async fn counts(
+        &self,
+        actor: &Actor,
+        kind: &str,
+        locale: Option<&str>,
+    ) -> Result<StatusCounts, CoreError> {
         require_read(actor, Area::Content)?;
         let repos = self.store.read();
         if repos.types().get(kind).await?.is_none() {
@@ -611,6 +620,7 @@ impl ContentService {
                     kind: Some(kind.to_owned()),
                     statuses: vec![status],
                     readable_by,
+                    locale: locale.map(str::to_owned),
                     ..ContentQuery::default()
                 })
                 .await
@@ -627,6 +637,43 @@ impl ContentService {
 }
 
 impl ContentService {
+    /// The translations of `items` (M6-1): for each item's translation group, the
+    /// members other than the item that `actor` may read, keyed by the item's id, in
+    /// one `group_members` read per 200 groups.
+    pub async fn translations(
+        &self,
+        actor: &Actor,
+        items: &[ContentItem],
+    ) -> Result<std::collections::HashMap<ContentId, Vec<ferrite_store::TranslationRef>>, CoreError>
+    {
+        let mut groups: Vec<ContentId> = items.iter().map(|i| i.translation_group).collect();
+        groups.sort_by_key(|g| g.as_uuid());
+        groups.dedup();
+        let repos = self.store.read();
+        let mut members = Vec::new();
+        for chunk in groups.chunks(ferrite_store::MAX_GROUPS) {
+            members.extend(repos.content().group_members(chunk).await?);
+        }
+        let now = Timestamp::now();
+        let readable = |m: &ferrite_store::TranslationRef| {
+            m.author_id == actor.user
+                || crate::actor::can(actor.role, crate::actor::Capability::EditOthers)
+                || (m.status == ContentStatus::Published
+                    && m.published_at.is_some_and(|at| at <= now))
+        };
+        Ok(items
+            .iter()
+            .map(|i| {
+                let of_item = members
+                    .iter()
+                    .filter(|m| m.group == i.translation_group && m.id != i.id && readable(m))
+                    .cloned()
+                    .collect();
+                (i.id, of_item)
+            })
+            .collect())
+    }
+
     /// `actor`'s autosave of item `id`, if any. Read like revisions (F12):
     /// [`get_for`](Self::get_for) (`NotFound` when the item cannot be read), then
     /// [`role_can_edit`] (`Forbidden` otherwise), so a read-only token of a role that may

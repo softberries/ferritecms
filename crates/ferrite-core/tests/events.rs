@@ -89,7 +89,13 @@ async fn keys_since(store: &dyn Store, after: i64) -> Keys {
     for e in &events {
         assert_eq!(e.kind, "invalidate", "{e:?}");
     }
-    events.into_iter().flat_map(|e| e.keys).collect()
+    // Translation group keys (M6-1) are checked in `content_locales.rs`; here every
+    // write names its own group, which these cases do not spell out.
+    events
+        .into_iter()
+        .flat_map(|e| e.keys)
+        .filter(|k| !k.starts_with("group:") && !k.starts_with("tgroup:"))
+        .collect()
 }
 
 fn set<const N: usize>(keys: [String; N]) -> Keys {

@@ -26,6 +26,7 @@ mod admin;
 mod allowed;
 mod lifecycle;
 pub mod seo;
+mod translate;
 
 pub use admin::{
     AdminQuery, AuthorRef, AutosaveDraft, ContentRef, MAX_REFS, MAX_REVISIONS_LISTED, SiteSearch,
@@ -34,6 +35,18 @@ pub use admin::{
 pub use allowed::{AllowedActions, allowed_actions};
 pub(crate) use lifecycle::reclaim_path;
 pub use seo::{Robots, Seo, SeoPatch};
+pub use translate::{Relocation, TranslateNote, Translated};
+pub(crate) use translate::{
+    check_group_free, check_parent_locale, check_term_locales, join_target,
+};
+
+/// Where a new item goes (13 §2.3): its locale (`None`: the site's default) and the
+/// translation group it joins (`None`: its own).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Placement {
+    pub(crate) locale: Option<String>,
+    pub(crate) group: Option<ContentId>,
+}
 
 /// Unique index on (type, parent, slug); a violation of it means another writer took
 /// the slug between our lookup and our write.
@@ -142,8 +155,48 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = self
-            .create_in(tx.as_ref(), rules.as_ref(), actor, draft)
+            .create_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                draft,
+                Placement::default(),
+            )
             .await;
+        finish(tx, done).await
+    }
+
+    /// [`create`](Self::create) in `locale` (`None`: the site's default; it must be one
+    /// of the site's locales, else `InvalidField { field: "locale" }`), joining the
+    /// translation group of item `translation_of` when given: that item must be one
+    /// `actor` may read (else `InvalidField { field: "translation_of" }`), of the same
+    /// type, and its group must have no member in `locale` ([`CoreError::InUse`] naming
+    /// it). The parent must be in `locale`, and on a multilingual site so must the terms.
+    pub async fn create_localized(
+        &self,
+        actor: &Actor,
+        draft: ContentDraft,
+        locale: Option<String>,
+        translation_of: Option<ContentId>,
+    ) -> Result<ContentItem, CoreError> {
+        require(actor, Capability::EditOwn)?;
+        let rules = self.permalinks.pin();
+        let tx = self.store.begin().await?;
+        let done = async {
+            let group = match translation_of {
+                None => None,
+                Some(of) => Some(join_target(tx.as_ref(), actor, of, &draft.kind).await?),
+            };
+            self.create_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                draft,
+                Placement { locale, group },
+            )
+            .await
+        }
+        .await;
         finish(tx, done).await
     }
 
@@ -157,6 +210,7 @@ impl ContentService {
         rules: &dyn Permalinks,
         actor: &Actor,
         draft: ContentDraft,
+        placement: Placement,
     ) -> Result<ContentItem, CoreError> {
         check_body(&draft.body)?;
         check_seo(&draft)?;
@@ -174,11 +228,30 @@ impl ContentService {
             draft.parent_id.map(|p| (p, None)),
         )
         .await?;
+        let locales = crate::locales::read(tx).await?;
+        let locale = match placement.locale {
+            _ if draft.kind == MEDIA_KIND => locales.default.tag.clone(),
+            None => locales.default.tag.clone(),
+            Some(l) if locales.contains(&l) => l,
+            Some(l) => {
+                return Err(CoreError::invalid_field(
+                    "locale",
+                    format!("{l:?} is not one of the site's locales"),
+                ));
+            }
+        };
+        if let Some(parent) = draft.parent_id {
+            check_parent_locale(tx, parent, &locale).await?;
+        }
+        check_term_locales(tx, &locales, &terms, &locale).await?;
+        if let Some(group) = placement.group {
+            check_group_free(tx, group, &locale, None).await?;
+        }
         let root = root_namespace(
             tx,
             rules,
             &types,
-            &draft.kind,
+            (&draft.kind, &locale),
             draft.parent_id,
             draft.slug.is_some(),
             &base,
@@ -186,7 +259,6 @@ impl ContentService {
         .await?;
         let excerpt = excerpt_of(&draft);
         let seo = draft.seo;
-        let locale = crate::locales::read(tx).await?.default.tag;
         let row = Row::New(NewContent {
             id: ContentId::new(),
             kind: draft.kind,
@@ -205,7 +277,7 @@ impl ContentService {
             created_at: None,
             updated_at: None,
             locale,
-            translation_group: None,
+            translation_group: placement.group,
         });
         let saved = save_with_free_slug(tx, row, &base, None, &root).await?;
         set_terms(tx, saved.id, &terms).await?;
@@ -314,6 +386,11 @@ impl ContentService {
             .filter(|_| draft.parent_id != current.parent_id)
             .map(|p| (p, Some(id)));
         check_item(tx, actor, &types, &current.kind, &draft.fields, new_parent).await?;
+        if let Some((parent, _)) = new_parent {
+            check_parent_locale(tx, parent, &current.locale).await?;
+        }
+        let locales = crate::locales::read(tx).await?;
+        check_term_locales(tx, &locales, &terms, &current.locale).await?;
         let old_term_rows = tx.terms().for_item(id).await?;
         let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
 
@@ -335,7 +412,7 @@ impl ContentService {
                 tx,
                 permalinks,
                 &types,
-                &current.kind,
+                (&current.kind, &current.locale),
                 next.parent_id,
                 draft.slug.is_some(),
                 &base,
@@ -479,7 +556,7 @@ pub(crate) struct RootNamespace {
     peers: Vec<String>,
 }
 
-/// The root-namespace rules for an item of `kind` under `parent` (none below the
+/// The root-namespace rules for an item of `kind` in `locale` under `parent` (none below the
 /// top level). `types` is every registered type, read once by the caller for its
 /// kind check too. A caller slug (`explicit`) that is a router prefix or four digits
 /// is `InvalidField { field: "slug", .. }` ("reserved slug").
@@ -487,7 +564,7 @@ pub(crate) async fn root_namespace(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     types: &[ContentType],
-    kind: &str,
+    (kind, locale): (&str, &str),
     parent: Option<ContentId>,
     explicit: bool,
     base: &str,
@@ -498,6 +575,11 @@ pub(crate) async fn root_namespace(
     let mut names: Vec<String> = types.iter().map(|t| t.name.clone()).collect();
     names.extend(repos.taxonomies().list().await?.into_iter().map(|t| t.name));
     names.extend(slug::ROUTE_WORDS.iter().map(|w| (*w).to_owned()));
+    // A default-locale item at `/<slug>/` may not take a locale prefix (13 §2.3).
+    let prefixes = permalinks.locale_prefixes(kind);
+    if !prefixes.contains(&ferrite_domain::locale::prefix(locale)) {
+        names.extend(prefixes);
+    }
     let year = slug::is_year(base);
     if explicit && (year || names.iter().any(|n| n == base)) {
         return Err(CoreError::invalid_field("slug", "reserved slug"));
@@ -527,6 +609,13 @@ impl Row {
         match self {
             Row::New(n) => n.parent_id,
             Row::Existing(i) => i.parent_id,
+        }
+    }
+
+    fn locale(&self) -> &str {
+        match self {
+            Row::New(n) => &n.locale,
+            Row::Existing(i) => &i.locale,
         }
     }
 
@@ -565,7 +654,7 @@ pub(crate) async fn save_with_free_slug(
         let attempt = tx.begin_nested().await?;
         let mut taken = attempt
             .content()
-            .slugs_with_prefix(row.kind(), None, row.parent(), base)
+            .slugs_with_prefix(row.kind(), Some(row.locale()), row.parent(), base)
             .await?;
         if row.parent().is_none() {
             taken.extend(slug::RESERVED.iter().map(|s| (*s).to_owned()));
@@ -577,7 +666,7 @@ pub(crate) async fn save_with_free_slug(
                 taken.extend(
                     attempt
                         .content()
-                        .slugs_with_prefix(peer, None, None, base)
+                        .slugs_with_prefix(peer, Some(row.locale()), None, base)
                         .await?,
                 );
             }
@@ -727,13 +816,17 @@ pub(crate) fn invalidation_keys(
     moved_descendants: &[ContentId],
 ) -> Vec<String> {
     let terms: BTreeSet<TermId> = old_terms.iter().chain(new_terms).copied().collect();
-    [events::post_key(item.id), events::archive_key(&item.kind)]
-        .into_iter()
-        .chain(terms.into_iter().map(events::term_key))
-        .chain(old_parent.into_iter().map(events::post_key))
-        .chain(item.parent_id.map(events::post_key))
-        .chain(moved_descendants.iter().copied().map(events::post_key))
-        .collect()
+    [
+        events::post_key(item.id),
+        events::archive_key(&item.kind),
+        events::group_key(item.translation_group),
+    ]
+    .into_iter()
+    .chain(terms.into_iter().map(events::term_key))
+    .chain(old_parent.into_iter().map(events::post_key))
+    .chain(item.parent_id.map(events::post_key))
+    .chain(moved_descendants.iter().copied().map(events::post_key))
+    .collect()
 }
 
 /// Records a move when the paths of `old` and `new` (the same item) differ, adding the
@@ -1022,6 +1115,7 @@ mod tests {
         let want: BTreeSet<String> = [
             events::post_key(it.id),
             events::archive_key("page"),
+            events::group_key(it.translation_group),
             events::term_key(a),
             events::term_key(b),
             events::term_key(c),
@@ -1039,7 +1133,7 @@ mod tests {
         let got: BTreeSet<String> = invalidation_keys(&it, &[a], &[a], Some(p1), &[])
             .into_iter()
             .collect();
-        assert_eq!(got.len(), 4, "{got:?}");
+        assert_eq!(got.len(), 5, "{got:?}");
         // Create under a parent: the parent is invalidated.
         assert!(invalidation_keys(&it, &[], &[], None, &[]).contains(&events::post_key(p1)));
     }

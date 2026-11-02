@@ -397,7 +397,7 @@ pub async fn count_content(
     ApiPath(kind): ApiPath<String>,
 ) -> Result<Json<ContentCountsDto>, Problem> {
     served(&kind)?;
-    let counts = api.content.counts(&who.actor, &kind).await?;
+    let counts = api.content.counts(&who.actor, &kind, None).await?;
     Ok(Json(counts.into()))
 }
 

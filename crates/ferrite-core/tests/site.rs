@@ -45,7 +45,14 @@ async fn max_seq(store: &dyn Store) -> i64 {
 async fn last_event(store: &dyn Store) -> (String, Vec<String>) {
     let events = store.read().events().since(0, 1000).await.unwrap();
     let last = events.last().unwrap();
-    (last.kind.clone(), last.keys.clone())
+    // Without the translation group keys (M6-1; checked in `taxonomy_locales.rs`).
+    let keys = last
+        .keys
+        .iter()
+        .filter(|k| !k.starts_with("tgroup:") && !k.starts_with("group:"))
+        .cloned()
+        .collect();
+    (last.kind.clone(), keys)
 }
 
 fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -160,10 +167,10 @@ pub async fn term_crud_and_events(db: &TestDb) {
         Err(CoreError::NotFound)
     ));
 
-    let listed = svc.list_terms("category").await.unwrap();
+    let listed = svc.list_terms("category", None).await.unwrap();
     assert_eq!(listed.len(), 3);
     assert!(matches!(
-        svc.list_terms("nope").await,
+        svc.list_terms("nope", None).await,
         Err(CoreError::NotFound)
     ));
 

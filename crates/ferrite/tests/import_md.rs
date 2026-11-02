@@ -1033,6 +1033,12 @@ fn count_files(dir: &Path) -> usize {
 
 async fn dry_run_writes_nothing(site: Site) {
     let (_root, dir) = tree();
+    // As every command's start does once (M6-1): the dry run itself then writes nothing.
+    let store = site.store().await;
+    ferrite_core::locales::settle(store.as_ref(), "en")
+        .await
+        .unwrap();
+    store.close().await;
     let before = snapshot(&site).await;
     let out = site.import(&dir, &["--dry-run", "--front-page"]).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));

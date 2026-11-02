@@ -44,7 +44,8 @@ pub use auth::{
     AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,
 };
 pub use content::{
-    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, SiteSearch,
+    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, Relocation,
+    SiteSearch, TranslateNote, Translated,
 };
 pub use error::{CoreError, RowError};
 pub use extensions::{
@@ -70,7 +71,7 @@ pub use site::{
     TermPublic, UserPublic,
 };
 pub use system::{MetricsSeries, SystemService};
-pub use taxonomy::TaxonomyService;
+pub use taxonomy::{NewTermInput, TaxonomyService, TermPlacement};
 pub use types::{
     ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch, is_type_name_shaped,
 };

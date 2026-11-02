@@ -565,13 +565,17 @@ async fn emit(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
     emit_for(repos, item, &terms).await
 }
 
-/// `post:<id>`, `archive:<kind>`, `term:<t>` for every term in `terms` and
-/// `post:<parent>` if the item has a parent.
+/// `post:<id>`, `archive:<kind>`, `group:<translation group>`, `term:<t>` for every
+/// term in `terms` and `post:<parent>` if the item has a parent.
 async fn emit_for(repos: &dyn Repos, item: &ContentItem, terms: &[Term]) -> Result<(), CoreError> {
-    let keys = [events::post_key(item.id), events::archive_key(&item.kind)]
-        .into_iter()
-        .chain(terms.iter().map(|t| events::term_key(t.id)))
-        .chain(item.parent_id.map(events::post_key));
+    let keys = [
+        events::post_key(item.id),
+        events::archive_key(&item.kind),
+        events::group_key(item.translation_group),
+    ]
+    .into_iter()
+    .chain(terms.iter().map(|t| events::term_key(t.id)))
+    .chain(item.parent_id.map(events::post_key));
     repos.events().append(&events::invalidate(keys)).await?;
     Ok(())
 }

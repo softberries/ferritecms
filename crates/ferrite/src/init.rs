@@ -155,8 +155,8 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     )
     .await?;
     tracing::info!(?applied, "database migrated");
-    // `site.locales` from the config's locale (13 §2.2); nothing else runs on a new site.
-    ferrite_core::locales::settle(store.as_ref(), &config.site.locale).await?;
+    // No locale settle here (ruling R-1-4): `import-site` needs the new database empty;
+    // the first command that opens it (`serve`, `seed`, `user`, …) settles the locales.
     Ok(())
 }
 

@@ -48,6 +48,9 @@ pub(crate) fn translation_ref(row: &PgRow) -> Result<ferrite_store::TranslationR
         parent_id: parent.map(ContentId::from_uuid),
         published_at: published_at.map(Into::into),
         title: row.try_get("title").map_err(map_db_err)?,
+        author_id: ferrite_domain::UserId::from_uuid(
+            row.try_get::<Uuid, _>("author_id").map_err(map_db_err)?,
+        ),
     })
 }
 

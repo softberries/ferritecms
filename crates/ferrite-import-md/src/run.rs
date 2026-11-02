@@ -1018,6 +1018,8 @@ async fn write_pages(
                     ..SeoPatch::default()
                 }),
                 meta: Vec::new(),
+                locale: None,
+                translation_group: None,
             })
             .await?;
         if let Some(slug) = outcome.slug_changed {

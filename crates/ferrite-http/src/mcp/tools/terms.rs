@@ -184,7 +184,7 @@ impl FerriteMcp {
         let terms = match self
             .api
             .taxonomy
-            .list_terms_for(caller.actor(), &input.taxonomy)
+            .list_terms_for(caller.actor(), &input.taxonomy, None)
             .await
         {
             Ok(t) => t,

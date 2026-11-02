@@ -69,6 +69,7 @@ impl DemoBatch {
             Some(slug.to_owned()),
             None,
             "",
+            crate::taxonomy::TermPlacement::default(),
         )
         .await?;
         self.tx.events().append(&events::invalidate(keys)).await?;
@@ -149,7 +150,13 @@ impl DemoBatch {
     ) -> Result<ContentItem, CoreError> {
         let mut item = self
             .content
-            .create_in(self.tx.as_ref(), self.rules.as_ref(), actor, draft)
+            .create_in(
+                self.tx.as_ref(),
+                self.rules.as_ref(),
+                actor,
+                draft,
+                crate::content::Placement::default(),
+            )
             .await?;
         if let Some(at) = published_at {
             item.published_at = Some(at);

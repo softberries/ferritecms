@@ -112,7 +112,13 @@ async fn last_event_keys(store: &dyn Store) -> Vec<String> {
     let events = store.read().events().since(seq - 1, 10).await.unwrap();
     let last = events.last().unwrap();
     assert_eq!(last.kind, "invalidate");
-    let mut keys = last.keys.clone();
+    // Without the translation group key (M6-1; checked in `content_locales.rs`).
+    let mut keys: Vec<String> = last
+        .keys
+        .iter()
+        .filter(|k| !k.starts_with("group:"))
+        .cloned()
+        .collect();
     keys.sort();
     keys
 }

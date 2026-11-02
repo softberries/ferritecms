@@ -197,7 +197,7 @@ impl ContentRepo for SqliteRepos {
         }
         let mut qb = QueryBuilder::<Sqlite>::new(
             "SELECT id, coalesce(translation_group, id) AS grp, type, locale, status, slug, \
-             parent_id, published_at, title FROM content_items WHERE translation_group IN (",
+             parent_id, published_at, title, author_id FROM content_items WHERE translation_group IN (",
         );
         let mut list = qb.separated(", ");
         for g in groups {

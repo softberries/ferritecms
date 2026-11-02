@@ -176,7 +176,13 @@ impl MediaService {
         let done = async {
             let item = self
                 .content
-                .create_in(tx.as_ref(), rules.as_ref(), &writer, draft)
+                .create_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    &writer,
+                    draft,
+                    crate::content::Placement::default(),
+                )
                 .await?;
             // Uploads are published at once (P5); the lifecycle's keys include
             // `post:<id>`, which covers the media row written next (R11).

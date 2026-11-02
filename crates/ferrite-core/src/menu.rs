@@ -70,6 +70,16 @@ impl MenuService {
         Ok(self.store.read().menus().list().await?)
     }
 
+    /// The menu a theme location `name` shows in `locale` (13 §2.6, D11): the menu that
+    /// translates `name` into `locale`, else `name` itself (`None` when neither exists).
+    pub async fn for_location(&self, name: &str, locale: &str) -> Result<Option<Menu>, CoreError> {
+        let menus = self.store.read().menus();
+        if let Some(m) = menus.get_translation(name, locale).await? {
+            return Ok(Some(m));
+        }
+        Ok(menus.get(name).await?)
+    }
+
     /// [`get`](Self::get) for the admin (`require_read(Menus)`, F16).
     pub async fn get_for(&self, actor: &Actor, name: &str) -> Result<Menu, CoreError> {
         require_read(actor, Area::Menus)?;
@@ -150,19 +160,52 @@ pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreErr
     for item in &menu.items {
         check_item(repos, item).await?;
     }
+    let locales = crate::locales::read(repos).await?;
+    let mut menu = menu.clone();
     if menu.locale.is_empty() {
-        let locale = match repos.menus().get(&menu.name).await? {
+        menu.locale = match repos.menus().get(&menu.name).await? {
             Some(stored) if !stored.locale.is_empty() => stored.locale,
-            _ => crate::locales::read(repos).await?.default.tag,
+            _ => locales.default.tag.clone(),
         };
-        let menu = Menu {
-            locale,
-            ..menu.clone()
-        };
-        repos.menus().put(&menu).await?;
-    } else {
-        repos.menus().put(menu).await?;
     }
+    if !locales.contains(&menu.locale) {
+        return Err(CoreError::invalid_field(
+            "locale",
+            format!("{:?} is not one of the site's locales", menu.locale),
+        ));
+    }
+    if let Some(of) = &menu.translation_of {
+        if of == &menu.name {
+            return Err(CoreError::invalid_field(
+                "translation_of",
+                "a menu cannot translate itself",
+            ));
+        }
+        match repos.menus().get(of).await? {
+            Some(original) if original.locale == locales.default.tag => {}
+            _ => {
+                return Err(CoreError::invalid_field(
+                    "translation_of",
+                    "translation_of must name a menu in the default locale",
+                ));
+            }
+        }
+        if menu.locale == locales.default.tag {
+            return Err(CoreError::invalid_field(
+                "translation_of",
+                "a translation is in another locale than the default",
+            ));
+        }
+        if let Some(taken) = repos.menus().get_translation(of, &menu.locale).await?
+            && taken.name != menu.name
+        {
+            return Err(CoreError::InUse(format!(
+                "the translation of {of} into {} already exists: {}",
+                menu.locale, taken.name
+            )));
+        }
+    }
+    repos.menus().put(&menu).await?;
     Ok(())
 }
 

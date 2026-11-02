@@ -227,7 +227,7 @@ impl FerriteMcp {
             Some(types) => {
                 let mut out = Vec::new();
                 for t in types.into_iter().filter(|t| t.name != MEDIA_KIND) {
-                    let c = api.content.counts(actor, &t.name).await?;
+                    let c = api.content.counts(actor, &t.name, None).await?;
                     out.push(TypeInfo {
                         counts: Counts {
                             draft: c.draft,

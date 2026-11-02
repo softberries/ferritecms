@@ -218,6 +218,7 @@ pub struct TranslationRef {
     pub parent_id: Option<ContentId>,
     pub published_at: Option<Timestamp>,
     pub title: String,
+    pub author_id: ferrite_domain::UserId,
 }
 
 /// A menu without its items (`MenuRepo::list`).
