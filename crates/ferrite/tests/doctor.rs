@@ -172,6 +172,7 @@ const ORDER: &[&str] = &[
     "db.connect",
     "db.schema",
     "db.identity",
+    "webhooks.endpoints",
     "upgrade.record",
     "media.store",
     "media.owner",
@@ -210,6 +211,7 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         ("db.connect", "ok"),
         ("db.schema", "ok"),
         ("db.identity", "ok"),
+        ("webhooks.endpoints", "ok"),
         ("upgrade.record", "ok"),
         // The local probe is not a network check: it runs offline too.
         ("media.store", "ok"),
@@ -238,7 +240,7 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         "every check is wired: {}",
         out.stdout
     );
-    assert_eq!(out.summary, "doctor: 11 ok, 0 warn, 0 error, 6 skip");
+    assert_eq!(out.summary, "doctor: 12 ok, 0 warn, 0 error, 6 skip");
     // The lock is not held, and SQLite has no clock or cluster to compare.
     assert!(
         out.detail("db.lock_state").contains("no node"),
@@ -2208,4 +2210,106 @@ fn postgres_password_is_never_printed() {
     for text in [&out.stdout, &out.stderr] {
         assert!(!text.contains("pg-hunter2"), "{text}");
     }
+}
+
+/// An endpoint row for `webhook_endpoints` (M6-6): `extra` sets the columns that differ.
+fn webhook_row(name: &str, install: &str, enabled: bool, extra: &str) -> String {
+    let id = uuid::Uuid::now_v7().simple().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    format!(
+        "INSERT INTO webhook_endpoints (id, name, url, events, enabled, install_id, \
+         secret_sealed, created_at, updated_at{cols}) VALUES (X'{id}', '{name}', \
+         'https://hooks.example.com/build?token=s3cr3t-token', '[\"*\"]', {e}, '{install}', \
+         'v1.sealed-value', {now}, {now}{vals})",
+        e = i32::from(enabled),
+        cols = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", extra.split('=').next().unwrap())
+        },
+        vals = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", extra.split('=').nth(1).unwrap())
+        },
+    )
+}
+
+#[test]
+fn webhooks_endpoints_warns_on_disabled_failing_paused_and_local_targets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let db = tmp.path().join("ferrite.db");
+    // None: ok.
+    assert_eq!(offline(tmp.path()).detail("webhooks.endpoints"), "none");
+    let install = sqlite_meta(&db, "install_id");
+    // One healthy endpoint: ok with counts.
+    sqlite_exec(&db, &[&webhook_row("Healthy", &install, true, "")]);
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "ok", "{}", out.stdout);
+    assert_eq!(out.detail("webhooks.endpoints"), "1 endpoints, 1 active");
+    // Auto-disabled (gone), failing for two days, and paused: one warning each.
+    let two_days_ago = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+        - 2 * 86_400_000_000;
+    sqlite_exec(
+        &db,
+        &[
+            &webhook_row("Gone", &install, false, "disabled_reason='gone'"),
+            &webhook_row(
+                "Slow",
+                &install,
+                true,
+                &format!("failing_since={two_days_ago}"),
+            ),
+            &webhook_row("Copied", "another-install", true, ""),
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "warn", "{}", out.stdout);
+    assert_eq!(out.code, 2);
+    let detail = out.detail("webhooks.endpoints");
+    for needle in [
+        "\"Gone\" (hooks.example.com) was disabled automatically (gone)",
+        "\"Slow\" (hooks.example.com) has been failing for more than 24 hours",
+        "\"Copied\" (hooks.example.com) is paused",
+    ] {
+        assert!(detail.contains(needle), "{needle}: {detail}");
+    }
+    assert!(!detail.contains("Healthy"), "{detail}");
+    // Names and hosts only: no path, query or sealed secret anywhere.
+    for leaked in ["s3cr3t", "/build", "sealed-value", "token="] {
+        assert!(!out.stdout.contains(leaked), "{leaked}: {}", out.stdout);
+    }
+}
+
+#[test]
+fn webhooks_local_targets_warns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let mut cmd = ferrite();
+    cmd.args(["doctor", "--offline", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true");
+    let out = run(cmd);
+    assert_eq!(out.status("webhooks.endpoints"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("webhooks.endpoints").contains("local_targets"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn webhooks_without_a_database_skips() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    std::fs::remove_file(tmp.path().join("ferrite.db")).unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "skip", "{}", out.stdout);
 }
