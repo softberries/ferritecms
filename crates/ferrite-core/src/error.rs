@@ -58,6 +58,11 @@ pub enum CoreError {
     Hashing,
     #[error(transparent)]
     Store(StoreError),
+    /// The write conflicts with what exists (`409`): a locale that still holds content,
+    /// a translation group that already has a member in the locale. The text says what
+    /// and names the existing row's id or the counts (M6-1).
+    #[error("in use: {0}")]
+    InUse(String),
 }
 
 /// One invalid row of a batch ([`CoreError::InvalidRows`]).

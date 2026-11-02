@@ -328,15 +328,26 @@ pub async fn release_migrate_lock(guard: Box<dyn LockGuard>) {
 /// in `<data_dir>/upgrade.json` and `schema_meta.last_binary_version` (M4-2 P30,
 /// [`crate::upgrade::migrate_and_record`]); returns the record when one was written. Runs under the
 /// migrate lock, so concurrent starts migrate (and record) once and none reads a
-/// half-migrated schema.
+/// half-migrated schema. Then, under the same lock, it settles the site's locales
+/// ([`ferrite_core::locales::settle`], design 13 §2.2) with `site_locale` (the config's
+/// `site.locale`) as the fallback for a database that never had `site.locales`.
 pub async fn startup_check(
     store: &dyn Store,
     binary: &semver::Version,
     db: &DatabaseConfig,
     data_dir: &Path,
+    site_locale: &str,
 ) -> anyhow::Result<Option<UpgradeRecord>> {
     let guard = migrate_lock(store).await?;
-    let result = check_and_migrate(store, binary, db, data_dir).await;
+    let result = async {
+        let written = check_and_migrate(store, binary, db, data_dir).await?;
+        let settled = ferrite_core::locales::settle(store, site_locale).await?;
+        if settled.changed() {
+            tracing::info!(?settled, "settled the site's locales");
+        }
+        anyhow::Ok(written)
+    }
+    .await;
     release_migrate_lock(guard).await;
     result
 }

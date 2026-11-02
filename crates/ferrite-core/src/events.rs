@@ -14,6 +14,8 @@
 //! | `term:<term id>` | one term: its name, slug, description, and the list of items in it |
 //! | `archive:<kind>` | the listing of a content type (home, feeds, type archives, term archives of each type of the taxonomy, date archives, search) |
 //! | `menu:<name>` | a menu's items |
+//! | `group:<content id>` | the members of a content translation group (13 §5): which translations exist, their status and URL |
+//! | `tgroup:<term id>` | the members of a term translation group |
 //! | `option:<key>` | one option value |
 //! | `user:<user id>` | the public face of a user (login, display name) shown as an author |
 //! | `redirect:<source path>` | a redirect (informational, see below) |
@@ -112,6 +114,16 @@ pub fn archive_key(kind: &str) -> String {
 /// Dependency key of a term.
 pub fn term_key(id: TermId) -> String {
     format!("term:{id}")
+}
+
+/// Dependency key of a content translation group (the id of its original, M6-1).
+pub fn group_key(group: ContentId) -> String {
+    format!("group:{group}")
+}
+
+/// Dependency key of a term translation group (M6-1).
+pub fn term_group_key(group: TermId) -> String {
+    format!("tgroup:{group}")
 }
 
 /// Dependency key of a menu.

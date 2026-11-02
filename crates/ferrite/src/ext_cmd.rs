@@ -278,6 +278,7 @@ async fn with_site(
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = Arc::new(open_media(&config)?);

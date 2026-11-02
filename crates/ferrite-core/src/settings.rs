@@ -7,7 +7,9 @@
 //! |---|---|
 //! | `site.title` | string of at most 200 characters, no control characters |
 //! | `site.description` | string of at most 1000 characters (line breaks and tabs allowed) |
-//! | `site.locale` | 1..=35 ASCII letters, digits, `-` or `_` (a BCP 47 tag such as `pt-BR`) |
+//! | `site.locale` | 1..=35 ASCII letters, digits, `-` or `_` (a BCP 47 tag such as `pt-BR`); on a multilingual site it must equal the default locale, on a one-locale site a change renames the locale (13 §2.2) |
+//! | `site.locales` | a list, default first, of 1–20 `{ "tag", "label"? }` ([`SiteLocales::from_option`]); prefixes, removals and renames are checked in the write's transaction ([`crate::locales::check_change`]); cannot be cleared |
+//! | `site.locale_texts` | an object keyed by non-default tags of `site.locales`: `{ "title"?, "description"? }` like `site.title` / `site.description` |
 //! | `reading.per_page` | integer 1..=100 |
 //! | `reading.front_page` | the UUID string of an existing, non-trashed page (checked by `set_many`), or null |
 //! | `reading.discourage_indexing` | boolean |
@@ -19,7 +21,10 @@
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
-use ferrite_domain::{ContentId, ContentStatus};
+use ferrite_domain::{
+    ContentId, ContentStatus,
+    locale::{LOCALE_TEXTS_OPTION, LOCALES_OPTION, SiteLocales},
+};
 use ferrite_store::Store;
 use serde_json::{Map, Value};
 
@@ -62,6 +67,10 @@ pub enum SettingKind {
     Permalink,
     /// One of the listed strings.
     Choice(&'static [&'static str]),
+    /// The site's locale list (`site.locales`, design 13 §2.2).
+    Locales,
+    /// Per-locale site title and tagline (`site.locale_texts`).
+    LocaleTexts,
 }
 
 /// One allowlisted setting.
@@ -90,6 +99,14 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "site.locale",
         kind: SettingKind::Locale,
+    },
+    SettingDef {
+        key: LOCALES_OPTION,
+        kind: SettingKind::Locales,
+    },
+    SettingDef {
+        key: LOCALE_TEXTS_OPTION,
+        kind: SettingKind::LocaleTexts,
     },
     SettingDef {
         key: "reading.per_page",
@@ -203,6 +220,16 @@ pub fn validate(key: &str, value: &Value) -> Result<(), CoreError> {
         SettingKind::Choice(choices) => {
             if !value.as_str().is_some_and(|s| choices.contains(&s)) {
                 return bad(format!("{key} must be one of {}", choices.join(", ")));
+            }
+        }
+        SettingKind::Locales => {
+            if let Err(e) = SiteLocales::from_option(value) {
+                return bad(e.to_string());
+            }
+        }
+        SettingKind::LocaleTexts => {
+            if let Err(e) = crate::locales::validate_texts(value) {
+                return bad(e);
             }
         }
         SettingKind::Permalink => {

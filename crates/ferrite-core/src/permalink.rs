@@ -37,7 +37,7 @@
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use ferrite_domain::{ContentId, ContentItem, Term};
+use ferrite_domain::{ContentId, ContentItem, Term, locale::SiteLocales};
 use ferrite_store::Repos;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -80,6 +80,14 @@ pub trait Permalinks: Send + Sync {
     /// The other content types whose top-level items get paths of the same shape as
     /// top-level items of `kind` (so their slugs must not collide). Default: none.
     fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
+        let _ = kind;
+        Vec::new()
+    }
+
+    /// The URL prefixes of the site's non-default locales when top-level items of
+    /// `kind` live at `/<slug>/` (such an item in the default locale may not take one as
+    /// its slug, 13 §2.3). Default: none.
+    fn locale_prefixes(&self, kind: &str) -> Vec<String> {
         let _ = kind;
         Vec::new()
     }
@@ -242,6 +250,9 @@ pub struct PermalinkRules {
     post: Structure,
     page: Structure,
     other: Structure,
+    /// The site's locales (`site.locales`): every non-default locale's items live under
+    /// its prefix (13 §4).
+    locales: SiteLocales,
 }
 
 /// Option holding the post structure.
@@ -293,7 +304,8 @@ pub async fn stored_rules(
         };
     }
     let [post, page] = structures;
-    PermalinkRules::from_options(post.as_deref(), page.as_deref())
+    let rules = PermalinkRules::from_options(post.as_deref(), page.as_deref())?;
+    Ok(rules.with_locales(crate::locales::read(repos).await?))
 }
 
 /// The second half of [`rules_from`]: [`PermalinkRules::check_types`] with the types
@@ -339,7 +351,37 @@ impl PermalinkRules {
             post: Structure::parse(post.unwrap_or(DEFAULT_POST))?,
             page,
             other: Self::default().other,
+            locales: Self::default().locales,
         })
+    }
+
+    /// These rules with the site's `locales`.
+    pub fn with_locales(mut self, locales: SiteLocales) -> Self {
+        self.locales = locales;
+        self
+    }
+
+    /// The site's locales the rules carry.
+    pub fn locales(&self) -> &SiteLocales {
+        &self.locales
+    }
+
+    /// Whether `other` has the same post and page structures (locales aside).
+    pub fn same_structures(&self, other: &Self) -> bool {
+        self.post == other.post && self.page == other.page
+    }
+
+    /// The content types whose top-level items live at `/<slug>/`: `page` with a page
+    /// structure that collapses to `/%slug%/` at the top, `post` with `/%slug%/`.
+    pub fn root_slug_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = Vec::new();
+        if self.page.is_root_slug() {
+            kinds.push("page");
+        }
+        if self.post.is_root_slug() {
+            kinds.push("post");
+        }
+        kinds
     }
 
     /// `Invalid` when the post or page structure starts with a literal that the router
@@ -397,6 +439,7 @@ impl Default for PermalinkRules {
             post: structure(DEFAULT_POST, vec![Segment::Slug]),
             page: structure(DEFAULT_PAGE, vec![Segment::ParentPath, Segment::Slug]),
             other: structure(OTHER, vec![Segment::ParentPath, Segment::Slug]),
+            locales: SiteLocales::single("en"),
         }
     }
 }
@@ -417,6 +460,14 @@ impl Permalinks for PermalinkRules {
 
     /// Posts and pages are peers when both put top-level items at `/<slug>/` (the
     /// defaults do); other types live under their `/{type}/` prefix.
+    fn locale_prefixes(&self, kind: &str) -> Vec<String> {
+        if self.root_slug_kinds().contains(&kind) {
+            self.locales.prefixes()
+        } else {
+            Vec::new()
+        }
+    }
+
     fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
         let shared = self.post.is_root_slug() && self.page.is_root_slug();
         match kind {
@@ -466,6 +517,10 @@ impl Permalinks for SwappablePermalinks {
 
     fn root_namespace_peers(&self, kind: &str) -> Vec<String> {
         self.rules.load().root_namespace_peers(kind)
+    }
+
+    fn locale_prefixes(&self, kind: &str) -> Vec<String> {
+        self.rules.load().locale_prefixes(kind)
     }
 }
 

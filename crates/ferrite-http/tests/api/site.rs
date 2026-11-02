@@ -20,6 +20,7 @@ api_tests!(
     csv_errors_name_lines,
     settings_patch_over_http,
     author_cannot_patch_settings,
+    settings_round_trip_locales,
 );
 
 const MENUS: &str = "/api/v1/menus";
@@ -447,7 +448,7 @@ async fn settings_patch_over_http(api: Api) -> Api {
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     let all = r.json();
     let keys: Vec<&String> = all.as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 12, "{all}");
+    assert_eq!(keys.len(), 14, "{all}");
     assert_eq!(all["mcp.enabled"], serde_json::Value::Null, "{all}");
     assert!(all.get("comments.enabled").is_some() && all.get("comments.moderation").is_some());
     assert_eq!(
@@ -600,6 +601,70 @@ async fn author_cannot_patch_settings(api: Api) -> Api {
             .await
             .unwrap()
             .is_none()
+    );
+    api
+}
+
+/// `site.locales` and `site.locale_texts` through `PATCH /settings` (M6-1 Task 5): the
+/// list comes back as written, `site.locale` follows the default, a removal of a locale
+/// that holds content is `409`, a clashing prefix `422`.
+async fn settings_round_trip_locales(api: Api) -> Api {
+    let (ada, b) = admin(&api).await;
+    let r = b
+        .send(
+            &api,
+            Method::PATCH,
+            SETTINGS,
+            Some(&json!({
+                "site.locales": [{"tag": "en"}, {"tag": "de", "label": "Deutsch"}],
+                "site.locale_texts": {"de": {"title": "Mein Garten"}},
+            })),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let saved = r.json();
+    assert_eq!(
+        saved["site.locales"],
+        json!([{"tag": "en", "label": "English"}, {"tag": "de", "label": "Deutsch"}])
+    );
+    assert_eq!(saved["site.locale"], "en");
+    assert_eq!(saved["site.locale_texts"]["de"]["title"], "Mein Garten");
+
+    let p = b
+        .send(
+            &api,
+            Method::PATCH,
+            SETTINGS,
+            Some(&json!({"site.locales": [{"tag": "en"}, {"tag": "api"}]})),
+            None,
+        )
+        .await
+        .assert_problem(422, "validation");
+    assert_eq!(p["errors"][0]["field"], "site.locales", "{p}");
+
+    api.store
+        .read()
+        .content()
+        .insert(&ferrite_domain::NewContent {
+            locale: "de".into(),
+            ..ferrite_store_tests::fixtures::new_post(&ada, "hallo")
+        })
+        .await
+        .unwrap();
+    let p = b
+        .send(
+            &api,
+            Method::PATCH,
+            SETTINGS,
+            Some(&json!({"site.locales": [{"tag": "en"}]})),
+            None,
+        )
+        .await
+        .assert_problem(409, "conflict");
+    assert!(
+        p["detail"].as_str().unwrap().contains("1 content item"),
+        "{p}"
     );
     api
 }

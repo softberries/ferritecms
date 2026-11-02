@@ -92,7 +92,7 @@ pub async fn upgrade_json_written_on_version_change(db: &TestDb) {
     let l = latest(store).await;
     set_last_binary(store, "0.0.1").await;
 
-    let written = startup_check(store, &bin, &dbconf(), data.path())
+    let written = startup_check(store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -109,7 +109,7 @@ pub async fn upgrade_json_written_on_version_change(db: &TestDb) {
     // The next start of the same binary changes nothing.
     let raw = std::fs::read(data.path().join(UPGRADE_FILE)).unwrap();
     assert!(
-        startup_check(store, &bin, &dbconf(), data.path())
+        startup_check(store, &bin, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -126,7 +126,7 @@ pub async fn upgrade_json_written_on_migration(db: &TestDb) {
     let l = latest(store).await;
     store.migrate_down(l - 2, true).await.unwrap();
 
-    startup_check(store, &bin, &dbconf(), data.path())
+    startup_check(store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -144,7 +144,7 @@ pub async fn upgrade_json_written_on_migration(db: &TestDb) {
 
     // Same binary, migrations again: the record is replaced.
     store.migrate_down(l - 1, true).await.unwrap();
-    startup_check(store, &bin, &dbconf(), data.path())
+    startup_check(store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -160,7 +160,7 @@ pub async fn no_upgrade_json_when_nothing_changed(db: &TestDb) {
     let bin = binary_version().unwrap();
     set_last_binary(store, &bin.to_string()).await;
     assert!(
-        startup_check(store, &bin, &dbconf(), data.path())
+        startup_check(store, &bin, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -179,7 +179,7 @@ pub async fn binary_rollback_round_trip_keeps_the_record(db: &TestDb) {
     store.migrate_down(l - 1, true).await.unwrap();
     set_last_binary(store, &a.to_string()).await;
 
-    let moved = startup_check(store, &b, &dbconf(), data.path())
+    let moved = startup_check(store, &b, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("A→B recorded");
@@ -189,7 +189,7 @@ pub async fn binary_rollback_round_trip_keeps_the_record(db: &TestDb) {
 
     // A (older) starts on the newer schema: the file is kept, only the key changes.
     assert!(
-        startup_check(store, &a, &dbconf(), data.path())
+        startup_check(store, &a, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -199,7 +199,7 @@ pub async fn binary_rollback_round_trip_keeps_the_record(db: &TestDb) {
 
     // B again: the record already names A→B and is kept.
     assert!(
-        startup_check(store, &b, &dbconf(), data.path())
+        startup_check(store, &b, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -224,7 +224,7 @@ async fn sqlite_snapshot_is_relative_to_the_data_folder() {
     store.migrate_up(Some(l - 2)).await.unwrap();
     set_last_binary(&store, "0.0.1").await;
 
-    let rec = startup_check(&store, &bin, &dbconf(), data.path())
+    let rec = startup_check(&store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -249,7 +249,7 @@ async fn new_database_writes_no_upgrade_json() {
     let store = sqlite_in(data.path()).await;
     let bin = binary_version().unwrap();
     assert!(
-        startup_check(&store, &bin, &dbconf(), data.path())
+        startup_check(&store, &bin, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -282,7 +282,7 @@ async fn retry_keeps_the_record_of_this_move() {
     };
     upgrade::write(data.path(), &earlier).unwrap();
     assert!(
-        startup_check(&store, &bin, &dbconf(), data.path())
+        startup_check(&store, &bin, &dbconf(), data.path(), "en")
             .await
             .unwrap()
             .is_none()
@@ -304,9 +304,15 @@ async fn crash_after_migrate_keeps_the_move_and_its_snapshot() {
     store.migrate_down(l - 1, true).await.unwrap();
     set_last_binary(&store, "0.0.1").await;
 
-    let e = upgrade::seams::fail_after_migrate(startup_check(&store, &bin, &dbconf(), data.path()))
-        .await
-        .unwrap_err();
+    let e = upgrade::seams::fail_after_migrate(startup_check(
+        &store,
+        &bin,
+        &dbconf(),
+        data.path(),
+        "en",
+    ))
+    .await
+    .unwrap_err();
     assert!(format!("{e:#}").contains("test seam"), "{e:#}");
     // Migrated, but only the provisional record and the old key.
     assert_eq!(latest(&store).await, l);
@@ -316,7 +322,7 @@ async fn crash_after_migrate_keeps_the_move_and_its_snapshot() {
     assert_eq!(provisional.snapshot, None);
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
 
-    let rec = startup_check(&store, &bin, &dbconf(), data.path())
+    let rec = startup_check(&store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("finalised");
@@ -361,7 +367,7 @@ async fn incomplete_attempt_keeps_its_start() {
     )
     .unwrap();
 
-    let rec = startup_check(&store, &bin, &dbconf(), data.path())
+    let rec = startup_check(&store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -389,7 +395,7 @@ async fn failed_migration_restores_the_previous_record() {
     std::fs::set_permissions(&backups, perms(0o500)).unwrap();
 
     // No record before: none after.
-    let e = startup_check(&store, &bin, &dbconf(), data.path())
+    let e = startup_check(&store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap_err();
     assert!(format!("{e:#}").contains("backups/pre-"), "{e:#}");
@@ -410,7 +416,7 @@ async fn failed_migration_restores_the_previous_record() {
         at: Timestamp::now(),
     };
     upgrade::write(data.path(), &previous).unwrap();
-    startup_check(&store, &bin, &dbconf(), data.path())
+    startup_check(&store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap_err();
     assert_eq!(upgrade::load(data.path()).unwrap(), Some(previous));
@@ -451,7 +457,7 @@ async fn unfinished_earlier_move_is_carried_into_the_next() {
     assert_eq!(latest_applied(&store).await, l - 1);
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
 
-    let rec = startup_check(&store, &c, &dbconf(), data.path())
+    let rec = startup_check(&store, &c, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
@@ -498,7 +504,7 @@ async fn finished_move_kept_by_a_rollback_is_not_carried() {
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
 
     // A→C to l.
-    let rec = startup_check(&store, &c, &dbconf(), data.path())
+    let rec = startup_check(&store, &c, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("A→C recorded");

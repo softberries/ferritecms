@@ -95,6 +95,8 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             "site.title",
             "site.description",
             "site.locale",
+            "site.locales",
+            "site.locale_texts",
             "reading.per_page",
             "reading.front_page",
             "reading.discourage_indexing",

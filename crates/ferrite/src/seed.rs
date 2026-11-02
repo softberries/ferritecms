@@ -106,6 +106,7 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = open_media(&config)?;

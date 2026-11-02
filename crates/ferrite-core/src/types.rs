@@ -455,6 +455,13 @@ pub(crate) async fn check_name_free(
     if is_taxonomy {
         return Err(CoreError::invalid_field(NAME, "name is a taxonomy"));
     }
+    // A locale prefix (13 §2.2): `/<prefix>/…` is that locale's site.
+    if crate::locales::read(repos).await?.by_prefix(name).is_some() {
+        return Err(CoreError::invalid_field(
+            NAME,
+            "name is the URL prefix of one of the site's locales",
+        ));
+    }
     for kind in ROOT_TYPES {
         if repos
             .content()

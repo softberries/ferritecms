@@ -155,6 +155,8 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     )
     .await?;
     tracing::info!(?applied, "database migrated");
+    // `site.locales` from the config's locale (13 §2.2); nothing else runs on a new site.
+    ferrite_core::locales::settle(store.as_ref(), &config.site.locale).await?;
     Ok(())
 }
 

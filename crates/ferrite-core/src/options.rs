@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::NewAudit;
+use ferrite_domain::{
+    NewAudit,
+    locale::{LOCALE_TEXTS_OPTION, LOCALES_OPTION, SiteLocales, bcp47_loose},
+};
 use ferrite_store::{Repos, Store};
 use serde_json::{Value, json};
 
@@ -14,6 +17,7 @@ use crate::{
         PERMALINK_REDIRECTS_VERSION, PermalinkRedirects, PermalinkStructures,
         permalink_redirects_job,
     },
+    locales::{self, SITE_LOCALE_OPTION},
     permalink::{self, PAGE_OPTION, POST_OPTION, PermalinkRules},
     settings,
     site::FRONT_PAGE_OPTION,
@@ -70,7 +74,7 @@ impl OptionService {
     ) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         check_key(key)?;
-        if is_permalink(key) {
+        if is_permalink(key) || is_locale_key(key) {
             settings::validate(key, value)?;
         }
         self.write(
@@ -134,7 +138,10 @@ impl OptionService {
         changes: &[Change<'_>],
         settings_write: bool,
     ) -> Result<(), CoreError> {
-        if changes.iter().any(|c| is_permalink(c.key)) {
+        if changes
+            .iter()
+            .any(|c| is_permalink(c.key) || is_locale_key(c.key))
+        {
             let (guard, tx) = begin_locked(self.store.as_ref()).await?;
             let done = write_with_invalidation(tx.as_ref(), actor, changes, settings_write).await;
             finish_locked(guard, tx, done).await
@@ -174,9 +181,9 @@ pub(crate) async fn set_in(
     autoload: bool,
 ) -> Result<(), CoreError> {
     check_key(key)?;
-    if is_permalink(key) {
+    if is_permalink(key) || is_locale_key(key) {
         return Err(CoreError::Invalid(
-            "permalink options need a transaction under the types lock".into(),
+            "permalink and locale options need a transaction under the types lock".into(),
         ));
     }
     write_changes(
@@ -193,9 +200,12 @@ pub(crate) async fn set_in(
     Ok(())
 }
 
-/// Whether `changes` sets or deletes a `permalink.*` option.
+/// Whether `changes` sets or deletes a `permalink.*` option or a locale option
+/// (`site.locales`, `site.locale`, `site.locale_texts`), which need the types lock.
 pub(crate) fn touches_permalinks(changes: &[(String, Option<Value>)]) -> bool {
-    changes.iter().any(|(key, _)| is_permalink(key))
+    changes
+        .iter()
+        .any(|(key, _)| is_permalink(key) || is_locale_key(key))
 }
 
 /// The validation of [`OptionService::set_many`]: every key allowlisted and given once,
@@ -247,7 +257,38 @@ async fn write_changes(
     changes: &[Change<'_>],
     settings_write: bool,
 ) -> Result<bool, CoreError> {
-    let permalinks: Vec<&Change<'_>> = changes.iter().filter(|c| is_permalink(c.key)).collect();
+    let (extra, locales_changed) = plan_locales(repos, changes).await?;
+    let extra: Vec<Change<'_>> = extra
+        .iter()
+        .map(|(key, value)| Change {
+            key,
+            value: Some(value),
+            autoload: true,
+        })
+        .collect();
+    // An extra write of a key replaces the caller's (the canonical `site.locales`).
+    let all: Vec<&Change<'_>> = changes
+        .iter()
+        .filter(|c| !extra.iter().any(|e| e.key == c.key))
+        .chain(extra.iter())
+        .collect();
+    let changed = write_plain(repos, actor, &all, settings_write).await?;
+    Ok(changed || locales_changed)
+}
+
+/// [`write_changes`] for `changes` (the locale plan already applied): the store checks,
+/// the rows and their events, the redirect job and the audit row.
+async fn write_plain(
+    repos: &dyn Repos,
+    actor: &Actor,
+    changes: &[&Change<'_>],
+    settings_write: bool,
+) -> Result<bool, CoreError> {
+    let permalinks: Vec<&Change<'_>> = changes
+        .iter()
+        .copied()
+        .filter(|c| is_permalink(c.key))
+        .collect();
     // The structures before the write; stored values that no longer parse give no
     // old paths to redirect from.
     let mut prev = None;
@@ -307,7 +348,7 @@ async fn enqueue_redirects(
     version: i64,
 ) -> Result<(), CoreError> {
     let next = permalink::stored_rules(repos, &[]).await?;
-    if next == *prev {
+    if next.same_structures(prev) {
         return Ok(());
     }
     let structures = |r: &PermalinkRules| PermalinkStructures {
@@ -327,6 +368,142 @@ async fn enqueue_redirects(
 
 pub(crate) fn is_permalink(key: &str) -> bool {
     key == POST_OPTION || key == PAGE_OPTION
+}
+
+/// `site.locales`, `site.locale` and `site.locale_texts`: written with the checks and
+/// couplings of [`plan_locales`].
+pub(crate) fn is_locale_key(key: &str) -> bool {
+    key == LOCALES_OPTION || key == SITE_LOCALE_OPTION || key == LOCALE_TEXTS_OPTION
+}
+
+/// The locale side of a write (13 §2.2), inside its transaction, before anything is
+/// written: checks a `site.locales` change ([`locales::check_change`]: prefixes,
+/// removals), keeps `site.locale` equal to the default (a `site.locale` write alone on a
+/// one-locale site renames the locale; on a multilingual one it must equal the default),
+/// relabels every row on a rename, and drops the `site.locale_texts` entries of
+/// removed locales. Returns the extra option writes it owes (`site.locale`,
+/// `site.locales`, `site.locale_texts`) and whether the locales changed (the caller then
+/// owes `invalidate [all]`).
+async fn plan_locales(
+    repos: &dyn Repos,
+    changes: &[Change<'_>],
+) -> Result<(Vec<(&'static str, Value)>, bool), CoreError> {
+    let find = |key: &str| changes.iter().find(|c| c.key == key);
+    let list = find(LOCALES_OPTION);
+    let single = find(SITE_LOCALE_OPTION);
+    let texts = find(LOCALE_TEXTS_OPTION);
+    if list.is_none() && single.is_none() && texts.is_none() {
+        return Ok((Vec::new(), false));
+    }
+    let old = locales::read(repos).await?;
+    let mut extra: Vec<(&'static str, Value)> = Vec::new();
+    let new = match (list, single) {
+        (Some(c), _) => {
+            let Some(v) = c.value else {
+                return Err(CoreError::invalid_field(
+                    LOCALES_OPTION,
+                    "site.locales cannot be cleared; list at least the default locale",
+                ));
+            };
+            let new = SiteLocales::from_option(v)
+                .map_err(|e| CoreError::invalid_field(LOCALES_OPTION, e.to_string()))?;
+            match single.map(|c| c.value) {
+                Some(Some(v)) if v.as_str() != Some(new.default.tag.as_str()) => {
+                    return Err(CoreError::invalid_field(
+                        SITE_LOCALE_OPTION,
+                        format!(
+                            "site.locale must equal the default locale {}",
+                            new.default.tag
+                        ),
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    let stored = repos.options().get(SITE_LOCALE_OPTION).await?;
+                    if stored.and_then(|e| e.value.as_str().map(str::to_owned))
+                        != Some(new.default.tag.clone())
+                    {
+                        extra.push((SITE_LOCALE_OPTION, Value::String(new.default.tag.clone())));
+                    }
+                }
+            }
+            // Stored in canonical form (tags, labels filled in).
+            extra.push((LOCALES_OPTION, new.to_option()));
+            Some(new)
+        }
+        (None, Some(c)) => match c.value {
+            None if old.is_multilingual() => {
+                return Err(CoreError::invalid_field(
+                    SITE_LOCALE_OPTION,
+                    "on a multilingual site site.locale is the default locale; change site.locales",
+                ));
+            }
+            None => None,
+            Some(v) => {
+                let tag = bcp47_loose(v.as_str().unwrap_or_default());
+                if old.is_multilingual() {
+                    if tag != old.default.tag {
+                        return Err(CoreError::invalid_field(
+                            SITE_LOCALE_OPTION,
+                            format!(
+                                "on a multilingual site site.locale must equal the default locale {}; change site.locales",
+                                old.default.tag
+                            ),
+                        ));
+                    }
+                    None
+                } else if tag == old.default.tag {
+                    None
+                } else {
+                    let new = SiteLocales::single(tag);
+                    extra.push((LOCALES_OPTION, new.to_option()));
+                    Some(new)
+                }
+            }
+        },
+        (None, None) => None,
+    };
+    let mut changed = false;
+    let effective = new.clone().unwrap_or_else(|| old.clone());
+    if let Some(new) = &new
+        && new != &old
+    {
+        changed = true;
+        let rules = permalink::stored_rules(repos, &[]).await?;
+        if let locales::Transition::Rename { to, .. } =
+            locales::check_change(repos, &old, new, &rules).await?
+        {
+            repos.locales().relabel_all(&to).await?;
+        }
+    }
+    // `site.locale_texts`: the written value's keys must be listed (non-default) locales;
+    // a list change drops the entries of locales it no longer lists.
+    match texts {
+        Some(c) => {
+            if let Some(v) = c.value
+                && let Some(map) = v.as_object()
+                && let Some(tag) = map
+                    .keys()
+                    .find(|t| !effective.others.iter().any(|d| &d.tag == *t))
+            {
+                return Err(CoreError::invalid_field(
+                    LOCALE_TEXTS_OPTION,
+                    format!("site.locale_texts: {tag} is not one of the site's other locales"),
+                ));
+            }
+            changed = true;
+        }
+        None if new.is_some() => {
+            if let Some(stored) = repos.options().get(LOCALE_TEXTS_OPTION).await? {
+                let kept = locales::texts_for(&stored.value, &effective);
+                if kept != stored.value {
+                    extra.push((LOCALE_TEXTS_OPTION, kept));
+                }
+            }
+        }
+        None => {}
+    }
+    Ok((extra, changed))
 }
 
 /// The `permalink.*` pair with `changes` on top fits the registered types and

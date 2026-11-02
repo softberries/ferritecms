@@ -153,6 +153,7 @@ async fn wordpress(args: WordpressArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = Arc::new(open_media(&config)?);
@@ -230,6 +231,7 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = open_media(&config)?;

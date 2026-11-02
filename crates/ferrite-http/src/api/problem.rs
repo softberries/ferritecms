@@ -413,6 +413,7 @@ impl From<CoreError> for Problem {
                 Self::internal()
             }
             CoreError::Store(s) => Self::from(s),
+            CoreError::InUse(what) => Self::new(StatusCode::CONFLICT, "conflict", "Conflict", what),
         }
     }
 }

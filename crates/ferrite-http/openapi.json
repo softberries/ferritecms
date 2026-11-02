@@ -11918,6 +11918,46 @@
           }
         }
       },
+      "LocaleEntryDto": {
+        "type": "object",
+        "description": "One entry of `site.locales`.",
+        "required": [
+          "tag"
+        ],
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the language switcher shows (1–50 characters; default the native name)."
+          },
+          "tag": {
+            "type": "string",
+            "description": "A BCP 47 tag `language[-Script][-REGION]` (e.g. `de`, `pt-BR`); its lowercase is\nthe URL prefix of a non-default locale."
+          }
+        }
+      },
+      "LocaleTextDto": {
+        "type": "object",
+        "description": "The texts of one locale in `site.locale_texts`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 1000 characters."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 200 characters."
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "description": "`POST /auth/login`.",
@@ -14062,6 +14102,29 @@
               "null"
             ],
             "description": "1 to 35 ASCII letters, digits, `-` or `_` (e.g. `en`, `pt-BR`)."
+          },
+          "site.locale_texts": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The site title and tagline per non-default locale, keyed by its tag.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LocaleTextDto"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "site.locales": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LocaleEntryDto"
+            },
+            "description": "The site's locales, the default first (1–20). A prefix that would shadow a\nroute, type, taxonomy or top-level page is `422`; removing a locale that still\nholds content is `409` with the counts. Cannot be reset to `null`."
           },
           "site.title": {
             "type": [
