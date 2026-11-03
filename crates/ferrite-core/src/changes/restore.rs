@@ -1,5 +1,7 @@
 //! The reverse writes of a revert (design 17 §7.3): each object back to a before-image,
-//! as the reverting person, through the crate's own write paths.
+//! as the reverting person, through the crate's own write paths and with the checks a
+//! person's own edit or transition gets (the release lock, workflow approval and staging,
+//! the publish gate).
 
 use ferrite_domain::{
     Change, ContentId, ContentItem, ContentStatus, Menu, Redirect, Term, TermId, Timestamp, UserId,
@@ -14,7 +16,9 @@ use super::snapshot::{
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, TRASHED_FROM_META, TypePatch,
     actor::{Capability, require},
-    content::{Action, Edit, Robots, SeoPatch, transition_in, webhook_type},
+    content::{
+        Action, Edit, Robots, SeoPatch, guarded_transition_in, live_edit_checks, webhook_type,
+    },
     events,
     permalink::Permalinks,
 };
@@ -147,7 +151,7 @@ async fn move_status(
     item: ContentItem,
     action: Action,
 ) -> Result<ContentItem, CoreError> {
-    let item = transition_in(tx, rules, actor, item.id, item.version, action).await?;
+    let item = guarded_transition_in(tx, rules, actor, item.id, item.version, action).await?;
     // The same webhook events as the public transitions (media items emit none here:
     // `emit_content` skips them, and the media paths below emit `media.*`).
     let kind = webhook_type(action);
@@ -216,12 +220,15 @@ async fn content(
         return Ok(());
     };
     let Some(target) = &r.target else {
+        crate::release::check_unlocked(tx, id).await?;
         // The assistant created it: trash, never delete (D7).
         if item.status != ContentStatus::Trash {
             trash(tx, rules, actor, item, media, None).await?;
         }
         return Ok(());
     };
+    // A scheduled release owns the item (M6-3): refused like a person's write.
+    crate::release::check_unlocked(tx, id).await?;
     let t: ContentSnap = parse(target)?;
     let mut item = item;
     if item.status == ContentStatus::Trash && t.status != ContentStatus::Trash {
@@ -233,7 +240,20 @@ async fn content(
             tx.meta().delete(id, TRASHED_FROM_META).await?;
         }
     }
-    if item.status != ContentStatus::Trash && editable_differs(tx, &item, &t).await? {
+    let live = |s: ContentStatus| {
+        matches!(
+            s,
+            ContentStatus::Published | ContentStatus::Scheduled | ContentStatus::Private
+        )
+    };
+    let editable = item.status != ContentStatus::Trash && editable_differs(tx, &item, &t).await?;
+    if editable && live(item.status) && !live(t.status) && t.status != ContentStatus::Trash {
+        // Back to draft first, as a person would: the edit is then not a live edit.
+        item = move_status(tx, rules, actor, item, Action::Unpublish).await?;
+    }
+    if editable {
+        // A person's in-place edit: staging rule P7 (an approver's is audited).
+        live_edit_checks(tx, actor, id).await?;
         let draft = ContentDraft {
             kind: item.kind.clone(),
             title: t.title.clone(),

@@ -73,6 +73,12 @@ backend_tests!(
     assistant_term_then_tagging_reverts_without_force,
     revert_publish_emits_unpublished_webhook,
     revert_reschedule_restores_scheduled_time,
+    revert_republish_into_workflow_type_needs_approval,
+    revert_republish_failing_the_gate_is_refused,
+    revert_of_release_locked_item_is_locked,
+    approver_revert_in_place_edit_audits_bypass,
+    non_approver_revert_of_live_edit_needs_staging,
+    revert_unpublish_then_edit_in_workflow_type,
 );
 
 async fn revert_create_trashes_the_item(db: &TestDb) {
@@ -1265,4 +1271,202 @@ async fn revert_reschedule_restores_scheduled_time(db: &TestDb) {
     let now = s.content.get(item.id).await.unwrap();
     assert_eq!(now.status, ContentStatus::Scheduled);
     assert_eq!(now.scheduled_at, Some(t0));
+}
+
+/// The failure of a revert: the change it names and the core error.
+fn failed(e: RevertError) -> (u32, CoreError) {
+    match e {
+        RevertError::Failed { seq, error } => (seq, error),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+async fn put_workflow(s: &Site, kind: &str) {
+    ferrite_core::workflow::WorkflowService::new(s.store.clone())
+        .put(
+            &s.admin,
+            kind,
+            ferrite_core::workflow::one_editor_preset(),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
+fn text_body() -> serde_json::Value {
+    json!({"type": "doc", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "Body"}]}
+    ]})
+}
+
+/// A post `who` published before any workflow or gate.
+async fn live_post(s: &Site, who: &Actor, body: serde_json::Value) -> ferrite_domain::ContentItem {
+    let mut d = draft("post", "Live");
+    d.body = body;
+    let item = s.content.create(who, d).await.unwrap();
+    s.content.publish(who, item.id, item.version).await.unwrap()
+}
+
+async fn revert_republish_into_workflow_type_needs_approval(db: &TestDb) {
+    let s = site(db).await;
+    let item = live_post(&s, &s.admin, text_body()).await;
+    s.content
+        .unpublish(&s.agent, item.id, item.version)
+        .await
+        .unwrap();
+    put_workflow(&s, "post").await;
+    let set = only_set(&s).await;
+    let (seq, error) = failed(service(&s).revert(&s.admin, set, all()).await.unwrap_err());
+    assert_eq!(seq, 1);
+    assert!(
+        matches!(error, CoreError::ApprovalRequired { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        s.content.get(item.id).await.unwrap().status,
+        ContentStatus::Draft,
+        "nothing written"
+    );
+}
+
+async fn revert_republish_failing_the_gate_is_refused(db: &TestDb) {
+    let s = site(db).await;
+    // An image without alt: one accessibility error.
+    let bad = json!({"type": "doc", "content": [{"type": "image", "attrs": {"src": "/a.png"}}]});
+    let item = live_post(&s, &s.admin, bad).await;
+    s.content
+        .unpublish(&s.agent, item.id, item.version)
+        .await
+        .unwrap();
+    ferrite_core::ContentTypeService::new(s.store.clone())
+        .update(
+            &s.admin,
+            "post",
+            ferrite_core::TypePatch {
+                quality_gate: Some(ferrite_domain::QualityGate::Errors),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let set = only_set(&s).await;
+    let (_, error) = failed(service(&s).revert(&s.admin, set, all()).await.unwrap_err());
+    assert!(matches!(error, CoreError::QualityBlocked(_)), "{error:?}");
+    assert_eq!(
+        s.content.get(item.id).await.unwrap().status,
+        ContentStatus::Draft
+    );
+}
+
+async fn revert_of_release_locked_item_is_locked(db: &TestDb) {
+    let s = site(db).await;
+    let item = s
+        .content
+        .create(&s.admin, draft("post", "One"))
+        .await
+        .unwrap();
+    s.content
+        .update(&s.agent, item.id, item.version, draft("post", "Two"))
+        .await
+        .unwrap();
+    let releases = ferrite_core::release::ReleaseService::new(
+        s.store.clone(),
+        s.rules.clone(),
+        s.content.clone(),
+    );
+    let r = releases
+        .create(
+            &s.admin,
+            ferrite_core::release::NewRelease {
+                title: "Launch".into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    s.store.read().releases().lock(item.id, r.id).await.unwrap();
+    let set = only_set(&s).await;
+    let (_, error) = failed(service(&s).revert(&s.admin, set, all()).await.unwrap_err());
+    assert!(
+        matches!(error, CoreError::Locked { release } if release == r.id),
+        "{error:?}"
+    );
+    assert_eq!(s.content.get(item.id).await.unwrap().title, "Two");
+}
+
+async fn approver_revert_in_place_edit_audits_bypass(db: &TestDb) {
+    let s = site(db).await;
+    let item = live_post(&s, &s.admin, text_body()).await;
+    s.content
+        .update(&s.agent, item.id, item.version, draft("post", "AI title"))
+        .await
+        .unwrap();
+    put_workflow(&s, "post").await;
+    let set = only_set(&s).await;
+    service(&s).revert(&s.admin, set, all()).await.unwrap();
+    let now = s.content.get(item.id).await.unwrap();
+    assert_eq!(
+        (now.title.as_str(), now.status),
+        ("Live", ContentStatus::Published)
+    );
+    let audit = s
+        .store
+        .read()
+        .audit()
+        .list(&AuditQuery {
+            action: Some("review.bypassed".into()),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0].actor_id, Some(s.admin.user));
+}
+
+async fn non_approver_revert_of_live_edit_needs_staging(db: &TestDb) {
+    let s = site(db).await;
+    let author = actor(s.store.as_ref(), Role::Author).await;
+    let agent = author.with_agent(ferrite_core::Agent::Token(ferrite_domain::ApiTokenId::new()));
+    let item = live_post(&s, &author, text_body()).await;
+    s.content
+        .update(&agent, item.id, item.version, draft("post", "AI title"))
+        .await
+        .unwrap();
+    put_workflow(&s, "post").await;
+    let set = only_set(&s).await;
+    let (_, error) = failed(service(&s).revert(&author, set, all()).await.unwrap_err());
+    assert!(matches!(error, CoreError::StagingRequired), "{error:?}");
+    assert_eq!(s.content.get(item.id).await.unwrap().title, "AI title");
+}
+
+/// An assistant's edit and publish of a draft, reverted by its author in a workflow
+/// type: the item goes back to draft first, so the edit is not a live edit.
+async fn revert_unpublish_then_edit_in_workflow_type(db: &TestDb) {
+    let s = site(db).await;
+    let author = actor(s.store.as_ref(), Role::Author).await;
+    let agent = author.with_agent(ferrite_core::Agent::Token(ferrite_domain::ApiTokenId::new()));
+    let item = s
+        .content
+        .create(&author, draft("post", "Mine"))
+        .await
+        .unwrap();
+    let item = s
+        .content
+        .update(&agent, item.id, item.version, draft("post", "AI title"))
+        .await
+        .unwrap();
+    s.content
+        .publish(&agent, item.id, item.version)
+        .await
+        .unwrap();
+    put_workflow(&s, "post").await;
+    let set = only_set(&s).await;
+    service(&s).revert(&author, set, all()).await.unwrap();
+    let now = s.content.get(item.id).await.unwrap();
+    assert_eq!(
+        (now.title.as_str(), now.status),
+        ("Mine", ContentStatus::Draft)
+    );
 }

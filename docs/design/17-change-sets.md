@@ -336,7 +336,14 @@ functions in the one `Tx` (`ContentService::update_in`, `publish_in`, `trash_in`
 term `_in` helpers; `menu::put_in`; `types::update_in`; options `set_many_in`;
 extension `write_*`). So capabilities, field and schema validation, invalidation events,
 revisions (note "Reverted an AI change" on content) and the writes' own audit rows apply
-as for any edit. Per kind:
+as for any edit. Content gets every check a person's own write gets (final review,
+2026-11-03): an item locked by a scheduled release fails the change with `Locked`; an
+in-place edit runs `live_edit_checks` (workflow staging rule P7, an approver's edit
+audited as `review.bypassed`); status moves go through `guarded_transition_in` (the
+workflow approval gate for publish and schedule, no override; the M6-4 publish gate; a
+submit starts a review). A live item whose before status is not live is unpublished
+before the edit, so that edit is not a live edit. A refused change fails the whole revert
+(`Failed { seq }`), which stays atomic. Per kind:
 
 - **content / media**: before absent → trash (media through the media trash path, so
   `trashed_from` is kept). Else: current trash and before not → restore; editable members

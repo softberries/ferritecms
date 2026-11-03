@@ -373,41 +373,16 @@ impl ContentService {
                 cap.finish(repos).await?;
                 return Ok(current);
             }
-            if matches!(action, Action::Publish | Action::Schedule(_)) {
-                // Rights first, so the gate never tells a reader about approvals.
-                authorize(actor, &current, action)?;
-                crate::workflow::gate::require_approval(
-                    repos,
-                    actor,
-                    &current,
-                    ReviewTarget::Item(id),
-                    None,
-                    extras.override_reason.as_deref(),
-                )
-                .await?;
-            }
-            let saved = transition_item(
+            let saved = guarded_item(
                 repos,
                 rules.as_ref(),
                 actor,
                 current,
                 expected_version,
                 action,
+                extras,
             )
             .await?;
-            // The publish gate (M6-4), after the transition's own checks.
-            gate(repos, action, &saved).await?;
-            if let Action::Submit = action {
-                crate::workflow::start_in(
-                    repos,
-                    actor,
-                    &saved,
-                    ReviewTarget::Item(id),
-                    None,
-                    extras.submit.unwrap_or_default(),
-                )
-                .await?;
-            }
             // Here, not in `transition_item`: `seed demo` and uploads publish through
             // that and emit nothing (design 18 §3.4).
             crate::webhooks::emit_content(
@@ -502,7 +477,76 @@ async fn gate(repos: &dyn Repos, action: Action, item: &ContentItem) -> Result<(
     crate::quality::gate::check(repos, item, &ty).await
 }
 
-pub(crate) async fn transition_in(
+/// A person's transition of `current` (read in this `Tx`) with the checks of
+/// [`transition_with`](ContentService::transition_with) after the release lock: the
+/// approval gate of workflow types for publish and schedule, the transition itself, the
+/// publish gate (M6-4) and, for a submit, the review it starts. Emits no webhook.
+async fn guarded_item(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    actor: &Actor,
+    current: ContentItem,
+    expected_version: i64,
+    action: Action,
+    extras: Gate,
+) -> Result<ContentItem, CoreError> {
+    let id = current.id;
+    if matches!(action, Action::Publish | Action::Schedule(_)) {
+        // Rights first, so the gate never tells a reader about approvals.
+        authorize(actor, &current, action)?;
+        crate::workflow::gate::require_approval(
+            repos,
+            actor,
+            &current,
+            ReviewTarget::Item(id),
+            None,
+            extras.override_reason.as_deref(),
+        )
+        .await?;
+    }
+    let saved = transition_item(repos, rules, actor, current, expected_version, action).await?;
+    // The publish gate (M6-4), after the transition's own checks.
+    gate(repos, action, &saved).await?;
+    if let Action::Submit = action {
+        crate::workflow::start_in(
+            repos,
+            actor,
+            &saved,
+            ReviewTarget::Item(id),
+            None,
+            extras.submit.unwrap_or_default(),
+        )
+        .await?;
+    }
+    Ok(saved)
+}
+
+/// A person's transition of item `id` inside the caller's `repos`, with every check a
+/// public transition applies (the release lock, approval, the publish gate; no override)
+/// and no webhook: the reverse writes of a change-set revert (design 17 §7.3).
+pub(crate) async fn guarded_transition_in(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    actor: &Actor,
+    id: ContentId,
+    expected_version: i64,
+    action: Action,
+) -> Result<ContentItem, CoreError> {
+    crate::release::check_unlocked(repos, id).await?;
+    let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+    guarded_item(
+        repos,
+        rules,
+        actor,
+        current,
+        expected_version,
+        action,
+        Gate::default(),
+    )
+    .await
+}
+
+async fn transition_in(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     actor: &Actor,
