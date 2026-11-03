@@ -302,6 +302,68 @@ impl ImportBatch<'_> {
         .await
     }
 
+    /// Moves item `id` (imported as `wp_id`, still at the version the import wrote) into
+    /// translation group `group`, keeping its locale and slug (M6-1); `Ok(false)` when it
+    /// is in that group already. An item edited here since the import is
+    /// `Conflict` (kept as it is), a group with another member in the item's locale
+    /// `InUse`.
+    pub async fn join_group(
+        &mut self,
+        id: ContentId,
+        wp_id: i64,
+        group: ContentId,
+    ) -> Result<bool, CoreError> {
+        let row = self
+            .tx
+            .imports()
+            .map_get(&self.handle.run.source, ImportMapKind::Content, wp_id)
+            .await?
+            .filter(|row| row.ferrite_id == id.as_uuid())
+            .ok_or(CoreError::NotFound)?;
+        let repos = self.tx.as_ref();
+        let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+        if current.translation_group == group {
+            return Ok(false);
+        }
+        if current.version != row.version {
+            return Err(CoreError::Conflict {
+                current_version: current.version,
+            });
+        }
+        let members = repos.content().group_members(&[group]).await?;
+        if let Some(other) = members
+            .iter()
+            .find(|m| m.locale == current.locale && m.id != id)
+        {
+            return Err(CoreError::InUse(format!(
+                "the translation group has an item in {} already ({})",
+                current.locale, other.id
+            )));
+        }
+        let saved = repos
+            .content()
+            .relocate(id, &current.locale, group, &current.slug, current.version)
+            .await?;
+        repos
+            .content()
+            .set_updated_at(id, current.updated_at)
+            .await?;
+        self.keys.insert(events::post_key(id));
+        self.keys
+            .insert(events::group_key(current.translation_group));
+        self.keys.insert(events::group_key(group));
+        self.remember(
+            ImportMapKind::Content,
+            wp_id,
+            id.as_uuid(),
+            &row.hash,
+            saved.version,
+        )
+        .await?;
+        self.items += 1;
+        Ok(true)
+    }
+
     /// The public path of item `id` under the rules this batch pinned (its parents and
     /// primary category as stored now); `None` when there is no such item.
     pub async fn path(&self, id: ContentId) -> Result<Option<String>, CoreError> {

@@ -75,6 +75,9 @@ pub struct MdOptions {
     pub front_page: bool,
     /// Run everything, then roll every write back.
     pub dry_run: bool,
+    /// The locale of pages whose front matter names none (`--locale`; `None`: the
+    /// site's default). M6-1.
+    pub locale: Option<String>,
     /// The largest image accepted (`media.max_upload`).
     pub max_upload: u64,
     /// Strip EXIF and XMP from imported JPEG, PNG and WebP files (`media.strip_metadata`).
@@ -291,6 +294,7 @@ pub async fn run(
             }
         }
         content_pass(&mut w, &cx, &mut docs, &media_ids, &mut report).await?;
+        group_pass(&mut w, &cx, &docs, &mut report).await?;
         if opts.front_page {
             front_page(&mut w, &cx, &docs, &mut report).await?;
         }
@@ -934,7 +938,23 @@ async fn write_pages(
     let (index, start, opts) = (cx.index, cx.start, cx.opts);
     let no_paths = HashMap::new();
     let mut problems = Vec::new();
+    let locales = b.locales().await?;
     for i in range {
+        let locale = docs[i]
+            .md
+            .front
+            .locale
+            .clone()
+            .or_else(|| opts.locale.clone());
+        if let Some(l) = &locale
+            && !locales.contains(l)
+        {
+            problems.push(Problem::Locale {
+                file: docs[i].md.rel.clone(),
+                locale: l.clone(),
+            });
+            continue;
+        }
         let parent = docs[i]
             .md
             .parent
@@ -1018,7 +1038,8 @@ async fn write_pages(
                     ..SeoPatch::default()
                 }),
                 meta: Vec::new(),
-                locale: None,
+                // An updated page keeps its locale (core's rule for re-runs).
+                locale,
                 translation_group: None,
             })
             .await?;
@@ -1032,6 +1053,110 @@ async fn write_pages(
         docs[i].written = Some(outcome.result);
     }
     Ok(problems)
+}
+
+/// Joins every written page whose front matter names `translation_of` to the
+/// translation group of the page at the end of that chain (13 §8.2): after the content
+/// pass, so the order of the files does not matter. What cannot be joined is reported
+/// (`translation-of`, exit 2) and the page keeps its own group.
+async fn group_pass(
+    w: &mut Writer<'_>,
+    cx: &Cx<'_>,
+    docs: &[Doc],
+    report: &mut MdReport,
+) -> Result<(), MdError> {
+    let mut joins: Vec<(usize, usize)> = Vec::new();
+    for (i, d) in docs.iter().enumerate() {
+        let Some(target) = &d.md.front.translation_of else {
+            continue;
+        };
+        if d.written.is_none() {
+            continue;
+        }
+        let fail = |message: String| Problem::TranslationOf {
+            file: d.md.rel.clone(),
+            message,
+        };
+        match translation_root(cx.index, docs, i) {
+            Ok(root) if docs[root].id.is_some() => joins.push((i, root)),
+            Ok(_) => report
+                .problems
+                .push(fail(format!("{target}: that page was skipped"))),
+            Err(message) => report.problems.push(fail(message)),
+        }
+    }
+    for chunk in joins.chunks(ImportBatch::BATCH_ITEMS) {
+        let mut batch = w.open().await?;
+        let done = join_groups(&mut batch, docs, chunk).await;
+        report.problems.extend(w.close(batch, done).await?);
+    }
+    Ok(())
+}
+
+async fn join_groups(
+    b: &mut ImportBatch<'_>,
+    docs: &[Doc],
+    joins: &[(usize, usize)],
+) -> Result<Vec<Problem>, MdError> {
+    let mut problems = Vec::new();
+    for &(i, root) in joins {
+        let (Some(id), Some(root_id)) = (docs[i].id, docs[root].id) else {
+            continue;
+        };
+        let Some(group) = b.get_item(root_id).await?.map(|r| r.translation_group) else {
+            continue;
+        };
+        let message = match b.join_group(id, docs[i].wp_id, group).await {
+            Ok(_) => continue,
+            Err(ferrite_core::CoreError::Conflict { .. }) => {
+                "the page was edited here since the import wrote it; kept".to_owned()
+            }
+            Err(ferrite_core::CoreError::InUse(m)) => m,
+            Err(e) => return Err(e.into()),
+        };
+        problems.push(Problem::TranslationOf {
+            file: docs[i].md.rel.clone(),
+            message,
+        });
+    }
+    Ok(problems)
+}
+
+/// The page at the end of `docs[i]`'s `translation_of` chain, or why there is none.
+fn translation_root(index: &Index, docs: &[Doc], i: usize) -> Result<usize, String> {
+    let mut seen = HashSet::from([i]);
+    let mut at = i;
+    while let Some(target) = &docs[at].md.front.translation_of {
+        // A file, or a folder (its index or synthesized page).
+        let next = resolve_rel(&docs[at].md.rel, target)
+            .and_then(|rel| index.page(&rel))
+            .ok_or_else(|| format!("{target} is not a page of this import"))?;
+        if !seen.insert(next) {
+            return Err(format!("{target}: the translation_of chain is a cycle"));
+        }
+        at = next;
+    }
+    Ok(at)
+}
+
+/// `target` resolved against the folder of file `rel` (both `/`-separated, relative to
+/// the import's folder); `None` when it leaves the folder or is absolute.
+fn resolve_rel(rel: &str, target: &str) -> Option<String> {
+    if target.starts_with('/') || target.contains('\\') {
+        return None;
+    }
+    let mut parts: Vec<&str> = rel.split('/').collect();
+    parts.pop();
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// Sets `reading.front_page` to the root index (P62) under the import's option rule:

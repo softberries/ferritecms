@@ -207,6 +207,11 @@ impl<'a> ImportBatch<'a> {
         Ok(self.tx.options().get(key).await?.map(|o| o.value))
     }
 
+    /// The site's locales as this batch sees them (M6-1).
+    pub async fn locales(&self) -> Result<ferrite_domain::locale::SiteLocales, CoreError> {
+        crate::locales::read(self.tx.as_ref()).await
+    }
+
     /// The stored redirect of `source` (to tell one the import did not write).
     pub async fn get_redirect(&self, source: &str) -> Result<Option<Redirect>, CoreError> {
         Ok(self.tx.redirects().get_by_source(source).await?)

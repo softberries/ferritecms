@@ -113,6 +113,12 @@ pub enum Problem {
     /// `--front-page`: the root index `file` is not public after the run (a draft, or
     /// scheduled for later), so `reading.front_page` was left as it was (ruling R-b12).
     FrontPageNotPublic { file: String },
+    /// The file was skipped: its locale (front matter or `--locale`) is not one of the
+    /// site's (M6-1).
+    Locale { file: String, locale: String },
+    /// The page's `translation_of` was not applied: `message` says why (not in the
+    /// import, a cycle, the group has the locale already, edited here). M6-1.
+    TranslationOf { file: String, message: String },
 }
 
 impl Problem {
@@ -137,6 +143,8 @@ impl Problem {
             Self::NoFrontPage => "no-front-page",
             Self::FrontPageKept { .. } => "front-page-kept",
             Self::FrontPageNotPublic { .. } => "front-page-not-public",
+            Self::Locale { .. } => "locale",
+            Self::TranslationOf { .. } => "translation-of",
         }
     }
 
@@ -156,7 +164,9 @@ impl Problem {
             | Self::SlugChanged { file, .. }
             | Self::OtherType { file, .. }
             | Self::FrontPageKept { file }
-            | Self::FrontPageNotPublic { file } => file,
+            | Self::FrontPageNotPublic { file }
+            | Self::Locale { file, .. }
+            | Self::TranslationOf { file, .. } => file,
             Self::SynthesizedSection { dir } | Self::TooDeep { dir } => dir,
             Self::NotInSource { page } => page,
             Self::NoFrontPage => "index.md",
@@ -212,6 +222,12 @@ impl Problem {
                 "--front-page: the page is not public (a draft, or scheduled for later); \
                  reading.front_page left unchanged"
                     .to_owned()
+            }
+            Self::Locale { locale, .. } => {
+                format!("skipped, {locale} is not one of the site's locales (Settings → Languages)")
+            }
+            Self::TranslationOf { message, .. } => {
+                format!("translation_of not applied: {message}")
             }
         }
     }
