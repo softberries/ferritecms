@@ -1,0 +1,217 @@
+{
+  "title": "Releases",
+  "description": "Group changes and publishing into one step that goes live at once, now or at a set time.",
+  "new": "New release",
+  "list": "Releases",
+  "filters": {
+    "label": "Filter releases",
+    "all": "All",
+    "open": "Open",
+    "scheduled": "Scheduled",
+    "applied": "Applied",
+    "failed": "Failed"
+  },
+  "status": {
+    "open": "Open",
+    "scheduled": "Scheduled",
+    "applied": "Applied",
+    "failed": "Failed"
+  },
+  "columns": {
+    "release": "Release",
+    "status": "Status",
+    "entries": "Entries",
+    "scheduled": "Goes live",
+    "creator": "Created by",
+    "updated": "Updated"
+  },
+  "entriesCount_one": "{{count}} entry",
+  "entriesCount_other": "{{count}} entries",
+  "you": "You",
+  "someone": "Someone else",
+  "notScheduled": "—",
+  "empty": {
+    "title": "No releases yet",
+    "body": "A release collects staged changes and pages to publish, and applies them together.",
+    "filtered": "No releases with this status."
+  },
+  "newDialog": {
+    "title": "New release",
+    "description": "Name it for what goes live together (“Spring launch”). Add items from their editor.",
+    "name": "Title",
+    "descriptionField": "Description",
+    "descriptionHint": "Optional: what it is for, for the people who review it.",
+    "create": "Create release",
+    "creating": "Creating…",
+    "cancel": "Cancel",
+    "titleRequired": "Give the release a title.",
+    "titleTooLong": "At most {{max}} characters."
+  },
+  "detail": {
+    "back": "Releases",
+    "titleLabel": "Release title",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Add a description",
+    "saved": "Saved",
+    "saveFailed": "Not saved: {{detail}}",
+    "created": "Created",
+    "goesLive": "Goes live",
+    "applied": "Applied",
+    "check": "Check",
+    "checking": "Checking…",
+    "previewSite": "Preview site",
+    "share": "Share preview…",
+    "schedule": "Schedule…",
+    "unschedule": "Unschedule",
+    "apply": "Apply now…",
+    "delete": "Delete release",
+    "deleteConfirm": "Delete “{{title}}”?",
+    "deleteBody": "Its entries and staged changes go with it. The items themselves stay as they are.",
+    "deleteAction": "Delete",
+    "deleted": "Release deleted",
+    "locked": "Scheduled: its entries are locked until it goes live. Unschedule it to change anything.",
+    "appliedNote": "Applied: everything in it is live. It stays here as history.",
+    "unscheduled": "Unscheduled. The items are unlocked.",
+    "previewFailed": "The preview could not be opened: {{detail}}",
+    "actionFailed": "That did not work: {{detail}}",
+    "stale": "Someone changed this release meanwhile. It now shows their version; try again."
+  },
+  "entries": {
+    "label": "Entries",
+    "item": "Item",
+    "type": "Type",
+    "locale": "Language",
+    "actions": "Goes live as",
+    "review": "Review",
+    "noReview": "—",
+    "empty": "Nothing in this release yet. Open an item and choose “Add to release…”.",
+    "remove": "Remove {{title}} from the release",
+    "rebase": "Rebase",
+    "rebaseHint": "The item was saved since this entry was added. Rebase keeps the staged change and takes the item's current version as its base.",
+    "rebased": "Rebased on the current version",
+    "conflict": "Conflict",
+    "untitled": "(untitled)"
+  },
+  "chips": {
+    "changes": "Changes",
+    "publish": "Publish",
+    "unpublish": "Unpublish"
+  },
+  "review": {
+    "in_review": "In review ({{step}} of {{steps}})",
+    "approved": "Approved",
+    "stale": "Approval outdated"
+  },
+  "check": {
+    "label": "Check report",
+    "clean": "Ready: every entry would apply.",
+    "problems_one": "{{count}} of {{total}} entries needs attention.",
+    "problems_other": "{{count}} of {{total}} entries need attention.",
+    "outcome": {
+      "ok": "Ready",
+      "conflict": "The item changed since it was added (now version {{version}}). Rebase it.",
+      "needs_approval": "Waiting for approval{{step}}.",
+      "forbidden": "You may not do this ({{capability}} needed).",
+      "invalid": "Not valid: {{message}}"
+    }
+  },
+  "failure": {
+    "title": "The scheduled apply failed",
+    "body": "Nothing of it went live. Fix the entries below, then schedule or apply it again.",
+    "conflict": "changed since it was added",
+    "at": "Failed {{when}}"
+  },
+  "apply": {
+    "title": "Apply “{{title}}” now?",
+    "description": "Everything below goes live in one step. Nothing goes live if any entry fails.",
+    "live": "What goes live",
+    "changes": "Changes go live",
+    "publish": "Published",
+    "unpublish": "Unpublished",
+    "changesAndPublish": "Changes go live, published",
+    "changesAndUnpublish": "Changes go live, unpublished",
+    "confirm": "Apply now",
+    "applying": "Applying…",
+    "cancel": "Cancel",
+    "applied": "“{{title}}” is live",
+    "failed": "Nothing went live: {{detail}}",
+    "conflicts": "Some entries cannot apply. Nothing went live:"
+  },
+  "override": {
+    "summary": "Override approval",
+    "hint": "As an admin you may apply without the approvals the workflow asks for. The reason is written to the audit log.",
+    "check": "Apply without the missing approvals",
+    "reason": "Reason",
+    "reasonRequired": "Say why (at most 500 characters)."
+  },
+  "scheduleDialog": {
+    "title": "Schedule “{{title}}”",
+    "description": "It goes live at this time. Its items are locked until then; the release is checked first.",
+    "confirm": "Schedule for {{when}}",
+    "scheduling": "Scheduling…",
+    "cancel": "Cancel",
+    "scheduled": "Scheduled for {{when}}",
+    "notReady": "The check found problems; fix them first:"
+  },
+  "share": {
+    "title": "Share preview",
+    "descriptionRelease": "A link that shows the whole site as it will look after this release, without signing in.",
+    "descriptionItem": "A link that shows this item as saved, without signing in.",
+    "expiry": "Link expires after",
+    "hours": {
+      "1": "1 hour",
+      "24": "24 hours",
+      "168": "7 days"
+    },
+    "create": "Create link",
+    "creating": "Creating…",
+    "field": "Preview link",
+    "links": "Links",
+    "noLinks": "No links yet.",
+    "expires": "Expires {{when}}",
+    "used": "last used {{when}}",
+    "revoke": "Revoke",
+    "revoked": "Link revoked",
+    "close": "Done",
+    "failed": "The link could not be made: {{detail}}"
+  },
+  "add": {
+    "title": "Add to release",
+    "titleChange": "Save as change",
+    "description": "The item goes live with the release, as staged here.",
+    "release": "Release",
+    "newRelease": "New release",
+    "newTitle": "Title of the new release",
+    "noneOpen": "No open release yet: name a new one.",
+    "transition": "When the release goes live",
+    "transitions": {
+      "none": "Keep its status",
+      "publish": "Publish it",
+      "unpublish": "Unpublish it"
+    },
+    "include": "Include my changes",
+    "includeHint": "The text and settings as they are in the editor now become the staged change.",
+    "includeForced": "The changes are staged, not saved to the live item.",
+    "confirm": "Add to release",
+    "confirmChange": "Save as change",
+    "adding": "Adding…",
+    "cancel": "Cancel",
+    "added": "Added to “{{title}}”",
+    "open": "Open release",
+    "nothing": "Choose a status change or include your changes.",
+    "failed": "Not added: {{detail}}"
+  },
+  "editor": {
+    "staged": "Staged in “{{title}}”",
+    "openChange": "Open the change",
+    "changeMode": "Editing the staged change in “{{title}}”",
+    "changeModeHint": "Saving keeps it in the release; nothing goes live until the release is applied.",
+    "backToItem": "Back to the item",
+    "openRelease": "Open the release",
+    "lockedBy": "Locked by the scheduled release “{{title}}”. Unschedule it to change this item.",
+    "changeLocked": "This release is {{status}}: its staged change cannot be edited.",
+    "saveChange": "Save change",
+    "changeSaved": "Change saved in “{{title}}”",
+    "changeFailed": "The change was not saved: {{detail}}"
+  }
+}

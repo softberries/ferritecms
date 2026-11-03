@@ -18,7 +18,8 @@
     "forbidden": "You can read this item but not edit it.",
     "trash": "This item is in the trash. Restore it to edit it.",
     "showJson": "Show stored JSON",
-    "noText": "This item has no text that can be shown."
+    "noText": "This item has no text that can be shown.",
+    "locked": "Locked by the scheduled release “{{title}}”. Unschedule it to change this item."
   },
   "save": {
     "button": "Save",
@@ -206,7 +207,11 @@
       "saving": "Saving…",
       "unpublish": "Unpublish",
       "unschedule": "Unschedule",
-      "preview": "Preview"
+      "preview": "Preview",
+      "saveChange": "Save as change…",
+      "saveStaged": "Save change",
+      "release": "Add to release…",
+      "share": "Share preview…"
     },
     "toast": {
       "submit": "Submitted for review",

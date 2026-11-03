@@ -52,6 +52,8 @@ test("author_sees_posts_pages_and_custom_types", () => {
         ["Recipes", "/content/recipe"],
         // Registered screens follow the types (Task 7: Media).
         ["Media", "/media"],
+        // M6-3: releases and the review queue.
+        ["Releases", "/releases"],
       ],
     ],
   ]);
@@ -63,6 +65,7 @@ test("author_sees_posts_pages_and_custom_types", () => {
     undefined,
     undefined,
     "g m",
+    "g r",
   ]);
 });
 
@@ -313,7 +316,14 @@ test("media_is_registered", () => {
 test("content_items_name_their_type_and_paths_find_their_item", () => {
   const sections = navFor(AUTHOR, TYPES);
   const content = sections.find((s) => s.id === "content")?.items ?? [];
-  expect(content.map((i) => i.contentType)).toEqual(["post", "page", "event", "recipe", undefined]);
+  expect(content.map((i) => i.contentType)).toEqual([
+    "post",
+    "page",
+    "event",
+    "recipe",
+    undefined,
+    undefined,
+  ]);
   expect(navItemAt(sections, "/")?.id).toBe("dashboard");
   expect(navItemAt(sections, "/content/page")?.id).toBe("content-page");
   expect(navItemAt(sections, "/content/page/")?.id).toBe("content-page");
@@ -467,6 +477,23 @@ test("admin_section_by_role", () => {
     .map((i) => i.shortcut)
     .filter((k) => k !== undefined);
   expect(new Set(chords).size).toBe(chords.length);
+});
+
+test("releases_for_every_writing_role", () => {
+  // M6-3 (design 15 §11.3): Releases (`g r`) after the content screens, for every role
+  // that writes content (`edit_own`).
+  for (const who of [AUTHOR, me("contributor", ["read_admin", "edit_own"])]) {
+    const content = navFor(who, TYPES).find((s) => s.id === "content");
+    const tail = content?.items.slice(-1).map((i) => [i.id, i.label, i.to, i.shortcut]);
+    expect(tail).toEqual([["releases", "Releases", "/releases", "g r"]]);
+  }
+  const reader = me("reader", ["read_admin"]);
+  expect(
+    navFor(reader, TYPES)
+      .flatMap((s) => s.items)
+      .some((i) => i.id === "releases" || i.id === "reviews"),
+  ).toBe(false);
+  expect(navItemAt(navFor(AUTHOR, TYPES), "/releases")?.id).toBe("releases");
 });
 
 test("nav_entry_only_for_manage_webhooks", () => {

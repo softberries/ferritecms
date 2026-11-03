@@ -15,6 +15,7 @@ import {
   LayoutDashboardIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  PackageIcon,
   PaletteIcon,
   PlugIcon,
   ServerCogIcon,
@@ -64,6 +65,10 @@ const SCREENS = {
     show: (can: Can) => can("moderate_comments"),
     shortcut: "g c",
   },
+  // Releases and the review queue (M6-3, design 15 §11.3–11.4): every role that writes
+  // content; the server lists what each may see.
+  releases: { section: "content", show: (can: Can) => can("edit_own"), shortcut: "g r" },
+  reviews: { section: "content", show: (can: Can) => can("edit_own"), shortcut: "g v" },
   types: { section: "structure", show: (can: Can) => can("manage_settings") },
   // `manage_terms` alone manages terms, not the taxonomies themselves (the screen decides).
   taxonomies: {
@@ -109,6 +114,7 @@ export interface ScreenEntry {
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "comments", to: "/comments", label: "nav.comments", icon: MessageSquareIcon },
+  { screen: "releases", to: "/releases", label: "nav.releases", icon: PackageIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },

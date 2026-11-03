@@ -57,6 +57,7 @@ import {
 import { qk } from "@/api/keys";
 import { resolveMediaUrl } from "@/api/media";
 import { type ApiError, isProblem } from "@/api/problem";
+import type { StagedSource } from "@/api/releases";
 import { typesQuery } from "@/api/types";
 import type {
   SchemaAutosaveInput,
@@ -103,7 +104,9 @@ export type ReadOnlyReason =
   | { kind: "invalid" }
   /** The server says this account may not edit the item (`allowed.edit`). */
   | { kind: "forbidden" }
-  | { kind: "trash" };
+  | { kind: "trash" }
+  /** In a scheduled release (M6-3, D5): nothing changes until it is unscheduled. */
+  | { kind: "locked"; release: { id: string; title: string } };
 
 /** The side panel's members of the draft (with title and body, one draft). */
 export interface MetaDraft {
@@ -400,6 +403,18 @@ export interface EditorDocumentOptions {
    * sent) or by the server's `422` (`server`, which `onWriteError` reports too).
    */
   onInvalid?: (source: "client" | "server") => void;
+  /**
+   * A public item of a workflow type that this account may not edit in place
+   * (`allowed.stage` without `allowed.edit`, P7 D20): a save asks for a release instead
+   * (the editor opens "Save as change"). Nothing is sent.
+   */
+  onStageRequired?: () => void;
+  /**
+   * Change mode (design 15 §11.2): the screen edits a release entry's staged change, and a
+   * save hands the whole snapshot to this (`PUT /releases/{id}/items/{item}`). No autosave
+   * slot is written (D36); the item itself is never saved.
+   */
+  saveChange?: (change: StagedSource) => Promise<void>;
 }
 
 /** A working draft the screen opens with: the autosave slot, or one kept over a sign-in. */
@@ -571,6 +586,8 @@ export interface EditorDocument {
   setAutosaveDebounce: (ms: number | null) => void;
   /** Whether this screen writes the autosave slot (an existing, editable item). */
   autosaves: boolean;
+  /** The screen edits a release entry's staged change (`saveChange`). */
+  changeMode: boolean;
 }
 
 function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
@@ -582,7 +599,10 @@ function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | 
 /** What the item's status and `allowed` say now (they change with transitions). */
 function itemReadOnly(item: ContentDto | null): ReadOnlyReason | null {
   if (item?.status === "trash") return { kind: "trash" };
-  if (item && !item.allowed.edit) return { kind: "forbidden" };
+  const lock = item?.releases?.find((r) => r.status === "scheduled");
+  if (lock) return { kind: "locked", release: { id: lock.id, title: lock.title } };
+  // A public item of a workflow type stays editable for staging (P7 D20).
+  if (item && !item.allowed.edit && !item.allowed.stage) return { kind: "forbidden" };
   return null;
 }
 
@@ -861,7 +881,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     restoring && !restoring.flush && !restoring.local ? new Date(restoring.at) : null,
   );
   const itemId = opts.item?.id ?? null;
-  const autosaves = itemId !== null && initialReadOnly === null;
+  // Change mode writes no slot (D36): the release holds the change.
+  const [changeMode] = useState(() => opts.saveChange !== undefined);
+  const autosaves = itemId !== null && initialReadOnly === null && !changeMode;
   // A kept draft that differs from the item goes to the slot at once; one that does not
   // is done with, and a slot that equals the item is removed quietly (no banner).
   const [restoreFlush] = useState(() => (restoring?.flush && restored ? restoring : null));
@@ -1190,11 +1212,78 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
   const waiting = useRef<Transition | null>(null);
   const [pending, setPending] = useState<Transition | null>(null);
 
+  /** Change mode's save: the draft as a staged change, through the release (D36). */
+  const saveChangeNow = useCallback(
+    (
+      change: (s: StagedSource) => Promise<void>,
+      current: ContentDto,
+    ): Promise<ContentDto | null> => {
+      setSaveState("saving");
+      const run = async (): Promise<ContentDto | null> => {
+        const sentTitle = titleRef.current;
+        const json = editor.getJSON();
+        const sentBody = JSON.stringify(json);
+        const sentMeta = metaRef.current;
+        const defs = latest.current.fieldDefs ?? null;
+        try {
+          await change({
+            title: sentTitle,
+            body: json,
+            excerpt: sentMeta.excerpt,
+            slug: sentMeta.slug,
+            parent_id: sentMeta.parent_id,
+            menu_order: sentMeta.menu_order,
+            terms: sentMeta.terms,
+            fields: defs ? toSave(defs, sentMeta.fields) : sentMeta.fields,
+            seo: seoOfDraft(sentMeta.seo),
+          });
+          saved.current = { title: sentTitle, body: sentBody };
+          savedMetaRef.current = sentMeta;
+          setSavedMeta(sentMeta);
+          setSavedAt(new Date());
+          setFieldErrors({});
+          setSaveAttempted(false);
+          const still = !isDirtyNow();
+          setDirty(!still);
+          setSaveState(still ? "saved" : "dirty");
+          return current;
+        } catch (e) {
+          setSaveState(e instanceof NetworkError ? "offline" : "error");
+          const errors = serverFieldErrors(e);
+          if (Object.keys(errors).length > 0) {
+            setFieldErrors(errors);
+            setSaveAttempted(true);
+            latest.current.onInvalid?.("server");
+          }
+          if (needsSignIn(e)) fail(e, "save");
+          else latest.current.onWriteError?.(e, "save");
+          return null;
+        } finally {
+          inflight.current = null;
+        }
+      };
+      const p = run();
+      inflight.current = p;
+      return p;
+    },
+    [editor, isDirtyNow, fail],
+  );
+
   const saveNow = useCallback(
     (then?: Transition): Promise<ContentDto | null> => {
       if (readOnlyRef.current || restoringRef.current) return Promise.resolve(null);
       if (inflight.current) return inflight.current;
       const current = itemRef.current;
+      const change = latest.current.saveChange;
+      if (change && current) {
+        if (!isDirtyNow()) return Promise.resolve(current);
+        return saveChangeNow(change, current);
+      }
+      if (current && !current.allowed.edit && current.allowed.stage) {
+        // Not in place (P7 D20): the change goes to a release.
+        latest.current.onStageRequired?.();
+        return Promise.resolve(null);
+      }
       if (current && !isDirtyNow()) {
         setDirty(false);
         setSaveState("saved");
@@ -1342,7 +1431,18 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       inflight.current = p;
       return p;
     },
-    [editor, type, adopt, fail, isDirtyNow, touch, queryClient, backupKey, setKeptStored],
+    [
+      editor,
+      type,
+      adopt,
+      fail,
+      isDirtyNow,
+      touch,
+      queryClient,
+      backupKey,
+      setKeptStored,
+      saveChangeNow,
+    ],
   );
 
   /** A save waits for a transition in flight, then saves what is still unsaved. */
@@ -1662,5 +1762,6 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     onAutosaved,
     setAutosaveDebounce,
     autosaves,
+    changeMode,
   };
 }

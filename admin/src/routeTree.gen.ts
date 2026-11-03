@@ -27,6 +27,8 @@ import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppPluginsIndexRouteImport } from './routes/_app/plugins.index'
 import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
 import { Route as AppPluginsPublishersRouteImport } from './routes/_app/plugins.publishers'
+import { Route as AppReleasesIndexRouteImport } from './routes/_app/releases.index'
+import { Route as AppReleasesIdRouteImport } from './routes/_app/releases.$id'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
 import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
@@ -134,6 +136,16 @@ const AppPluginsPublishersRoute = AppPluginsPublishersRouteImport.update({
   path: '/plugins/publishers',
   getParentRoute: () => AppRoute,
 } as any)
+const AppReleasesIndexRoute = AppReleasesIndexRouteImport.update({
+  id: '/releases/',
+  path: '/releases/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReleasesIdRoute = AppReleasesIdRouteImport.update({
+  id: '/releases/$id',
+  path: '/releases/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
@@ -237,6 +249,7 @@ export interface FileRoutesByFullPath {
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
   '/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/releases/$id': typeof AppReleasesIdRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
@@ -244,6 +257,7 @@ export interface FileRoutesByFullPath {
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
+  '/releases/': typeof AppReleasesIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/system/': typeof AppSystemIndexRoute
   '/users/': typeof AppUsersIndexRoute
@@ -273,6 +287,7 @@ export interface FileRoutesByTo {
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
   '/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/releases/$id': typeof AppReleasesIdRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
@@ -280,6 +295,7 @@ export interface FileRoutesByTo {
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
+  '/releases': typeof AppReleasesIndexRoute
   '/settings': typeof AppSettingsIndexRoute
   '/system': typeof AppSystemIndexRoute
   '/users': typeof AppUsersIndexRoute
@@ -311,6 +327,7 @@ export interface FileRoutesById {
   '/_app/appearance/themes': typeof AppAppearanceThemesRoute
   '/_app/plugins/$name': typeof AppPluginsNameRoute
   '/_app/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/_app/releases/$id': typeof AppReleasesIdRoute
   '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/system/$tab': typeof AppSystemTabRoute
@@ -318,6 +335,7 @@ export interface FileRoutesById {
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
+  '/_app/releases/': typeof AppReleasesIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/system/': typeof AppSystemIndexRoute
   '/_app/users/': typeof AppUsersIndexRoute
@@ -349,6 +367,7 @@ export interface FileRouteTypes {
     | '/appearance/themes'
     | '/plugins/$name'
     | '/plugins/publishers'
+    | '/releases/$id'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
@@ -356,6 +375,7 @@ export interface FileRouteTypes {
     | '/comments/'
     | '/media/'
     | '/plugins/'
+    | '/releases/'
     | '/settings/'
     | '/system/'
     | '/users/'
@@ -385,6 +405,7 @@ export interface FileRouteTypes {
     | '/appearance/themes'
     | '/plugins/$name'
     | '/plugins/publishers'
+    | '/releases/$id'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
@@ -392,6 +413,7 @@ export interface FileRouteTypes {
     | '/comments'
     | '/media'
     | '/plugins'
+    | '/releases'
     | '/settings'
     | '/system'
     | '/users'
@@ -422,6 +444,7 @@ export interface FileRouteTypes {
     | '/_app/appearance/themes'
     | '/_app/plugins/$name'
     | '/_app/plugins/publishers'
+    | '/_app/releases/$id'
     | '/_app/settings/$group'
     | '/_app/structure/redirects'
     | '/_app/system/$tab'
@@ -429,6 +452,7 @@ export interface FileRouteTypes {
     | '/_app/comments/'
     | '/_app/media/'
     | '/_app/plugins/'
+    | '/_app/releases/'
     | '/_app/settings/'
     | '/_app/system/'
     | '/_app/users/'
@@ -582,6 +606,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPluginsPublishersRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/releases/': {
+      id: '/_app/releases/'
+      path: '/releases'
+      fullPath: '/releases/'
+      preLoaderRoute: typeof AppReleasesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/releases/$id': {
+      id: '/_app/releases/$id'
+      path: '/releases/$id'
+      fullPath: '/releases/$id'
+      preLoaderRoute: typeof AppReleasesIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/settings/': {
       id: '/_app/settings/'
       path: '/settings'
@@ -713,6 +751,7 @@ interface AppRouteChildren {
   AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppPluginsNameRoute: typeof AppPluginsNameRoute
   AppPluginsPublishersRoute: typeof AppPluginsPublishersRoute
+  AppReleasesIdRoute: typeof AppReleasesIdRoute
   AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppSystemTabRoute: typeof AppSystemTabRoute
@@ -720,6 +759,7 @@ interface AppRouteChildren {
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
+  AppReleasesIndexRoute: typeof AppReleasesIndexRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppSystemIndexRoute: typeof AppSystemIndexRoute
   AppUsersIndexRoute: typeof AppUsersIndexRoute
@@ -744,6 +784,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppPluginsNameRoute: AppPluginsNameRoute,
   AppPluginsPublishersRoute: AppPluginsPublishersRoute,
+  AppReleasesIdRoute: AppReleasesIdRoute,
   AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppSystemTabRoute: AppSystemTabRoute,
@@ -751,6 +792,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,
+  AppReleasesIndexRoute: AppReleasesIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppSystemIndexRoute: AppSystemIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,

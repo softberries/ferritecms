@@ -626,3 +626,85 @@ describe("seo", () => {
     expect(input(null)).toHaveProperty("canonical", null);
   });
 });
+
+// M6-3 (design 15 §6.4, §11.2; P7 D20): a public item of a workflow type that this account
+// may not edit in place is staged instead (`allowed.stage`); change mode edits a release
+// entry's staged change and saves it through the release, never the item or its slot.
+function StagingHarness({
+  start,
+  onStageRequired,
+  saveChange,
+}: {
+  start: SchemaContentDto;
+  onStageRequired?: () => void;
+  saveChange?: (s: unknown) => Promise<void>;
+}) {
+  const d = useEditorDocument({
+    type: "post",
+    item: start,
+    placeholder: "",
+    bodyLabel: "Body",
+    ...(onStageRequired ? { onStageRequired } : {}),
+    ...(saveChange ? { saveChange } : {}),
+  });
+  useEffect(() => {
+    doc = d;
+  });
+  return <EditorContent editor={d.editor} />;
+}
+
+const staged = (version: number): SchemaContentDto => {
+  const i = item(version, "Live text");
+  return {
+    ...i,
+    status: "published",
+    allowed: { ...i.allowed, edit: false, stage: true, publish: false, schedule: false },
+  };
+};
+
+describe("staging", () => {
+  test("a_stage_only_item_is_editable_and_its_save_asks_for_a_release", async () => {
+    const seen = stubRoutes({
+      [`/api/v1/content/post/${ID}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    const onStageRequired = vi.fn();
+    renderWithRouter(<StagingHarness start={staged(3)} onStageRequired={onStageRequired} />);
+    await waitFor(() => expect(doc?.editor.isEditable).toBe(true));
+    expect(doc?.readOnly).toBeNull();
+    act(() => doc?.setTitle("Typo fixed"));
+    let result: unknown = "pending";
+    await act(async () => {
+      result = await doc?.save();
+    });
+    expect(result).toBeNull();
+    expect(onStageRequired).toHaveBeenCalledTimes(1);
+    expect(seen.filter((u) => u.pathname === `/api/v1/content/post/${ID}`)).toEqual([]);
+  });
+
+  test("change_mode_saves_through_the_release_and_never_the_slot", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const seen = stubRoutes({});
+    const saveChange = vi.fn<(s: unknown) => Promise<void>>(() => Promise.resolve());
+    const start = item(3, "Staged text");
+    renderWithRouter(<StagingHarness start={start} saveChange={saveChange} />);
+    await waitFor(() => expect(doc?.editor.isEditable).toBe(true));
+    act(() => doc?.setTitle("Staged title"));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    // No autosave slot in change mode (D36).
+    expect(seen).toEqual([]);
+    await act(async () => {
+      await doc?.save();
+    });
+    expect(saveChange).toHaveBeenCalledTimes(1);
+    expect(saveChange.mock.calls[0]?.[0]).toMatchObject({
+      title: "Staged title",
+      slug: "restore-me",
+      terms: [],
+      body: { type: "doc" },
+    });
+    expect(doc?.dirty).toBe(false);
+    expect(doc?.saveState).toBe("saved");
+    expect(seen).toEqual([]);
+    vi.useRealTimers();
+  });
+});

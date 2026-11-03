@@ -13,10 +13,21 @@
 // never reached the server, `editor/local-backup.ts`); the screen offers it when it
 // differs from both the item and the slot. Images dropped on the body upload through a
 // queue that lives here, above the remounted screen (`body-uploads.ts`).
+//
+// `?release=<id>` (M6-3, design 15 §11.2) is change mode: the loader reads the release and
+// the screen edits the item's entry there (its staged change, or the stored item when the
+// entry has none), saving through the release; no slot is read or written. A release that
+// does not hold the item opens the item as usual.
 
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { getContent } from "@/api/content";
+import {
+  type ReleaseDetail,
+  type ReleaseEntry,
+  releaseEditable,
+  releaseQuery,
+} from "@/api/releases";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import type { SchemaAutosaveDto, SchemaContentDto } from "@/api/schema";
@@ -35,6 +46,7 @@ import type { RestoreSource } from "@/editor/editor-state";
 import { clearHandoff, peekHandoff } from "@/editor/handoff";
 import { type Backup, readBackup } from "@/editor/local-backup";
 import type { UploadQueue } from "@/media/upload-queue";
+import { itemOfChange } from "@/releases/change-mode";
 
 const NOT_EDITED = new Set(["media"]);
 
@@ -43,12 +55,22 @@ interface ItemLoaderData {
   item: SchemaContentDto;
   /** The caller's autosave slot of the item, if any. */
   autosave: SchemaAutosaveDto | null;
+  /** Change mode: the release and the item's entry in it. */
+  change: { release: ReleaseDetail; entry: ReleaseEntry } | null;
+}
+
+interface ItemSearch {
+  release?: string;
 }
 
 /** Whether the screen will be editable, so a slot can matter (else none is read). */
-const mayHaveSlot = (item: SchemaContentDto) => item.allowed.edit && item.status !== "trash";
+const mayHaveSlot = (item: SchemaContentDto) =>
+  (item.allowed.edit || item.allowed.stage) && item.status !== "trash";
 
 export const Route = createFileRoute("/_app/content/$type/$id")({
+  validateSearch: (raw: Record<string, unknown>): ItemSearch =>
+    typeof raw.release === "string" && raw.release !== "" ? { release: raw.release } : {},
+  loaderDeps: ({ search }) => ({ release: search.release }),
   staticData: {
     crumb: (t, data) => {
       const item = (data as ItemLoaderData | undefined)?.item;
@@ -60,7 +82,7 @@ export const Route = createFileRoute("/_app/content/$type/$id")({
   staleTime: 0,
   gcTime: 0,
   shouldReload: false,
-  loader: async ({ context, params }): Promise<ItemLoaderData> => {
+  loader: async ({ context, params, deps }): Promise<ItemLoaderData> => {
     const { queryClient } = context;
     const types = await queryClient.ensureQueryData(typesQuery);
     const type = types.find((ty) => ty.name === params.type);
@@ -69,17 +91,34 @@ export const Route = createFileRoute("/_app/content/$type/$id")({
     const handed = peekHandoff(params.id)
       ? queryClient.getQueryData<SchemaContentDto>(key)
       : undefined;
-    if (handed) return { label: type.label, item: handed, autosave: null };
+    if (handed && !deps.release) {
+      return { label: type.label, item: handed, autosave: null, change: null };
+    }
     try {
       const item = await queryClient.fetchQuery({
         queryKey: key,
         queryFn: () => getContent(params.type, params.id),
         staleTime: 0,
       });
+      if (deps.release) {
+        const release = await queryClient.fetchQuery({
+          ...releaseQuery(deps.release),
+          staleTime: 0,
+        });
+        const entry = release.entries.find((e) => e.item_id === item.id);
+        if (entry) {
+          return {
+            label: type.label,
+            item: itemOfChange(item, entry, releaseEditable(release)),
+            autosave: null,
+            change: { release, entry },
+          };
+        }
+      }
       // Only an editable screen can use a slot (and only there may the caller read one,
       // so a read-only item asks for nothing that would answer 403).
       const autosave = mayHaveSlot(item) ? await loadAutosave(params.type, params.id) : null;
-      return { label: type.label, item, autosave };
+      return { label: type.label, item, autosave, change: null };
     } catch (e) {
       if (e instanceof ApiError && (e.status === 404 || e.status === 400)) throw notFound();
       throw e;
@@ -106,8 +145,9 @@ interface Start {
 
 function ItemEditor() {
   const data = Route.useLoaderData();
-  // Another item is another screen (its own drop uploads and reopen state).
-  return <ItemEditorOf key={data.item.id} data={data} />;
+  // Another item is another screen (its own drop uploads and reopen state); so is its
+  // staged change in a release.
+  return <ItemEditorOf key={`${data.item.id}:${data.change?.release.id ?? ""}`} data={data} />;
 }
 
 function ItemEditorOf({ data }: { data: ItemLoaderData }) {
@@ -122,6 +162,19 @@ function ItemEditorOf({ data }: { data: ItemLoaderData }) {
   // The first start, from the loader: a draft kept over a sign-in, else the slot.
   const initial = useMemo((): Start => {
     const id = data.item.id;
+    if (data.change) {
+      // Change mode: the release holds the draft; no slot, no backup, no kept draft.
+      return {
+        item: data.item,
+        restore: null,
+        kept: null,
+        backup: null,
+        revision: null,
+        discarded: null,
+        epoch: 0,
+        from: data,
+      };
+    }
     const pending = peekPendingDraft(id, userId);
     const restore: RestoreSource | null = pending
       ? {
@@ -172,6 +225,7 @@ function ItemEditorOf({ data }: { data: ItemLoaderData }) {
       start={start}
       uploads={uploads.queue}
       onReopen={onReopen}
+      change={data.change}
     />
   );
 }
@@ -182,12 +236,14 @@ function ItemScreen({
   start,
   uploads,
   onReopen,
+  change,
 }: {
   type: string;
   label: string;
   start: Start;
   uploads: UploadQueue;
   onReopen: (next: Reopen) => void;
+  change: ItemLoaderData["change"];
 }) {
   const { item } = start;
   // Read once per mount, dropped once mounted (StrictMode may run the initializer twice).
@@ -206,6 +262,7 @@ function ItemScreen({
       discarded={start.discarded}
       uploads={uploads}
       onReopen={onReopen}
+      change={change}
     />
   );
 }

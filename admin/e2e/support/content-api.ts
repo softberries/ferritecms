@@ -236,6 +236,26 @@ export class ContentApi {
     await this.ctx.delete(`/api/v1/terms/${id}`, { headers: this.headers() });
   }
 
+  /**
+   * Any API call on this session (`/api/v1` + `path`), with the CSRF token and, given a
+   * version, `If-Match`; fails the test unless it succeeds. M6-3 specs use it for releases,
+   * workflows and reviews.
+   */
+  async call<T>(
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    path: string,
+    options: { data?: unknown; version?: number } = {},
+  ): Promise<T> {
+    return this.ok<T>(
+      await this.ctx.fetch(`/api/v1${path}`, {
+        method,
+        headers: this.headers(options.version),
+        ...(options.data === undefined ? {} : { data: options.data }),
+      }),
+      `${method} ${path}`,
+    );
+  }
+
   async create(
     type: string,
     title: string,

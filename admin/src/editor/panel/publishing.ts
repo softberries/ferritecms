@@ -15,7 +15,17 @@ import { uiLocale } from "@/lib/locale";
  * reads "Unschedule"; `preview` opens `/_preview/<id>`.
  */
 export type PanelAction =
-  "publish" | "schedule" | "publishNow" | "submit" | "save" | "unpublish" | "preview";
+  | "publish"
+  | "schedule"
+  | "publishNow"
+  | "submit"
+  | "save"
+  | "saveChange"
+  | "unpublish"
+  | "preview";
+
+/** The release actions under the status (M6-3): Add to release…, Share preview…. */
+export type ReleaseAction = "release" | "share";
 
 export interface PanelActions {
   /** The first is the filled button; the rest are outlined. */
@@ -41,23 +51,27 @@ export function statusActions(item: ActionItem | null, readOnly: boolean): Panel
   const a = item.allowed;
   const primary: PanelAction[] = [];
   const secondary: PanelAction[] = [];
+  // A public item of a workflow type that may only be staged (P7 D20): Save as change.
+  const save: PanelAction[] = a.edit ? ["save"] : a.stage ? ["saveChange"] : [];
   switch (item.status) {
     case "draft":
     case "pending":
-      if (a.publish) primary.push("publish");
-      if (a.schedule) primary.push("schedule");
-      // Submit for review is for those who cannot publish (contributors).
+      // An admin's override (M6-3 §6.5): publishing without the approval, with a reason.
+      if (a.publish || a.override) primary.push("publish");
+      if (a.schedule || a.override) primary.push("schedule");
+      // Submit for review is for those who cannot publish (contributors, and everyone in
+      // a type whose workflow still waits for an approval).
       if (a.submit && !a.publish) primary.push("submit");
       if (a.edit) primary.push("save");
       break;
     case "scheduled":
-      if (a.edit) primary.push("save");
+      primary.push(...save);
       if (a.publish) primary.push("publishNow");
       if (a.unpublish) secondary.push("unpublish");
       break;
     case "published":
     case "private":
-      if (a.edit) primary.push("save");
+      primary.push(...save);
       if (a.unpublish) secondary.push("unpublish");
       break;
     default:
@@ -65,6 +79,23 @@ export function statusActions(item: ActionItem | null, readOnly: boolean): Panel
   }
   secondary.push(...preview);
   return { primary, secondary };
+}
+
+/**
+ * The release actions for `item` (M6-3, design 15 §11.2): Add to release… for an item this
+ * account may edit or stage, Share preview… for any stored item (the server checks that
+ * the account may preview it). None for a new item, a trashed one, or in change mode.
+ */
+export function releaseActions(
+  item: ActionItem | null,
+  readOnly: boolean,
+  changeMode: boolean,
+): ReleaseAction[] {
+  if (item === null || item.status === "trash" || changeMode) return [];
+  const out: ReleaseAction[] = [];
+  if (!readOnly && (item.allowed.edit || item.allowed.stage)) out.push("release");
+  out.push("share");
+  return out;
 }
 
 // --- Schedule time ---------------------------------------------------------------

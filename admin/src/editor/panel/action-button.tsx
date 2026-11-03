@@ -2,11 +2,12 @@
 // Publish, Schedule and Publish now open the publish dialog; Submit runs in place; the
 // save action is quiet (outlined, disabled) while there is nothing to save.
 
-import { ClockIcon, SendIcon } from "lucide-react";
+import { ClockIcon, PackagePlusIcon, SendIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import type { EditorDocument } from "../editor-state";
 import { useActionRunner } from "./actions";
+import { useEditorActions } from "./editor-actions";
 import type { PanelAction } from "./publishing";
 
 export interface ActionButtonProps {
@@ -28,6 +29,7 @@ export function ActionButton({
 }: ActionButtonProps) {
   const { t } = useTranslation("editor");
   const { label, run, busy } = useActionRunner(doc);
+  const actions = useEditorActions();
   const common = { type: "button" as const, variant, size, className, "data-action": action };
   switch (action) {
     case "publish":
@@ -74,6 +76,18 @@ export function ActionButton({
         </Button>
       );
     }
+    case "saveChange":
+      return (
+        <Button
+          {...common}
+          disabled={busy}
+          aria-keyshortcuts="Meta+S Control+S"
+          onClick={() => actions.release(true)}
+        >
+          <PackagePlusIcon data-icon="inline-start" />
+          {label(action)}
+        </Button>
+      );
     default:
       return null;
   }
