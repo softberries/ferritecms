@@ -231,10 +231,21 @@ fn render_image(map: &Map<String, Value>, ctx: &RenderCtx, out: &mut String) {
     if caption.is_some() {
         out.push_str("<figure>");
     }
+    // A decorative image (design 16 §4.1) has an empty alt whatever `alt` holds.
+    let decorative = map
+        .get("attrs")
+        .and_then(|a| a.get("decorative"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let alt = if decorative {
+        ""
+    } else {
+        attr_str(map, "alt").unwrap_or("")
+    };
     out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"",
         encode_double_quoted_attribute(&image.src),
-        encode_double_quoted_attribute(attr_str(map, "alt").unwrap_or(""))
+        encode_double_quoted_attribute(alt)
     ));
     if let Some(title) = attr_str(map, "title") {
         out.push_str(&format!(
@@ -699,6 +710,24 @@ mod tests {
     fn long_unknown_type_is_handled() {
         let d = doc(vec![json!({"type":"x".repeat(100_000),"content":[t("a")]})]);
         assert_eq!(r(d), "a");
+    }
+
+    #[test]
+    fn decorative_image_renders_empty_alt() {
+        let img = |attrs: Value| r(doc(vec![json!({"type":"image","attrs":attrs})]));
+        assert_eq!(
+            img(json!({"src":"/i.png","alt":"A lake","decorative":true})),
+            "<img src=\"/i.png\" alt=\"\">"
+        );
+        // Only `true` counts.
+        assert_eq!(
+            img(json!({"src":"/i.png","alt":"A lake","decorative":"true"})),
+            "<img src=\"/i.png\" alt=\"A lake\">"
+        );
+        assert_eq!(
+            img(json!({"src":"/i.png","alt":"A lake","decorative":false})),
+            "<img src=\"/i.png\" alt=\"A lake\">"
+        );
     }
 
     #[test]
