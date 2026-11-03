@@ -319,6 +319,16 @@ impl ReviewService {
             if review.submitted_by == Some(actor.user) || item.author_id == actor.user {
                 return Err(CoreError::Forbidden("another approver"));
             }
+            // Nobody approves a change they staged themselves (review finding 8).
+            if let ReviewTarget::Entry(release, it) = review.target
+                && tx
+                    .releases()
+                    .entry(release, it)
+                    .await?
+                    .is_some_and(|e| e.added_by == Some(actor.user))
+            {
+                return Err(CoreError::Forbidden("another approver"));
+            }
             let now = Timestamp::now();
             match tx
                 .reviews()

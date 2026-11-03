@@ -190,28 +190,50 @@ fn local_target(raw_query: Option<&str>) -> String {
         .unwrap_or_else(|| "/".to_owned())
 }
 
-async fn resolve(state: &AppState, token: &str) -> Option<(Arc<Editorial>, PreviewPrincipal)> {
-    let ed = state.editorial.clone()?;
+/// What resolving a preview token gave.
+enum Resolved {
+    Valid(Arc<Editorial>, PreviewPrincipal),
+    /// Unknown, expired, revoked, or its creator may no longer see it.
+    Invalid,
+    /// The lookup failed (a store error): neither valid nor known invalid.
+    Failed,
+}
+
+async fn resolve(state: &AppState, token: &str) -> Resolved {
+    let Some(ed) = state.editorial.clone() else {
+        return Resolved::Invalid;
+    };
     match ed.links.resolve(token).await {
-        Ok(Some(p)) => Some((ed, p)),
-        Ok(None) => None,
+        Ok(Some(p)) => Resolved::Valid(ed, p),
+        Ok(None) => Resolved::Invalid,
         Err(e) => {
             tracing::warn!(error = %e, "preview link lookup failed");
-            None
+            Resolved::Failed
         }
     }
+}
+
+fn busy_page() -> Response<Body> {
+    let mut res = page_response(&error_page::busy(), None);
+    preview_headers(&mut res);
+    res
 }
 
 /// `/_preview/link/<token>`.
 pub(crate) async fn link(
     state: &Arc<AppState>,
+    headers: &HeaderMap,
     token: &str,
     raw_query: Option<&str>,
 ) -> Response<Body> {
-    let Some((ed, p)) = resolve(state, token).await else {
-        let mut res = missing(state, Missing::NotFound).await;
-        preview_headers(&mut res);
-        return res;
+    let (ed, p) = match resolve(state, token).await {
+        Resolved::Valid(ed, p) => (ed, p),
+        Resolved::Failed => return busy_page(),
+        Resolved::Invalid => {
+            let mut res = missing(state, Missing::NotFound).await;
+            preview_headers(&mut res);
+            return res;
+        }
     };
     match p.link.target {
         PreviewTarget::Release(_) => {
@@ -244,11 +266,22 @@ pub(crate) async fn link(
                 .map(|i| i.title)
                 .unwrap_or_default();
             let view = Arc::new(state.preview_view(state.store.clone(), None));
-            let path = format!("/_preview/link/{token}");
+            // The token is a credential: it never reaches plugins, themes or logs.
+            let path = "/_preview/link".to_owned();
             let route = Route::Preview { id };
             // `?working=1`: the creator's autosave slot (the editor's live preview loads
-            // through a link, P7 D16); `?release=<id>`: an entry's staged change.
-            let kind = kind_of(raw_query);
+            // through a link, P7 D16); `?release=<id>`: an entry's staged change. Only for
+            // the creator's own signed-in browser (the frame's navigation carries the
+            // session cookie); anyone else holding the link sees the stored item.
+            let mut kind = kind_of(raw_query);
+            if kind != PreviewKind::Stored {
+                let own = super::handler::session(state, headers)
+                    .await
+                    .is_some_and(|who| who.user.id == p.link.created_by);
+                if !own {
+                    kind = PreviewKind::Stored;
+                }
+            }
             match pipeline::preview(view, route, path, p.actor, id, kind).await {
                 Ok(page) => with_bar(
                     &page,
@@ -310,8 +343,11 @@ pub(crate) async fn cookie_page(
     let Some(token) = read_preview_cookie(headers, state.cookie_secure) else {
         return CookiePage::None;
     };
-    let Some((ed, p)) = resolve(state, token).await else {
-        return CookiePage::Clear;
+    let (ed, p) = match resolve(state, token).await {
+        Resolved::Valid(ed, p) => (ed, p),
+        // A failed lookup keeps the cookie (review finding 5).
+        Resolved::Failed => return CookiePage::Served(busy_page()),
+        Resolved::Invalid => return CookiePage::Clear,
     };
     let PreviewTarget::Release(release) = p.link.target else {
         return CookiePage::Clear;

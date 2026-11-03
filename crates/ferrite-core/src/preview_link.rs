@@ -213,7 +213,10 @@ impl PreviewLinkService {
             .last_used_at
             .is_none_or(|t| now.as_micros() - t.as_micros() >= TOUCH_EVERY_MICROS)
         {
-            repos.preview_links().touch(link.id, now).await?;
+            // Best effort: a busy writer must not turn a valid link away.
+            if let Err(e) = repos.preview_links().touch(link.id, now).await {
+                tracing::debug!(error = %e, "preview link touch skipped");
+            }
         }
         Ok(Some(PreviewPrincipal { link, actor }))
     }

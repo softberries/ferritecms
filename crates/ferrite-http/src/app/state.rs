@@ -36,6 +36,9 @@ pub const RENDER_WAIT: Duration = Duration::from_secs(5);
 /// Default [`HttpConfig::render_budget`] (`plugins.render_budget_ms`, P22).
 pub const RENDER_BUDGET: Duration = Duration::from_millis(1000);
 
+/// The throwaway page cache of a preview view (its shared 404/410 pages only).
+const PREVIEW_CACHE_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Option holding the site title; falls back to [`HttpConfig::site_title`].
 pub const TITLE_OPTION: &str = "site.title";
 /// Option holding the tagline; falls back to [`HttpConfig::site_description`].
@@ -333,7 +336,9 @@ impl AppState {
             media: self.media.clone(),
             theme: ArcSwap::new(self.theme.load_full()),
             previous_theme: ArcSwapOption::empty(),
-            cache: self.cache.clone(),
+            // Never the live cache: an error page rendered through the sandbox must not
+            // reach visitors (review finding 1).
+            cache: Arc::new(PageCache::new(PREVIEW_CACHE_BYTES)),
             routes: ArcSwap::new(self.routes.load_full()),
             config: self.config.clone(),
             migrations_ok: self.migrations_ok,

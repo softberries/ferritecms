@@ -848,7 +848,65 @@ async fn notify_job_enqueued_in_same_tx(db: &TestDb) {
     );
 }
 
+/// Review finding 8: whoever staged an entry's change cannot approve it.
+async fn stager_cannot_approve_entry(db: &TestDb) {
+    let s = site(db).await;
+    let it = published(&s).await;
+    let r = s
+        .releases
+        .create(
+            &s.editor,
+            NewRelease {
+                title: "R".into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    s.releases
+        .stage(
+            &s.editor,
+            r.id,
+            r.version,
+            EntryInput {
+                item: it.id,
+                transition: EntryTransition::None,
+                changes: Some(StagedChange {
+                    title: "Mine".into(),
+                    slug: None,
+                    parent_id: None,
+                    excerpt: None,
+                    body: body("Mine"),
+                    fields: json!({}),
+                    menu_order: 0,
+                    terms: vec![],
+                    seo: None,
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    let review = s
+        .reviews
+        .submit_entry(&s.editor2, r.id, it.id, SubmitInput::default())
+        .await
+        .unwrap();
+    let err = s
+        .reviews
+        .decide(
+            &s.editor,
+            review.id,
+            review.version,
+            Decision::Approve,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::Forbidden(_)), "{err:?}");
+}
+
 backend_tests!(
+    stager_cannot_approve_entry,
     no_workflow_behaves_as_before,
     workflow_blocks_publish_and_schedule_without_approval,
     approved_current_review_allows_publish,

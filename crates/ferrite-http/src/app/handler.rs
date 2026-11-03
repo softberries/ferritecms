@@ -80,7 +80,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         }
         Route::PreviewLink { token } => {
             let token = token.clone();
-            return super::preview::link(&state, &token, raw_query.as_deref()).await;
+            return super::preview::link(&state, req.headers(), &token, raw_query.as_deref()).await;
         }
         Route::PreviewExit => return super::preview::exit(&state),
         _ => {}

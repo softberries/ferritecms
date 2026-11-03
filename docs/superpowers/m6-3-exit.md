@@ -103,6 +103,18 @@ Design: [15](../design/15-editing.md) (§19 "As built"). Plan:
 - **R-M6-3-13:** `content_preview_link` is a write tool now (`content:write`). After the
   M6-5 merge, `release_apply` captures each entry's item change; the tools that change
   only release or link rows are listed as excluded in `every_write_tool_records_a_change`.
+- **R-M6-3-15 (final review):** a preview view gets its own throwaway page cache (its
+  404/410 pages rendered through the sandbox never reach the live cache); an apply refuses
+  entries locked by another scheduled release; preview-link tokens are left out of the
+  render path and the request log; an item link's `?working=1` / `?release=` modes apply
+  only for the creator's own session (anyone else sees the stored item); a failed token
+  lookup answers busy and keeps the cookie, and a failed `last_used_at` touch no longer
+  fails the lookup; whoever staged an entry cannot approve it. Tests
+  `apply_refuses_items_locked_by_another_release`, `stager_cannot_approve_entry`, the
+  extended `cookie_preview_renders_release_and_is_never_cached` and
+  `item_link_opens_without_session`. Deferred (minor): the 15 s deadline does not stop a
+  blocking theme render still holding the sandbox; edits racing a schedule on Postgres end
+  as a failed release; `allowed_actions` ignores release locks (the server answers 409).
 - **R-M6-3-14:** found and fixed during task 8: a savepoint's commit inside the sandbox
   rolled back (checks and previews lost every entry); test
   `sandbox_savepoint_commit_keeps_writes`.

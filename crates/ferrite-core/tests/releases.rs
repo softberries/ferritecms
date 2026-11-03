@@ -896,7 +896,43 @@ async fn quality_gate_refuses_the_whole_release(db: &TestDb) {
     assert_eq!(s.get(bad.id).await.status, ContentStatus::Draft);
 }
 
+/// Review finding 2: an open release cannot change an item another scheduled release
+/// locked.
+async fn apply_refuses_items_locked_by_another_release(db: &TestDb) {
+    let s = site(db);
+    let e = actor(s.store.as_ref(), Role::Editor).await;
+    let a = s.item(&e, "post", "A").await;
+    let open = s.release(&e).await;
+    let open = s
+        .stage(
+            &e,
+            &open,
+            a.id,
+            EntryTransition::None,
+            Some(change("from B")),
+        )
+        .await
+        .unwrap();
+    let sched = s.release(&e).await;
+    let sched = s
+        .stage(&e, &sched, a.id, EntryTransition::Publish, None)
+        .await
+        .unwrap();
+    s.releases
+        .schedule(&e, sched.id, sched.version, later(3600), None)
+        .await
+        .unwrap();
+    let err = s
+        .releases
+        .apply(&e, open.id, open.version, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::ReleaseConflict(_)), "{err:?}");
+    assert_eq!(s.get(a.id).await.title, "A");
+}
+
 backend_tests!(
+    apply_refuses_items_locked_by_another_release,
     quality_gate_refuses_the_whole_release,
     contributor_creates_and_stages_own_draft,
     cannot_stage_others_item_without_edit_others,

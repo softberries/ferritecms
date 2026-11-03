@@ -325,6 +325,20 @@ impl ReleaseService {
         }
         let mut moved = Vec::new();
         for e in &entries {
+            // An item another scheduled release locked is not changed here (review
+            // finding 2); that release owns it until it is applied or unscheduled.
+            if let Some(other) = tx.releases().lock_of(e.item_id).await?
+                && other != r.id
+            {
+                moved.push(EntryCheck {
+                    item: e.item_id,
+                    outcome: EntryOutcome::Invalid {
+                        field: None,
+                        message: format!("locked by scheduled release {other}"),
+                    },
+                });
+                continue;
+            }
             if let Some(item) = tx.content().get(e.item_id).await?
                 && item.version != e.base_version
             {

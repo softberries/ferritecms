@@ -182,6 +182,15 @@ async fn cookie_preview_renders_release_and_is_never_cached(app: App) -> App {
     );
     // Live: still a 404.
     assert_eq!(app.get("/launch/").await.status, StatusCode::NOT_FOUND);
+    // Review finding 1: a missing page under the preview never fills the live cache.
+    let cached = app.cached().await;
+    let r = app.get_with_cookie("/nowhere/", &cookie).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.cached().await,
+        cached,
+        "no live cache entry from a preview"
+    );
     // Exit clears the cookie.
     let exit = app.get("/_preview/exit").await;
     assert_eq!(exit.status, StatusCode::SEE_OTHER);
@@ -255,12 +264,19 @@ async fn item_link_opens_without_session(app: App) -> App {
         .create(&ada, PreviewTarget::Item(it.id), Some(1))
         .await
         .unwrap();
-    let r = app.get(&format!("/_preview/link/{mine}?working=1")).await;
+    let ada_cookie = app.session(&app.ada_user).await;
+    let r = app
+        .get_with_cookie(&format!("/_preview/link/{mine}?working=1"), &ada_cookie)
+        .await;
     assert!(
         r.body.contains("<h1>Typed in the editor</h1>"),
         "{}",
         r.body
     );
+    // Review finding 4: without the creator's session the link shows the stored item.
+    let r = app.get(&format!("/_preview/link/{mine}?working=1")).await;
+    assert!(r.body.contains("<h1>Shared draft</h1>"), "{}", r.body);
+    assert!(!r.body.contains(mine.as_str()), "the token is not rendered");
     app
 }
 
