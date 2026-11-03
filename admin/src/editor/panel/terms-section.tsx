@@ -35,12 +35,20 @@ export interface TermsSectionProps {
   /** `me.capabilities` includes `manage_terms`. */
   canCreate: boolean;
   disabled: boolean;
+  /** On a multilingual site, the item's locale: only its terms are offered, and new
+   * ones are made in it (M6-1). */
+  locale?: string | undefined;
 }
 
 export function TermsSection(props: TermsSectionProps) {
   const { t } = useTranslation("editor");
   const headingId = useId();
   const terms = useQuery(termsQuery(props.taxonomy.name));
+  const locale = props.locale;
+  const data = useMemo(
+    () => (locale && terms.data ? terms.data.filter((x) => x.locale === locale) : terms.data),
+    [terms.data, locale],
+  );
   return (
     <section
       aria-labelledby={headingId}
@@ -56,20 +64,25 @@ export function TermsSection(props: TermsSectionProps) {
       ) : terms.isError ? (
         <p className="text-xs text-destructive">{t("terms.failed")}</p>
       ) : props.taxonomy.hierarchical ? (
-        <TermTree {...props} terms={terms.data} />
+        <TermTree {...props} terms={data ?? []} />
       ) : (
-        <TagPicker {...props} terms={terms.data} />
+        <TagPicker {...props} terms={data ?? []} />
       )}
     </section>
   );
 }
 
 /** Creates a term and adds it to the cached list and the selection. */
-function useCreateTerm(taxonomy: TaxonomyDto, onCreated: (term: TermDto) => void) {
+function useCreateTerm(
+  taxonomy: TaxonomyDto,
+  locale: string | undefined,
+  onCreated: (term: TermDto) => void,
+) {
   const { t } = useTranslation("editor");
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => createTerm(taxonomy.name, { name }),
+    mutationFn: (name: string) =>
+      createTerm(taxonomy.name, { name, ...(locale ? { locale } : {}) }),
     onSuccess: (term) => {
       qc.setQueryData<TermDto[]>(qk.terms(taxonomy.name), (old) => [...(old ?? []), term]);
       onCreated(term);
@@ -88,12 +101,13 @@ function TermTree({
   onChange,
   canCreate,
   disabled,
+  locale,
 }: TermsSectionProps & { terms: TermDto[] }) {
   const { t } = useTranslation("editor");
   const tree = useMemo(() => termTree(terms, uiLocale()), [terms]);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
-  const create = useCreateTerm(taxonomy, (term) => {
+  const create = useCreateTerm(taxonomy, locale, (term) => {
     onChange([...selected, term.id]);
     setName("");
     setAdding(false);
@@ -185,13 +199,14 @@ function TagPicker({
   onChange,
   canCreate,
   disabled,
+  locale,
 }: TermsSectionProps & { terms: TermDto[] }) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const byId = useMemo(() => new Map(terms.map((term) => [term.id, term])), [terms]);
   const chosen = selected.map((id) => byId.get(id)).filter((x): x is TermDto => !!x);
-  const create = useCreateTerm(taxonomy, (term) => {
+  const create = useCreateTerm(taxonomy, locale, (term) => {
     onChange([...selected, term.id]);
     setSearch("");
   });

@@ -45,6 +45,8 @@ export interface Term {
   slug: string;
   description: string;
   parent_id?: string | null;
+  locale?: string;
+  translation_group?: string;
 }
 
 /** A menu as `GET /menus/{name}` answers. */
@@ -400,7 +402,15 @@ export class ContentApi {
   }
 
   /** `PUT /menus/{name}`: creates the menu or replaces its whole tree. */
-  async putMenu(name: string, menu: { label: string; items: Menu["items"] }): Promise<Menu> {
+  async putMenu(
+    name: string,
+    menu: {
+      label: string;
+      items: Menu["items"];
+      locale?: string;
+      translation_of?: string | null;
+    },
+  ): Promise<Menu> {
     return this.ok(
       await this.ctx.put(`/api/v1/menus/${name}`, { headers: this.headers(), data: menu }),
       `put menu ${name}`,

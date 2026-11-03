@@ -86,3 +86,78 @@ test("translate_a_post_into_german", async ({ as, site, siteKey, expectAccessibl
     await api.dispose();
   }
 });
+
+// M6-1 Task 16: a category translated from the term sheet shows under Deutsch; the
+// primary menu translated from its editor becomes `primary-de`, listed at its location,
+// and an edit of it shows on the cached German home page.
+test("terms_and_menus_per_locale", async ({ as, site, siteKey }) => {
+  const api = await ContentApi.as(siteKey, site.url, "admin");
+  const before = await api.getSettings();
+  const page = await as("admin");
+  const name = uid("Season");
+  const terms: string[] = [];
+  try {
+    await api.patchSettings({
+      "site.locales": [{ tag: "en" }, { tag: "de", label: "Deutsch" }],
+    });
+    const en = await api.createTerm("category", name);
+    terms.push(en.id);
+
+    await page.goto("/admin/structure/taxonomies/category");
+    await page.getByRole("button", { name: `Actions for ${name}`, exact: true }).click();
+    await page.getByRole("menuitem", { name: "Edit" }).click();
+    const sheet = page.locator("[data-slot=term-sheet]");
+    await sheet.getByRole("button", { name: "Translate into Deutsch" }).click();
+    await expect(toast(page, "made in Deutsch")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    const tabs = page.locator("[data-slot=locale-tabs]");
+    await tabs.getByRole("button", { name: /Deutsch/ }).click();
+    await expect(
+      page.getByRole("button", { name: `Actions for ${name}`, exact: true }),
+    ).toBeVisible();
+    for (const t of await api.listTerms("category")) {
+      if (t.name === name && t.id !== en.id) terms.push(t.id);
+    }
+    expect(terms).toHaveLength(2);
+
+    // The German home page as cached now (it shows the default menu).
+    await page.request.get("/de/");
+    await page.goto("/admin/structure/menus/primary");
+    await page
+      .locator("[data-slot=menu-translate]")
+      .getByRole("button", { name: "Translate into Deutsch" })
+      .click();
+    await expect(page).toHaveURL(/\/admin\/structure\/menus\/primary-de$/);
+    const de = await api.getMenu("primary-de");
+    expect(de?.items.length ?? 0).toBeGreaterThan(0);
+    await page.goto("/admin/structure/menus");
+    await expect(
+      page
+        .locator("[data-slot=menu-location][data-name=primary]")
+        .locator("[data-locale=de]")
+        .getByRole("link"),
+    ).toHaveText(/primary-de|Primary/);
+
+    // An entry renamed in the German menu shows on /de/ (its cached copy is flushed).
+    const items = (de?.items ?? []).map((i, n) => (n === 0 ? { ...i, label: "Startseite" } : i));
+    await api.putMenu("primary-de", {
+      label: de?.label ?? "",
+      items,
+      locale: "de",
+      translation_of: "primary",
+    });
+    await expect
+      .poll(async () => (await (await page.request.get("/de/")).text()).includes("Startseite"), {
+        timeout: 10_000,
+      })
+      .toBe(true);
+  } finally {
+    await api.deleteMenu("primary-de").catch(() => undefined);
+    for (const id of terms.reverse()) await api.deleteTerm(id).catch(() => undefined);
+    await api
+      .patchSettings({ "site.locales": before["site.locales"] ?? [{ tag: "en" }] })
+      .catch(() => undefined);
+    await api.dispose();
+  }
+});

@@ -64,8 +64,13 @@ Terms (categories, tags and your own taxonomies) and menus have a language too.
   German pages then show `primary-de` where the theme shows `primary`; a language without
   its own menu shows the default one.
 
-The admin's taxonomy and menu screens do not show languages yet; use the API for
-per-language terms and menus.
+In the admin, a taxonomy's screen shows one language's terms at a time (pick it above
+the list); a new term is made in the language shown, and a term's sheet has
+**Translate into …** for the languages it has no translation in. **Structure → Menus**
+lists, under each theme location, the menu each other language shows there, and a
+default-language menu's editor has **Translate into …**, which makes `<name>-<prefix>`
+(for example `primary-de`) with a copy of its entries for you to translate. The editor's
+term pickers offer the terms in the item's language.
 
 ## Addresses and search engines
 

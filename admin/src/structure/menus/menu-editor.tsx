@@ -29,6 +29,8 @@ import { type MenuDto, deleteMenu, getMenu, menusQuery, putMenu } from "@/api/me
 import { ApiError } from "@/api/problem";
 import { EmptyState } from "@/components/kit/empty-state";
 import { PageHeader } from "@/components/kit/page-header";
+import { useSiteLocales } from "@/lib/locales";
+import { TranslateMenu } from "./menu-locales";
 import { SaveState, type SaveStateValue } from "@/components/kit/save-state";
 import { SortableTree } from "@/components/kit/sortable-tree";
 import { type FlatNode, flatten } from "@/components/kit/tree-model";
@@ -101,7 +103,11 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
   const stale = useStaleAsk(base.label || base.name);
   const targets = useTargets(nodes);
 
-  const location = list.data?.locations.find((l) => l.name === base.name);
+  const locales = useSiteLocales();
+  // A translation shows at the location of the menu it translates.
+  const location = list.data?.locations.find(
+    (l) => l.name === base.name || l.name === base.translation_of,
+  );
   const draft = useMemo(() => toInput(nodes, label), [nodes, label]);
   const dirty = !stableEqual(draft, normal(base));
   const problems = useMemo(() => checkMenu(nodes), [nodes]);
@@ -176,7 +182,12 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
         }
         return;
       }
-      const saved = await putMenu(base.name, draft);
+      // The menu's locale and translation stay as they are (the PUT replaces the menu).
+      const saved = await putMenu(base.name, {
+        ...draft,
+        locale: base.locale,
+        translation_of: base.translation_of ?? null,
+      });
       forgetRemovals();
       setBase(saved);
       setLabel(saved.label);
@@ -251,7 +262,11 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
         action: {
           label: t("menus.editor.undo"),
           onClick: () => {
-            putMenu(snapshot.name, toInput(fromDto(snapshot), snapshot.label))
+            putMenu(snapshot.name, {
+              ...toInput(fromDto(snapshot), snapshot.label),
+              locale: snapshot.locale,
+              translation_of: snapshot.translation_of ?? null,
+            })
               .then(() => {
                 void qc.invalidateQueries({ queryKey: qk.menus.list });
                 toast.success(t("menus.editor.restored", { label: name }));
@@ -318,6 +333,16 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
             ) : list.data ? (
               <span className="text-sm text-muted-foreground">{t("menus.editor.noLocation")}</span>
             ) : null}
+            {locales.multilingual ? (
+              <Badge variant="outline" data-slot="menu-locale">
+                {locales.label(base.locale)}
+              </Badge>
+            ) : null}
+            {locales.multilingual && base.translation_of ? (
+              <span className="text-sm text-muted-foreground">
+                {t("locales.menuTranslates", { menu: base.translation_of })}
+              </span>
+            ) : null}
           </span>
         }
         actions={
@@ -343,6 +368,13 @@ export function MenuEditor({ initial }: { initial: MenuDto }) {
             </Button>
           </>
         }
+      />
+
+      <TranslateMenu
+        menu={base}
+        menus={list.data?.items ?? []}
+        locales={locales}
+        disabled={dirty || saving || deleting}
       />
 
       <div className="grid items-start gap-6 lg:grid-cols-[22rem_minmax(0,1fr)] lg:grid-rows-[auto_1fr]">

@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { type MenuDto, listMenus, menusQuery, putMenu } from "@/api/menus";
+import { useSiteLocales } from "@/lib/locales";
+import { LocationLocales } from "./menu-locales";
 import { ApiError } from "@/api/problem";
 import { EmptyState } from "@/components/kit/empty-state";
 import { ErrorState } from "@/components/kit/error-state";
@@ -62,8 +64,11 @@ export function MenusList({ creating, setCreating }: MenusListProps) {
   const menus = list.data?.items ?? [];
   const locations = list.data?.locations ?? [];
   const located = new Set(locations.map((l) => l.name));
+  const locales = useSiteLocales();
+  // A location's menu in another locale is listed under its location (M6-1).
   const others = menus
     .filter((m) => !located.has(m.name))
+    .filter((m) => !(m.translation_of && located.has(m.translation_of)))
     .sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name));
   const labelOf = (name: string) => menus.find((m) => m.name === name)?.label ?? "";
 
@@ -127,13 +132,16 @@ export function MenusList({ creating, setCreating }: MenusListProps) {
                   icon={MapPinIcon}
                   title={loc.label || loc.name}
                   detail={
-                    loc.menu ? (
-                      t("menus.locations.shows", {
-                        label: labelOf(loc.name) || t("menus.unlabelled"),
-                      })
-                    ) : (
-                      <Badge variant="outline">{t("menus.locations.empty")}</Badge>
-                    )
+                    <>
+                      {loc.menu ? (
+                        t("menus.locations.shows", {
+                          label: labelOf(loc.name) || t("menus.unlabelled"),
+                        })
+                      ) : (
+                        <Badge variant="outline">{t("menus.locations.empty")}</Badge>
+                      )}
+                      <LocationLocales name={loc.name} menus={menus} locales={locales} />
+                    </>
                   }
                   action={
                     loc.menu ? (

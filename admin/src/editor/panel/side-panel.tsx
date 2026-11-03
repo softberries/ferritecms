@@ -154,6 +154,7 @@ function PanelBody({
   const site = useQuery(metaQuery);
   const types = useQuery(typesQuery);
   const taxonomies = useTypeTaxonomies(type);
+  const locales = useSiteLocales();
   const hierarchical = types.data?.find((ty) => ty.name === type)?.hierarchical === true;
   const disabled = doc.readOnly !== null || doc.restoring;
   const canCreate = me?.capabilities.includes("manage_terms") === true;
@@ -190,6 +191,7 @@ function PanelBody({
               onChange={(terms) => doc.setMeta({ terms })}
               canCreate={canCreate}
               disabled={disabled}
+              locale={locales.multilingual ? doc.item?.locale : undefined}
             />
           ))}
         </>

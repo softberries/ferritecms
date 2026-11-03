@@ -17,6 +17,7 @@ import { reportApiError } from "@/api/client";
 import { qk } from "@/api/keys";
 import { ApiError } from "@/api/problem";
 import { type TaxonomyDto, type TermDto, createTerm } from "@/api/taxonomies";
+import { TermTranslations } from "./term-translations";
 import { deleteTerm, getTerm, patchTerm } from "@/api/terms";
 import { useStaleAsk } from "@/components/kit/use-stale-ask";
 import {
@@ -173,12 +174,19 @@ export function TermParentPicker({
 export function TermSheet({
   taxonomy,
   terms,
+  allTerms = terms,
+  locale = null,
   state,
   origin = null,
   onClose,
 }: {
   taxonomy: TaxonomyDto;
+  /** The terms of the sheet's locale (the parent picker's choices). */
   terms: readonly TermDto[];
+  /** Every term in every locale (the Translations section); default `terms`. */
+  allTerms?: readonly TermDto[];
+  /** The locale a new term is made in (`null`: the site's default). */
+  locale?: string | null;
   state: TermSheetState;
   /** The tree row whose menu opened it: focus goes back to that menu on close. */
   origin?: string | null;
@@ -214,6 +222,8 @@ export function TermSheet({
             key={current.kind === "edit" ? current.term.id : `new:${current.parentId ?? ""}`}
             taxonomy={taxonomy}
             terms={terms}
+            allTerms={allTerms}
+            locale={locale}
             state={current}
             onClose={onClose}
           />
@@ -226,11 +236,15 @@ export function TermSheet({
 function TermFormBody({
   taxonomy,
   terms,
+  allTerms,
+  locale,
   state,
   onClose,
 }: {
   taxonomy: TaxonomyDto;
   terms: readonly TermDto[];
+  allTerms: readonly TermDto[];
+  locale: string | null;
   state: NonNullable<TermSheetState>;
   onClose: () => void;
 }) {
@@ -280,6 +294,7 @@ function TermFormBody({
           description,
           parent_id: parent,
           ...(slug.trim() ? { slug: slug.trim() } : {}),
+          ...(locale ? { locale } : {}),
         });
         qc.setQueryData<TermDto[]>(key, (list) => (list ? [...list, saved] : list));
         toast.success(t("taxonomies.terms.created", { name: saved.name }));
@@ -398,6 +413,7 @@ function TermFormBody({
             error={serverErrors.parent_id}
           />
         ) : null}
+        {base ? <TermTranslations term={base} allTerms={allTerms} disabled={busy} /> : null}
         {failure ? (
           <p role="alert" className="text-sm text-destructive">
             {failure}
