@@ -3,13 +3,17 @@
 // first), offers "Now" or "Later" (the schedule picker; only when `allowed.schedule`),
 // and confirms with a button that says exactly what will happen. A failure of the
 // transition stays in the dialog; a 412 goes to the editor's conflict handler.
+// M6-4: the accessibility errors of the last check are listed, and when the type's gate
+// is on (`errors`) the confirm button is disabled while they remain; a `422
+// content-quality` from the server shows its own list (design 16 §11.1).
 
 import { CalendarClockIcon, ZapIcon } from "lucide-react";
 import { cn } from "cn";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ApiError } from "@/api/problem";
+import { ApiError, isProblem } from "@/api/problem";
+import type { CheckResponse, FindingDto } from "@/api/quality";
 import type { TaxonomyDto, TermDto } from "@/api/taxonomies";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { uiLocale } from "@/lib/locale";
 import type { EditorDocument } from "../editor-state";
+import { blockingFindings, findingId, messageFor } from "../quality/findings";
 import {
   type WallClock,
   browserTimeZone,
@@ -42,6 +47,8 @@ export interface PublishDialogProps {
   siteUrl: string | null;
   taxonomies: TaxonomyDto[];
   terms: Map<string, TermDto>;
+  /** The last check (M6-4); `undefined`: no checks on this screen. */
+  quality?: CheckResponse | null;
 }
 
 export function PublishDialog(props: PublishDialogProps) {
@@ -65,8 +72,13 @@ function PublishDialogBody({
   siteUrl,
   taxonomies,
   terms,
+  quality,
 }: PublishDialogProps & { mode: PublishMode }) {
   const { t } = useTranslation("editor");
+  const { t: tq } = useTranslation("quality");
+  const [refused, setRefused] = useState<FindingDto[] | null>(null);
+  const blocking = quality ? blockingFindings(quality.findings) : [];
+  const gated = quality?.gate.mode === "errors" && quality.gate.blocked;
   const item = doc.item;
   const canSchedule = item?.allowed.schedule === true;
   const canNow = item?.allowed.publish === true;
@@ -113,6 +125,12 @@ function PublishDialogBody({
     setBusy(true);
     setServerError(null);
     const onError = (e: unknown) => {
+      if (isProblem(e, "content-quality")) {
+        const listed = (e.problem as { findings?: FindingDto[] }).findings ?? [];
+        setRefused(listed);
+        setServerError(tq("publish.refused"));
+        return;
+      }
       const detail =
         e instanceof ApiError
           ? e.problem.errors?.[0]?.detail || e.problem.detail || e.problem.title
@@ -213,6 +231,22 @@ function PublishDialogBody({
             {t("publish.unsaved")}
           </p>
         ) : null}
+        {quality !== undefined && (blocking.length > 0 || refused) ? (
+          <div
+            data-slot="publish-quality"
+            className="flex flex-col gap-1 rounded-lg border border-destructive/40 p-3 text-sm"
+          >
+            <p className="font-medium">
+              {tq("publish.errors", { count: (refused ?? blocking).length })}
+            </p>
+            {gated ? <p className="text-muted-foreground">{tq("publish.blocked")}</p> : null}
+            <ul className="list-disc pl-5">
+              {(refused ?? blocking).map((f) => (
+                <li key={findingId(f)}>{messageFor(tq, f)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {canSchedule && canNow ? (
           <fieldset className="flex flex-col gap-2">
@@ -265,7 +299,8 @@ function PublishDialogBody({
         <Button
           type="button"
           data-slot="publish-confirm"
-          disabled={busy || (mode === "schedule" && scheduleError !== null)}
+          disabled={busy || gated || (mode === "schedule" && scheduleError !== null)}
+          {...(gated ? { title: tq("publish.blocked") } : {})}
           onClick={() => {
             void confirm();
           }}

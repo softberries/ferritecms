@@ -96,6 +96,7 @@ import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
 import { PublishBar } from "./panel/publish-bar";
 import { PANEL_ID, SidePanel } from "./panel/side-panel";
+import { useEditorQuality } from "./quality/editor-quality";
 import { blockText } from "./text";
 import { WordStats } from "./word-stats";
 
@@ -771,6 +772,16 @@ export function EditorScreen({
       />
     ) : null;
 
+  // M6-4: the accessibility and link checks (marks, the panel's Checks, the publish
+  // dialog), checked again when the publish dialog opens.
+  const quality = useEditorQuality(doc, type, () => setPanelOpen(true));
+  const checkNow = quality.state.checkNow;
+  useEffect(() => {
+    if (publishMode !== null) void checkNow();
+    // Only when the dialog opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishMode]);
+
   const takeTheirs = async (open: OpenConflict) => {
     // Mine goes to the slot first: Take theirs never loses it (Restore brings it back).
     await doc.keepInSlot(open.mine);
@@ -821,6 +832,7 @@ export function EditorScreen({
             onOpenChange={setPanelOpen}
             wide={wide}
             fieldsHere={placement === "panel"}
+            quality={quality.panel}
             onPublish={(mode) => {
               if (!wide) setSheetOpen(false);
               setPublishMode(mode);
@@ -935,6 +947,7 @@ export function EditorScreen({
         siteUrl={site.data?.site_url ?? null}
         taxonomies={taxonomies}
         terms={terms}
+        quality={quality.state.report}
       />
       {wide || focusMode ? (
         <EditorFooter

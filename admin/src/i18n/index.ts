@@ -12,6 +12,7 @@ import importNs from "./en/import.json";
 import kit from "./en/kit.json";
 import media from "./en/media.json";
 import palette from "./en/palette.json";
+import quality from "./en/quality.json";
 import shell from "./en/shell.json";
 import structure from "./en/structure.json";
 import styleguide from "./en/styleguide.json";
@@ -36,6 +37,7 @@ export const resources = {
     ai,
     import: importNs,
     webhooks,
+    quality,
   },
 } as const;
 

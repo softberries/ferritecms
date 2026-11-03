@@ -1,5 +1,11 @@
 import type { operations } from "./schema";
 
+/** The filters of the health report (`api/quality.ts`). */
+type HealthFilters = Omit<
+  NonNullable<operations["health_findings"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /** The filters of a media list (every query member but the page cursor and size). */
 export type MediaListFilters = Omit<
   NonNullable<operations["list_media"]["parameters"]["query"]>,
@@ -159,5 +165,11 @@ export const qk = {
       ["webhooks", "item", id, "deliveries", status] as const,
     delivery: (id: string, delivery: string) =>
       ["webhooks", "item", id, "delivery", delivery] as const,
+  },
+  /** The content health report (M6-4). `all` covers the summary and every page. */
+  health: {
+    all: ["health"] as const,
+    summary: ["health", "summary"] as const,
+    findings: (filters: HealthFilters) => ["health", "findings", filters] as const,
   },
 } as const;

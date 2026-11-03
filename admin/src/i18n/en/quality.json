@@ -1,0 +1,156 @@
+{
+  "severity": {
+    "error": "Error",
+    "warning": "Warning",
+    "notice": "Notice",
+    "error_other": "{{count}} errors",
+    "error_one": "{{count}} error",
+    "warning_other": "{{count}} warnings",
+    "warning_one": "{{count}} warning",
+    "notice_other": "{{count}} notices",
+    "notice_one": "{{count}} notice"
+  },
+  "category": {
+    "accessibility": "Accessibility",
+    "links": "Links",
+    "media": "Media",
+    "site": "Site",
+    "freshness": "Freshness"
+  },
+  "panel": {
+    "title": "Checks",
+    "none": "No problems found.",
+    "waiting": "Checking…",
+    "failed": "The checks are not available right now.",
+    "counts": "{{error}} errors, {{warning}} warnings, {{notice}} notices",
+    "show": "Show",
+    "fixAlt": "Add alt text",
+    "suppress": "Suppress…",
+    "unsuppress": "Restore",
+    "suppressed": "Suppressed ({{count}})",
+    "suppressedBy": "Suppressed: {{reason}}",
+    "inField": "In the field {{field}}",
+    "featured": "Featured image",
+    "saveFirst": "Save the item to suppress findings."
+  },
+  "suppress": {
+    "title": "Suppress this finding",
+    "description": "It stays listed as suppressed and no longer counts, here and in the content health report.",
+    "whole": "Every finding of this rule on this item",
+    "reason": "Why",
+    "reasonHint": "Required: say why this is fine, for the next person who reads it.",
+    "submit": "Suppress",
+    "cancel": "Cancel",
+    "failed": "The finding was not suppressed.",
+    "forbidden": "Only editors may suppress an error on this content type."
+  },
+  "mark": {
+    "label": "{{severity}}: {{message}}"
+  },
+  "publish": {
+    "errors_one": "{{count}} accessibility error",
+    "errors_other": "{{count}} accessibility errors",
+    "blocked": "This content type blocks publishing while accessibility errors remain. Fix them or ask an editor to suppress them.",
+    "refused": "Publishing was refused: fix these accessibility errors first.",
+    "review": "Review",
+    "clean": "No accessibility errors."
+  },
+  "rules": {
+    "image-alt-missing": {
+      "title": "Image without alt text",
+      "message": "An image has no alt text."
+    },
+    "image-alt-empty": {
+      "title": "Empty alt text",
+      "message": "An image has an empty alt text but is not marked decorative."
+    },
+    "image-alt-filename": {
+      "title": "Alt text is a file name",
+      "message": "The alt text “{{found}}” looks like a file name."
+    },
+    "heading-empty": {
+      "title": "Empty heading",
+      "message": "A heading has no text."
+    },
+    "heading-level-skipped": {
+      "title": "Skipped heading level",
+      "message": "The heading “{{found}}” skips a level."
+    },
+    "link-text-empty": {
+      "title": "Link without text",
+      "message": "A link has no text."
+    },
+    "link-text-vague": {
+      "title": "Vague link text",
+      "message": "The link text “{{found}}” does not say where it leads."
+    },
+    "link-text-url": {
+      "title": "Link text is a URL",
+      "message": "A link's text is a bare address: {{found}}."
+    },
+    "table-header-missing": {
+      "title": "Table without headers",
+      "message": "A table has no header row or column."
+    },
+    "table-header-empty": {
+      "title": "Empty table header",
+      "message": "A table header cell is empty."
+    },
+    "html-unchecked": {
+      "title": "HTML not checked",
+      "message": "A raw HTML block is not checked."
+    },
+    "media-missing": {
+      "title": "Missing media",
+      "message": "An image points at media that is missing or in the trash."
+    },
+    "featured-alt-missing": {
+      "title": "Featured image without alt text",
+      "message": "The featured image's media item has no alt text."
+    },
+    "link-internal-broken": {
+      "title": "Broken link",
+      "message": "The link “{{found}}” leads to a page that does not exist."
+    },
+    "link-internal-redirected": {
+      "title": "Redirected link",
+      "message": "The link “{{found}}” leads to a page that redirects."
+    },
+    "link-anchor-missing": {
+      "title": "Missing anchor",
+      "message": "The link {{found}} names a heading that is not on the page."
+    },
+    "link-external-broken": {
+      "title": "Broken external link",
+      "message": "The external link “{{found}}” is broken."
+    },
+    "orphan": {
+      "title": "Orphan",
+      "message": "Nothing on the site links to this item."
+    },
+    "redirect-chain": {
+      "title": "Redirect chain",
+      "message": "A redirect leads to another redirect: {{found}}."
+    },
+    "redirect-loop": {
+      "title": "Redirect loop",
+      "message": "Redirects lead back to where they started: {{found}}."
+    },
+    "redirect-target-broken": {
+      "title": "Redirect to nowhere",
+      "message": "A redirect leads to a page that does not exist: {{found}}."
+    },
+    "stale": {
+      "title": "Not edited for long",
+      "message": "This item has not been edited for a long time."
+    },
+    "check-truncated": {
+      "title": "Not fully checked",
+      "message": "The item is too large or too deep to check completely."
+    },
+    "findings-truncated": {
+      "title": "Too many findings",
+      "message": "The run found too many problems to list them all."
+    }
+  }
+}

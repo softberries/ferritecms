@@ -520,3 +520,59 @@ img.ProseMirror-separator {
 .editor-body.editor-body-compact > * + * {
   margin-top: 0.75em;
 }
+
+/* Content quality marks (M6-4, design 16 §11.1): a wavy underline on text, an outline on
+   images and tables, and a small button whose name says what is wrong (never colour
+   alone). */
+.ProseMirror .quality-mark.is-error {
+  text-decoration: underline wavy var(--destructive);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+.ProseMirror .quality-mark.is-warning {
+  text-decoration: underline wavy var(--warning);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+.ProseMirror figure.quality-mark.is-error,
+.ProseMirror table.quality-mark.is-error {
+  outline: 2px solid var(--destructive);
+  outline-offset: 2px;
+}
+.ProseMirror figure.quality-mark.is-warning,
+.ProseMirror table.quality-mark.is-warning {
+  outline: 2px dashed var(--warning);
+  outline-offset: 2px;
+}
+.ProseMirror .quality-widget {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  margin-inline-end: 0.25rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+  color: var(--background);
+  cursor: pointer;
+}
+.ProseMirror .quality-widget.is-error {
+  background: var(--destructive);
+}
+.ProseMirror .quality-widget.is-warning {
+  background: var(--warning);
+  color: var(--foreground);
+}
+.ProseMirror .quality-widget:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .ProseMirror .quality-widget {
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
+  }
+}
