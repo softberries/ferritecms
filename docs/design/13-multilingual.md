@@ -582,8 +582,14 @@ Where the build differs from the sections above (the M6-1 exit lists each as an
   item on a re-run is not applied.
 - **Markdown import (§8.2).** Groups are joined after the content pass, not by writing
   files in dependency order; a page that cannot join is reported as `translation-of`.
-- **Admin.** The taxonomy and menu screens do not show locales yet (per-locale terms and
-  menus through the API); the content list's status counts are not per locale.
+- **Admin.** The taxonomy screen shows one locale at a time; a menu's translation is made
+  from its editor as `<name>-<prefix>` with a copy of the entries (fresh ids); the content
+  list's status counts are not per locale.
+- **Review fixes.** A menu translation's write and delete also emit `menu:<translation_of>`;
+  the front page's group decides whichever member is the original; a default-locale change
+  checks every prefix against the new default's top-level slugs; media follows the default
+  locale and 0014's down keeps it; `PATCH` with a move is one transaction; `mcp`, `oauth`,
+  `.well-known` and `favicon.ico` are reserved slugs.
 - **MCP.** `terms_list` takes `locale`; `term_create` takes `locale` and `translation_of`;
   `menu_get` returns and `menu_set` takes `locale` and `translation_of` (left out: kept,
   `null`: removed).

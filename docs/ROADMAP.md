@@ -595,14 +595,15 @@ Done (2026-11-03, branch `m6-1-multilingual`; exit
   with `[strings.<tag>]`.)
 - [x] Admin: a locale filter on lists, "Translate" (copies the item as a draft in the target
   locale), side-by-side translation status; the API and the MCP content tools take `locale`.
-  (Settings → Languages; the taxonomy and menu screens are a follow-up below.)
+  (Settings → Languages; the taxonomy and menu screens per locale; the MCP term and menu
+  tools take `locale`.)
 - [x] WordPress import keeps an item's language where the WXR carries one (WPML / Polylang
   data; what the export holds is checked first, not assumed). (Checked against the
   plugins' documented shapes with hand-written files only; no real export was available.)
 - Follow-ups:
-  - [ ] Admin: locales on the taxonomy and menu screens (translate a term, a menu per
+  - [x] Admin: locales on the taxonomy and menu screens (translate a term, a menu per
     locale; plan Task 16).
-  - [ ] MCP: `locale` on `terms_list`, `term_create`, `menu_get`, `menu_set`.
+  - [x] MCP: `locale` on `terms_list`, `term_create`, `menu_get`, `menu_set`.
   - [ ] WordPress import against a real Polylang export (and WPML's Export and Import if
     a licence is available); `--default-locale`; the report's `languages` section; terms
     in the locale of the items that use them.
