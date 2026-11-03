@@ -101,6 +101,8 @@ pub struct RouteTable {
     page: Structure,
     types: Vec<TypeInfo>,
     taxonomies: Vec<String>,
+    /// `(prefix, tag)` of every non-default locale (13 §4), in site order.
+    locales: Vec<(String, String)>,
 }
 
 impl RouteTable {
@@ -110,7 +112,26 @@ impl RouteTable {
             page: rules.page().clone(),
             types: public_types.to_vec(),
             taxonomies: taxonomies.to_vec(),
+            locales: rules
+                .locales()
+                .others
+                .iter()
+                .map(|d| (d.prefix(), d.tag.clone()))
+                .collect(),
         }
+    }
+
+    /// Whether the site has locale prefixes (more than one locale).
+    pub fn is_multilingual(&self) -> bool {
+        !self.locales.is_empty()
+    }
+
+    /// The non-default locale whose prefix is `segment` (ASCII case-insensitive):
+    /// `(prefix, tag)`.
+    fn locale_by_prefix(&self, segment: &str) -> Option<&(String, String)> {
+        self.locales
+            .iter()
+            .find(|(p, _)| p.eq_ignore_ascii_case(segment))
     }
 
     fn type_named(&self, name: &str) -> Option<&TypeInfo> {
@@ -280,6 +301,69 @@ pub fn resolve(raw_path: &str, raw_query: Option<&str>, table: &RouteTable) -> R
         }
         Matched::None => Route::NotFound,
     }
+}
+
+/// The locale of a request (13 §4): `tag` of the non-default locale whose prefix the
+/// path starts with, `None` for the default locale.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RouteLocale {
+    pub tag: Option<String>,
+}
+
+/// [`resolve`] with the site's locale prefixes: when the first segment is a
+/// non-default locale's prefix (ASCII case-insensitive), the rest (`/` when empty) is
+/// resolved by [`resolve`] and every [`Route::Canonical`] target gets the prefix back
+/// (`/DE/about` and `/de/about` answer 301 `/de/about/`, `/de` 301 `/de/`). Under a
+/// prefix only content, listings and feeds exist: files (`robots.txt`, sitemaps),
+/// `/_media`, `/_theme`, `/_preview` and the health routes are 404. Without a prefix
+/// (or on a one-locale site) the locale is the default and the route is exactly
+/// [`resolve`]'s.
+pub fn resolve_localized(
+    raw_path: &str,
+    raw_query: Option<&str>,
+    table: &RouteTable,
+) -> (RouteLocale, Route) {
+    let default = || (RouteLocale::default(), resolve(raw_path, raw_query, table));
+    if table.locales.is_empty() {
+        return default();
+    }
+    let Some(after) = raw_path.strip_prefix('/') else {
+        return default();
+    };
+    let (first, rest) = match after.find('/') {
+        Some(i) => (&after[..i], &after[i..]),
+        None => (after, ""),
+    };
+    let Some((prefix, tag)) = table.locale_by_prefix(first) else {
+        return default();
+    };
+    let locale = RouteLocale {
+        tag: Some(tag.clone()),
+    };
+    let with_query = |to: String| match raw_query {
+        Some(q) if !q.is_empty() => format!("{to}?{}", visible_ascii(q)),
+        _ => to,
+    };
+    if rest.is_empty() {
+        return (locale, Route::Canonical(with_query(format!("/{prefix}/"))));
+    }
+    let route = match resolve(rest, raw_query, table) {
+        Route::Health
+        | Route::Ready
+        | Route::Robots
+        | Route::Sitemap(_)
+        | Route::Media { .. }
+        | Route::Theme { .. }
+        | Route::Preview { .. }
+        | Route::NotFound => Route::NotFound,
+        Route::Canonical(to) => Route::Canonical(format!("/{prefix}{to}")),
+        _ if first != prefix => Route::Canonical(with_query(format!("/{prefix}{rest}"))),
+        route => route,
+    };
+    if matches!(route, Route::NotFound) {
+        return (locale, Route::NotFound);
+    }
+    (locale, route)
 }
 
 /// `<id>` of `/_preview/<id>`: exactly the 36-character lowercase hyphenated form

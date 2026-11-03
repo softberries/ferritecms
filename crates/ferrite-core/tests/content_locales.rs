@@ -519,7 +519,40 @@ async fn admin_list_filters_by_locale_and_returns_translations(db: &TestDb) {
     assert!(tr.values().all(Vec::is_empty));
 }
 
+/// A published item moved to another locale answers 301 from its old path (13 §2.3).
+async fn relocate_published_item_stores_redirect(db: &TestDb) {
+    let (admin, svc) = multilingual(db).await;
+    let post = svc
+        .create(&admin, draft("post", "Story", Some("story")))
+        .await
+        .unwrap();
+    let post = svc.publish(&admin, post.id, post.version).await.unwrap();
+    assert_eq!(svc.permalink(post.id).await.unwrap(), "/story/");
+    svc.relocate(
+        &admin,
+        post.id,
+        post.version,
+        Relocation {
+            locale: Some("de".into()),
+            translation_of: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(svc.permalink(post.id).await.unwrap(), "/de/story/");
+    let r = db
+        .store()
+        .read()
+        .redirects()
+        .get_by_source("/story/")
+        .await
+        .unwrap()
+        .expect("a redirect from the old path");
+    assert_eq!((r.target.as_str(), r.code), ("/de/story/", 301));
+}
+
 backend_tests!(
+    relocate_published_item_stores_redirect,
     create_defaults_to_default_locale,
     create_in_unlisted_locale_refused,
     same_slug_in_two_locales,

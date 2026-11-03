@@ -445,11 +445,20 @@ impl Default for PermalinkRules {
 }
 
 impl Permalinks for PermalinkRules {
+    /// The item's path; an item in a non-default locale lives under its prefix
+    /// (`/de/` + the structure's expansion, 13 §4). A locale the site does not list
+    /// gets no prefix.
     fn path(&self, input: &PermalinkInput) -> String {
-        match input.item.kind.as_str() {
+        let path = match input.item.kind.as_str() {
             "post" => self.post.expand(None, input),
             "page" => self.page.expand(None, input),
             kind => self.other.expand(Some(kind), input),
+        };
+        match self.locales.prefix_of(&input.item.locale) {
+            Some(prefix) if input.item.kind != ferrite_domain::MEDIA_KIND => {
+                format!("/{prefix}{path}")
+            }
+            _ => path,
         }
     }
 
@@ -539,6 +548,15 @@ pub fn term_path(taxonomy: &str, slug: &str) -> String {
         utf8_percent_encode(taxonomy, SEGMENT),
         utf8_percent_encode(slug, SEGMENT)
     )
+}
+
+/// [`term_path`] under a locale prefix (`None`: the default locale, no prefix):
+/// `/de/category/nachrichten/` (13 §4). Prefixes are lowercase ASCII tags.
+pub fn term_path_in(prefix: Option<&str>, taxonomy: &str, slug: &str) -> String {
+    match prefix {
+        None => term_path(taxonomy, slug),
+        Some(p) => format!("/{p}{}", term_path(taxonomy, slug)),
+    }
 }
 
 /// Loads the permalink input of `item` through `repos` (a transaction's repos inside a
@@ -645,6 +663,69 @@ mod tests {
             Err(CoreError::Invalid(m)) => m,
             other => panic!("{s:?}: expected Invalid, got {other:?}"),
         }
+    }
+
+    fn localized(post: Option<&str>) -> PermalinkRules {
+        PermalinkRules::from_options(post, None)
+            .unwrap()
+            .with_locales(
+                SiteLocales::from_option(&json!([{"tag": "en"}, {"tag": "de"}, {"tag": "pt-BR"}]))
+                    .unwrap(),
+            )
+    }
+
+    fn in_locale(mut item: ContentItem, locale: &str) -> ContentItem {
+        item.locale = locale.into();
+        item
+    }
+
+    #[test]
+    fn path_prefixes_non_default_locale() {
+        let rules = localized(None);
+        let post = in_locale(item("post", "hallo"), "de");
+        assert_eq!(rules.path(&input(post)), "/de/hallo/");
+        let page = in_locale(item("page", "sobre"), "pt-BR");
+        assert_eq!(rules.path(&input(page)), "/pt-br/sobre/");
+        let mut child = input(in_locale(item("page", "team"), "de"));
+        child.ancestors = vec![(ContentId::new(), "ueber".into())];
+        assert_eq!(rules.path(&child), "/de/ueber/team/");
+        let book = in_locale(item("book", "roman"), "de");
+        assert_eq!(rules.path(&input(book)), "/de/book/roman/");
+        let dated = localized(Some("/%year%/%month%/%slug%/"));
+        let post = in_locale(item("post", "hallo"), "de");
+        assert_eq!(dated.path(&input(post)), "/de/2025/11/hallo/");
+        // A locale the site does not list gets no prefix; media none either.
+        assert_eq!(
+            rules.path(&input(in_locale(item("post", "x"), "fr"))),
+            "/x/"
+        );
+    }
+
+    #[test]
+    fn default_locale_path_unchanged() {
+        let rules = localized(None);
+        assert_eq!(rules.path(&input(item("post", "hello"))), "/hello/");
+        assert_eq!(
+            PermalinkRules::default().path(&input(in_locale(item("post", "hello"), "de"))),
+            "/hello/",
+            "one-locale rules never prefix"
+        );
+    }
+
+    #[test]
+    fn term_path_in_prefixes() {
+        assert_eq!(term_path_in(None, "category", "news"), "/category/news/");
+        assert_eq!(
+            term_path_in(Some("de"), "category", "nachrichten"),
+            "/de/category/nachrichten/"
+        );
+        let rules = localized(None);
+        assert_eq!(rules.locale_prefixes("page"), ["de", "pt-br"]);
+        assert!(
+            localized(Some("/blog/%slug%/"))
+                .locale_prefixes("post")
+                .is_empty()
+        );
     }
 
     #[test]
