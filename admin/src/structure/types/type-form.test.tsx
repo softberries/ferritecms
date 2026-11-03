@@ -5,7 +5,7 @@
 // schema; the server's refusal of them lands at the field; a type another relation
 // points at is refused with that reason.
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ContentTypeDto } from "@/api/types";
@@ -118,6 +118,24 @@ describe("type form", () => {
     // Only the kinds this change has, each with its own words.
     expect(dialog.querySelector("[data-change=removed]")).toBeNull();
     expect(dialog).not.toHaveTextContent("and are then removed");
+  });
+
+  test("the_gate_switch_sends_quality_gate_and_is_hidden_for_media", async () => {
+    const dto = typeOf("book", []);
+    const patches = routes(dto);
+    await mount(dto);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("switch", { name: /Block publishing on accessibility errors/ }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toMatchObject({ quality_gate: "errors" });
+    cleanup();
+    const media = typeOf("media", null, { built_in: true, label: "Media" });
+    routes(media);
+    await mount(media);
+    expect(screen.queryByRole("switch", { name: /Block publishing/ })).toBeNull();
   });
 
   test("a_built_in_type_says_it_cannot_be_deleted", async () => {

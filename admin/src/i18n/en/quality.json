@@ -152,5 +152,42 @@
       "title": "Too many findings",
       "message": "The run found too many problems to list them all."
     }
+  },
+  "health": {
+    "title": "Content health",
+    "description": "Broken links, orphan pages, missing alt text, redirect chains and items nobody has edited for a long time, checked every day.",
+    "runNow": "Run now",
+    "running": "Running…",
+    "queued": "The content health run is queued.",
+    "alreadyRunning": "A run is already queued or running.",
+    "runFailed": "The run could not be started.",
+    "lastRun": "Last run",
+    "notYet": "Not yet",
+    "nextRun": "Next run",
+    "truncated": "The last run stopped early; not every problem is listed.",
+    "externalOff": "External links are not checked.",
+    "externalSettings": "Turn it on in Settings",
+    "neverTitle": "No report yet",
+    "neverBody": "The first run happens tonight at 04:00 UTC, or now with Run now.",
+    "tabsLabel": "Categories",
+    "all": "All",
+    "filterType": "Type",
+    "anyType": "Every type",
+    "filterLocale": "Language",
+    "anyLocale": "Every language",
+    "filterSeverity": "Severity",
+    "anySeverity": "Every severity",
+    "noFindings": "Nothing found here.",
+    "colProblem": "Problem",
+    "colWhere": "Where",
+    "colSeverity": "Severity",
+    "untitled": "(no title)",
+    "more": "Show more",
+    "card": {
+      "title": "Content health",
+      "description": "The newest daily report",
+      "open": "Open the report",
+      "never": "No report yet."
+    }
   }
 }

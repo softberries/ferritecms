@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/kit/page-header";
 import { Button } from "@/components/ui/button";
 import { ActivityChart } from "@/dashboard/activity-chart";
 import { AiCard } from "@/dashboard/ai-card";
+import { HealthCard } from "@/dashboard/health-card";
 import { NeedsAttention } from "@/dashboard/needs-attention";
 import { attentionAccess, hasAttention } from "@/dashboard/queries";
 import { RecentDrafts } from "@/dashboard/recent-drafts";
@@ -73,6 +74,7 @@ function Dashboard() {
           />
         ) : null}
         {health ? <SiteMetrics className="lg:col-span-12" /> : null}
+        {caps.includes("edit_others") ? <HealthCard className="lg:col-span-12" /> : null}
       </div>
     </div>
   );

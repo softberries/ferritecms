@@ -23,6 +23,7 @@ import { Route as AppImportRouteImport } from './routes/_app/import'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
 import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
+import { Route as AppHealthIndexRouteImport } from './routes/_app/health.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppPluginsIndexRouteImport } from './routes/_app/plugins.index'
 import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
@@ -112,6 +113,11 @@ const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
 const AppCommentsIndexRoute = AppCommentsIndexRouteImport.update({
   id: '/comments/',
   path: '/comments/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppHealthIndexRoute = AppHealthIndexRouteImport.update({
+  id: '/health/',
+  path: '/health/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
@@ -242,6 +248,7 @@ export interface FileRoutesByFullPath {
   '/system/$tab': typeof AppSystemTabRoute
   '/webhooks/$id': typeof AppWebhooksIdRoute
   '/comments/': typeof AppCommentsIndexRoute
+  '/health/': typeof AppHealthIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
@@ -278,6 +285,7 @@ export interface FileRoutesByTo {
   '/system/$tab': typeof AppSystemTabRoute
   '/webhooks/$id': typeof AppWebhooksIdRoute
   '/comments': typeof AppCommentsIndexRoute
+  '/health': typeof AppHealthIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
   '/settings': typeof AppSettingsIndexRoute
@@ -316,6 +324,7 @@ export interface FileRoutesById {
   '/_app/system/$tab': typeof AppSystemTabRoute
   '/_app/webhooks/$id': typeof AppWebhooksIdRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
+  '/_app/health/': typeof AppHealthIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
@@ -354,6 +363,7 @@ export interface FileRouteTypes {
     | '/system/$tab'
     | '/webhooks/$id'
     | '/comments/'
+    | '/health/'
     | '/media/'
     | '/plugins/'
     | '/settings/'
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/system/$tab'
     | '/webhooks/$id'
     | '/comments'
+    | '/health'
     | '/media'
     | '/plugins'
     | '/settings'
@@ -427,6 +438,7 @@ export interface FileRouteTypes {
     | '/_app/system/$tab'
     | '/_app/webhooks/$id'
     | '/_app/comments/'
+    | '/_app/health/'
     | '/_app/media/'
     | '/_app/plugins/'
     | '/_app/settings/'
@@ -552,6 +564,13 @@ declare module '@tanstack/react-router' {
       path: '/comments'
       fullPath: '/comments/'
       preLoaderRoute: typeof AppCommentsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/health/': {
+      id: '/_app/health/'
+      path: '/health'
+      fullPath: '/health/'
+      preLoaderRoute: typeof AppHealthIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/media/': {
@@ -718,6 +737,7 @@ interface AppRouteChildren {
   AppSystemTabRoute: typeof AppSystemTabRoute
   AppWebhooksIdRoute: typeof AppWebhooksIdRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
+  AppHealthIndexRoute: typeof AppHealthIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
@@ -749,6 +769,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSystemTabRoute: AppSystemTabRoute,
   AppWebhooksIdRoute: AppWebhooksIdRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
+  AppHealthIndexRoute: AppHealthIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,

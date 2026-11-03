@@ -268,7 +268,8 @@ test("comments_is_registered", () => {
   const items = navFor(editor, TYPES).flatMap((s) => s.items);
   const comments = items.find((i) => i.id === "comments");
   expect(comments).toMatchObject({ label: "Comments", to: "/comments", shortcut: "g c" });
-  expect(items.map((i) => i.id).slice(-2)).toEqual(["media", "comments"]);
+  // Content health (M6-4) follows for `edit_others`.
+  expect(items.map((i) => i.id).slice(-3)).toEqual(["media", "comments", "health"]);
   expect(navItemAt(navFor(editor, TYPES), "/comments/")?.id).toBe("comments");
   expect(
     navFor(AUTHOR, TYPES)
@@ -485,5 +486,19 @@ test("nav_entry_only_for_manage_webhooks", () => {
     navFor(others, TYPES)
       .flatMap((s) => s.items)
       .some((i) => i.id === "webhooks"),
+  ).toBe(false);
+});
+
+test("nav_entry_health_for_edit_others", () => {
+  // M6-4 registers Content health in Content, after Comments: `edit_others`, `g h`.
+  const editor = me("editor", ["read_admin", "edit_others"]);
+  const item = navFor(editor, TYPES)
+    .flatMap((s) => s.items)
+    .find((i) => i.id === "health");
+  expect(item).toMatchObject({ label: "Content health", to: "/health", shortcut: "g h" });
+  expect(
+    navFor(AUTHOR, TYPES)
+      .flatMap((s) => s.items)
+      .some((i) => i.id === "health"),
   ).toBe(false);
 });

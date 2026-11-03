@@ -49,6 +49,9 @@ interface ItemLoaderData {
 const mayHaveSlot = (item: SchemaContentDto) => item.allowed.edit && item.status !== "trash";
 
 export const Route = createFileRoute("/_app/content/$type/$id")({
+  // `?check=<rule>:<key>` (M6-4): the health report's link to one finding.
+  validateSearch: (raw: Record<string, unknown>): { check?: string } =>
+    typeof raw.check === "string" && raw.check.length <= 400 ? { check: raw.check } : {},
   staticData: {
     crumb: (t, data) => {
       const item = (data as ItemLoaderData | undefined)?.item;

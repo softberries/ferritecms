@@ -2,6 +2,7 @@
 
 import {
   BookOpenIcon,
+  HeartPulseIcon,
   ImageIcon,
   LanguagesIcon,
   Link2Icon,
@@ -21,6 +22,7 @@ export const SETTINGS_GROUPS = [
   "media-sizes",
   "mail",
   "ai-assistants",
+  "health",
 ] as const;
 export type SettingsGroup = (typeof SETTINGS_GROUPS)[number];
 
@@ -36,6 +38,7 @@ export const GROUP_ICONS: Record<SettingsGroup, LucideIcon> = {
   "media-sizes": ImageIcon,
   mail: MailIcon,
   "ai-assistants": SparklesIcon,
+  health: HeartPulseIcon,
 };
 
 /** The group's key under `settings.groups` (i18n keys cannot hold `-`). */
@@ -48,4 +51,5 @@ export const GROUP_KEYS = {
   "media-sizes": "mediaSizes",
   mail: "mail",
   "ai-assistants": "aiAssistants",
+  health: "health",
 } as const satisfies Record<SettingsGroup, string>;

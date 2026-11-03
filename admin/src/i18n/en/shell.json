@@ -26,7 +26,8 @@
     "viewSite": "View site",
     "badge_one": "({{count}} waiting)",
     "badge_other": "({{count}} waiting)",
-    "account": "Account"
+    "account": "Account",
+    "health": "Content health"
   },
   "crumbs": {
     "dashboard": "Dashboard",

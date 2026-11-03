@@ -7,6 +7,7 @@
 // entry, its section and its chord are fixed here in `SCREENS`.
 
 import {
+  HeartPulseIcon,
   BlocksIcon,
   FileTextIcon,
   FilesIcon,
@@ -64,6 +65,8 @@ const SCREENS = {
     show: (can: Can) => can("moderate_comments"),
     shortcut: "g c",
   },
+  // Content health (M6-4, design 16 §11.2): editors and admins; `g h` is free in 11 §6.
+  health: { section: "content", show: (can: Can) => can("edit_others"), shortcut: "g h" },
   types: { section: "structure", show: (can: Can) => can("manage_settings") },
   // `manage_terms` alone manages terms, not the taxonomies themselves (the screen decides).
   taxonomies: {
@@ -109,6 +112,7 @@ export interface ScreenEntry {
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "comments", to: "/comments", label: "nav.comments", icon: MessageSquareIcon },
+  { screen: "health", to: "/health", label: "nav.health", icon: HeartPulseIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },

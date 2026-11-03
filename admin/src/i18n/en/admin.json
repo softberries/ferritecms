@@ -457,6 +457,10 @@
       "aiAssistants": {
         "title": "AI assistants",
         "description": "Let Claude, ChatGPT, Cursor and other assistants manage this site through MCP, as the person who connects them."
+      },
+      "health": {
+        "title": "Content health",
+        "description": "What the daily content health report checks: external links and how old an item may get."
       }
     },
     "general": {
@@ -589,6 +593,13 @@
         "cancel": "Cancel",
         "confirm": "Change the default"
       }
+    },
+    "health": {
+      "external": "Check external links",
+      "externalHint": "Off by default. When on, the daily run asks every linked site whether the page still exists (at most 1,000 links a day, one request at a time per site).",
+      "privacy": "The server then contacts the sites you link to, from its own address: they learn that this site links to them.",
+      "stale": "Stale after (days)",
+      "staleHint": "Published items not edited for longer are reported as stale. {{min}} to {{max}} days; empty: {{value}}."
     }
   },
   "themes": {
