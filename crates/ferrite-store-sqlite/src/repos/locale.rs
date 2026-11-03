@@ -35,6 +35,16 @@ impl LocaleRepo for SqliteRepos {
         relabel(self, to, "locale = '' AND ? IS NOT NULL").await
     }
 
+    async fn relabel_media(&self, to: &str) -> Result<u64, StoreError> {
+        validate_text("locale", to)?;
+        let done = run!(&self.writer, |e| sqlx::query(
+            "UPDATE content_items SET locale = ?1 WHERE type = 'media' AND locale <> ?1"
+        )
+        .bind(to)
+        .execute(e))?;
+        Ok(done.rows_affected())
+    }
+
     async fn fill_groups(&self) -> Result<u64, StoreError> {
         let items = run!(&self.writer, |e| sqlx::query(
             "UPDATE content_items SET translation_group = id WHERE translation_group IS NULL"

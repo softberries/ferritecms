@@ -512,9 +512,11 @@ impl SiteReader {
         if id == Some(item.id) {
             return Ok(public(true, deps));
         }
-        // A translation of the front page is its locale's front page (13 §4).
+        // A translation of the front page is its locale's front page (13 §4), whichever
+        // member of the group is the original (review fix: the original need not be the
+        // item `reading.front_page` names). A one-locale reader has no translations.
         if let Some(id) = id
-            && item.translation_group != item.id
+            && matches!(self.locale, ReadLocale::Only(_))
             && let Some(front) = repos.content().get(id).await?
         {
             deps.insert(post_key(id));
@@ -859,6 +861,17 @@ impl SiteReader {
         }
         deps.insert(option_key(FRONT_PAGE_OPTION));
         let front = front_page_id(repos).await?;
+        let locales = crate::locales::read(repos).await?;
+        // On a multilingual site every member of the front page's group is its locale's
+        // front page (review fix: listed at its locale's root, not at its redirecting
+        // permalink).
+        let front_group = match front {
+            Some(id) if locales.is_multilingual() => {
+                deps.insert(post_key(id));
+                repos.content().get(id).await?.map(|f| f.translation_group)
+            }
+            _ => None,
+        };
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
@@ -868,6 +881,11 @@ impl SiteReader {
             out.entries.push(SitemapEntry {
                 url: if front == Some(item.id) {
                     "/".to_owned()
+                } else if front_group == Some(item.translation_group) {
+                    match locales.prefix_of(&item.locale) {
+                        Some(p) => format!("/{p}/"),
+                        None => "/".to_owned(),
+                    }
                 } else {
                     url
                 },
@@ -878,7 +896,6 @@ impl SiteReader {
         .await?;
         out.next_cursor = q.cursor;
         // Alternates only on a multilingual site (13 §5); a one-locale sitemap is as it was.
-        let locales = crate::locales::read(repos).await?;
         if locales.is_multilingual() {
             deps.insert(option_key(ferrite_domain::locale::LOCALES_OPTION));
             let members = self

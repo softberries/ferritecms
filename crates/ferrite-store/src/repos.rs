@@ -261,6 +261,10 @@ pub trait LocaleRepo: Send + Sync {
     /// Sets every content item, term and menu with the blank locale (written by an older
     /// binary) to `to`; returns the rows changed.
     async fn relabel_blank(&self, to: &str) -> Result<LocaleUsage, StoreError>;
+    /// Sets every media item whose locale is not `to` to `to` (a new default locale:
+    /// media is shared by every locale and carries the default); returns the rows
+    /// changed.
+    async fn relabel_media(&self, to: &str) -> Result<u64, StoreError>;
     /// Sets `translation_group = id` on content items and terms without a group; returns
     /// the rows changed.
     async fn fill_groups(&self) -> Result<u64, StoreError>;

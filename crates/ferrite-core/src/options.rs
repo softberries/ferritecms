@@ -474,6 +474,10 @@ async fn plan_locales(
             locales::check_change(repos, &old, new, &rules).await?
         {
             repos.locales().relabel_all(&to).await?;
+        } else if new.default.tag != old.default.tag {
+            // Media belongs to every locale and carries the default (review fix: else a
+            // later lossy down of 0014 would take the library with the old default).
+            repos.locales().relabel_media(&new.default.tag).await?;
         }
     }
     // `site.locale_texts`: the written value's keys must be listed (non-default) locales;

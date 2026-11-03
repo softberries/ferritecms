@@ -17,6 +17,7 @@ api_tests!(
     content_translate_and_filter,
     terms_and_menus_per_locale,
     mcp_translate_then_update,
+    patch_with_refused_move_saves_nothing,
 );
 
 const POSTS: &str = "/api/v1/content/post";
@@ -320,5 +321,35 @@ async fn mcp_translate_then_update(api: Api) -> Api {
         .as_str()
         .unwrap_or_default();
     assert!(text.contains("content_translate"), "{body}");
+    api
+}
+
+/// Review fix: a `PATCH` whose locale move is refused saves none of its other changes
+/// either (one transaction).
+async fn patch_with_refused_move_saves_nothing(api: Api) -> Api {
+    let b = bilingual(&api).await;
+    let en = post(&api, &b, POSTS, json!({"title": "Hello"})).await;
+    let id = en["id"].as_str().unwrap().to_owned();
+    post(
+        &api,
+        &b,
+        &format!("{POSTS}/{id}/translations"),
+        json!({"locale": "de-AT"}),
+    )
+    .await;
+    // The group has a German member already: moving this one there is refused.
+    b.send(
+        &api,
+        Method::PATCH,
+        &format!("{POSTS}/{id}"),
+        Some(&json!({"title": "Changed", "locale": "de-AT"})),
+        Some(en["version"].as_i64().unwrap()),
+    )
+    .await
+    .assert_problem(409, "conflict");
+    let now = b.get(&api, &format!("{POSTS}/{id}")).await.json();
+    assert_eq!(now["title"], "Hello", "{now}");
+    assert_eq!(now["locale"], "en");
+    assert_eq!(now["version"], en["version"]);
     api
 }

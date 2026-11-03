@@ -44,6 +44,7 @@ backend_tests!(
     menu_translation_lookup,
     locale_usage_counts,
     relabel_all_and_blank,
+    relabel_media_moves_only_media,
     fill_groups_sets_null_groups,
     search_locale_filter,
 );

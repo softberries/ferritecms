@@ -3,18 +3,19 @@
 -- deleted, with what cascades from an item (meta, revisions, term links, comments,
 -- autosaves, search documents, media rows) or a menu (its items), and the options
 -- `site.locales` and `site.locale_texts`. Rows with the blank locale an older binary
--- writes count as the default. A surviving item or term whose parent is deleted becomes
--- top level.
+-- writes count as the default. Media items are never deleted (the library is shared by
+-- every locale, whatever locale its rows carry). A surviving item or term whose parent is
+-- deleted becomes top level.
 
 UPDATE content_items SET parent_id = NULL
 WHERE parent_id IN (
     SELECT id FROM content_items
-    WHERE locale <> '' AND locale <> (
+    WHERE type <> 'media' AND locale <> '' AND locale <> (
         SELECT value #>> '{0,tag}' FROM options WHERE key = 'site.locales'))
   AND NOT (locale <> '' AND locale <> (
         SELECT value #>> '{0,tag}' FROM options WHERE key = 'site.locales'));
 DELETE FROM content_items
-WHERE locale <> '' AND locale <> (
+WHERE type <> 'media' AND locale <> '' AND locale <> (
     SELECT value #>> '{0,tag}' FROM options WHERE key = 'site.locales');
 
 UPDATE terms SET parent_id = NULL

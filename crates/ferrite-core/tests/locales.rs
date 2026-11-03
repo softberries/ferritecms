@@ -506,7 +506,87 @@ async fn locale_write_emits_options_changed_and_all(db: &TestDb) {
     );
 }
 
+/// Review fix: a new default moves its items to the root, so every prefix is checked
+/// against the new default's top-level slugs: a German page `fr` would sit at `/fr/`.
+async fn default_change_refuses_a_shadowed_prefix(db: &TestDb) {
+    let store = db.store();
+    let actor = admin(store).await;
+    let opts = options(db);
+    opts.set_many(
+        &actor,
+        &set(
+            "site.locales",
+            json!([{"tag": "en"}, {"tag": "de"}, {"tag": "fr"}]),
+        ),
+    )
+    .await
+    .unwrap();
+    let page = content(db)
+        .create_localized(&actor, draft("page", "fr"), Some("de".into()), None)
+        .await
+        .unwrap();
+    assert_eq!((page.locale.as_str(), page.slug.as_str()), ("de", "fr"));
+    let err = opts
+        .set_many(
+            &actor,
+            &set(
+                "site.locales",
+                json!([{"tag": "de"}, {"tag": "en"}, {"tag": "fr"}]),
+            ),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        CoreError::InvalidField { field, message } => {
+            assert_eq!(field, "site.locales");
+            assert!(message.contains(&page.id.to_string()), "{message}");
+            assert!(message.contains("/fr/"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(locales_of(store).await, ["en", "de", "fr"]);
+}
+
+/// Review fix: media is shared by every locale and follows the default, and the lossy
+/// down of 0014 never deletes it.
+async fn default_change_relabels_media_and_down_keeps_it(db: &TestDb) {
+    let store = db.store();
+    let actor = admin(store).await;
+    let opts = options(db);
+    opts.set_many(
+        &actor,
+        &set("site.locales", json!([{"tag": "en"}, {"tag": "de"}])),
+    )
+    .await
+    .unwrap();
+    let svc = content(db);
+    svc.create(&actor, draft("post", "x")).await.unwrap();
+    svc.create(&actor, draft("post", "pic")).await.unwrap();
+    db.exec_raw("UPDATE content_items SET type = 'media' WHERE slug = 'pic'")
+        .await;
+    opts.set_many(
+        &actor,
+        &set("site.locales", json!([{"tag": "de"}, {"tag": "en"}])),
+    )
+    .await
+    .unwrap();
+    let media = db
+        .query_text("SELECT locale FROM content_items WHERE type = 'media'")
+        .await;
+    assert_eq!(media, [Some("de".to_owned())]);
+    let post = db
+        .query_text("SELECT locale FROM content_items WHERE type = 'post'")
+        .await;
+    assert_eq!(post, [Some("en".to_owned())]);
+    // Back below 0014 (lossy): the English post goes with the old default; media stays.
+    store.migrate_down(13, true).await.unwrap();
+    let types = db.query_text("SELECT type FROM content_items").await;
+    assert_eq!(types, [Some("media".to_owned())]);
+}
+
 backend_tests!(
+    default_change_refuses_a_shadowed_prefix,
+    default_change_relabels_media_and_down_keeps_it,
     read_falls_back_to_site_locale_option,
     settle_relabels,
     settle_uses_the_site_locale_option_before_the_config,

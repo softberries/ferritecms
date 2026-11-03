@@ -149,8 +149,12 @@ pub async fn check_change(
         .into_iter()
         .map(|t| t.name)
         .collect();
+    // A new default moves its items to the root, where an old prefix may now shadow one
+    // of them (review fix): then every prefix is checked against the new default's
+    // top-level slugs again.
+    let default_moves = old.default.tag != new.default.tag;
     for def in &new.others {
-        if old.by_prefix(&def.prefix()).is_some() {
+        if !default_moves && old.by_prefix(&def.prefix()).is_some() {
             // Already a prefix: whatever it shadows was refused when it was added.
             continue;
         }
@@ -181,9 +185,9 @@ pub async fn check_change(
                 .await?
             {
                 return Err(bad(format!(
-                    "the locale prefix /{p}/ is the address of the {kind} {:?} ({}); change \
-                     its slug first",
-                    item.title, item.id
+                    "the locale prefix /{p}/ would be the address of the {kind} {:?} ({}) in \
+                     {}; change its slug first",
+                    item.title, item.id, new.default.tag
                 )));
             }
         }

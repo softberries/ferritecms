@@ -579,16 +579,11 @@ pub async fn update_content(
         translation_of: patch.translation_of.map(|t| t.map(ContentId::from_uuid)),
     };
     let draft = patch.apply(&current, terms);
-    let mut result = api.content.update(actor, id, version, draft).await;
-    // The locale and group move after the field update (13 §7; R-1-16: two writes).
-    if relocation != Relocation::default()
-        && let Ok(saved) = &result
-    {
-        result = api
-            .content
-            .relocate(actor, id, saved.version, relocation)
-            .await;
-    }
+    // The locale and group move after the field update, in the same transaction (13 §7).
+    let result = api
+        .content
+        .update_and_relocate(actor, id, version, draft, relocation)
+        .await;
     written(&api, actor, id, result).await
 }
 

@@ -113,11 +113,8 @@ impl DemoBatch {
 
     /// Replaces a menu (validated as `MenuService::put` does) and emits `menu:<name>`.
     pub async fn menu(&self, menu: &Menu) -> Result<(), CoreError> {
-        menu::put_in(self.tx.as_ref(), menu).await?;
-        self.tx
-            .events()
-            .append(&events::invalidate([events::menu_key(&menu.name)]))
-            .await?;
+        let keys = menu::put_in(self.tx.as_ref(), menu).await?;
+        self.tx.events().append(&events::invalidate(keys)).await?;
         Ok(())
     }
 

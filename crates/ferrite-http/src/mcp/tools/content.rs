@@ -1493,15 +1493,11 @@ impl FerriteMcp {
             locale: input.locale,
             translation_of: input.translation_of.map(|t| t.map(ContentId::from_uuid)),
         };
-        let mut result = api.content.update(actor, id, input.version, draft).await;
-        if relocation != ferrite_core::Relocation::default()
-            && let Ok(saved) = &result
-        {
-            result = api
-                .content
-                .relocate(actor, id, saved.version, relocation)
-                .await;
-        }
+        // One transaction: the fields and the move are saved together or not at all.
+        let result = api
+            .content
+            .update_and_relocate(actor, id, input.version, draft, relocation)
+            .await;
         match result {
             Ok(item) => {
                 self.audit(

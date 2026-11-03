@@ -355,101 +355,161 @@ impl ContentService {
     ) -> Result<ContentItem, CoreError> {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
+        let done = relocate_in(
+            tx.as_ref(),
+            rules.as_ref(),
+            actor,
+            id,
+            expected_version,
+            change,
+        )
+        .await;
+        finish(tx, done).await
+    }
+
+    /// A field update and then a [`relocate`](Self::relocate) in one transaction (the
+    /// API's `PATCH` with `locale` or `translation_of`; review fix of R-1-16): either both
+    /// are saved or neither. An empty `change` is a plain update.
+    pub async fn update_and_relocate(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        draft: ContentDraft,
+        change: Relocation,
+    ) -> Result<ContentItem, CoreError> {
+        let rules = self.permalinks.pin();
+        let tx = self.store.begin().await?;
         let done = async {
-            let repos: &dyn Repos = tx.as_ref();
-            let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
-            can_edit(actor, &current)?;
-            if current.version != expected_version {
-                return Err(CoreError::Conflict {
-                    current_version: current.version,
-                });
-            }
-            if current.kind == MEDIA_KIND {
-                return Err(CoreError::Invalid(
-                    "media is shared by every locale".into(),
-                ));
-            }
-            let locales = crate::locales::read(repos).await?;
-            let locale = change.locale.clone().unwrap_or_else(|| current.locale.clone());
-            if !locales.contains(&locale) {
-                return Err(CoreError::invalid_field(
-                    "locale",
-                    format!("{locale:?} is not one of the site's locales"),
-                ));
-            }
-            let moves_locale = locale != current.locale;
-            if moves_locale {
-                let children = repos
-                    .content()
-                    .count(&ContentQuery {
-                        parent: ParentFilter::Of(id),
-                        ..ContentQuery::default()
-                    })
-                    .await?;
-                if children > 0 {
-                    return Err(CoreError::Invalid(
-                        "the item has children: change their locale first".into(),
-                    ));
-                }
-                if let Some(parent) = current.parent_id {
-                    super::check_parent_locale(repos, parent, &locale).await?;
-                }
-            }
-            let group = match change.translation_of {
-                None => current.translation_group,
-                Some(None) => current.id,
-                Some(Some(of)) => join_target(repos, actor, of, &current.kind).await?,
-            };
-            if group == current.translation_group && !moves_locale {
-                return Ok(current);
-            }
-            check_group_free(repos, group, &locale, Some(id)).await?;
-            let slug = if moves_locale {
-                free_slug(
-                    repos,
+            let saved = self
+                .update_in(
+                    tx.as_ref(),
                     rules.as_ref(),
-                    &current,
-                    &locale,
+                    actor,
+                    super::Edit {
+                        id,
+                        expected_version,
+                        draft,
+                        note: None,
+                    },
                 )
-                .await?
-            } else {
-                current.slug.clone()
-            };
-            let old_term_rows = repos.terms().for_item(id).await?;
-            let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
-            let terms: Vec<TermId> = if moves_locale {
-                term_translations(repos, &old_term_rows, &locale)
-                    .await?
-                    .into_iter()
-                    .filter_map(|(_, to)| to)
-                    .collect()
-            } else {
-                old_terms.clone()
-            };
-            let terms = dedup(&terms);
-            let saved = repos
-                .content()
-                .relocate(id, &locale, group, &slug, expected_version)
                 .await?;
-            if terms != old_terms {
-                set_terms(repos, id, &terms).await?;
+            if change == Relocation::default() {
+                return Ok(saved);
             }
-            let mut redirected = Vec::new();
-            let moved = record_moves(
-                repos,
+            relocate_in(
+                tx.as_ref(),
                 rules.as_ref(),
-                &current,
-                old_term_rows,
-                &saved,
-                terms != old_terms,
-                &mut redirected,
+                actor,
+                id,
+                saved.version,
+                change,
             )
+            .await
+        }
+        .await;
+        finish(tx, done).await
+    }
+}
+
+/// [`ContentService::relocate`] inside the caller's `tx` with its pinned `rules`.
+async fn relocate_in(
+    tx: &dyn Tx,
+    rules: &dyn crate::Permalinks,
+    actor: &Actor,
+    id: ContentId,
+    expected_version: i64,
+    change: Relocation,
+) -> Result<ContentItem, CoreError> {
+    let repos: &dyn Repos = tx;
+    let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+    can_edit(actor, &current)?;
+    if current.version != expected_version {
+        return Err(CoreError::Conflict {
+            current_version: current.version,
+        });
+    }
+    if current.kind == MEDIA_KIND {
+        return Err(CoreError::Invalid("media is shared by every locale".into()));
+    }
+    let locales = crate::locales::read(repos).await?;
+    let locale = change
+        .locale
+        .clone()
+        .unwrap_or_else(|| current.locale.clone());
+    if !locales.contains(&locale) {
+        return Err(CoreError::invalid_field(
+            "locale",
+            format!("{locale:?} is not one of the site's locales"),
+        ));
+    }
+    let moves_locale = locale != current.locale;
+    if moves_locale {
+        let children = repos
+            .content()
+            .count(&ContentQuery {
+                parent: ParentFilter::Of(id),
+                ..ContentQuery::default()
+            })
             .await?;
-            let mut keys = invalidation_keys(&saved, &old_terms, &terms, current.parent_id, &moved);
-            keys.push(events::group_key(current.translation_group));
-            keys.extend(crate::redirects::redirect_keys(redirected));
-            repos.events().append(&events::invalidate(keys)).await?;
-            repos
+        if children > 0 {
+            return Err(CoreError::Invalid(
+                "the item has children: change their locale first".into(),
+            ));
+        }
+        if let Some(parent) = current.parent_id {
+            super::check_parent_locale(repos, parent, &locale).await?;
+        }
+    }
+    let group = match change.translation_of {
+        None => current.translation_group,
+        Some(None) => current.id,
+        Some(Some(of)) => join_target(repos, actor, of, &current.kind).await?,
+    };
+    if group == current.translation_group && !moves_locale {
+        return Ok(current);
+    }
+    check_group_free(repos, group, &locale, Some(id)).await?;
+    let slug = if moves_locale {
+        free_slug(repos, rules, &current, &locale).await?
+    } else {
+        current.slug.clone()
+    };
+    let old_term_rows = repos.terms().for_item(id).await?;
+    let old_terms: Vec<TermId> = old_term_rows.iter().map(|t| t.id).collect();
+    let terms: Vec<TermId> = if moves_locale {
+        term_translations(repos, &old_term_rows, &locale)
+            .await?
+            .into_iter()
+            .filter_map(|(_, to)| to)
+            .collect()
+    } else {
+        old_terms.clone()
+    };
+    let terms = dedup(&terms);
+    let saved = repos
+        .content()
+        .relocate(id, &locale, group, &slug, expected_version)
+        .await?;
+    if terms != old_terms {
+        set_terms(repos, id, &terms).await?;
+    }
+    let mut redirected = Vec::new();
+    let moved = record_moves(
+        repos,
+        rules,
+        &current,
+        old_term_rows,
+        &saved,
+        terms != old_terms,
+        &mut redirected,
+    )
+    .await?;
+    let mut keys = invalidation_keys(&saved, &old_terms, &terms, current.parent_id, &moved);
+    keys.push(events::group_key(current.translation_group));
+    keys.extend(crate::redirects::redirect_keys(redirected));
+    repos.events().append(&events::invalidate(keys)).await?;
+    repos
                 .audit()
                 .append(&NewAudit {
                     actor_id: Some(actor.user),
@@ -462,19 +522,9 @@ impl ContentService {
                     }),
                 })
                 .await?;
-            crate::webhooks::emit_content(
-                repos,
-                rules.as_ref(),
-                "content.updated",
-                &saved,
-                Some(actor.user),
-            )
-            .await?;
-            Ok(saved)
-        }
-        .await;
-        finish(tx, done).await
-    }
+    crate::webhooks::emit_content(repos, rules, "content.updated", &saved, Some(actor.user))
+        .await?;
+    Ok(saved)
 }
 
 /// A free slug for `item` moving to `locale`: its slug, else `-N`, under the root rules

@@ -791,6 +791,8 @@ pub async fn reserved_and_dot_slugs(db: &TestDb) {
         "healthz",
         "_preview",
         "_Preview",
+        "mcp",
+        "oauth",
     ] {
         let mut d = draft("post", "X");
         d.slug = Some(s.into());

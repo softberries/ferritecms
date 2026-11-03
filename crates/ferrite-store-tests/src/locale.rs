@@ -404,6 +404,25 @@ pub async fn locale_usage_counts(db: &TestDb) {
     assert!(store.read().locales().usage("fr").await.unwrap().is_empty());
 }
 
+/// `relabel_media` moves media items only (a new default locale).
+pub async fn relabel_media_moves_only_media(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    let mut media = post_in(&user, "pic", "en", None);
+    media.kind = "media".into();
+    let media_id = media.id;
+    insert(store, &media).await;
+    let post = post_in(&user, "p", "en", None);
+    let post_id = post.id;
+    insert(store, &post).await;
+    let locales = store.read().locales();
+    assert_eq!(locales.relabel_media("de").await.unwrap(), 1);
+    assert_eq!(locales.relabel_media("de").await.unwrap(), 0);
+    let content = store.read().content();
+    assert_eq!(content.get(media_id).await.unwrap().unwrap().locale, "de");
+    assert_eq!(content.get(post_id).await.unwrap().unwrap().locale, "en");
+}
+
 /// `relabel_all` moves every row to one locale; `relabel_blank` only blank ones.
 pub async fn relabel_all_and_blank(db: &TestDb) {
     let store = db.store();

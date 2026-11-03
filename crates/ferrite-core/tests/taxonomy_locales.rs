@@ -296,7 +296,48 @@ async fn deleting_default_menu_keeps_translations_listed(db: &TestDb) {
     assert_eq!(list[0].translation_of.as_deref(), Some("primary"));
 }
 
+/// Review fix: a menu translation's write and delete also flush the pages that showed the
+/// default menu at that location (they depend on `menu:<of>`).
+async fn menu_translation_events_name_the_translated_menu(db: &TestDb) {
+    let actor = admin(db).await;
+    let store = db.store();
+    let svc = MenuService::new(db.shared_store());
+    svc.put(&actor, &menu("primary", "en", None)).await.unwrap();
+    svc.put(&actor, &menu("footer", "en", None)).await.unwrap();
+    async fn keys_since(store: &dyn Store, before: i64) -> Vec<String> {
+        store
+            .read()
+            .events()
+            .since(before, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|e| e.keys)
+            .collect()
+    }
+    let before = store.read().events().max_seq().await.unwrap();
+    svc.put(&actor, &menu("nav-de", "de", Some("primary")))
+        .await
+        .unwrap();
+    let keys = keys_since(store, before).await;
+    assert!(keys.contains(&"menu:nav-de".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"menu:primary".to_owned()), "{keys:?}");
+    // Moved to another location: the old and the new one are both flushed.
+    let before = store.read().events().max_seq().await.unwrap();
+    svc.put(&actor, &menu("nav-de", "de", Some("footer")))
+        .await
+        .unwrap();
+    let keys = keys_since(store, before).await;
+    assert!(keys.contains(&"menu:primary".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"menu:footer".to_owned()), "{keys:?}");
+    let before = store.read().events().max_seq().await.unwrap();
+    svc.delete(&actor, "nav-de").await.unwrap();
+    let keys = keys_since(store, before).await;
+    assert!(keys.contains(&"menu:footer".to_owned()), "{keys:?}");
+}
+
 backend_tests!(
+    menu_translation_events_name_the_translated_menu,
     term_slug_shared_across_locales,
     term_parent_must_share_locale,
     translate_term_maps_parent,

@@ -103,10 +103,8 @@ impl MenuService {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
         let done = async {
-            put_in(tx.as_ref(), menu).await?;
-            tx.events()
-                .append(&events::invalidate([events::menu_key(&menu.name)]))
-                .await?;
+            let keys = put_in(tx.as_ref(), menu).await?;
+            tx.events().append(&events::invalidate(keys)).await?;
             Ok(())
         }
         .await;
@@ -118,13 +116,12 @@ impl MenuService {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
         let done = async {
-            if tx.menus().get(name).await?.is_none() {
+            let Some(stored) = tx.menus().get(name).await? else {
                 return Err(CoreError::NotFound);
-            }
+            };
             tx.menus().delete(name).await?;
-            tx.events()
-                .append(&events::invalidate([events::menu_key(name)]))
-                .await?;
+            let keys = menu_keys(name, [stored.translation_of.as_deref()]);
+            tx.events().append(&events::invalidate(keys)).await?;
             Ok(())
         }
         .await;
@@ -155,19 +152,31 @@ fn check_menu(menu: &Menu) -> Result<(), CoreError> {
 ///
 /// An empty `menu.locale` keeps the stored menu's locale (a new menu takes the site's
 /// default locale).
-pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreError> {
+///
+/// Returns the invalidation keys of the write: `menu:<name>`, and `menu:<of>` for the
+/// menu it translates now and the one it translated before (pages in that locale showed
+/// the default menu at that location until now, and depend on its key).
+pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<Vec<String>, CoreError> {
     check_menu(menu)?;
     for item in &menu.items {
         check_item(repos, item).await?;
     }
     let locales = crate::locales::read(repos).await?;
+    let stored = repos.menus().get(&menu.name).await?;
     let mut menu = menu.clone();
     if menu.locale.is_empty() {
-        menu.locale = match repos.menus().get(&menu.name).await? {
-            Some(stored) if !stored.locale.is_empty() => stored.locale,
+        menu.locale = match &stored {
+            Some(stored) if !stored.locale.is_empty() => stored.locale.clone(),
             _ => locales.default.tag.clone(),
         };
     }
+    let keys = menu_keys(
+        &menu.name,
+        [
+            menu.translation_of.as_deref(),
+            stored.as_ref().and_then(|s| s.translation_of.as_deref()),
+        ],
+    );
     if !locales.contains(&menu.locale) {
         return Err(CoreError::invalid_field(
             "locale",
@@ -206,7 +215,19 @@ pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreErr
         }
     }
     repos.menus().put(&menu).await?;
-    Ok(())
+    Ok(keys)
+}
+
+/// `menu:<name>` and `menu:<of>` for each translated menu named (deduplicated).
+fn menu_keys<'a>(name: &str, of: impl IntoIterator<Item = Option<&'a str>>) -> Vec<String> {
+    let mut keys = vec![events::menu_key(name)];
+    for of in of.into_iter().flatten() {
+        let key = events::menu_key(of);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// `InvalidField { field, .. }` when `label` is longer than [`MAX_MENU_LABEL`].

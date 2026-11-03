@@ -369,7 +369,47 @@ async fn related_and_tree_stay_in_item_locale(db: &TestDb) {
     );
 }
 
+/// Review fix: the front page's group decides, whichever member is the original. A German
+/// `start` written first and translated to English `home`, with `home` as the front page:
+/// `start` is the German front page (its permalink redirects to `/de/`), and the sitemap
+/// lists it at `/de/`.
+async fn translated_front_page_whose_original_is_not_the_front_item(db: &TestDb) {
+    let store = db.shared_store();
+    multilingual(store.as_ref()).await;
+    let a = author(store.as_ref()).await;
+    let start = post(store.as_ref(), &a, "page", "start", "de", None, &[]).await;
+    let home = post(store.as_ref(), &a, "page", "home", "en", Some(start), &[]).await;
+    store
+        .read()
+        .options()
+        .set("reading.front_page", &json!(home.to_string()), true)
+        .await
+        .unwrap();
+    let base = reader(store.clone(), rules(store.as_ref()).await);
+    let de_r = base.in_locale(ReadLocale::Only("de".into()));
+    let item = de_r
+        .single("page", &["start".into()])
+        .await
+        .unwrap()
+        .value
+        .unwrap();
+    assert!(de_r.is_front_page(&item.item).await.unwrap().value);
+    let urls: Vec<String> = base
+        .sitemap("page", None)
+        .await
+        .unwrap()
+        .value
+        .entries
+        .into_iter()
+        .map(|e| e.url)
+        .collect();
+    assert!(urls.contains(&"/de/".to_owned()), "{urls:?}");
+    assert!(urls.contains(&"/".to_owned()), "{urls:?}");
+    assert!(!urls.contains(&"/de/start/".to_owned()), "{urls:?}");
+}
+
 backend_tests!(
+    translated_front_page_whose_original_is_not_the_front_item,
     all_issues_no_locale_predicate,
     only_filters_singles_listings_search_feeds_archives,
     term_archive_finds_term_by_locale,
