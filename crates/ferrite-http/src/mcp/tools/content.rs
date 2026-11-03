@@ -955,18 +955,18 @@ fn with_notes(mut summary: String, notes: &[String]) -> String {
 }
 
 /// A body converted for a write.
-struct Body {
+pub(crate) struct Body {
     /// The new body; `None` when the call sends none.
-    body: Option<Value>,
+    pub(crate) body: Option<Value>,
     /// The argument it came from (`body_markdown` or `body_blocks`), for errors.
     field: &'static str,
     /// The title lifted from a leading `# H1` (only when the call gave no title).
-    title: Option<String>,
+    pub(crate) title: Option<String>,
     notes: Vec<String>,
 }
 
 /// Converts the body argument of a write (see the module docs for the H1 rule).
-fn resolve_body(
+pub(crate) fn resolve_body(
     markdown: Option<String>,
     blocks: Option<Value>,
     title: Option<&str>,

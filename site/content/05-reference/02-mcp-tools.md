@@ -6,7 +6,7 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 # MCP tools
 
 These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
-57 of them, in 13 areas. To connect an assistant, see
+59 of them, in 14 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 How to read the tables:
@@ -156,6 +156,16 @@ the admin or the CLI: no tool does them.
 | `system_status` | Reports versions, mode, backends, schema state, job counts and nodes. | `system:read` | read |
 | `jobs_list` | Lists background jobs, with filters by state and kind. | `system:read` | read |
 | `audit_list` | Reads the audit log, with filters by actor, action and target. | `system:read` | read |
+
+## Content quality
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `content_check` | Checks an item, or a draft before it is written, for accessibility and link problems (alt text, headings, link text, tables, missing media, broken links on the site), each finding with its WCAG criteria and how to fix it, and says whether the type's publish gate would refuse it. | `content:read` | read |
+| `health_report` | Reads the site's content health report: the last daily run's totals and a page of findings (broken links, orphan pages, missing alt text, redirect chains, stale items), filtered by category, rule, severity, type or language. Editors and administrators only. | `content:read` | read |
+
+No tool suppresses a finding or starts a health run: a suppression is a person's decision
+with a reason, made in the admin.
 
 ## Resources and prompts
 

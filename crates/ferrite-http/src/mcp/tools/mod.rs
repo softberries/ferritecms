@@ -15,6 +15,7 @@ pub mod content;
 pub mod media;
 pub mod menus;
 pub mod plugins;
+pub mod quality;
 pub mod redirects;
 pub mod settings;
 pub mod site;

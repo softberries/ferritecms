@@ -124,7 +124,8 @@ impl FerriteMcp {
                 + Self::appearance_tools()
                 + Self::plugin_tools()
                 + Self::user_tools()
-                + Self::system_tools(),
+                + Self::system_tools()
+                + Self::quality_tools(),
             prompts: Self::prompt_router(),
         }
     }

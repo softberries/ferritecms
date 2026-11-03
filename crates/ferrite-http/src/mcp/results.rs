@@ -51,6 +51,17 @@ pub fn from_problem(p: Problem) -> CallToolResult {
             None => text.push_str(&format!("\n- {}", e.detail)),
         }
     }
+    if let Some(findings) = doc.findings.as_ref().and_then(Value::as_array) {
+        text.push_str("\nFix these (content_check lists them with how to fix each):");
+        for f in findings {
+            let rule = f["rule"].as_str().unwrap_or("");
+            let context = f["context"].as_str();
+            text.push_str(&format!(
+                "\n- {rule}: {}",
+                crate::mcp::tools::quality::message(rule, context)
+            ));
+        }
+    }
     if let Some(current) = &doc.current {
         text.push_str("\nThe current version is in `current`: re-apply the change to it.");
         if let Some(v) = current.get("version") {

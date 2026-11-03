@@ -21,6 +21,7 @@ mod locales;
 mod mcp;
 mod mcp_admin;
 mod mcp_content;
+mod mcp_quality;
 mod mcp_reference;
 mod mcp_structure;
 mod media;

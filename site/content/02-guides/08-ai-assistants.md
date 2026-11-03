@@ -202,7 +202,7 @@ assistant cannot be used anywhere else.
 
 ## What an assistant can do
 
-57 tools cover what an editor or administrator does in the admin:
+59 tools cover what an editor or administrator does in the admin:
 
 - **Content**: list, search, read, write, publish, schedule, submit for review, trash
   and restore posts, pages and custom types, with revisions and preview links. Bodies are
@@ -213,6 +213,9 @@ assistant cannot be used anywhere else.
 - **Comments**: moderate and reply.
 - **Site**: settings, the active theme and its settings, turning plugins on or off and
   their settings (secrets can be set, never read back).
+- **Content quality**: check an item or a draft for accessibility and link problems
+  before publishing (`content_check`), and read the site's content health report
+  (`health_report`).
 - **System**: site health, background jobs and the audit log; users and their roles (read
   only).
 
