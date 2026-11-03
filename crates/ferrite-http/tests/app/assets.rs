@@ -602,6 +602,9 @@ async fn theme_assets(app: App) -> App {
         Some("public, max-age=31536000, immutable")
     );
     assert!(r.body.contains("color: #222"));
+    // Readable from an opaque origin: the sandboxed live preview (Firefox and WebKit load
+    // its stylesheet in CORS mode from origin `null`).
+    assert_eq!(r.header("access-control-allow-origin"), Some("*"));
     let etag = r.header("etag").unwrap().to_owned();
     // Weak for compressible text, strong for binaries.
     assert!(etag.starts_with(&format!("W/\"{hash}-")), "{etag}");

@@ -10,7 +10,9 @@
 //! (`W/…`) for the text formats (CSS, JS, SVG, JSON, source maps, plain text), which
 //! the compression layer may encode per request (a strong tag must differ per
 //! content-coding, RFC 9110 §8.8.1; `If-None-Match` compares weakly), and strong for
-//! images, fonts and other binaries, which are never compressed.
+//! images, fonts and other binaries, which are never compressed. Every asset carries
+//! `Access-Control-Allow-Origin: *` (the sandboxed live preview reads them from origin
+//! `null`).
 
 use std::sync::Arc;
 
@@ -75,6 +77,10 @@ pub(crate) fn serve(
     };
     set(&mut res, header::ETAG, &etag);
     set(&mut res, header::CACHE_CONTROL, IMMUTABLE);
+    // Public, immutable files: readable cross-origin, so the editor's sandboxed live
+    // preview (an opaque origin, which Firefox and WebKit load stylesheets from in CORS
+    // mode) gets the theme's CSS and fonts. No credentials are involved.
+    set(&mut res, header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
     if !fresh {
         set(&mut res, header::CONTENT_TYPE, mime);
     }

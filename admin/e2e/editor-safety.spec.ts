@@ -478,6 +478,8 @@ test("screens", async ({ as, site, siteKey, snap, guard }) => {
 
   // Offline: the autosave cannot reach the server and waits to reconnect.
   guard.allowFailedResource(/\/autosave$/);
+  // The editor's accessibility check (M6-4) runs on the same edit and fails offline too.
+  guard.allowFailedResource(/\/content\/post\/check$/);
   guard.allow(/ERR_INTERNET_DISCONNECTED/);
   await page.context().setOffline(true);
   await typeAtEnd(page, `Written offline ${uid()}`);
