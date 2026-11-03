@@ -1,0 +1,150 @@
+# M6-2 exit: plugin trust
+
+**Criterion** ([ROADMAP](../ROADMAP.md), M6-2; design [14](../design/14-plugin-trust.md);
+rulings [m6.md](rulings/m6.md) P5): plugins can be signed with a publisher's minisign key;
+install verifies the signature and the permission report names the verified publisher; a
+plugin name's data is bound to its publisher so a same-named plugin from someone else cannot
+read it; a signed static registry gives `ferrite plugin search|install NAME|update`, update
+checks on the Plugins screen, and CI publishes the three example plugins there.
+
+**Result: built** on branch `m6-2-plugin-trust` (from `m6`), 2026-11-03. The publishing half
+waits for the user's keys (ruling P5): until they exist the release packs the plugins
+unsigned and publishes no index, and `crates/ferrite/registry.pub` is a placeholder, so the
+default registry is off in every build. Everything was tested with throwaway keys.
+
+## What was built
+
+| Area | Delivered |
+|---|---|
+| Formats | `ferrite_domain::plugin_trust` (key ids, `PublisherKey`, `MinisigHeader`, owner ids, rows, `SignaturePolicy`), `ferrite_domain::plugin_registry` (index schema 1, every rule of 14 §5.1 with a hostile test, search, newest per world, `is_newer`) |
+| Crypto | `ferrite_plugin_host::trust`: the signing payload `ferrite-plugin-signature/1`, `verify_minisig` (prehashed only), `verify_bundle`, `verify_index`; `self-update` uses the same verifier (D5); `minisign-verify` is now a workspace dependency of the plugin host only |
+| Fingerprint | `permission_report_signed`: `"signer"` in the fingerprint only when signed (D11; the pinned unsigned values are unchanged); `registry`, `publishers` reserved for uploads |
+| Storage | migration `0015_plugin_publishers` on both backends (`plugin_publishers`, `plugin_owners`, `plugin_registry`), `PluginTrustRepo` (own module `ferrite-store/src/plugin_trust.rs`), contract tests on both; keys and owners exported, the cache skipped |
+| Core | `extensions::trust::decide` (the 14 §4.2 table, policy, revocations, registry publisher text), run again inside the locked install transaction; `install_plugin_trusted`, `revoke_key` (compromised disables and emits `plugins.changed`), `trust_key`, `unbind`, `store_registry` (serial rule and revocations in one transaction); erase deletes the owner row; audit `plugin.install` gains `signer`, `owner`, `source`; `plugin.publisher.revoke` |
+| Config | `[plugins] signatures`, `registry`, `registry_key`, `registry_check` (`off` default, ruling P5), env overrides, the init template |
+| HTTP | signed uploads (`signature`, `publisher_key` parts), `TrustDto` on reports, `InstalledTrustDto` on plugins (state, owner, signer, source, update); `registry_fetch` (HTTPS through the egress SSRF rules, ≤ 3 redirects, size caps before and while reading; `file://` registries confined to their folder); registry refresh/view/inspect in the installer; endpoints `GET /plugins/registry`, `POST …/refresh` (1/min/site), `…/inspect`, `…/install`, `GET /plugins/publishers`, `POST …/{key_id}/revoke`; OpenAPI regenerated |
+| Jobs, doctor | `plugins.registry_check` (handler always; daily periodic only with `registry_check = "daily"`), doctor `plugins.trust` (26 checks) |
+| CLI | signed folders in `check`/`install --dir`, `install NAME[@VERSION]`, `search`, `update [--check]` (exit 2), `digest`, `keys list|trust|revoke`, `unbind` |
+| Admin | Publisher block in the report, signed uploads (two optional inputs, drop by name), refusals shown with Approve disabled, publisher state in words, Update chip, Check for updates, Installed/Registry tabs, Publisher keys page with Revoke, the plugin page's Publisher section and Update; Vitest; E2E `plugins-trust.spec.ts` with Node-crypto minisign (D19) |
+| CI | `plugin-payload.sh`, `sign-plugins.sh`, `verify-file.sh`, `registry-index.py`; `package-plugins.sh` (`SIGNATURES_DIR`, `ASSETS`), `sums.sh`; `release.yml` `plugins-sign` / `plugins-sign-dry-run`, asset count 9 or 17, Pages dispatch; `pages.yml` places the verified index; CI `packaging` runs the signing path with throwaway keys |
+| Docs | design 14 (P5 applied), 05, 07, 09 (§7 jobs and the "Plugin keys" runbook), 01; guides Plugins, Plugin authoring, CLI and Configuration reference, MCP tools note; `site/VERIFIED.md` rows; `CLAUDE.md`; ROADMAP ticked with follow-ups |
+
+## Keys and secrets the user must create (ruling P5)
+
+Nothing here was created or stored by the agent. Once, by a maintainer (09 §7 "Plugin keys"):
+
+1. **Plugin publisher key** (`ferritecms.dev`, signs the three example plugins):
+   `minisign -G -p plugins.pub -s plugins.key`. Put the second line of `plugins.pub` (the
+   base64 key) into `registry/publishers.json` → `publishers[0].keys` and commit it. Store the
+   contents of `plugins.key` as the secret `PLUGINS_SECRET_KEY` and its password as
+   `PLUGINS_PASSWORD` in the GitHub environment `release`.
+2. **Registry index key** (signs `index.json`): `minisign -G -p registry.pub -s registry.key`;
+   `cp registry.pub crates/ferrite/registry.pub` (replaces the placeholder; commit it). Store
+   `registry.key` as `REGISTRY_SECRET_KEY` and its password as `REGISTRY_PASSWORD` in `release`.
+3. Keep offline copies of both secret keys and passwords. Pages must stay on "GitHub Actions"
+   (already set for the docs site); `release.yml` asks for `actions: write` to start
+   `pages.yml` itself.
+
+Until all four secrets and both public halves are in place, `plugins-sign` logs a notice and
+packs the plugins unsigned; `pages.yml` skips the index with a notice.
+
+## Execution decisions
+
+- **R-2-1** `PluginTrustRepo` lives in its own module (`ferrite-store/src/plugin_trust.rs`); the
+  shared `repos.rs` gets one `Repos` method, the backends' `repos/mod.rs` one module line and
+  one delegate each.
+- **R-2-2** The migration tests no longer pin version lists: `ferrite-store-tests`
+  (`versions`, `down_from`, `up_from` in `migrations.rs`, used by `artifact_gc.rs` and
+  `plugin.rs`), `ferrite-store-sqlite` (`migrate.rs`), `ferrite` `tests/cli.rs`, `tests/export_cli.rs`,
+  `tests/rollback.rs` and `tests/upgrade.rs` derive them from the migration folder, so 0014 and 0016 landing beside
+  0015 need no edit there (merge: take these versions). The fabricated schema-10 archive in
+  `export_cli.rs` drops the tables newer than schema 10 (`plugin_publishers`,
+  `plugin_owners`), as a real schema-10 export would not have them.
+- **R-2-3** `store_registry` stores the index and applies its revocations in one transaction
+  (the plan had two calls).
+- **R-2-4** Core never reads the registry cache itself: the HTTP installer verifies the cached
+  index's signature with the configured key on every use (`registry_context`) and passes the
+  parsed index in `RegistryContext`, so a cache written under another key is never trusted.
+- **R-2-5** A trust refusal at inspection is kept in `Inspected` (`TrustRefusal`) and answered
+  as `422` with the report (`report.trust.refusal`); `stage_plugin` refuses it again.
+- **R-2-6** A malformed or oversize key part is field `publisher_key`; a key without a
+  signature is refused the same way.
+- **R-2-7** `config check`'s summary line is unchanged (tests pin it); it warns only when
+  `registry_check = "daily"` has no registry. Doctor reports the registry state.
+- **R-2-8** Doctor's "older than 3 days" warning applies only with `registry_check = "daily"`
+  (ruling P5: an on-demand site would always warn).
+- **R-2-9** The registry check is due at 04:00 UTC (after the artifacts GC at 03:00).
+- **R-2-10** `TrustDto` gains `refusal`; `InstalledTrustDto` is `{state, owner, signer, source,
+  update}`; `PublisherKeyList` carries the policy.
+- **R-2-11** CLI trust tests run on SQLite; the Postgres paths of the same code are covered by
+  the core, API and job tests on both backends.
+- **R-2-12** The Rust registry fixture (`crates/ferrite-http/tests/support/registry_fixture.rs`)
+  is shared by three test crates through `#[path]` and carries `#![allow(dead_code)]`, since each
+  test binary uses a different part of it.
+- **R-2-13** CI signing is one script (`sign-plugins.sh`) for the release, the dry run and the
+  CI `packaging` job; `verify-file.sh` (exit 3 for a placeholder key) checks every signature.
+  The `plugins` job uploads the wasm (`plugins-wasm`) and the sign jobs pack. `BASE_URL=""`
+  makes an index whose files are relative (a `file://` registry from a release folder).
+- **R-2-14** `plugins-trust.spec.ts` is a site-wide spec (runs after the rest, alone): it
+  installs and removes a plugin every list shows and revokes the site's registry key.
+- **R-2-15** A failed refresh is recorded only on an existing cache row; a first fetch that
+  fails leaves "not checked yet" (follow-up in the ROADMAP).
+- **R-2-16** Revoking a key the site has no row for (a registry key) inserts a row with source
+  `registry` and the publisher's name as its label.
+- **R-2-17** The key id of a signature is read in `ferrite-domain` (`MinisigHeader`), since
+  `minisign-verify` does not expose it.
+- **R-2-18** `registry` and `publishers` are refused for uploads only; `inspect` and `retained`
+  stay refused everywhere, as before.
+
+## Verified
+
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`: clean.
+- `FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test cargo test --workspace
+  --no-fail-fast` (Postgres 17): 4 398 passed, 21 failed in the full run; 20 were the
+  `rollback.rs` and `upgrade.rs` tests computing `latest - 1` across the version gap (0014 not
+  on this branch), fixed by R-2-2 and then 38/38 passing; the remaining one,
+  `import_cli::import_site_a_end_to_end_sqlite`, fails only because it serves on the fixed
+  port 127.0.0.1:8080, which the user's own local site holds on this machine (unrelated to
+  M6-2; it passed before the port was taken).
+- Admin: `pnpm -C admin typecheck`, `lint`, `test` (Vitest 848/848, including the E2E support
+  unit tests: the Node minisign signer verified by the `minisign` CLI 0.12).
+- E2E (release build, `pnpm -C admin build`), Chromium on SQLite and Postgres:
+  `plugins-trust.spec.ts` 2/2 (registry check, install with Verified publisher, Update chip
+  0.1.0 → 0.2.0, unsigned upload refused with the publisher message, compromised revocation
+  disables the plugin, axe on the Registry tab and the Publishers page) and `plugins.spec.ts`
+  14/14.
+- `actionlint` on `release.yml`, `pages.yml`, `ci.yml`; `shellcheck -x .github/scripts/*.sh`.
+- `sign-plugins.sh` run locally with throwaway keys (twice: serial 1, then 2 on top);
+  `registry_script.rs` checks the script's output with the binary's reader.
+- **Manual end-to-end check** (release build, throwaway keys made with `minisign -G -W`):
+  `BASE_URL="" EXTRA_KEY=plugins.pub .github/scripts/sign-plugins.sh 0.2.0 reg …` signed the
+  three example plugins and wrote a `file://` registry; on a fresh `init` site with
+  `registry = "file://…/reg/ferrite-registry-index.json"` and its `registry_key`:
+  `ferrite plugin search` listed analytics, contact-form, seo 0.2.0 by "FerriteCMS
+  (Softberries)"; `ferrite plugin install seo --yes` printed `publisher: verified
+  ferritecms.dev (… registry key …)` and `data: bound to reg:<registry key>:ferritecms.dev`;
+  `update --check` printed `no updates` (exit 0); `plugin check --dir` on the unpacked signed
+  `analytics` folder from the tarball printed the verified publisher; `doctor --offline`
+  printed `ok plugins.trust 1 plugins, 1 verified; registry serial 1 checked 0 min ago`. The
+  admin's Registry tab and Update chip were exercised by the E2E spec above.
+
+## Not verified
+
+- A real `release.yml` run: neither the publishing run with the user's keys nor a manual dry
+  run on GitHub (not runnable locally; the steps were run as scripts).
+- The first Pages publication of the index, GitHub's asset redirect host for the registry
+  downloads, and `gh workflow run pages.yml` from `GITHUB_TOKEN`.
+- A real-world HTTPS registry fetch (the fetcher was tested against a local TLS server with a
+  test resolver and the production address rule).
+- Firefox and WebKit runs of the new spec (the full cross-browser run is at the end of M6).
+- The CLI trust commands on Postgres (R-2-11); doctor `plugins.trust` on a Postgres site.
+- Two cluster nodes: that a compromised revocation unloads the plugin on every node (the
+  `plugins.changed` event is asserted; the reload path is the existing one).
+
+## Follow-ups
+
+Listed in the ROADMAP under M6-2: create the keys and run the first signed release; erase
+`plugin.<name>.*` content meta with a plugin's data (design 14 §12, P5: Later); record a
+failed first registry fetch; design 14 §14 (third-party submissions, signed themes,
+transparency log, index expiry).

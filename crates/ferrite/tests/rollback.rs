@@ -204,6 +204,23 @@ fn set_meta(data: &Path, key: &str, value: &str) {
     });
 }
 
+/// The migration version `n` steps below the newest one (versions may have gaps while
+/// parallel branches land, so not `latest - n`).
+fn schema_below(n: usize) -> i64 {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite-store-sqlite/migrations");
+    let mut v: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| {
+            let name = e.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix(".up.sql")
+                .map(|n| n.split('_').next().unwrap().parse::<i64>().unwrap())
+        })
+        .collect();
+    v.sort_unstable();
+    assert_eq!(*v.last().unwrap(), latest_schema_version());
+    v[v.len() - 1 - n]
+}
+
 /// A SQLite site upgraded from [`OLD`] at `schema_from` to this binary at the latest
 /// schema: `upgrade.json` names the move and its snapshot.
 fn upgraded_site(root: &Path, schema_from: i64) -> (PathBuf, UpgradeRecord) {
@@ -275,7 +292,7 @@ fn rollback_swaps_and_back() {
     bins.assert_unswapped();
 
     // With --data: the check runs, and the record stays.
-    let (data, rec) = upgraded_site(tmp.path(), latest_schema_version() - 1);
+    let (data, rec) = upgraded_site(tmp.path(), schema_below(1));
     let out = rollback(&bins.current)
         .arg("--data")
         .arg(&data)
@@ -364,7 +381,7 @@ fn rollback_refuses_incompatible_schema_exit_3() {
 fn rollback_schema_downs_to_schema_from() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let from = latest_schema_version() - 2;
+    let from = schema_below(2);
     let (data, _) = upgraded_site(tmp.path(), from);
     let install_id = meta(&data, SCHEMA_META_INSTALL_ID);
 
@@ -390,7 +407,7 @@ fn rollback_schema_downs_to_schema_from() {
 fn rollback_schema_after_binary_rollback_runs_as_prev() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let from = latest_schema_version() - 2;
+    let from = schema_below(2);
     let (data, _) = upgraded_site(tmp.path(), from);
 
     rollback(&bins.current)
@@ -454,7 +471,7 @@ fn rollback_schema_refuses_lossy_without_flag() {
 fn rollback_schema_requires_newer_binary() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let (data, mut rec) = upgraded_site(tmp.path(), latest_schema_version() - 1);
+    let (data, mut rec) = upgraded_site(tmp.path(), schema_below(1));
     rec.to = "9.9.9".into();
     upgrade::write(&data, &rec).unwrap();
 
@@ -535,7 +552,7 @@ fn rollback_schema_requires_newer_binary() {
 fn rollback_renames_upgrade_json() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let (data, _) = upgraded_site(tmp.path(), latest_schema_version() - 1);
+    let (data, _) = upgraded_site(tmp.path(), schema_below(1));
     let raw = std::fs::read(data.join(UPGRADE_FILE)).unwrap();
 
     rollback(&bins.current)
@@ -559,7 +576,7 @@ fn rollback_renames_upgrade_json() {
 fn rollback_schema_stores_the_older_version() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let from = latest_schema_version() - 1;
+    let from = schema_below(1);
     let (data, _) = upgraded_site(tmp.path(), from);
 
     rollback(&bins.current)
@@ -584,7 +601,7 @@ fn rollback_schema_stores_the_older_version() {
 fn rollback_schema_nothing_to_revert_stores_the_older_version() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::new(tmp.path(), Some(0));
-    let from = latest_schema_version() - 1;
+    let from = schema_below(1);
     let (data, _) = upgraded_site(tmp.path(), from);
     migrate_down(&data, from);
     assert_eq!(
@@ -614,7 +631,7 @@ fn rollback_schema_nothing_to_revert_stores_the_older_version() {
 fn rollback_schema_without_from_stores_the_reported_version() {
     let tmp = tempfile::tempdir().unwrap();
     let bins = Bins::with_old(tmp.path(), Some(0), "0.0.7");
-    let from = latest_schema_version() - 1;
+    let from = schema_below(1);
     let (data, mut rec) = upgraded_site(tmp.path(), from);
     rec.from = None;
     upgrade::write(&data, &rec).unwrap();
@@ -991,7 +1008,7 @@ fn pg_exec(pg: &PgSchema, sql: &str) {
 fn rollback_schema_refuses_while_a_postgres_node_is_live() {
     let Some(pg) = PgSchema::new() else { return };
     let tmp = tempfile::tempdir().unwrap();
-    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, latest_schema_version() - 1);
+    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, schema_below(1));
     let bins = Bins::with_old(tmp.path(), Some(0), rec.from.as_deref().unwrap());
     pg_exec(
         &pg,
@@ -1023,7 +1040,7 @@ fn rollback_schema_refuses_while_a_postgres_node_is_live() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(db_version(&data), latest_schema_version() - 1);
+    assert_eq!(db_version(&data), schema_below(1));
     bins.assert_swapped();
 }
 
@@ -1031,7 +1048,7 @@ fn rollback_schema_refuses_while_a_postgres_node_is_live() {
 fn rollback_restore_snapshot_refused_on_postgres() {
     let Some(pg) = PgSchema::new() else { return };
     let tmp = tempfile::tempdir().unwrap();
-    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, latest_schema_version() - 1);
+    let (data, rec) = upgraded_pg_site(tmp.path(), &pg, schema_below(1));
     let bins = Bins::with_old(tmp.path(), Some(0), rec.from.as_deref().unwrap());
 
     let out = rollback(&bins.current)

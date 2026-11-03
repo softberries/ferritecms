@@ -611,7 +611,7 @@ pub(crate) fn metadata_client_for_tests(
     build(Lookup::Custom(resolver), allow_ip, roots, true, TIMEOUT)
 }
 
-/// The longest fetch of one registry file ([`registry_client`]); each request sets its
+/// The longest fetch of one registry file (the registry client's); each request sets its
 /// own, shorter deadline.
 pub const REGISTRY_TIMEOUT: Duration = Duration::from_secs(60);
 
