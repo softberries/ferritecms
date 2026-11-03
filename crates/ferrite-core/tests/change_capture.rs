@@ -156,6 +156,14 @@ backend_tests!(
     comment_reply_and_moderate_are_captured,
     before_and_after_hashes_chain_across_two_updates,
     translate_is_captured_as_a_create,
+    term_delete_image_keeps_links,
+    menu_set_new_menu_is_created,
+    type_update_under_types_lock_is_captured,
+    redirect_create_over_existing_source_has_a_before_image,
+    settings_update_records_one_change_per_key,
+    permalink_change_captured_under_lock,
+    plugin_secret_image_stays_sealed,
+    theme_activate_records_previous_theme,
 );
 
 async fn agent_create_update_publish_records_three_changes(db: &TestDb) {
@@ -390,4 +398,258 @@ async fn translate_is_captured_as_a_create(db: &TestDb) {
     assert_eq!(ch[0].object_id, t.item.id.to_string());
     assert_eq!(ch[0].before, Image::Absent);
     assert_eq!(opened(&ch[0].after)["locale"], "de");
+}
+
+async fn term_delete_image_keeps_links(db: &TestDb) {
+    let s = site(db).await;
+    let tax = ferrite_core::TaxonomyService::new(s.store.clone());
+    let term = tax
+        .create_term(&s.admin, "category", "News", None, None, "d")
+        .await
+        .unwrap();
+    let mut d = draft("post", "Linked");
+    d.terms = vec![term.id];
+    let item = s.content.create(&s.admin, d).await.unwrap();
+    tax.delete_term(&s.agent, term.id).await.unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 1);
+    assert_eq!(ch[0].op, "term.delete");
+    assert_eq!(ch[0].after, Image::Absent);
+    let before = opened(&ch[0].before);
+    assert_eq!(before["name"], "News");
+    assert_eq!(before["items"], json!([item.id.to_string()]));
+    assert_eq!(before["items_total"], 1);
+    assert_eq!(ch[0].label, "News");
+}
+
+async fn menu_set_new_menu_is_created(db: &TestDb) {
+    let s = site(db).await;
+    let menus = ferrite_core::MenuService::new(s.store.clone());
+    let menu = ferrite_domain::Menu {
+        name: "main".into(),
+        label: "Main".into(),
+        items: vec![ferrite_domain::MenuItem {
+            id: ferrite_domain::MenuItemId::new(),
+            parent_id: None,
+            position: 0,
+            kind: ferrite_domain::MenuItemKind::Url,
+            target_id: None,
+            url: Some("https://example.com/".into()),
+            label: "Home".into(),
+        }],
+        locale: "en".into(),
+        translation_of: None,
+    };
+    menus.put(&s.agent, &menu).await.unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 1);
+    assert_eq!(
+        (ch[0].op.as_str(), ch[0].object_kind.as_str()),
+        ("menu.put", "menu")
+    );
+    assert_eq!(ch[0].object_id, "main");
+    assert_eq!(ch[0].before, Image::Absent);
+    assert_eq!(opened(&ch[0].after)["items"][0]["label"], "Home");
+}
+
+async fn type_update_under_types_lock_is_captured(db: &TestDb) {
+    let s = site(db).await;
+    let types = ferrite_core::ContentTypeService::new(s.store.clone());
+    types
+        .create(
+            &s.agent,
+            ferrite_core::NewType {
+                name: "book".into(),
+                label: "Books".into(),
+                hierarchical: false,
+                has_archive: true,
+                fields: None,
+            },
+        )
+        .await
+        .unwrap();
+    types
+        .update(
+            &s.agent,
+            "book",
+            ferrite_core::TypePatch {
+                label: Some("Library".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let ch = s.changes().await;
+    let ops: Vec<&str> = ch.iter().map(|c| c.op.as_str()).collect();
+    assert_eq!(ops, ["type.create", "type.update"]);
+    assert_eq!(ch[0].before, Image::Absent);
+    assert_eq!(opened(&ch[1].before)["label"], "Books");
+    assert_eq!(opened(&ch[1].after)["label"], "Library");
+    assert!(opened(&ch[1].after).get("created_at").is_none());
+}
+
+async fn redirect_create_over_existing_source_has_a_before_image(db: &TestDb) {
+    let s = site(db).await;
+    let r = ferrite_core::RedirectService::new(s.store.clone());
+    let first = r.upsert(&s.admin, "/old", "/new", 301).await.unwrap();
+    let second = r.upsert(&s.agent, "/old", "/newer", 302).await.unwrap();
+    assert_eq!(first.id, second.id);
+    r.upsert(&s.agent, "/fresh", "/x", 301).await.unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 2);
+    assert_eq!(ch[0].object_id, first.id.to_string());
+    assert_eq!(opened(&ch[0].before)["target"], "/new");
+    assert_eq!(opened(&ch[0].after)["code"], 302);
+    assert!(opened(&ch[0].after).get("hits").is_none());
+    assert_eq!(ch[1].before, Image::Absent);
+    assert_eq!(opened(&ch[1].after)["source_path"], "/fresh");
+    let id: ferrite_domain::RedirectId = ch[1].object_id.parse().unwrap();
+    r.update(&s.agent, id, "/fresh2", "/y", 301).await.unwrap();
+    r.delete(&s.agent, id).await.unwrap();
+    let ch = s.changes().await;
+    let ops: Vec<&str> = ch.iter().map(|c| c.op.as_str()).collect();
+    assert_eq!(
+        ops,
+        [
+            "redirect.create",
+            "redirect.create",
+            "redirect.update",
+            "redirect.delete"
+        ]
+    );
+    assert_eq!(ch[3].after, Image::Absent);
+}
+
+async fn settings_update_records_one_change_per_key(db: &TestDb) {
+    let s = site(db).await;
+    ferrite_core::OptionService::new(s.store.clone())
+        .set_many(
+            &s.agent,
+            &[
+                ("site.title".to_owned(), Some(json!("New title"))),
+                ("site.description".to_owned(), Some(json!("A tagline"))),
+            ],
+        )
+        .await
+        .unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 2);
+    assert!(
+        ch.iter()
+            .all(|c| c.op == "settings.update" && c.object_kind == "option")
+    );
+    let keys: Vec<&str> = ch.iter().map(|c| c.object_id.as_str()).collect();
+    assert_eq!(keys, ["site.title", "site.description"]);
+    assert_eq!(opened(&ch[0].after), json!({"value": "New title"}));
+    assert_eq!(s.sets().await[0].changes, 2);
+}
+
+async fn permalink_change_captured_under_lock(db: &TestDb) {
+    let s = site(db).await;
+    ferrite_core::OptionService::new(s.store.clone())
+        .set_many(
+            &s.agent,
+            &[("permalink.post".to_owned(), Some(json!("/blog/%slug%/")))],
+        )
+        .await
+        .unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 1);
+    assert_eq!(ch[0].object_id, "permalink.post");
+    assert_eq!(ch[0].before, Image::Absent);
+}
+
+async fn plugin_secret_image_stays_sealed(db: &TestDb) {
+    let s = site(db).await;
+    let svc = ferrite_core::ExtensionAdmin::new(s.store.clone(), SiteKey::generate().unwrap());
+    let a = Artifact {
+        hash: ArtifactHash::parse(&"0a".repeat(32)).unwrap(),
+        kind: ArtifactKind::Plugin,
+        bytes: 42,
+        mime: "application/wasm".into(),
+        created_at: Timestamp::now(),
+        orphaned_at: None,
+    };
+    let now = Timestamp::now();
+    let row = ferrite_domain::InstalledPlugin {
+        name: "seo".into(),
+        version: "0.1.0".into(),
+        artifact_hash: a.hash.clone(),
+        manifest: json!({
+            "plugin": {"name": "seo", "version": "0.1.0"},
+            "settings": {
+                "limit": {"type": "number", "label": "Limit"},
+                "api_key": {"type": "secret", "label": "API key"},
+            },
+        }),
+        granted: json!({}),
+        enabled: false,
+        disabled_reason: None,
+        installed_at: now,
+        updated_at: now,
+    };
+    svc.install_plugin(&s.admin, &a, &row).await.unwrap();
+    let plaintext = "sk-live-0123456789";
+    let mut patch = serde_json::Map::new();
+    patch.insert("api_key".into(), json!(plaintext));
+    patch.insert("limit".into(), json!(5));
+    svc.set_plugin_settings(&s.agent, "seo", patch)
+        .await
+        .unwrap();
+    svc.set_plugin_enabled(&s.agent, "seo", true).await.unwrap();
+    let ch = s.changes().await;
+    let ops: Vec<&str> = ch.iter().map(|c| c.op.as_str()).collect();
+    assert_eq!(ops, ["plugin.settings", "plugin.settings", "plugin.enable"]);
+    let secret = ch
+        .iter()
+        .find(|c| c.object_id == "plugin.seo.settings.api_key")
+        .unwrap();
+    let text = opened(&secret.after).to_string();
+    assert!(text.contains("\"sealed\":\"v1."), "{text}");
+    assert!(!text.contains(plaintext), "{text}");
+    assert_eq!(opened(&ch[2].before)["enabled"], false);
+    assert_eq!(opened(&ch[2].after)["enabled"], true);
+}
+
+async fn theme_activate_records_previous_theme(db: &TestDb) {
+    let s = site(db).await;
+    let svc = ferrite_core::ExtensionAdmin::new(s.store.clone(), SiteKey::generate().unwrap());
+    let art = |seed: u8| Artifact {
+        hash: ArtifactHash::parse(&format!("{seed:02x}").repeat(32)).unwrap(),
+        kind: ArtifactKind::Theme,
+        bytes: 42,
+        mime: "application/octet-stream".into(),
+        created_at: Timestamp::now(),
+        orphaned_at: None,
+    };
+    let theme = |name: &str, a: &Artifact| ferrite_domain::InstalledTheme {
+        name: name.into(),
+        version: "1.0.0".into(),
+        artifact_hash: a.hash.clone(),
+        manifest: json!({"name": name}),
+        active: false,
+        installed_at: Timestamp::now(),
+    };
+    let (light, dark) = (art(1), art(2));
+    svc.install_theme(&s.admin, &light, &theme("light", &light), true)
+        .await
+        .unwrap();
+    svc.install_theme(&s.admin, &dark, &theme("dark", &dark), false)
+        .await
+        .unwrap();
+    assert!(s.sets().await.is_empty());
+    svc.activate_theme(&s.agent, "dark", &dark.hash)
+        .await
+        .unwrap();
+    let ch = s.changes().await;
+    assert_eq!(ch.len(), 1);
+    assert_eq!(
+        (ch[0].op.as_str(), ch[0].object_id.as_str()),
+        ("theme.activate", "active")
+    );
+    assert_eq!(
+        opened(&ch[0].before),
+        json!({"name": "light", "artifact": light.hash.as_str()})
+    );
+    assert_eq!(opened(&ch[0].after)["name"], "dark");
 }

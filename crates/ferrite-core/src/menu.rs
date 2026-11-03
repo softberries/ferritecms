@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ferrite_domain::{ContentId, ContentStatus, Menu, MenuItem, MenuItemKind, TermId};
 use ferrite_store::{MenuSummary, Repos, Store};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, require, require_read},
@@ -103,8 +104,16 @@ impl MenuService {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::MenuPut,
+                &[ObjectRef::Menu(menu.name.clone())],
+            )
+            .await?;
             let keys = put_in(tx.as_ref(), menu).await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;

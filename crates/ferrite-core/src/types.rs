@@ -37,6 +37,7 @@ use ferrite_domain::{ContentQuery, ContentType, NewAudit, Timestamp, UserId};
 use ferrite_store::{LOCK_TYPES, LockGuard, Repos, Store, StoreError, Tx, lock};
 use serde_json::{Value, json};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, require, require_read},
@@ -118,8 +119,11 @@ impl ContentTypeService {
         let ty = check_new_type(&new)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TypeCreate, &[]).await?;
             create_in(tx.as_ref(), actor.user, &ty, new.fields.as_deref()).await?;
             invalidate_all(tx.as_ref()).await?;
+            cap.created(ObjectRef::Type(ty.name.clone()));
+            cap.finish(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;
@@ -142,8 +146,16 @@ impl ContentTypeService {
         }
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::TypeUpdate,
+                &[ObjectRef::Type(name.to_owned())],
+            )
+            .await?;
             let ty = update_in(tx.as_ref(), actor.user, name, label, &patch).await?;
             invalidate_all(tx.as_ref()).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;

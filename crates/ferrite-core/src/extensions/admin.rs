@@ -14,6 +14,7 @@ use ferrite_domain::plugin_trust::{KeySource, PluginOwner, PublisherKey, Revocat
 use super::{
     ExtensionService, InstallTrust, RetainedPluginData, TrustDecision, append_audit, finish_locked,
 };
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
@@ -288,7 +289,7 @@ impl ExtensionAdmin {
         };
         let audit = audit(actor, action, "plugin", name, json!({ "name": name }));
         self.service
-            .set_plugin_enabled_with(name, enabled, Some(audit))
+            .set_plugin_enabled_with(name, enabled, Some(audit), Some(actor))
             .await
     }
 
@@ -362,7 +363,7 @@ impl ExtensionAdmin {
         });
         let audit = audit(actor, "theme.install", "theme", &row.name, details);
         self.service
-            .install_theme_with(artifact, row, activate, Some(audit))
+            .install_theme_with(artifact, row, activate, Some(audit), Some(actor))
             .await
     }
 
@@ -383,7 +384,7 @@ impl ExtensionAdmin {
             json!({ "name": name, "artifact": expected.as_str() }),
         );
         self.service
-            .activate_theme_with(name, expected, Some(audit))
+            .activate_theme_with(name, expected, Some(audit), Some(actor))
             .await
     }
 }
@@ -438,7 +439,19 @@ impl ExtensionAdmin {
             json!({ "name": name, "keys": keys }),
         );
         let (guard, tx) = self.service.begin_locked().await?;
-        let done = write_theme_settings(tx.as_ref(), name, &patch, entry).await;
+        let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::ThemeSettings,
+                &[ObjectRef::Option(theme_option(name))],
+            )
+            .await?;
+            let stored = write_theme_settings(tx.as_ref(), name, &patch, entry).await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(stored)
+        }
+        .await;
         let stored = finish_locked(guard, tx, done).await?;
         Ok(schema.values(&stored))
     }
@@ -486,9 +499,17 @@ impl ExtensionAdmin {
                 json!({ "name": name, "keys": keys }),
             );
             let (guard, tx) = self.service.begin_locked().await?;
-            let done = self
-                .write_plugin_settings(tx.as_ref(), name, &patch, entry)
-                .await;
+            let done = async {
+                let options: Vec<ObjectRef> = patch
+                    .keys()
+                    .map(|k| ObjectRef::Option(plugin_option(name, k)))
+                    .collect();
+                let cap = Capture::begin(tx.as_ref(), actor, Op::PluginSettings, &options).await?;
+                self.write_plugin_settings(tx.as_ref(), name, &patch, entry)
+                    .await?;
+                cap.finish(tx.as_ref()).await
+            }
+            .await;
             finish_locked(guard, tx, done).await?;
         }
         self.plugin_settings(actor, name).await

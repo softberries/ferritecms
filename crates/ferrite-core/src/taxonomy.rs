@@ -15,6 +15,7 @@ use ferrite_domain::{Taxonomy, Term, TermId, Timestamp, UserId};
 use ferrite_store::{MAX_CONTENT_KINDS, Repos, Store, StoreError, Tx};
 use serde_json::json;
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Area, Capability, require, require_read},
@@ -222,6 +223,7 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
             let (saved, keys) = create_term_in(
                 tx.as_ref(),
                 taxonomy,
@@ -233,6 +235,8 @@ impl TaxonomyService {
             )
             .await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -253,6 +257,7 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
             let (saved, keys) = create_term_in(
                 tx.as_ref(),
                 &input.taxonomy,
@@ -264,6 +269,8 @@ impl TaxonomyService {
             )
             .await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -411,6 +418,8 @@ impl TaxonomyService {
         let explicit = slug.as_deref().map(slug::validate).transpose()?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermUpdate, &[ObjectRef::Term(id)]).await?;
             let current = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
             let tax = get_taxonomy(tx.as_ref(), &current.taxonomy).await?;
             check_flat(&tax, parent)?;
@@ -439,6 +448,7 @@ impl TaxonomyService {
                 }
             }
             emit(tx.as_ref(), &tax, &saved).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -451,6 +461,8 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermDelete, &[ObjectRef::Term(id)]).await?;
             let term = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
             let tax = get_taxonomy(tx.as_ref(), &term.taxonomy).await?;
             let siblings = tx.terms().list(&term.taxonomy, None).await?;
@@ -459,6 +471,7 @@ impl TaxonomyService {
             }
             tx.terms().delete(id).await?;
             emit(tx.as_ref(), &tax, &term).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;

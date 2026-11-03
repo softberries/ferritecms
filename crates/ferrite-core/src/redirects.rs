@@ -11,6 +11,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{MAX_REDIRECTS_BY_TARGET, Repos, Store};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, RowError,
     actor::{Area, Capability, can, require, require_read},
@@ -164,6 +165,11 @@ impl RedirectService {
         check_row(source, target, code)?;
         let tx = self.store.begin().await?;
         let done = async {
+            // The row for `source` (if any) is the object an assistant changes.
+            let existing = tx.redirects().get_by_source(source).await?;
+            let objects: Vec<ObjectRef> =
+                existing.iter().map(|r| ObjectRef::Redirect(r.id)).collect();
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::RedirectCreate, &objects).await?;
             // Creating `source` while its variant is stored would split the two; an
             // existing row for `source` itself (legacy pairs) is changed in place.
             if let Some(other) = toggled(source)
@@ -187,6 +193,10 @@ impl RedirectService {
                 })
                 .await?;
             emit_redirects_changed(tx.as_ref(), [source.to_owned()]).await?;
+            if existing.is_none() {
+                cap.created(ObjectRef::Redirect(saved.id));
+            }
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -213,6 +223,8 @@ impl RedirectService {
         let tx = self.store.begin().await?;
         let done = async {
             let repos = tx.as_ref();
+            let cap = Capture::begin(repos, actor, Op::RedirectUpdate, &[ObjectRef::Redirect(id)])
+                .await?;
             let current = repos
                 .redirects()
                 .get(id)
@@ -255,6 +267,7 @@ impl RedirectService {
                 sources.push(source.to_owned());
             }
             emit_redirects_changed(repos, sources).await?;
+            cap.finish(repos).await?;
             Ok(saved)
         }
         .await;
@@ -384,9 +397,17 @@ impl RedirectService {
         require(actor, Capability::ManageRedirects)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::RedirectDelete,
+                &[ObjectRef::Redirect(id)],
+            )
+            .await?;
             if let Some(r) = tx.redirects().get(id).await? {
                 tx.redirects().delete(id).await?;
                 emit_redirects_changed(tx.as_ref(), [r.source_path]).await?;
+                cap.finish(tx.as_ref()).await?;
             }
             Ok(())
         }
