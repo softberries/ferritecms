@@ -679,7 +679,9 @@ async fn startup_load_failure_is_retried(db: Arc<TestDb>) {
             .since(seq, 10)
             .await
             .unwrap()
-            .is_empty(),
+            .iter()
+            // The daily content health run (M6-4) may finish meanwhile; it names no page.
+            .all(|e| e.kind == ferrite_core::events::HEALTH_COMPLETED),
         "converged without an event"
     );
     eventually(PLUGIN_LOAD, "errors cleared", || {

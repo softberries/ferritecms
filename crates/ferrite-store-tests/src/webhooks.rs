@@ -127,12 +127,15 @@ pub async fn migration_0016_roundtrip(db: &TestDb) {
 
     // Down to 0015 (lossy, M6-2), which stays applied.
     // Every later migration (0018, wave B's) goes with 0016 and comes back.
-    let down = store.migrate_down(15, false).await.unwrap();
+    // Lossy later downs (M6-4's 0019) are taken first, with their own consent.
+    let lossy = store.migrate_down(18, true).await.unwrap();
+    let mut down = store.migrate_down(15, false).await.unwrap();
     assert_eq!(down.last(), Some(&16), "{down:?}");
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
     }
+    down.splice(0..0, lossy);
     let mut up = down.clone();
     up.reverse();
     assert_eq!(store.migrate_up(None).await.unwrap().applied, up);

@@ -451,7 +451,7 @@ async fn settings_patch_over_http(api: Api) -> Api {
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
     let all = r.json();
     let keys: Vec<&String> = all.as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 15, "{all}");
+    assert_eq!(keys.len(), 17, "{all}");
     assert_eq!(all["mcp.enabled"], serde_json::Value::Null, "{all}");
     assert!(all.get("comments.enabled").is_some() && all.get("comments.moderation").is_some());
     assert_eq!(

@@ -91,8 +91,11 @@ pub async fn migration_0018_roundtrip(db: &TestDb) {
 
     // Down to 0017 (a wave-B sibling's, or 0016 before the merge): every later migration
     // goes, 0018 among them, and comes back.
-    let down = store.migrate_down(17, false).await.unwrap();
+    // Lossy later downs (M6-4's 0019) are taken first, with their own consent.
+    let lossy = store.migrate_down(18, true).await.unwrap();
+    let mut down = store.migrate_down(17, false).await.unwrap();
     assert!(down.contains(&18), "{down:?}");
+    down.splice(0..0, lossy);
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
