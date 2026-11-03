@@ -369,11 +369,6 @@ pub(crate) fn label_of(value: &Value) -> String {
     text.chars().take(200).collect()
 }
 
-/// Whether `value` (an image of `kind`) is a content or media snapshot in the trash.
-pub(crate) fn is_trashed(value: &Value) -> bool {
-    value.get("status").and_then(Value::as_str) == Some(ContentStatus::Trash.as_str())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

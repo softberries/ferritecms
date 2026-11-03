@@ -171,66 +171,7 @@ impl ContentTypeService {
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
-        let done = async {
-            let ty = tx.types().get(name).await?.ok_or(CoreError::NotFound)?;
-            if ty.built_in {
-                return Err(CoreError::Invalid("built-in type".into()));
-            }
-            let items = tx
-                .content()
-                .list(&ContentQuery {
-                    kind: Some(ty.name.clone()),
-                    limit: 1,
-                    ..ContentQuery::default()
-                })
-                .await?;
-            if !items.items.is_empty() {
-                return Err(CoreError::Invalid("type has content".into()));
-            }
-            for other in tx.types().list().await? {
-                if other.name == ty.name {
-                    continue;
-                }
-                // A stored schema that no longer parses is not ignored: it might name this
-                // type. Not the request's fault, so plain `Invalid` naming the type (as a
-                // stored permalink option that no longer parses).
-                let defs = fields::schema_of(&other.fields).map_err(|e| {
-                    CoreError::Invalid(format!(
-                        "the stored field schema of type {:?} is unreadable: {e}",
-                        other.name
-                    ))
-                })?;
-                if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
-                    return Err(CoreError::Invalid(format!(
-                        "type is a relation target of type {:?}",
-                        other.name
-                    )));
-                }
-            }
-            if let Some(tax) = tx
-                .taxonomies()
-                .list()
-                .await?
-                .into_iter()
-                .find(|t| t.content_types.contains(&ty.name))
-            {
-                return Err(CoreError::Invalid(format!(
-                    "type is used by taxonomy {:?}",
-                    tax.name
-                )));
-            }
-            tx.types().delete(&ty.name).await?;
-            announce(
-                tx.as_ref(),
-                actor.user,
-                Change::Type,
-                "delete",
-                &ty.name,
-                json!({}),
-            )
-            .await
-        }
-        .await;
+        let done = delete_in(tx.as_ref(), actor.user, name).await;
         finish_locked(guard, tx, done).await
     }
 }
@@ -252,6 +193,64 @@ pub(crate) fn check_new_type(new: &NewType) -> Result<ContentType, CoreError> {
         built_in: false,
         created_at: Timestamp::now(),
     })
+}
+
+/// [`ContentTypeService::delete`] inside the caller's `repos` (which holds
+/// [`LOCK_TYPES`](ferrite_store::LOCK_TYPES)), without the capability check.
+pub(crate) async fn delete_in(
+    repos: &dyn Repos,
+    user: UserId,
+    name: &str,
+) -> Result<(), CoreError> {
+    let ty = repos.types().get(name).await?.ok_or(CoreError::NotFound)?;
+    if ty.built_in {
+        return Err(CoreError::Invalid("built-in type".into()));
+    }
+    let items = repos
+        .content()
+        .list(&ContentQuery {
+            kind: Some(ty.name.clone()),
+            limit: 1,
+            ..ContentQuery::default()
+        })
+        .await?;
+    if !items.items.is_empty() {
+        return Err(CoreError::Invalid("type has content".into()));
+    }
+    for other in repos.types().list().await? {
+        if other.name == ty.name {
+            continue;
+        }
+        // A stored schema that no longer parses is not ignored: it might name this
+        // type. Not the request's fault, so plain `Invalid` naming the type (as a
+        // stored permalink option that no longer parses).
+        let defs = fields::schema_of(&other.fields).map_err(|e| {
+            CoreError::Invalid(format!(
+                "the stored field schema of type {:?} is unreadable: {e}",
+                other.name
+            ))
+        })?;
+        if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
+            return Err(CoreError::Invalid(format!(
+                "type is a relation target of type {:?}",
+                other.name
+            )));
+        }
+    }
+    if let Some(tax) = repos
+        .taxonomies()
+        .list()
+        .await?
+        .into_iter()
+        .find(|t| t.content_types.contains(&ty.name))
+    {
+        return Err(CoreError::Invalid(format!(
+            "type is used by taxonomy {:?}",
+            tax.name
+        )));
+    }
+    repos.types().delete(&ty.name).await?;
+    announce(repos, user, Change::Type, "delete", &ty.name, json!({})).await
 }
 
 /// Registers `ty` (from [`check_new_type`]; `defs` its schema) inside the caller's `Tx`,

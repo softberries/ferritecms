@@ -36,7 +36,7 @@ use crate::{
 const DUE_BATCH: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum Action {
+pub(crate) enum Action {
     Publish,
     /// Publish by the scheduler: the item must be scheduled.
     PublishDue,
@@ -341,7 +341,7 @@ impl ContentService {
     }
 }
 
-async fn transition_in(
+pub(crate) async fn transition_in(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     actor: &Actor,

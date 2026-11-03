@@ -799,7 +799,7 @@ async fn write_install_theme(
     append_audit(repos, audit).await
 }
 
-async fn write_activate_theme(
+pub(crate) async fn write_activate_theme(
     repos: &dyn Repos,
     name: &str,
     expected: &ferrite_domain::ArtifactHash,
@@ -1012,7 +1012,7 @@ pub(crate) fn manifest_publisher(manifest: &Value) -> String {
         .to_owned()
 }
 
-async fn write_plugin_enabled(
+pub(crate) async fn write_plugin_enabled(
     repos: &dyn Repos,
     name: &str,
     enabled: bool,

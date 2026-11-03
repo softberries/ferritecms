@@ -62,6 +62,7 @@ impl Capture {
     }
 
     /// Whether this capture records anything.
+    #[cfg(test)]
     pub(crate) fn is_active(&self) -> bool {
         self.active.is_some()
     }

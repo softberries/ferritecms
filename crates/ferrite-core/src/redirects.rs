@@ -580,6 +580,60 @@ fn check_row(source: &str, target: &str, code: u16) -> Result<(), CoreError> {
 }
 
 /// The loop and chain rules for `source` → `target` against the redirects `repos` holds.
+/// Reverts redirect `id` to `before` (design 17 §7.3): `None` deletes it; otherwise the
+/// row is written again with its id, source, target, code and origin after the loop
+/// check (hits and times kept from the current row). A source another redirect holds is
+/// "source taken". Emits the `redirect:` keys of the old and the restored source.
+pub(crate) async fn restore_in(
+    repos: &dyn Repos,
+    id: RedirectId,
+    before: Option<&Redirect>,
+) -> Result<(), CoreError> {
+    let current = repos.redirects().get(id).await?;
+    let mut sources = Vec::new();
+    match before {
+        None => {
+            if let Some(c) = current {
+                repos.redirects().delete(id).await?;
+                sources.push(c.source_path);
+            }
+        }
+        Some(b) => {
+            check_row(&b.source_path, &b.target, b.code)?;
+            if repos
+                .redirects()
+                .get_by_source(&b.source_path)
+                .await?
+                .is_some_and(|other| other.id != id)
+            {
+                return Err(source_taken());
+            }
+            if let Some(c) = &current {
+                repos.redirects().delete(id).await?;
+                sources.push(c.source_path.clone());
+            }
+            check_chain(repos, &b.source_path, &b.target).await?;
+            let row = Redirect {
+                id,
+                hits: current.as_ref().map_or(0, |c| c.hits),
+                created_at: current
+                    .as_ref()
+                    .map_or_else(Timestamp::now, |c| c.created_at),
+                last_hit_at: current.as_ref().and_then(|c| c.last_hit_at),
+                ..b.clone()
+            };
+            let saved = repos.redirects().upsert(&row).await?;
+            if saved.id != id {
+                return Err(source_taken());
+            }
+            if !sources.contains(&b.source_path) {
+                sources.push(b.source_path.clone());
+            }
+        }
+    }
+    emit_redirects_changed(repos, sources).await
+}
+
 async fn check_chain(repos: &dyn Repos, source: &str, target: &str) -> Result<(), CoreError> {
     let ours = variants(source);
     let mut at = target.to_owned();
