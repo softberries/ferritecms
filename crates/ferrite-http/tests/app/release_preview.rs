@@ -228,6 +228,39 @@ async fn item_link_opens_without_session(app: App) -> App {
     assert!(r.body.contains("<h1>Shared draft</h1>"));
     assert!(r.body.contains("aria-label=\"Preview\""));
     assert_preview_headers(&r);
+    // The editor's live preview: the creator's autosave over the item (P7: the iframe
+    // loads through a link).
+    let ada = ferrite_core::Actor::new(app.ada_user.id, Role::Author);
+    app.svc
+        .put_autosave(
+            &ada,
+            it.id,
+            AutosaveDraft {
+                base_version: it.version,
+                title: "Typed in the editor".into(),
+                excerpt: None,
+                slug: None,
+                parent_id: None,
+                menu_order: None,
+                terms: None,
+                body: json!({"type": "doc", "content": []}),
+                fields: json!({}),
+                seo: None,
+            },
+        )
+        .await
+        .unwrap();
+    let (_, mine) = ed
+        .links
+        .create(&ada, PreviewTarget::Item(it.id), Some(1))
+        .await
+        .unwrap();
+    let r = app.get(&format!("/_preview/link/{mine}?working=1")).await;
+    assert!(
+        r.body.contains("<h1>Typed in the editor</h1>"),
+        "{}",
+        r.body
+    );
     app
 }
 

@@ -246,7 +246,10 @@ pub(crate) async fn link(
             let view = Arc::new(state.preview_view(state.store.clone(), None));
             let path = format!("/_preview/link/{token}");
             let route = Route::Preview { id };
-            match pipeline::preview(view, route, path, p.actor, id, PreviewKind::Stored).await {
+            // `?working=1`: the creator's autosave slot (the editor's live preview loads
+            // through a link, P7 D16); `?release=<id>`: an entry's staged change.
+            let kind = kind_of(raw_query);
+            match pipeline::preview(view, route, path, p.actor, id, kind).await {
                 Ok(page) => with_bar(
                     &page,
                     &PreviewBar {
