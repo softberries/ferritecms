@@ -28,7 +28,7 @@
   </div>
 </header>
 {%- if request.preview %}
-<p class="preview-notice" role="status"><span class="wrap">{{ t("Preview: this content is not published.") }}</span></p>
+<p class="preview-notice" role="status"><span class="wrap">{{ t("Preview: this content is not published.") }}{% if request.preview_release %} ({{ request.preview_release }}){% endif %}</span></p>
 {%- endif %}
 <main id="content" class="site-main" tabindex="-1">
 {% block content %}{% endblock %}

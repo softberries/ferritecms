@@ -139,9 +139,21 @@ pub(crate) async fn preview(
     path: String,
     actor: Actor,
     id: ContentId,
+    kind: PreviewKind,
 ) -> Result<CachedPage, NotFound> {
-    let result = preview_route(&state, &route, &path, &actor, id).await;
+    let result = preview_route(&state, &route, &path, &actor, id, kind).await;
     outcome(&state, &path, result).await
+}
+
+/// Which state of the item a preview shows (design 15 §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreviewKind {
+    /// As stored.
+    Stored,
+    /// The caller's autosave slot over it (`?working=1`).
+    Working,
+    /// The staged change of its entry in a release (`?release=<id>`).
+    Staged(ferrite_domain::ReleaseId),
 }
 
 async fn outcome(
@@ -221,10 +233,16 @@ async fn preview_route(
     path: &str,
     actor: &Actor,
     id: ContentId,
+    kind: PreviewKind,
 ) -> Result<Option<CachedPage>, RenderError> {
     let slot = acquire_slot(state).await?;
     let until = budget_end(state.config.render_budget);
-    let read = match state.reader.preview(actor, id).await {
+    let read = match kind {
+        PreviewKind::Stored => state.reader.preview(actor, id).await,
+        PreviewKind::Working => state.reader.preview_working(actor, id).await,
+        PreviewKind::Staged(release) => state.reader.preview_staged(actor, id, release).await,
+    };
+    let read = match read {
         Ok(read) => read,
         Err(CoreError::NotFound | CoreError::Forbidden(_)) => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -297,6 +315,7 @@ async fn finish(
         Some(until) => req.until(until),
         None => req,
     };
+    let req = req.read_only(state.read_only_plugins);
     let mut trace = RenderTrace::default();
     if let Some(item) = item.as_mut() {
         filter_item(&state.plugins, item, &req, &mut trace).await;
@@ -349,7 +368,8 @@ async fn finish(
         head_html,
         footer_html,
         status: 200,
-        preview,
+        preview: preview || state.preview_release.is_some(),
+        preview_release: state.preview_release.clone(),
     };
     let bridge = Arc::new(BlockingBridge::new(
         Handle::current(),
@@ -630,7 +650,7 @@ async fn load(
         Route::Feed(_) | Route::Sitemap(_) | Route::Robots => None,
         Route::Media { .. } | Route::Theme { .. } => None,
         // Answered by the handler through `preview`, never through the cache.
-        Route::Preview { .. } => None,
+        Route::Preview { .. } | Route::PreviewLink { .. } | Route::PreviewExit => None,
         Route::Canonical(_) | Route::Health | Route::Ready | Route::NotFound => None,
     };
     Ok(shown.map(Loaded::Shown))

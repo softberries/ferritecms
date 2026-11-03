@@ -239,6 +239,13 @@ pub enum Route {
     Preview {
         id: ContentId,
     },
+    /// `/_preview/link/<token>`: a signed preview link (M6-3, design 15 §7); exactly
+    /// `ferp_` + 43 base64url characters.
+    PreviewLink {
+        token: String,
+    },
+    /// `/_preview/exit`: leaves a whole-site preview (clears its cookie).
+    PreviewExit,
     /// Try in order; see the module docs for the handler's permalink check.
     Content(Vec<Candidate>),
     NotFound,
@@ -371,6 +378,8 @@ pub fn resolve_localized(
         | Route::Media { .. }
         | Route::Theme { .. }
         | Route::Preview { .. }
+        | Route::PreviewLink { .. }
+        | Route::PreviewExit
         | Route::NotFound => Route::NotFound,
         Route::Canonical(to) => Route::Canonical(format!("/{prefix}{to}")),
         _ if first != prefix => Route::Canonical(with_query(format!("/{prefix}{rest}"))),
@@ -385,6 +394,14 @@ pub fn resolve_localized(
 /// `<id>` of `/_preview/<id>`: exactly the 36-character lowercase hyphenated form
 /// (`Uuid::parse_str` alone would also take upper case, braces and `urn:uuid:`).
 fn preview(rest: &str) -> Option<Route> {
+    if rest == "exit" {
+        return Some(Route::PreviewExit);
+    }
+    if let Some(token) = rest.strip_prefix("link/") {
+        return ferrite_core::preview_link::is_token(token).then(|| Route::PreviewLink {
+            token: token.to_owned(),
+        });
+    }
     let shape = rest.len() == 36
         && rest.bytes().enumerate().all(|(i, b)| match i {
             8 | 13 | 18 | 23 => b == b'-',

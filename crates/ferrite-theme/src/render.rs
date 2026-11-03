@@ -223,6 +223,9 @@ pub struct RenderContext {
     pub footer_html: String,
     pub status: u16,
     pub preview: bool,
+    /// The title of the release a whole-site preview shows (`request.preview_release`,
+    /// M6-3); `None` otherwise.
+    pub preview_release: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -551,6 +554,7 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
             page => ctx.request.page.max(1),
             status => ctx.status,
             preview => ctx.preview,
+            preview_release => ctx.preview_release,
         },
     );
     let head = ctx.head_html;

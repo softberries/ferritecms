@@ -15614,6 +15614,9 @@
           "detail": {
             "type": "string"
           },
+          "entries": {
+            "description": "One `{item, outcome, …}` per release entry (`EntryCheckDto`); only on\n`release-conflict` and `release-not-ready` (409)."
+          },
           "errors": {
             "type": "array",
             "items": {

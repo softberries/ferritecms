@@ -524,6 +524,16 @@ async fn boot(
                 .with_job_totals(move || (jobs.done(), jobs.failed())),
         )
     };
+    // The API's services; `content` also runs the scheduled-publishing jobs.
+    let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks.clone()));
+    let releases = Arc::new(ferrite_core::release::ReleaseService::new(
+        store.clone(),
+        dyn_permalinks.clone(),
+        content.clone(),
+    ));
+    let preview_links = Arc::new(ferrite_core::preview_link::PreviewLinkService::new(
+        store.clone(),
+    ));
     let state = Arc::new(
         AppState::new(AppParts {
             store: store.clone(),
@@ -541,20 +551,14 @@ async fn boot(
         .with_served(served.clone())
         .with_hits(hits.clone())
         .with_comments(comments.clone())
-        .with_metrics(metrics.clone()),
+        .with_metrics(metrics.clone())
+        .with_editorial(releases.clone(), preview_links.clone()),
     );
 
     let status = Arc::new(NodeStatus::default());
     status.set_theme(&loaded, loaded.error.as_deref(), loaded.fallback);
     status.set_plugins(&report);
 
-    // The API's services; `content` also runs the scheduled-publishing jobs.
-    let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks.clone()));
-    let releases = Arc::new(ferrite_core::release::ReleaseService::new(
-        store.clone(),
-        dyn_permalinks.clone(),
-        content.clone(),
-    ));
     // The node's import service (M3-2): enqueues and reads imports, checks the job's
     // importer and stores run reports in the media store. The `import.wordpress` job
     // and the API share it.

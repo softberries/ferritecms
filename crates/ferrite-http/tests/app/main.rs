@@ -25,6 +25,7 @@ mod metrics;
 mod plugin_route;
 mod preview;
 mod protocol;
+mod release_preview;
 mod reload_race;
 mod served;
 mod tree;

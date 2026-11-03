@@ -98,6 +98,7 @@ pub mod hits;
 pub mod media;
 mod pipeline;
 mod plugin_route;
+pub(crate) mod preview;
 mod response;
 mod state;
 pub mod theme_asset;

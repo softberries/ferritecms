@@ -74,6 +74,46 @@ pub fn read_session_cookie(headers: &HeaderMap, secure: bool) -> Option<&str> {
         .filter(|v| !v.is_empty())
 }
 
+/// The whole-site preview cookie's name (M6-3, design 15 §5.3): `__Host-ferrite_preview`
+/// on an `https` site, `ferrite_preview` on an `http` one.
+pub fn preview_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        "__Host-ferrite_preview"
+    } else {
+        "ferrite_preview"
+    }
+}
+
+/// `Set-Cookie` of a preview token living `max_age` seconds (`0` clears it). Preview
+/// tokens are `ferp_` + base64url: always a valid header value.
+pub fn preview_cookie(token: &str, max_age: u64, secure: bool) -> HeaderValue {
+    let name = preview_cookie_name(secure);
+    let flag = if secure { "; Secure" } else { "" };
+    let text = format!("{name}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}{flag}");
+    HeaderValue::from_str(&text).unwrap_or_else(|_| {
+        HeaderValue::from_static(if secure {
+            "__Host-ferrite_preview=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+        } else {
+            "ferrite_preview=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+        })
+    })
+}
+
+/// The value of the preview cookie, if any.
+pub fn read_preview_cookie(headers: &HeaderMap, secure: bool) -> Option<&str> {
+    let wanted = preview_cookie_name(secure);
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|line| line.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name.trim() == wanted).then(|| value.trim().trim_matches('"'))
+        })
+        .filter(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -211,6 +211,14 @@ pub struct AppState {
     /// [`HttpConfig::media_origin`]) and the fixed security headers.
     pub(crate) admin_headers: AdminHeaders,
     renders: AtomicU64,
+    /// Releases and preview links (M6-3): the link and whole-site previews. `None`:
+    /// both answer the 404 page.
+    pub(crate) editorial: Option<Arc<super::preview::Editorial>>,
+    /// The release title a whole-site preview view shows (`request.preview_release`);
+    /// `None` on the live state.
+    pub(crate) preview_release: Option<String>,
+    /// Plugin writes are refused (a link or whole-site preview view, D12).
+    pub(crate) read_only_plugins: bool,
 }
 
 impl AppState {
@@ -239,6 +247,9 @@ impl AppState {
                     .min(Semaphore::MAX_PERMITS),
             )),
             renders: AtomicU64::new(0),
+            editorial: None,
+            preview_release: None,
+            read_only_plugins: false,
             origin: crate::api::origin_of(&parts.config.site_url)
                 .ok()
                 .map(|(origin, _)| origin),
@@ -288,6 +299,60 @@ impl AppState {
     /// The registry of [`with_metrics`](Self::with_metrics), if any.
     pub fn metrics(&self) -> Option<&Arc<Metrics>> {
         self.metrics.as_ref()
+    }
+
+    /// Link and whole-site previews (M6-3) use `releases` and `links`; at most
+    /// [`PREVIEW_SLOTS`](super::preview::preview_slots) release previews render at once
+    /// on this node.
+    pub fn with_editorial(
+        mut self,
+        releases: Arc<ferrite_core::release::ReleaseService>,
+        links: Arc<ferrite_core::preview_link::PreviewLinkService>,
+    ) -> Self {
+        self.editorial = Some(Arc::new(super::preview::Editorial::new(
+            releases,
+            links,
+            self.store.backend(),
+        )));
+        self
+    }
+
+    /// A view of this state reading through `store` (a preview's sandbox or the live
+    /// store) for one preview request (design 15 §9.4): the same theme, routes, plugins
+    /// and config; no cache writes, no counters, plugin writes refused.
+    pub(crate) fn preview_view(
+        &self,
+        store: Arc<dyn Store>,
+        release_title: Option<String>,
+    ) -> AppState {
+        AppState {
+            reader: Arc::new(self.reader.with_store(store.clone())),
+            redirects: Arc::new(RedirectService::new(store.clone())),
+            store,
+            plugins: self.plugins.clone(),
+            media: self.media.clone(),
+            theme: ArcSwap::new(self.theme.load_full()),
+            previous_theme: ArcSwapOption::empty(),
+            cache: self.cache.clone(),
+            routes: ArcSwap::new(self.routes.load_full()),
+            config: self.config.clone(),
+            migrations_ok: self.migrations_ok,
+            auth: self.auth.clone(),
+            renderer: self.renderer.clone(),
+            render_slots: self.render_slots.clone(),
+            origin: self.origin.clone(),
+            cookie_secure: self.cookie_secure,
+            served: None,
+            hits: None,
+            metrics: None,
+            comments: self.comments.clone(),
+            admin: self.admin.clone(),
+            admin_headers: self.admin_headers.clone(),
+            renders: AtomicU64::new(0),
+            editorial: None,
+            preview_release: release_title,
+            read_only_plugins: true,
+        }
     }
 
     /// Theme-form comments (`POST /_comment`) go to `comments`, the node's one

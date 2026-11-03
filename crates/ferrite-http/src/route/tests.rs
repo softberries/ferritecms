@@ -401,6 +401,20 @@ fn preview_paths() {
                 (&format!("/_preview/{ID}"), preview.clone()),
                 (&format!("/_preview/{ID}?x=1"), preview.clone()),
                 (&format!("/_preview/{ID}/"), Route::NotFound),
+                ("/_preview/exit", Route::PreviewExit),
+                ("/_preview/exit/", Route::NotFound),
+                (
+                    "/_preview/link/ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    Route::PreviewLink {
+                        token: "ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                    },
+                ),
+                ("/_preview/link/ferp_short", Route::NotFound),
+                (
+                    "/_preview/link/ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+",
+                    Route::NotFound,
+                ),
+                ("/_preview/link/", Route::NotFound),
                 (&format!("/_preview/{upper}"), Route::NotFound),
                 (&format!("/_preview/{simple}"), Route::NotFound),
                 (&format!("/_preview/{{{ID}}}"), Route::NotFound),
