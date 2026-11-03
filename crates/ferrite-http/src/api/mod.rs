@@ -46,6 +46,8 @@ pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
 pub mod redirects;
+pub mod releases;
+pub mod reviews;
 pub mod settings;
 mod state;
 pub mod system;
@@ -276,6 +278,44 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(webhooks::get_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook))
+        // M6-3: releases, preview links, workflows and reviews.
+        .routes(routes!(releases::list_releases, releases::create_release))
+        .routes(routes!(
+            releases::get_release,
+            releases::update_release,
+            releases::delete_release
+        ))
+        .routes(routes!(releases::add_release_item))
+        .routes(routes!(
+            releases::put_release_item,
+            releases::delete_release_item
+        ))
+        .routes(routes!(releases::rebase_release_item))
+        .routes(routes!(releases::submit_release_item))
+        .routes(routes!(releases::check_release))
+        .routes(routes!(releases::schedule_release))
+        .routes(routes!(releases::unschedule_release))
+        .routes(routes!(releases::apply_release))
+        .routes(routes!(
+            releases::list_release_preview_links,
+            releases::create_release_preview_link
+        ))
+        .routes(routes!(
+            releases::list_content_preview_links,
+            releases::create_content_preview_link
+        ))
+        .routes(routes!(releases::revoke_preview_link))
+        .routes(routes!(reviews::list_workflows))
+        .routes(routes!(
+            reviews::get_workflow,
+            reviews::put_workflow,
+            reviews::delete_workflow
+        ))
+        .routes(routes!(reviews::list_reviews))
+        .routes(routes!(reviews::get_review))
+        .routes(routes!(reviews::decide_review))
+        .routes(routes!(reviews::assign_review))
+        .routes(routes!(reviews::withdraw_review))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

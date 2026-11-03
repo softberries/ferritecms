@@ -33,6 +33,7 @@ mod plugins_trust;
 mod redirect_search;
 #[path = "../support/registry_fixture.rs"]
 mod registry_fixture;
+mod releases;
 mod reset;
 mod sessions;
 mod settings_ext;

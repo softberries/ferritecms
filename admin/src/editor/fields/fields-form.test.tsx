@@ -47,6 +47,9 @@ function item(fields: Record<string, unknown>, version = 3): SchemaContentDto {
       submit: false,
       trash: true,
       trash_undoable: true,
+      needs_approval: false,
+      stage: false,
+      override: false,
       unpublish: false,
     },
   };

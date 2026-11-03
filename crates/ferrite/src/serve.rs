@@ -653,6 +653,11 @@ async fn boot(
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
             webhooks: webhooks.clone(),
+            editorial: ferrite_http::api::releases::EditorialApi::new(
+                store.clone(),
+                releases.clone(),
+                preview_links.clone(),
+            ),
         })
         .context("site.url")?,
     );

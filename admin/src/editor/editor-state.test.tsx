@@ -44,6 +44,9 @@ function item(version: number, text: string): SchemaContentDto {
       submit: false,
       trash: true,
       trash_undoable: true,
+      needs_approval: false,
+      stage: false,
+      override: false,
       unpublish: false,
     },
   };

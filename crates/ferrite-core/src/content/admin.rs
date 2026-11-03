@@ -491,7 +491,7 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
-            crate::release::check_unlocked(tx.as_ref(), id).await?;
+            super::live_edit_checks(tx.as_ref(), actor, id).await?;
             let rev = tx
                 .revisions()
                 .get(rid)
@@ -499,7 +499,6 @@ impl ContentService {
                 .filter(|r| r.item_id == id)
                 .ok_or(CoreError::NotFound)?;
             let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
-            crate::workflow::gate::require_live_edit(tx.as_ref(), actor, &current).await?;
             let terms = tx
                 .terms()
                 .for_item(id)

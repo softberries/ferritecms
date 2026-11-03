@@ -347,10 +347,7 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
-            crate::release::check_unlocked(tx.as_ref(), id).await?;
-            if let Some(current) = tx.content().get(id).await? {
-                crate::workflow::gate::require_live_edit(tx.as_ref(), actor, &current).await?;
-            }
+            live_edit_checks(tx.as_ref(), actor, id).await?;
             self.update_in(
                 tx.as_ref(),
                 rules.as_ref(),
@@ -480,6 +477,22 @@ impl ContentService {
         tx.autosaves().delete(id, actor.user).await?;
         Ok(saved)
     }
+}
+
+/// The checks of a public in-place edit of item `id` (M6-3): not in a scheduled release
+/// (`Locked`), and in a workflow type a public item only by an approver (P7, audited) or
+/// else `StagingRequired`. Release apply, imports and seed write through `update_in`
+/// without them.
+pub(crate) async fn live_edit_checks(
+    tx: &dyn Repos,
+    actor: &Actor,
+    id: ContentId,
+) -> Result<(), CoreError> {
+    crate::release::check_unlocked(tx, id).await?;
+    if let Some(current) = tx.content().get(id).await? {
+        crate::workflow::gate::require_live_edit(tx, actor, &current).await?;
+    }
+    Ok(())
 }
 
 /// The redirects of an update of `current` (its terms then were `old_term_rows`) to

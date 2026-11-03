@@ -58,6 +58,12 @@ pub struct ContentDto {
     pub translation_group: Uuid,
     /// The other members of the item's translation group the caller may read.
     pub translations: Vec<TranslationRefDto>,
+    /// The open review, in a type with an approval workflow (M6-3).
+    pub review: Option<super::editorial::ReviewSummaryDto>,
+    /// Releases (not applied) holding the item that the caller may see, at most 10;
+    /// left out when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<super::editorial::ReleaseRefDto>,
 }
 
 /// Another item of a translation group.
@@ -93,6 +99,8 @@ impl ContentDto {
             locale: item.locale.clone(),
             translation_group: item.translation_group.as_uuid(),
             translations: Vec::new(),
+            review: None,
+            releases: Vec::new(),
             id: item.id.as_uuid(),
             kind: item.kind,
             status: item.status.as_str().to_owned(),
@@ -310,6 +318,13 @@ pub struct AllowedActionsDto {
     /// `DELETE` is allowed and `restore` would be once the item is trashed (the admin's
     /// Undo after a trash).
     pub trash_undoable: bool,
+    /// Publish or schedule would be allowed but the workflow's approval is missing.
+    pub needs_approval: bool,
+    /// A public item of a workflow type: change it through a release.
+    pub stage: bool,
+    /// An admin may publish without the approval, with `override_reason`.
+    #[serde(rename = "override")]
+    pub override_: bool,
 }
 
 impl From<AllowedActions> for AllowedActionsDto {
@@ -324,6 +339,9 @@ impl From<AllowedActions> for AllowedActionsDto {
             restore: a.restore,
             delete: a.delete,
             trash_undoable: a.trash_undoable,
+            needs_approval: a.needs_approval,
+            stage: a.stage,
+            override_: a.r#override,
         }
     }
 }
@@ -542,6 +560,10 @@ impl ContentPatch {
 pub struct ScheduleRequest {
     /// When to publish; must lie in the future.
     pub at: DateTime<Utc>,
+    /// Admins only, in a type with an approval workflow: schedules without the
+    /// approval (1 to 500 characters, audited; M6-3).
+    #[serde(default)]
+    pub override_reason: Option<String>,
 }
 
 /// A revision in a list: who saved it and when, without the content.

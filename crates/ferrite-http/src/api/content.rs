@@ -65,9 +65,10 @@ use super::{
         RevisionSummaryDto, ScheduleRequest, TranslateInput, TranslationCreated, TranslationRefDto,
         TranslationStatusDto,
     },
+    dto::editorial::{OverrideInput, SubmitInput},
     extract::{
-        ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
-        invalid_cursor, invalid_param,
+        ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, OptionalJson, check_limit, created,
+        etag, invalid_cursor, invalid_param,
     },
     list,
     problem::{Problem, ProblemDocument},
@@ -269,8 +270,11 @@ pub(crate) async fn dto(
             title: r.title,
         });
     }
+    let releases = api.editorial.releases.releases_of(actor, item.id).await?;
     let mut dto = ContentDto::new(item, terms, permalink, author, allowed, seo);
     dto.translations = translations;
+    dto.review = wf.review.map(Into::into);
+    dto.releases = releases.into_iter().map(Into::into).collect();
     Ok(dto)
 }
 
@@ -713,6 +717,7 @@ async fn transition(
     operation_id = "publish_content",
     security(("session" = []), ("bearer" = [])),
     params(("type" = String, Path), ("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
+    request_body(content = Option<OverrideInput>, description = "Optional; `override_reason` (admins) publishes a workflow type's item without its approval"),
     responses(
         (status = 200, description = "Published (from draft, pending or scheduled; `ETag`)", body = ContentDto),
         (status = 403, description = "`forbidden` (`publish_own`, `publish_others`, `content:write`) or `csrf`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -729,8 +734,18 @@ pub async fn publish_content(
     who: Authed,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
     IfMatch(version): IfMatch,
+    OptionalJson(input): OptionalJson<OverrideInput>,
 ) -> Result<Response, Problem> {
-    transition(&api, &who, &kind, id, version, Transition::Publish).await
+    let Some(reason) = input.override_reason else {
+        return transition(&api, &who, &kind, id, version, Transition::Publish).await;
+    };
+    let actor = &who.0.actor;
+    let id = load(&api, actor, &kind, id).await?.id;
+    let result = api
+        .content
+        .publish_with_override(actor, id, version, Some(reason))
+        .await;
+    written(&api, actor, id, result).await
 }
 
 #[utoipa::path(
@@ -767,6 +782,7 @@ pub async fn unpublish_content(
     operation_id = "submit_content",
     security(("session" = []), ("bearer" = [])),
     params(("type" = String, Path), ("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
+    request_body(content = Option<SubmitInput>, description = "Optional; in a type with a workflow, the first step's reviewers and a note"),
     responses(
         (status = 200, description = "Submitted for review (draft to pending; `ETag`)", body = ContentDto),
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
@@ -783,8 +799,15 @@ pub async fn submit_content(
     who: Authed,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
     IfMatch(version): IfMatch,
+    OptionalJson(input): OptionalJson<SubmitInput>,
 ) -> Result<Response, Problem> {
-    transition(&api, &who, &kind, id, version, Transition::Submit).await
+    let actor = &who.0.actor;
+    let id = load(&api, actor, &kind, id).await?.id;
+    let result = api
+        .content
+        .submit_with(actor, id, version, input.into())
+        .await;
+    written(&api, actor, id, result).await
 }
 
 #[utoipa::path(
@@ -843,7 +866,10 @@ pub async fn schedule_content(
     let actor = &who.actor;
     let id = load(&api, actor, &kind, id).await?.id;
     let at = Timestamp::from(req.at);
-    let result = api.content.schedule(actor, id, version, at).await;
+    let result = api
+        .content
+        .schedule_with_override(actor, id, version, at, req.override_reason)
+        .await;
     written(&api, actor, id, result).await
 }
 

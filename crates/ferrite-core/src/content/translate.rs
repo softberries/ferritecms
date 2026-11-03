@@ -355,14 +355,18 @@ impl ContentService {
     ) -> Result<ContentItem, CoreError> {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = relocate_in(
-            tx.as_ref(),
-            rules.as_ref(),
-            actor,
-            id,
-            expected_version,
-            change,
-        )
+        let done = async {
+            super::live_edit_checks(tx.as_ref(), actor, id).await?;
+            relocate_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                id,
+                expected_version,
+                change,
+            )
+            .await
+        }
         .await;
         finish(tx, done).await
     }
@@ -381,6 +385,7 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            super::live_edit_checks(tx.as_ref(), actor, id).await?;
             let saved = self
                 .update_in(
                     tx.as_ref(),

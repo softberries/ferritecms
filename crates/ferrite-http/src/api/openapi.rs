@@ -42,6 +42,9 @@ pub const HOST_SESSION_COOKIE: &str = "__Host-ferrite_session";
         (name = "import", description = "WordPress imports: start from an upload, poll the job, read runs and reports"),
         (name = "oauth", description = "AI assistants: the consent screen's pending authorization requests and the connected apps (OAuth grants)"),
         (name = "webhooks", description = "Outgoing webhooks: endpoints, the event catalogue, test deliveries, secret rotation, the delivery log and redelivery (admins)"),
+        (name = "releases", description = "Releases: staged changes applied together, now or on a schedule; whole-site previews and signed preview links"),
+        (name = "workflows", description = "Approval workflows per content type (admins configure)"),
+        (name = "reviews", description = "Reviews: the queue, decisions, assignees, withdrawal"),
     ),
 )]
 pub struct ApiDoc;

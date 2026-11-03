@@ -354,6 +354,7 @@ impl Api {
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
                 webhooks: webhook_service(store.clone()),
+                editorial: editorial_api(store.clone()),
             })
             .expect("api state"),
         );
@@ -539,6 +540,7 @@ impl Api {
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
             webhooks: a.webhooks.clone(),
+            editorial: a.editorial.clone(),
         }
     }
 
@@ -595,6 +597,7 @@ impl Api {
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
                 webhooks: webhook_service(store.clone()),
+                editorial: editorial_api(store.clone()),
             })
             .expect("api state"),
         );
@@ -1154,6 +1157,21 @@ macro_rules! api_tests {
             }
         }
     )*};
+}
+
+/// The editorial services of the API tests (M6-3).
+pub fn editorial_api(store: Arc<dyn Store>) -> ferrite_http::api::releases::EditorialApi {
+    let rules = Arc::new(PermalinkRules::default());
+    let content = Arc::new(ContentService::new(store.clone(), rules.clone()));
+    ferrite_http::api::releases::EditorialApi::new(
+        store.clone(),
+        Arc::new(ferrite_core::release::ReleaseService::new(
+            store.clone(),
+            rules,
+            content,
+        )),
+        Arc::new(ferrite_core::preview_link::PreviewLinkService::new(store)),
+    )
 }
 
 /// The webhook service of the API tests: any address allowed (the transport is a fake

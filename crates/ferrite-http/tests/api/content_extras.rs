@@ -33,6 +33,10 @@ fn allowed(names: &[&str]) -> Value {
         "restore",
         "delete",
         "trash_undoable",
+        // M6-3: workflow flags (no workflow here: always false).
+        "needs_approval",
+        "stage",
+        "override",
     ];
     all.iter()
         .map(|n| ((*n).to_owned(), Value::Bool(names.contains(n))))

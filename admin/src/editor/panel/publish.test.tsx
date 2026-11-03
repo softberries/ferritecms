@@ -44,6 +44,9 @@ const NONE: SchemaAllowedActionsDto = {
   unpublish: false,
   trash: false,
   trash_undoable: false,
+  needs_approval: false,
+  stage: false,
+  override: false,
   restore: false,
   delete: false,
 };

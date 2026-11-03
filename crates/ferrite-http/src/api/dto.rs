@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 pub mod auth;
 pub mod comments;
 pub mod content;
+pub mod editorial;
 pub mod extensions;
 pub mod import;
 pub mod media;
