@@ -23,6 +23,7 @@ pub mod oauth;
 mod options;
 pub mod permalink;
 mod redirects;
+pub mod release;
 pub mod seed;
 pub mod settings;
 pub mod site;
