@@ -79,6 +79,8 @@ backend_tests!(
     approver_revert_in_place_edit_audits_bypass,
     non_approver_revert_of_live_edit_needs_staging,
     revert_unpublish_then_edit_in_workflow_type,
+    agent_release_schedule_is_recorded_and_revert_unschedules,
+    revert_of_applied_release_schedule_is_refused,
 );
 
 async fn revert_create_trashes_the_item(db: &TestDb) {
@@ -1468,5 +1470,122 @@ async fn revert_unpublish_then_edit_in_workflow_type(db: &TestDb) {
     assert_eq!(
         (now.title.as_str(), now.status),
         ("Mine", ContentStatus::Draft)
+    );
+}
+
+fn in_an_hour() -> Timestamp {
+    Timestamp::from_micros(Timestamp::now().as_micros() + 3_600_000_000).unwrap()
+}
+
+/// A release with one publish entry that the agent scheduled (P8a), and its time.
+async fn agent_scheduled_release(
+    s: &Site,
+) -> (
+    ferrite_core::release::ReleaseService,
+    ferrite_domain::Release,
+    Timestamp,
+) {
+    use ferrite_core::release::{EntryInput, NewRelease, ReleaseService};
+    let releases = ReleaseService::new(s.store.clone(), s.rules.clone(), s.content.clone());
+    let item = s
+        .content
+        .create(&s.admin, draft("post", "Batched"))
+        .await
+        .unwrap();
+    let r = releases
+        .create(
+            &s.admin,
+            NewRelease {
+                title: "Launch".into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let r = releases
+        .stage(
+            &s.admin,
+            r.id,
+            r.version,
+            EntryInput {
+                item: item.id,
+                transition: ferrite_domain::EntryTransition::Publish,
+                changes: None,
+            },
+        )
+        .await
+        .unwrap();
+    let at = in_an_hour();
+    let r = releases
+        .schedule(&s.agent, r.id, r.version, at, None)
+        .await
+        .unwrap();
+    (releases, r, at)
+}
+
+async fn agent_release_schedule_is_recorded_and_revert_unschedules(db: &TestDb) {
+    let s = site(db).await;
+    let (_, r, _) = agent_scheduled_release(&s).await;
+    let changes = s.changes().await;
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(
+        (changes[0].op.as_str(), changes[0].object_kind.as_str()),
+        ("release.schedule", "release")
+    );
+    assert_eq!(changes[0].object_id, r.id.to_string());
+    assert_eq!(changes[0].label, "Launch");
+    let set = only_set(&s).await;
+    service(&s).revert(&s.admin, set, all()).await.unwrap();
+    let now = s.store.read().releases().get(r.id).await.unwrap().unwrap();
+    assert_eq!(now.status, ferrite_domain::ReleaseStatus::Open);
+    assert_eq!(now.scheduled_at, None);
+    let entries = s.store.read().releases().entries(r.id).await.unwrap();
+    assert_eq!(
+        s.store
+            .read()
+            .releases()
+            .lock_of(entries[0].item_id)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+async fn revert_of_applied_release_schedule_is_refused(db: &TestDb) {
+    let s = site(db).await;
+    let (releases, r, at) = agent_scheduled_release(&s).await;
+    // The job applies it as the person who scheduled it.
+    assert!(releases.apply_scheduled(r.id, at).await.unwrap());
+    let set = only_set(&s).await;
+    let (seq, error) = failed(
+        service(&s)
+            .revert(
+                &s.admin,
+                set,
+                RevertRequest {
+                    force: true,
+                    ..all()
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(seq, 1);
+    match error {
+        CoreError::Invalid(msg) => {
+            assert!(msg.contains("applied") && msg.contains("editor"), "{msg}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        s.store
+            .read()
+            .releases()
+            .get(r.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ferrite_domain::ReleaseStatus::Applied
     );
 }

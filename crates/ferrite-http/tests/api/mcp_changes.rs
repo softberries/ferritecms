@@ -228,7 +228,7 @@ fn id(v: &Value) -> String {
 
 /// Every tool whose annotations say `readOnlyHint: false` records a change when it
 /// writes (design 17 §3.3): a new write tool fails here until it captures (or is listed
-/// as deliberately excluded, of which there are none).
+/// as deliberately excluded below).
 async fn every_write_tool_records_a_change(api: Api) -> Api {
     let (ada, t) = admin(&api).await;
     // Two languages for content_translate (a person's setting, over REST).
@@ -511,15 +511,45 @@ async fn every_write_tool_records_a_change(api: Api) -> Api {
         json!({"id": id(&rel), "version": version(&staged)}),
     )
     .await;
+    // Scheduling is recorded as a release entry (ruling P8a), unscheduling too.
+    let rel = ok(&tool(&api, &t.0, "release_create", json!({"title": "Later"})).await).clone();
+    let draft = post(&api, &ada, "Later", "later", false).await;
+    let staged = ok(&tool(
+        &api,
+        &t.0,
+        "release_stage",
+        json!({"id": id(&rel), "version": version(&rel), "item": draft.to_string(),
+               "transition": "publish"}),
+    )
+    .await)
+    .clone();
+    let scheduled = write(
+        &api,
+        &t,
+        w,
+        "release_schedule",
+        json!({"id": id(&rel), "version": version(&staged),
+               "at": (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339()}),
+    )
+    .await;
+    let before = total(&api).await;
+    let r = tool(
+        &api,
+        &t.0,
+        "release_schedule",
+        json!({"id": id(&rel), "version": version(&scheduled), "at": null}),
+    )
+    .await;
+    ok(&r);
+    assert_eq!(total(&api).await, before + 1, "unscheduling recorded: {r}");
 
     // The guard: every write tool the server lists is covered above, except those that
-    // change no site object a change set can hold: release rows and preview links
-    // (M6-3; reverting content cannot undo them, and they publish nothing).
+    // change no site object a change set can hold: a release's draft rows (creating and
+    // staging publish nothing; P8a records only its schedule) and preview links (M6-3).
     let excluded = [
         "release_create",
         "release_stage",
         "release_unstage",
-        "release_schedule",
         "release_preview_link",
         "content_preview_link",
     ];

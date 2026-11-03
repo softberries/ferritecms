@@ -155,6 +155,14 @@ async fn admin_path(api: &ApiState, c: &ChangeSummary) -> Result<Option<String>,
             .get(id)
             .await?
             .map(|p| format!("/plugins/{}", p.name)),
+        "release" => match id.parse() {
+            Ok(rid) => repos
+                .releases()
+                .get(rid)
+                .await?
+                .map(|r| format!("/releases/{}", r.id)),
+            Err(_) => None,
+        },
         _ => None,
     })
 }

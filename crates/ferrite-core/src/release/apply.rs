@@ -538,6 +538,14 @@ impl ReleaseService {
         let done = async {
             let mut r = Self::at_version(tx.as_ref(), actor, id, version).await?;
             editable(&r)?;
+            // An assistant's schedule is recorded (P8a).
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::ReleaseSchedule,
+                &[ObjectRef::Release(id)],
+            )
+            .await?;
             let entries = tx.releases().entries(id).await?;
             for e in &entries {
                 if let Some(other) = tx.releases().lock_of(e.item_id).await? {
@@ -578,6 +586,7 @@ impl ReleaseService {
                 },
             )
             .await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(r)
         }
         .await;
@@ -595,26 +604,16 @@ impl ReleaseService {
         require(actor, Capability::EditOwn)?;
         let tx = self.store.begin().await?;
         let done = async {
-            let mut r = Self::at_version(tx.as_ref(), actor, id, version).await?;
-            if r.status != ReleaseStatus::Scheduled {
-                return Err(CoreError::Invalid("the release is not scheduled".into()));
-            }
-            tx.releases().unlock_all(id).await?;
-            r.status = ReleaseStatus::Open;
-            r.scheduled_at = None;
-            r.scheduled_by = None;
-            r.override_reason = None;
-            r.updated_at = Timestamp::now();
-            let r = tx.releases().update(&r).await?;
-            webhooks::emit(
+            let r = Self::at_version(tx.as_ref(), actor, id, version).await?;
+            let cap = Capture::begin(
                 tx.as_ref(),
-                NewWebhookEvent {
-                    kind: "release.unscheduled",
-                    content_type: None,
-                    data: json!({"release": release_ref(&r), "by": actor.user.to_string()}),
-                },
+                actor,
+                Op::ReleaseUnschedule,
+                &[ObjectRef::Release(id)],
             )
             .await?;
+            let r = unschedule_in(tx.as_ref(), actor, r).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(r)
         }
         .await;
@@ -816,4 +815,35 @@ impl ReleaseService {
             }
         }
     }
+}
+
+/// [`unschedule`](ReleaseService::unschedule) of `r` (read in `repos` and visible to
+/// `actor`): `open` again, the locks removed, `release.unscheduled` emitted. Also the
+/// reverse write of an assistant's schedule (P8a).
+pub(crate) async fn unschedule_in(
+    repos: &dyn Repos,
+    actor: &Actor,
+    mut r: Release,
+) -> Result<Release, CoreError> {
+    require(actor, Capability::EditOwn)?;
+    if r.status != ReleaseStatus::Scheduled {
+        return Err(CoreError::Invalid("the release is not scheduled".into()));
+    }
+    repos.releases().unlock_all(r.id).await?;
+    r.status = ReleaseStatus::Open;
+    r.scheduled_at = None;
+    r.scheduled_by = None;
+    r.override_reason = None;
+    r.updated_at = Timestamp::now();
+    let r = repos.releases().update(&r).await?;
+    webhooks::emit(
+        repos,
+        NewWebhookEvent {
+            kind: "release.unscheduled",
+            content_type: None,
+            data: json!({"release": release_ref(&r), "by": actor.user.to_string()}),
+        },
+    )
+    .await?;
+    Ok(r)
 }

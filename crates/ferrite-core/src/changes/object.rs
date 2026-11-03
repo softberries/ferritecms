@@ -1,6 +1,6 @@
 //! The objects a captured write touches (design 17 §4) and the ops it records (§3.3).
 
-use ferrite_domain::{CommentId, ContentId, RedirectId, TermId};
+use ferrite_domain::{CommentId, ContentId, RedirectId, ReleaseId, TermId};
 
 use crate::Area;
 
@@ -23,6 +23,8 @@ pub(crate) enum ObjectRef {
     ActiveTheme,
     /// An installed plugin by name.
     Plugin(String),
+    /// A release's schedule (ruling P8a): its status and time, not its entries.
+    Release(ReleaseId),
 }
 
 impl ObjectRef {
@@ -39,6 +41,7 @@ impl ObjectRef {
             Self::Option(_) => "option",
             Self::ActiveTheme => "theme",
             Self::Plugin(_) => "plugin",
+            Self::Release(_) => "release",
         }
     }
 
@@ -53,6 +56,7 @@ impl ObjectRef {
             Self::Redirect(id) => id.to_string(),
             Self::Comment(id) => id.to_string(),
             Self::ActiveTheme => "active".into(),
+            Self::Release(id) => id.to_string(),
         }
     }
 
@@ -70,6 +74,7 @@ impl ObjectRef {
             "option" => Self::Option(id.to_owned()),
             "theme" if id == "active" => Self::ActiveTheme,
             "plugin" => Self::Plugin(id.to_owned()),
+            "release" => Self::Release(id.parse().ok()?),
             _ => return None,
         })
     }
@@ -77,7 +82,7 @@ impl ObjectRef {
     /// The area whose read right a viewer needs to see the images (design 17 §8).
     pub(crate) fn area(&self) -> Area {
         match self {
-            Self::Content(_) | Self::Type(_) => Area::Content,
+            Self::Content(_) | Self::Type(_) | Self::Release(_) => Area::Content,
             Self::Media(_) => Area::Media,
             Self::Term(_) => Area::Terms,
             Self::Menu(_) => Area::Menus,
@@ -123,6 +128,8 @@ pub(crate) enum Op {
     PluginEnable,
     PluginDisable,
     PluginSettings,
+    ReleaseSchedule,
+    ReleaseUnschedule,
 }
 
 impl Op {
@@ -159,6 +166,8 @@ impl Op {
             Self::PluginEnable => "plugin.enable",
             Self::PluginDisable => "plugin.disable",
             Self::PluginSettings => "plugin.settings",
+            Self::ReleaseSchedule => "release.schedule",
+            Self::ReleaseUnschedule => "release.unschedule",
         }
     }
 }
@@ -180,6 +189,7 @@ mod tests {
             ObjectRef::Option("site.title".into()),
             ObjectRef::ActiveTheme,
             ObjectRef::Plugin("seo".into()),
+            ObjectRef::Release(ReleaseId::new()),
         ] {
             assert_eq!(ObjectRef::parse(r.kind(), &r.id()), Some(r));
         }

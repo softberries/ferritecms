@@ -36,7 +36,7 @@ pub struct ChangeOut {
     /// What was done, e.g. `content.update`, `term.delete`.
     pub op: String,
     /// The object's kind: `content`, `media`, `term`, `menu`, `type`, `redirect`,
-    /// `comment`, `option`, `theme` or `plugin`.
+    /// `comment`, `option`, `theme`, `plugin` or `release`.
     pub kind: String,
     pub id: String,
     /// Its title or name when it was written.

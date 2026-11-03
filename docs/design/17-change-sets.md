@@ -138,6 +138,8 @@ record is the promise of this feature.
 | `theme_settings_update` | `ExtensionAdmin::set_theme_settings` | `theme.settings` | option `theme.<name>.settings` | `write_theme_settings` with a patch that yields the before object |
 | `plugin_enable` / `plugin_disable` | `ExtensionAdmin::set_plugin_enabled` | `plugin.enable` / `plugin.disable` | plugin | `write_plugin_enabled(before.enabled)` |
 | `plugin_settings_update` | `ExtensionAdmin::set_plugin_settings` | `plugin.settings` | one option per key | the before option rows written as stored (sealed secrets stay sealed, D12) |
+| `release_schedule` (P8a) | `ReleaseService::schedule` / `unschedule` | `release.schedule` / `release.unschedule` | release (its schedule) | unschedule while still scheduled; a release applied since refuses the change (no undo of its own: undo in the editor); a schedule the assistant removed is not set again (schedule it on the Releases screen) |
+| `release_apply` | `ReleaseService::apply` | as each entry's write | each item it changes | as those items' changes (the release row itself is not recorded) |
 
 (The embedded-theme path of `theme_activate` installs a row first through
 `ExtensionAdmin::install_theme`; the captured object is still the active theme.)
@@ -168,6 +170,7 @@ object of what a person can change, without volatile columns:
 | `option` | option key | `{ "value": <stored JSON> }`; a plugin secret as stored (`{"sealed": "v1.…"}`) |
 | `theme` | `active` | `{ "name", "artifact" }` of the active theme row (absent: the built-in default) |
 | `plugin` | plugin name | `enabled`, `disabled_reason`, `version`, `artifact` |
+| `release` (P8a) | release id | `status`, `scheduled_at`, and `title` (the label; not hashed, so a rename is no conflict) |
 
 Left out everywhere: `version`, `created_at`, `updated_at`, `body_html`, counters.
 

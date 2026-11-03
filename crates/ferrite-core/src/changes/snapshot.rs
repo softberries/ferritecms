@@ -110,6 +110,14 @@ pub(crate) struct ThemeSnap {
     pub artifact: String,
 }
 
+/// A release's schedule (P8a); the title is the label only (not hashed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ReleaseSnap {
+    pub title: String,
+    pub status: ferrite_domain::ReleaseStatus,
+    pub scheduled_at: Option<Timestamp>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PluginSnap {
     pub enabled: bool,
@@ -197,6 +205,14 @@ pub(crate) async fn snapshot(
                 disabled_reason: p.disabled_reason,
                 version: p.version,
                 artifact: p.artifact_hash.as_str().to_owned(),
+            })?),
+            None => None,
+        },
+        ObjectRef::Release(id) => match repos.releases().get(*id).await? {
+            Some(r) => Some(to_value(&ReleaseSnap {
+                title: r.title,
+                status: r.status,
+                scheduled_at: r.scheduled_at,
             })?),
             None => None,
         },
@@ -330,6 +346,8 @@ fn link_members(object: &ObjectRef) -> &'static [&'static str] {
     match object {
         ObjectRef::Term(_) => &["items", "items_total"],
         ObjectRef::Content(_) | ObjectRef::Media(_) => &["terms"],
+        // A rename of the release is no change of its schedule.
+        ObjectRef::Release(_) => &["title"],
         _ => &[],
     }
 }

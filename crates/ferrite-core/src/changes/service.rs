@@ -485,6 +485,9 @@ impl ChangeSetService {
             let Some(object) = ObjectRef::parse(&c.object_kind, &c.object_id) else {
                 return Err(CoreError::Internal("unknown change object").into());
             };
+            if let Some(error) = restore::refusal(tx, &object).await? {
+                return Err(RevertError::Failed { seq: c.seq, error });
+            }
             if !state.contains_key(&key) {
                 let current = snapshot(tx, &object).await?;
                 state.insert(key.clone(), hash_snapshot(&object, current.as_ref()));

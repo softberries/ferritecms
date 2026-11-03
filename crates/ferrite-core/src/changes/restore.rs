@@ -4,14 +4,16 @@
 //! the publish gate).
 
 use ferrite_domain::{
-    Change, ContentId, ContentItem, ContentStatus, Menu, Redirect, Term, TermId, Timestamp, UserId,
+    Change, ContentId, ContentItem, ContentStatus, Menu, Redirect, ReleaseId, ReleaseStatus, Term,
+    TermId, Timestamp, UserId,
 };
 use ferrite_store::{Repos, Tx};
 use serde_json::Value;
 
 use super::object::ObjectRef;
 use super::snapshot::{
-    CommentSnap, ContentSnap, OptionSnap, PluginSnap, RedirectSnap, TermSnap, ThemeSnap, TypeSnap,
+    CommentSnap, ContentSnap, OptionSnap, PluginSnap, RedirectSnap, ReleaseSnap, TermSnap,
+    ThemeSnap, TypeSnap,
 };
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, TRASHED_FROM_META, TypePatch,
@@ -124,6 +126,7 @@ pub(crate) async fn apply(
             }
             ObjectRef::ActiveTheme => theme(tx, actor, r).await,
             ObjectRef::Plugin(name) => plugin(tx, actor, name, r).await,
+            ObjectRef::Release(id) => release(tx, actor, *id, r).await,
         };
         res.map_err(fail(r.newest_seq))?;
     }
@@ -630,6 +633,55 @@ async fn plugin(tx: &dyn Tx, actor: &Actor, name: &str, r: &Restore) -> Result<(
         .ok_or_else(|| CoreError::Invalid("the plugin is no longer installed".into()))?;
     if row.enabled != t.enabled {
         crate::extensions::write_plugin_enabled(tx, name, t.enabled, None).await?;
+    }
+    Ok(())
+}
+
+/// Why a change of `object` can never be reverted now, whatever `force` says: a
+/// release that has been applied since its schedule was recorded (P8a). An applied
+/// release has no undo of its own.
+pub(crate) async fn refusal(
+    repos: &dyn Repos,
+    object: &ObjectRef,
+) -> Result<Option<CoreError>, CoreError> {
+    let ObjectRef::Release(id) = object else {
+        return Ok(None);
+    };
+    Ok(match repos.releases().get(*id).await? {
+        Some(r) if r.status == ReleaseStatus::Applied => Some(CoreError::Invalid(format!(
+            "the release \"{}\" has been applied, and an applied release has no undo of \
+             its own: undo its changes in the editor (an assistant's apply is in its \
+             change set as content changes)",
+            r.title
+        ))),
+        _ => None,
+    })
+}
+
+/// A release's schedule back to `r.target` (P8a): unscheduled when it was not
+/// scheduled before; a schedule an assistant took away is not set again here.
+async fn release(tx: &dyn Tx, actor: &Actor, id: ReleaseId, r: &Restore) -> Result<(), CoreError> {
+    let Some(target) = &r.target else {
+        return Ok(());
+    };
+    let t: ReleaseSnap = parse(target)?;
+    let current = crate::release::ReleaseService::visible(tx, actor, id).await?;
+    if let Some(e) = refusal(tx, &ObjectRef::Release(id)).await? {
+        return Err(e);
+    }
+    let scheduled = current.status == ReleaseStatus::Scheduled;
+    if t.status == ReleaseStatus::Scheduled {
+        if !scheduled || current.scheduled_at != t.scheduled_at {
+            return Err(CoreError::Invalid(format!(
+                "the release \"{}\" was scheduled before: schedule it again on its \
+                 Releases screen",
+                t.title
+            )));
+        }
+        return Ok(());
+    }
+    if scheduled {
+        crate::release::unschedule_in(tx, actor, current).await?;
     }
     Ok(())
 }

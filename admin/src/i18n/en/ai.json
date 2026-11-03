@@ -342,7 +342,9 @@
       "theme.settings": "Changed theme settings",
       "plugin.enable": "Enabled plugin",
       "plugin.disable": "Disabled plugin",
-      "plugin.settings": "Changed plugin setting"
+      "plugin.settings": "Changed plugin setting",
+      "release.schedule": "Scheduled release",
+      "release.unschedule": "Took off the schedule"
     },
     "dialog": {
       "titleAll": "Revert this change set?",

@@ -20,6 +20,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{Repos, Store};
 
+pub(crate) use apply::unschedule_in;
 pub use apply::{EntryCheck, EntryOutcome, ReleaseCheck};
 pub use sandbox::{SandboxReport, SandboxStore};
 pub use tx::{ApplyTx, MAX_RELEASE_KEYS, Mode};
@@ -148,7 +149,7 @@ impl ReleaseService {
     }
 
     /// Reads release `id` through `repos` and checks that `actor` may see it.
-    async fn visible(
+    pub(crate) async fn visible(
         repos: &dyn Repos,
         actor: &Actor,
         id: ReleaseId,
