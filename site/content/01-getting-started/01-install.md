@@ -53,8 +53,8 @@ the same key as a release binary and `ferrite self-update` checks releases with 
 ## Docker image
 
 Each release also publishes an image for `linux/amd64` and `linux/arm64` at
-`ghcr.io/softberries/ferritecms`, tagged with the version (for example `0.2.0`), with
-`0.2` when it is the newest release of that minor line, and with `latest` when it is the
+`ghcr.io/softberries/ferritecms`, tagged with the version (for example `0.3.0`), with
+`0.3` when it is the newest release of that minor line, and with `latest` when it is the
 newest stable release. `docker build -t ferrite .` in the repository builds the same image
 from source.
 
@@ -64,7 +64,7 @@ the site in the volume first, then start it. Inside a container the server must 
 all addresses, so set `FERRITE_SERVER__LISTEN`:
 
 ```sh
-IMAGE=ghcr.io/softberries/ferritecms:0.2.0
+IMAGE=ghcr.io/softberries/ferritecms:0.3.0
 docker run --rm -v ferrite-data:/data $IMAGE init --data /data --url http://localhost:8080
 docker run --rm -v ferrite-data:/data $IMAGE user create --data /data --login me --email me@example.com
 docker run -d --name ferrite -p 8080:8080 -v ferrite-data:/data \

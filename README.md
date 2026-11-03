@@ -59,9 +59,9 @@ The two quickest ways to connect:
   with OAuth (ChatGPT), then sign in and approve.
 
 Cursor, VS Code and any other MCP client work too; a personal API token in an
-`Authorization` header replaces the sign-in for scripts. 58 tools cover posts and pages,
-media, terms, menus, content types, redirects, comments, settings, themes, plugins and the
-site's health. The assistant acts as you: through your site's own sign-in and consent
+`Authorization` header replaces the sign-in for scripts. 70 tools cover posts and pages,
+media, terms, menus, content types, redirects, comments, settings, themes, plugins,
+releases and reviews, content checks and the site's health. The assistant acts as you: through your site's own sign-in and consent
 screen, with your role narrowed to the areas you approve, and its changes are recorded in
 the audit log under the app's name and in AI activity, where you review and undo them. Installing plugins, managing users and tokens, imports
 and backups stay with people.
@@ -88,7 +88,7 @@ Download a release for your platform from
 [Releases](https://github.com/softberries/ferritecms/releases), unpack it and start a site:
 
 ```sh
-VERSION=0.2.0
+VERSION=0.3.0
 TARGET=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, *-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/ferrite-$VERSION-$TARGET.tar.gz
 tar -xzf ferrite-$VERSION-$TARGET.tar.gz
@@ -109,7 +109,7 @@ shows how to check a download.
 ### Docker
 
 ```sh
-IMAGE=ghcr.io/softberries/ferritecms:0.2.0
+IMAGE=ghcr.io/softberries/ferritecms:0.3.0
 docker run --rm -v ferrite-data:/data $IMAGE init --data /data --url http://localhost:8080
 docker run --rm -v ferrite-data:/data $IMAGE user create --data /data --login me --email me@example.com
 docker run -d --name ferrite -p 8080:8080 -v ferrite-data:/data \
@@ -141,13 +141,39 @@ downloads the media from the old site instead. The import writes a report of eve
 it converted, skipped or redirected. The admin's Import screen does the same while the
 site runs. See [Import from WordPress](https://softberries.github.io/ferritecms/guides/import-wordpress/).
 
-## What's in 0.2.0
+## What's in 0.3.0
 
-New in 0.2.0:
+New in 0.3.0, the editorial platform:
+
+- Multilingual content: up to 20 languages, each translation its own item linked to the
+  others, `/de/` style addresses, `hreflang` links, per-language sitemaps, feeds, terms and
+  menus, and a language switcher in the starter themes. The Markdown import takes a
+  language from the front matter.
+- Releases and reviews: a live preview beside the editor; releases that apply a set of
+  changes together, now or on a schedule, with a preview of the whole site as the release
+  will make it; signed, expiring preview links to share; approval workflows with steps per
+  content type and reviewer assignment.
+- Accessibility checks in the editor (alt text, heading order, link text, empty headings,
+  tables without headers), a per-type switch that blocks publishing on errors, and a
+  Content health screen fed by a daily job (broken internal links, orphan pages, redirect
+  chains and loops, items not updated for a long time).
+- AI change sets: what an assistant changes over MCP is grouped into change sets with
+  before and after images, which a person reviews under AI activity and reverts, whole or
+  one change at a time.
+- Outgoing webhooks: signed per the Standard Webhooks spec, retried through the job
+  queue, with a delivery log and test deliveries.
+- Plugin signing: a plugin signed with its publisher's minisign key is verified on install
+  and the permission report names the publisher; a plugin's data stays bound to its
+  publisher; `ferrite plugin search|install|update` read a signed static registry, which
+  you can host yourself. No official registry is published yet and the example plugins
+  ship unsigned.
+- The MCP server lists 70 tools (56 in 0.2.0) and 5 prompts.
+
+From 0.2.0:
 
 - AI assistants over MCP: an endpoint at `/mcp` on every site, OAuth sign-in through the
-  site's own consent screen, 56 tools, and the admin's consent screen, Connected apps list
-  and AI assistants settings.
+  site's own consent screen, and the admin's consent screen, Connected apps list and AI
+  assistants settings.
 - A redesigned documentation site with search, hosted on GitHub Pages.
 
 From 0.1.0, the first release:

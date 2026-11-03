@@ -1,6 +1,6 @@
 [plugin]
 name        = "analytics"
-version     = "0.2.0"
+version     = "0.3.0"
 publisher   = "ferritecms.dev"
 description = "Privacy-friendly page-view statistics: counts per day, path and referrer host, with a stats page for chosen users"
 world       = "ferrite:plugin/plugin@0.1.0"
