@@ -19,6 +19,11 @@
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)`, `Unavailable(what)` | 503 | `busy` + `Retry-After: 5` |
+//! | `Locked { release }` | 409 | `release-locked` (`errors[0] = { field: "release", detail: <id> }`) |
+//! | `ReleaseConflict(entries)` | 409 | `release-conflict` (+ `entries`) |
+//! | `ReleaseNotReady(check)` | 409 | `release-not-ready` (+ `entries`) |
+//! | `ApprovalRequired { step }` | 409 | `approval-required` |
+//! | `StagingRequired` | 409 | `staging-required` |
 //! | `Random`, `Hashing`, `Internal(what)`, any other `Store` | 500 | `internal` |
 //!
 //! Problems built by the API layer itself, not mapped from a core error:
@@ -126,16 +131,25 @@ pub struct Problem {
     pub title: &'static str,
     pub detail: String,
     pub errors: Vec<FieldError>,
-    /// The current resource (412 only). Boxed: keeps `Result<_, Problem>` small (clippy
-    /// `result_large_err`).
-    pub current: Option<Box<serde_json::Value>>,
-    /// The permission report of the upload (an approval mismatch of `POST /plugins`
-    /// only). Boxed like `current`.
-    pub report: Option<Box<serde_json::Value>>,
+    /// The extension members (`current`, `report`, `entries`), boxed together: keeps
+    /// `Result<_, Problem>` small (clippy `result_large_err`).
+    pub members: Option<Box<Members>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
     /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
     pub challenge: Option<Challenge>,
+}
+
+/// The optional extension members of a [`Problem`].
+#[derive(Debug, Clone, Default)]
+pub struct Members {
+    /// The current resource (412 only).
+    pub current: Option<serde_json::Value>,
+    /// The permission report of the upload (an approval mismatch of `POST /plugins`
+    /// only).
+    pub report: Option<serde_json::Value>,
+    /// Per-entry release problems (`release-conflict`, `release-not-ready`, M6-3).
+    pub entries: Option<serde_json::Value>,
 }
 
 /// The `WWW-Authenticate` challenge of a 401 (RFC 6750 §3).
@@ -179,6 +193,10 @@ pub struct ProblemDocument {
     /// admin can review what this upload asks for and approve it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<serde_json::Value>,
+    /// One `{item, outcome, …}` per release entry (`EntryCheckDto`); only on
+    /// `release-conflict` and `release-not-ready` (409).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<serde_json::Value>,
 }
 
 impl Problem {
@@ -194,11 +212,20 @@ impl Problem {
             title,
             detail: detail.into(),
             errors: Vec::new(),
-            current: None,
-            report: None,
+            members: None,
             retry_after: None,
             challenge: None,
         }
+    }
+
+    fn members_mut(&mut self) -> &mut Members {
+        self.members.get_or_insert_with(Default::default)
+    }
+
+    /// Sets `entries` (a release's per-entry problems).
+    pub fn with_entries(mut self, entries: serde_json::Value) -> Self {
+        self.members_mut().entries = Some(entries);
+        self
     }
 
     /// Adds one `errors` entry.
@@ -212,13 +239,13 @@ impl Problem {
 
     /// Sets `current` (the resource as stored, for a 412).
     pub fn with_current(mut self, current: serde_json::Value) -> Self {
-        self.current = Some(Box::new(current));
+        self.members_mut().current = Some(current);
         self
     }
 
     /// Sets `report` (a plugin upload's permission report).
     pub fn with_report(mut self, report: serde_json::Value) -> Self {
-        self.report = Some(Box::new(report));
+        self.members_mut().report = Some(report);
         self
     }
 
@@ -325,8 +352,9 @@ impl Problem {
             status: self.status.as_u16(),
             detail: self.detail.clone(),
             errors: self.errors.clone(),
-            current: self.current.as_deref().cloned(),
-            report: self.report.as_deref().cloned(),
+            current: self.members.as_ref().and_then(|m| m.current.clone()),
+            report: self.members.as_ref().and_then(|m| m.report.clone()),
+            entries: self.members.as_ref().and_then(|m| m.entries.clone()),
         }
     }
 }
@@ -414,6 +442,42 @@ impl From<CoreError> for Problem {
             }
             CoreError::Store(s) => Self::from(s),
             CoreError::InUse(what) => Self::new(StatusCode::CONFLICT, "conflict", "Conflict", what),
+            CoreError::Locked { release } => Self::new(
+                StatusCode::CONFLICT,
+                "release-locked",
+                "Locked by a scheduled release",
+                format!("the item is in scheduled release {release}; unschedule it first"),
+            )
+            .with_error(Some("release"), release.to_string()),
+            CoreError::ReleaseConflict(entries) => Self::new(
+                StatusCode::CONFLICT,
+                "release-conflict",
+                "The release cannot be applied",
+                "some entries cannot be applied; nothing was written",
+            )
+            .with_entries(serde_json::to_value(entries).unwrap_or_default()),
+            CoreError::ReleaseNotReady(check) => Self::new(
+                StatusCode::CONFLICT,
+                "release-not-ready",
+                "The release is not ready",
+                "the check found problems; fix them before scheduling",
+            )
+            .with_entries(serde_json::to_value(check.entries).unwrap_or_default()),
+            CoreError::ApprovalRequired { step } => Self::new(
+                StatusCode::CONFLICT,
+                "approval-required",
+                "Approval required",
+                match step {
+                    Some(s) => format!("the content type needs approval; waiting for: {s}"),
+                    None => "the content type needs approval; submit it for review".to_owned(),
+                },
+            ),
+            CoreError::StagingRequired => Self::new(
+                StatusCode::CONFLICT,
+                "staging-required",
+                "Staging required",
+                "a public item of this type changes through a release",
+            ),
         }
     }
 }
@@ -713,6 +777,46 @@ mod tests {
                 422,
                 "validation",
                 Some("too long"),
+                None,
+            ),
+            // M6-3.
+            (
+                CoreError::Locked {
+                    release: ferrite_domain::ReleaseId::new(),
+                },
+                409,
+                "release-locked",
+                None,
+                None,
+            ),
+            (
+                CoreError::ReleaseConflict(vec![]),
+                409,
+                "release-conflict",
+                None,
+                None,
+            ),
+            (
+                CoreError::ReleaseNotReady(Default::default()),
+                409,
+                "release-not-ready",
+                None,
+                None,
+            ),
+            (
+                CoreError::ApprovalRequired {
+                    step: Some("Legal".into()),
+                },
+                409,
+                "approval-required",
+                Some("the content type needs approval; waiting for: Legal"),
+                None,
+            ),
+            (
+                CoreError::StagingRequired,
+                409,
+                "staging-required",
+                None,
                 None,
             ),
         ];

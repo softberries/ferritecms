@@ -117,6 +117,7 @@ fn expected(role: Role, own: bool, status: ContentStatus) -> AllowedActions {
             restore: status == Trash,
             delete: status == Trash,
             trash_undoable: status != Trash,
+            ..AllowedActions::default()
         };
     }
     if role == Role::Contributor && own {
@@ -186,7 +187,7 @@ pub async fn allowed_actions_matrix(db: &TestDb) {
             for status in STATUSES {
                 let cell = format!("{role:?} own={own} {status:?}");
                 let probe = item(db, &svc, owner, status).await;
-                let got = allowed_actions(&me, &probe);
+                let got = allowed_actions(&me, &probe, &Default::default());
                 assert_eq!(got, expected(role, own, status), "{cell}");
                 for (name, allowed) in flags(got) {
                     // A fresh item per action: each run changes it.
@@ -213,7 +214,7 @@ pub async fn allowed_actions_follow_token_scopes(db: &TestDb) {
     let reader =
         admin.with_scopes(ferrite_core::Scopes::from_strs(&["content:read".to_owned()]).unwrap());
     let it = item(db, &svc, &admin, ContentStatus::Draft).await;
-    assert_eq!(allowed_actions(&reader, &it), AllowedActions::default());
+    assert_eq!(allowed_actions(&reader, &it, &Default::default()), AllowedActions::default());
     assert!(matches!(
         svc.publish(&reader, it.id, it.version).await,
         Err(CoreError::Forbidden(_))

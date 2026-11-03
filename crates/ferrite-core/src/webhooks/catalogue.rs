@@ -89,6 +89,31 @@ pub const EVENT_TYPES: &[EventTypeInfo] = &[
     t("user.updated", "user", "A user account changed."),
     t("user.deleted", "user", "A user account was deleted."),
     t("import.finished", "import", "An import run finished."),
+    // M6-3 (design 15 §13).
+    t("release.scheduled", "release", "A release was scheduled."),
+    t(
+        "release.unscheduled",
+        "release",
+        "A scheduled release was taken off the schedule.",
+    ),
+    t("release.applied", "release", "A release was applied."),
+    t("release.failed", "release", "A scheduled release failed."),
+    t(
+        "review.submitted",
+        "review",
+        "Content was submitted for review.",
+    ),
+    t("review.approved", "review", "A review was approved."),
+    t(
+        "review.changes_requested",
+        "review",
+        "A reviewer asked for changes.",
+    ),
+    t(
+        "review.overridden",
+        "review",
+        "An administrator published without the approvals.",
+    ),
 ];
 
 /// The group of an event type (`content` for `content.published`).

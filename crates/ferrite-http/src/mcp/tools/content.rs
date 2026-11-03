@@ -1317,11 +1317,13 @@ impl FerriteMcp {
         let map = authors(api, actor, page.items.iter().map(|i| i.author_id)).await?;
         let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
         let public = self.public_urls(actor, &ids).await?;
+        let states = api.content.workflow_states(actor, &page.items).await?;
         let mut items = Vec::with_capacity(page.items.len());
         for item in page.items {
             let id = item.id;
             let author = pick(&map, item.author_id)?;
-            let allowed = ferrite_core::content::allowed_actions(actor, &item);
+            let wf = states.get(&id).cloned().unwrap_or_default();
+            let allowed = ferrite_core::content::allowed_actions(actor, &item, &wf);
             let d = ContentSummaryDto::new(item, author, allowed);
             let (url, is_public) = self.url_of(d.id, d.status == "trash", public.get(&id));
             items.push(SummaryOut {

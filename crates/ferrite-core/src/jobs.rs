@@ -439,6 +439,75 @@ pub fn webhook_deliver_job(
 /// Deletes delivery-log events older than the retention (design 18 §4.6), hourly.
 pub const WEBHOOKS_PRUNE_KIND: &str = "webhooks.prune";
 
+/// Applies one scheduled release at its time (M6-3, design 15 §4.6); payload
+/// [`ReleaseApply`].
+pub const RELEASE_APPLY_KIND: &str = "release.apply";
+/// Periodic safety net (every 30 s): applies every due scheduled release.
+pub const RELEASE_APPLY_DUE_KIND: &str = "release.apply_due";
+/// Current version of the [`ReleaseApply`] payload.
+pub const RELEASE_APPLY_VERSION: u32 = 1;
+
+/// Payload of a [`RELEASE_APPLY_KIND`] job: `{"v":1,"id":"<uuid>","at":"<RFC 3339>"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseApply {
+    pub v: u32,
+    pub id: ferrite_domain::ReleaseId,
+    pub at: Timestamp,
+}
+
+/// The job scheduling release `id` for `at` enqueues: due at `at`, unique key
+/// `release:<id>:<at unix micros>` (as [`publish_scheduled_job`]).
+pub fn release_apply_job(id: ferrite_domain::ReleaseId, at: Timestamp) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(RELEASE_APPLY_VERSION));
+    payload.insert("id".into(), Value::String(id.to_string()));
+    payload.insert("at".into(), Value::String(rfc3339(at)));
+    let mut job = NewJob::new(RELEASE_APPLY_KIND, Value::Object(payload));
+    job.unique_key = Some(format!("release:{id}:{}", at.as_micros()));
+    job.run_at = Some(at);
+    job
+}
+
+/// Sends the editorial mail of one review or release event (design 15 §6.6); payload
+/// [`EditorialNotify`].
+pub const EDITORIAL_NOTIFY_KIND: &str = "editorial.notify";
+/// Current version of the [`EditorialNotify`] payload.
+pub const EDITORIAL_NOTIFY_VERSION: u32 = 1;
+
+/// Payload of an [`EDITORIAL_NOTIFY_KIND`] job:
+/// `{"v":1,"event":"review.submitted"|…,"review"?,"release"?,"comment"?}`; recipients and
+/// texts are computed when it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorialNotify {
+    pub v: u32,
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ferrite_domain::ReviewId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ferrite_domain::ReleaseId>,
+}
+
+/// The [`EDITORIAL_NOTIFY_KIND`] job of `event` about a review or a release.
+pub fn editorial_notify_job(
+    event: &str,
+    review: Option<ferrite_domain::ReviewId>,
+    release: Option<ferrite_domain::ReleaseId>,
+) -> NewJob {
+    let payload = EditorialNotify {
+        v: EDITORIAL_NOTIFY_VERSION,
+        event: event.to_owned(),
+        review,
+        release,
+    };
+    NewJob::new(
+        EDITORIAL_NOTIFY_KIND,
+        serde_json::to_value(payload).unwrap_or_default(),
+    )
+}
+
+/// Deletes expired preview links (M6-3, design 15 §7), daily.
+pub const PREVIEW_LINKS_PRUNE_KIND: &str = "preview_links.prune";
+
 /// Same form as `Timestamp`'s serde (chrono's RFC 3339 with `Z`).
 fn rfc3339(at: Timestamp) -> String {
     at.as_datetime()

@@ -148,6 +148,45 @@ impl SeoPatch {
         check_canonical(&self.canonical)
     }
 
+    /// The inverse of [`to_json`](Self::to_json): an object whose members `title`,
+    /// `description`, `canonical` (string or `null`) and `robots` (array of directives
+    /// or `null`) become `Some`; anything else is `InvalidField { field: "seo" }`. Not
+    /// checked: call [`check`](Self::check).
+    pub fn from_json(value: &Value) -> Result<Self, CoreError> {
+        let bad = |m: &str| CoreError::invalid_field("seo", m.to_owned());
+        let Value::Object(map) = value else {
+            return Err(bad("seo must be an object"));
+        };
+        let text = |key: &str| -> Result<Option<Option<String>>, CoreError> {
+            match map.get(key) {
+                None => Ok(None),
+                Some(Value::Null) => Ok(Some(None)),
+                Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
+                Some(_) => Err(bad("seo members are strings")),
+            }
+        };
+        if map
+            .keys()
+            .any(|k| !matches!(k.as_str(), "title" | "description" | "canonical" | "robots"))
+        {
+            return Err(bad("unknown seo member"));
+        }
+        let robots = match map.get("robots") {
+            None => None,
+            Some(Value::Null) => Some(None),
+            Some(v) => Some(Some(
+                serde_json::from_value::<Vec<Robots>>(v.clone())
+                    .map_err(|_| bad("unknown robots directive"))?,
+            )),
+        };
+        Ok(Self {
+            title: text("title")?,
+            description: text("description")?,
+            canonical: text("canonical")?,
+            robots,
+        })
+    }
+
     /// The patch as JSON, as the autosave slot stores it: an object with a member for
     /// each `Some` (`null` for `Some(None)`), the strings as given.
     pub fn to_json(&self) -> Value {

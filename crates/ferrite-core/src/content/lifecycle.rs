@@ -17,7 +17,7 @@
 //! `published` (publish, and the scheduler's publish) enqueues the `post.published`
 //! action jobs in its transaction ([`actions`](crate::actions), M2a-2 P20).
 
-use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
+use ferrite_domain::{ContentId, ContentItem, ContentStatus, ReviewTarget, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
 use super::ContentService;
@@ -164,7 +164,10 @@ impl ContentService {
     ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
         let rules = self.permalinks.pin();
-        let done = delete_in(tx.as_ref(), rules.as_ref(), actor, id, expected_version).await;
+        let done = match crate::release::check_unlocked(tx.as_ref(), id).await {
+            Ok(()) => delete_in(tx.as_ref(), rules.as_ref(), actor, id, expected_version).await,
+            Err(e) => Err(e),
+        };
         finish(tx, done).await
     }
 
@@ -255,6 +258,19 @@ impl ContentService {
         transition_item(repos, rules, actor, item, version, Action::Publish).await
     }
 
+    /// [`unpublish`](Self::unpublish) of `item` (as read or written in the caller's `Tx`,
+    /// at its current version) inside the caller's `repos`: the same checks and
+    /// `invalidate` keys (release apply, M6-3).
+    pub(crate) async fn unpublish_in(
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        item: ContentItem,
+    ) -> Result<ContentItem, CoreError> {
+        let version = item.version;
+        transition_item(repos, rules, actor, item, version, Action::Unpublish).await
+    }
+
     /// [`trash`](Self::trash) of item `id` inside the caller's `repos` with the caller's
     /// pinned `rules`: the same checks, search removal and `invalidate` event.
     pub(crate) async fn trash_in(
@@ -300,34 +316,161 @@ impl ContentService {
         expected_version: i64,
         action: Action,
     ) -> Result<ContentItem, CoreError> {
+        self.transition_with(actor, id, expected_version, action, Gate::default())
+            .await
+    }
+
+    /// [`transition`](Self::transition) with the M6-3 additions: the release lock, the
+    /// approval gate of workflow types for publish and schedule (an admin's
+    /// `override_reason` passes it, audited), and the review a submit starts.
+    pub(super) async fn transition_with(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        action: Action,
+        gate: Gate,
+    ) -> Result<ContentItem, CoreError> {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = match transition_in(
-            tx.as_ref(),
-            rules.as_ref(),
-            actor,
-            id,
-            expected_version,
-            action,
-        )
-        .await
-        {
+        let done = async {
+            crate::release::check_unlocked(tx.as_ref(), id).await?;
+            let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
+            let repos = tx.as_ref();
+            if let Action::Submit = action
+                && current.status == ContentStatus::Pending
+                && crate::workflow::gate::workflow_of(repos, &current.kind)
+                    .await?
+                    .is_some()
+            {
+                // Resubmit: a new review, no status change (design 15 §6.2).
+                authorize(actor, &current, Action::Submit)?;
+                if current.version != expected_version {
+                    return Err(CoreError::Conflict {
+                        current_version: current.version,
+                    });
+                }
+                crate::workflow::start_in(
+                    repos,
+                    actor,
+                    &current,
+                    ReviewTarget::Item(id),
+                    None,
+                    gate.submit.unwrap_or_default(),
+                )
+                .await?;
+                return Ok(current);
+            }
+            if matches!(action, Action::Publish | Action::Schedule(_)) {
+                // Rights first, so the gate never tells a reader about approvals.
+                authorize(actor, &current, action)?;
+                crate::workflow::gate::require_approval(
+                    repos,
+                    actor,
+                    &current,
+                    ReviewTarget::Item(id),
+                    None,
+                    gate.override_reason.as_deref(),
+                )
+                .await?;
+            }
+            let saved = transition_item(
+                repos,
+                rules.as_ref(),
+                actor,
+                current,
+                expected_version,
+                action,
+            )
+            .await?;
+            if let Action::Submit = action {
+                crate::workflow::start_in(
+                    repos,
+                    actor,
+                    &saved,
+                    ReviewTarget::Item(id),
+                    None,
+                    gate.submit.unwrap_or_default(),
+                )
+                .await?;
+            }
             // Here, not in `transition_item`: `seed demo` and uploads publish through
             // that and emit nothing (design 18 §3.4).
-            Ok(saved) => crate::webhooks::emit_content(
-                tx.as_ref(),
+            crate::webhooks::emit_content(
+                repos,
                 rules.as_ref(),
                 webhook_type(action),
                 &saved,
                 Some(actor.user),
             )
-            .await
-            .map(|_| saved),
-            Err(e) => Err(e),
-        };
+            .await?;
+            Ok(saved)
+        }
+        .await;
         finish(tx, done).await
     }
+
+    /// [`publish`](Self::publish) with an admin's override of a missing approval
+    /// (design 15 §6.5): `override_reason` (1–500 characters) is audited as
+    /// `workflow.override` when the gate would refuse.
+    pub async fn publish_with_override(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        override_reason: Option<String>,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason,
+            submit: None,
+        };
+        self.transition_with(actor, id, expected_version, Action::Publish, gate)
+            .await
+    }
+
+    /// [`schedule`](Self::schedule) with an admin's override (as
+    /// [`publish_with_override`](Self::publish_with_override)).
+    pub async fn schedule_with_override(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        at: Timestamp,
+        override_reason: Option<String>,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason,
+            submit: None,
+        };
+        self.transition_with(actor, id, expected_version, Action::Schedule(at), gate)
+            .await
+    }
+
+    /// [`submit`](Self::submit) with reviewers and a note: in a type with a workflow it
+    /// starts a review at step 0 (and from `pending` without an open review, a new one:
+    /// "Resubmit"); elsewhere the input is ignored (D25).
+    pub async fn submit_with(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        input: crate::workflow::SubmitInput,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason: None,
+            submit: Some(input),
+        };
+        self.transition_with(actor, id, expected_version, Action::Submit, gate)
+            .await
+    }
+}
+
+/// The extras of a gated transition.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Gate {
+    pub(super) override_reason: Option<String>,
+    pub(super) submit: Option<crate::workflow::SubmitInput>,
 }
 
 async fn transition_in(

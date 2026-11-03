@@ -374,6 +374,35 @@ impl ContentService {
         Ok((terms, Seo::load(repos, item.id).await?))
     }
 
+    /// The workflow state of `item` for `actor` (M6-3): whether its type has a workflow,
+    /// its open review and whether `actor` may approve, for
+    /// [`allowed_actions`](crate::content::allowed_actions).
+    pub async fn workflow_state(
+        &self,
+        actor: &Actor,
+        item: &ContentItem,
+    ) -> Result<crate::workflow::WorkflowState, CoreError> {
+        crate::workflow::state_of(self.store.read(), actor, item).await
+    }
+
+    /// [`workflow_state`](Self::workflow_state) of each of `items` (one read of the
+    /// workflows; reviews only for items of workflow types).
+    pub async fn workflow_states(
+        &self,
+        actor: &Actor,
+        items: &[ContentItem],
+    ) -> Result<HashMap<ContentId, crate::workflow::WorkflowState>, CoreError> {
+        let repos = self.store.read();
+        let workflows = repos.workflows().list().await?;
+        let mut out = HashMap::new();
+        for item in items {
+            if workflows.iter().any(|w| w.type_name == item.kind) {
+                out.insert(item.id, crate::workflow::state_of(repos, actor, item).await?);
+            }
+        }
+        Ok(out)
+    }
+
     /// The terms of item `id`, in their stored order (as [`get_for`](Self::get_for)
     /// checks it).
     pub async fn terms_of(&self, actor: &Actor, id: ContentId) -> Result<Vec<TermId>, CoreError> {
@@ -459,6 +488,7 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            crate::release::check_unlocked(tx.as_ref(), id).await?;
             let rev = tx
                 .revisions()
                 .get(rid)
@@ -466,6 +496,7 @@ impl ContentService {
                 .filter(|r| r.item_id == id)
                 .ok_or(CoreError::NotFound)?;
             let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
+            crate::workflow::gate::require_live_edit(tx.as_ref(), actor, &current).await?;
             let terms = tx
                 .terms()
                 .for_item(id)

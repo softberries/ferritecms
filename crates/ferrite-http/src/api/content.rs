@@ -251,7 +251,8 @@ pub(crate) async fn dto(
     let (terms, seo) = api.content.extras_for(actor, &item).await?;
     let permalink = api.content.permalink(item.id).await?;
     let author = author_of(api, actor, item.author_id).await?;
-    let allowed = allowed_actions(actor, &item);
+    let wf = api.content.workflow_state(actor, &item).await?;
+    let allowed = allowed_actions(actor, &item, &wf);
     let refs = api
         .content
         .translations(actor, std::slice::from_ref(&item))
@@ -379,9 +380,11 @@ pub async fn list_content(
     let page = api.content.list(&who.actor, &query).await?;
     let map = authors(&api, &who.actor, page.items.iter().map(|i| i.author_id)).await?;
     let mut translations = api.content.translations(&who.actor, &page.items).await?;
+    let states = api.content.workflow_states(&who.actor, &page.items).await?;
     let (items, next_cursor) = list::items(page, |item| {
         let author = pick(&map, item.author_id)?;
-        let allowed = allowed_actions(&who.actor, &item);
+        let wf = states.get(&item.id).cloned().unwrap_or_default();
+        let allowed = allowed_actions(&who.actor, &item, &wf);
         let refs = translations.remove(&item.id).unwrap_or_default();
         let mut dto = ContentSummaryDto::new(item, author, allowed);
         dto.translations = refs

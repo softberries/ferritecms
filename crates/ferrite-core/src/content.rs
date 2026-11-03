@@ -346,8 +346,12 @@ impl ContentService {
         // One set of rules for the whole write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = self
-            .update_in(
+        let done = async {
+            crate::release::check_unlocked(tx.as_ref(), id).await?;
+            if let Some(current) = tx.content().get(id).await? {
+                crate::workflow::gate::require_live_edit(tx.as_ref(), actor, &current).await?;
+            }
+            self.update_in(
                 tx.as_ref(),
                 rules.as_ref(),
                 actor,
@@ -358,7 +362,9 @@ impl ContentService {
                     note: None,
                 },
             )
-            .await;
+            .await
+        }
+        .await;
         finish(tx, done).await
     }
 
@@ -778,6 +784,8 @@ async fn after_save(
     note: Option<String>,
 ) -> Result<(), CoreError> {
     write_revision(repos, actor, item, note).await?;
+    // A save changes what an item review approved (design 15 §6.2, D18).
+    crate::workflow::mark_stale_item(repos, item.id).await?;
     index_search(repos, item).await?;
     repos.events().append(&events::invalidate(keys)).await?;
     let id = item.id.to_string();
