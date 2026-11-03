@@ -118,6 +118,25 @@ jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[
 local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
 OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
 `0016_webhooks`; design 18.
+M6-4 (accessibility and content health, design 16, `m6-4-exit.md`) is built:
+`ferrite_core::quality` (the rule catalogue `RULES`, iterative capped document checks,
+media facts, `gate::check` the per-type publish gate (`content_types.quality_gate`
+`off`|`errors`; ruling P4: M6-3 releases call it per item), `QualityService` (check,
+suppressions with a reason, the health summary and findings, "Run now"), `HealthRunner`
+(items, internal links, orphans, redirects, stale, opt-in external links with the
+`link_checks` cache), `robots`), decorative images (`decorative: true` renders `alt=""`),
+`ferrite_http::quality_probe::SiteProbe` (paths through the router and the page lookup, no
+render, cache, counters or plugins) and `link_check::LinkChecker` (SSRF-checked, robots.txt,
+default ports), the `content.health` job (`crates/ferrite/src/jobs/health.rs`, daily 04:00
+UTC, lock `content.health`), the REST `POST /content/{type}/check`,
+`/content/{type}/{id}/suppressions`, `/health/summary|findings|runs` and `422
+content-quality`, MCP `content_check` and `health_report` (60 tools), the settings
+`health.external_links` and `health.stale_days`, the webhook event `health.completed`, the
+admin's editor checks (marks, the panel's Checks, the publish dialog, the Decorative image
+switch), Content health screen (`g h`), dashboard card, type gate switch and Settings →
+Content health; migration `0019_content_health`. Try it: `POST /api/v1/content/post/check`
+with `{"body": {...}}`; `POST /api/v1/health/runs` then `GET /api/v1/health/findings`
+(`serve` runs the job).
 M6-5 (AI change sets) is built
 (`m6-5-exit.md`): `ferrite_core::changes` (`Actor.agent` set only by the MCP guard, typed
 canonical snapshots, zstd images, `Capture` in every public write path the MCP write tools

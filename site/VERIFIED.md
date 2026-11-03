@@ -631,3 +631,23 @@ fresh `seed demo` site on `127.0.0.1:8091` (the screenshot's run: a personal tok
 | ai-assistants | Kept 90 days by default, 1 to 365 in Settings → AI assistants, not changeable by an assistant | `crates/ferrite-core/src/settings.rs`; `crates/ferrite-cluster/tests/change_sets_prune.rs`; API `mcp_settings_not_writable_via_mcp` | Verified |
 | ai-assistants | The screenshot `admin-ai-activity.webp` shows what its alt text says | Looked at after it was taken (1440 × 900, scale 2) | Verified |
 | README | Changes are recorded as change sets you review and undo | As the rows above | Verified |
+
+## Accessibility checks and content health, M6-4 (2026-11-03)
+
+Claims of `02-guides/11-content-health.md` and the M6-4 lines of `08-ai-assistants.md` and
+`05-reference/02-mcp-tools.md`, checked against the code on branch `m6-4-content-quality`.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| content-health | Checks run about 1.5 s after typing stops and when the publish dialog opens | `admin/src/editor/quality/use-quality-check.ts` (`CHECK_DEBOUNCE_MS`); `editor.tsx` (`checkNow` on `publishMode`); Vitest `debounces 1.5 s after the last change` | Verified |
+| content-health | The listed errors, warnings and notices, with their severities | `crates/ferrite-core/src/quality/rules.rs` (`RULES`); unit tests in `quality/check.rs` | Verified |
+| content-health | Vague link text in English, German, French, Spanish and Polish | `crates/ferrite-core/src/quality/vague.rs`; test `by_locale` | Verified |
+| content-health | Decorative image clears alt and is not reported; empty alt without it is a warning | `image-node.tsx` `AltEditor`; Vitest `the decorative switch writes decorative and clears alt`; core `image_rules`; `render.rs` `decorative_image_renders_empty_alt` | Verified |
+| content-health | Gate: dialog disabled, API `422 content-quality`, live edits refused only when adding errors, scheduler, imports and seed never refused | `content/lifecycle.rs` `gate`; `content.rs` `live_edit_gate`; core tests `publish_refused_on_gated_type_with_errors`, `update_of_live_item_refused_only_when_errors_increase`, `publish_due_and_publish_scheduled_never_gated`, `publish_in_not_gated`; API `publish_on_gated_type_is_422_with_findings`; Vitest `gate_blocked_disables_confirm` | Verified |
+| content-health | Only accessibility errors gate | `quality/gate.rs` `blocks` | Verified |
+| content-health | A suppression needs a reason, counts nowhere; on a gated type only editors suppress errors; audited `quality.suppress` | `quality/service.rs` `suppress`; tests `author_cannot_suppress_error_on_gated_type`, `check_marks_suppressed_and_excludes_from_counts`, `suppress_audited`, `suppressed_findings_excluded_from_totals` | Verified |
+| content-health | Daily at 04:00 UTC or Run now; `g h`; editors and administrators | `jobs.rs` `CONTENT_HEALTH_OFFSET`; `jobs/health.rs` test `periodic_is_daily_at_0400_and_fits`; `admin/src/shell/nav.ts` (`health`, `edit_others`, `g h`); API `summary_and_findings_need_edit_others` | Verified |
+| content-health | Orphan rule (front page, menu of its language, linked, reachable parent, types with an archive) | `quality/health.rs` `orphans`; test `orphan_rules` | Verified |
+| content-health | Redirect chains, loops, broken targets; stale after 30–3650 days (default 365) from the newest revision | `health.rs` `redirects`, `freshness`; `settings.rs` `health.stale_days`; tests `redirect_chain_loop_and_broken_target`, `stale_uses_newest_revision`, `health_settings_validate` | Verified |
+| content-health | External links off by default; robots.txt, one request at a time per site with 2 s between, at most 1 000 a day, a good answer reused for a week, public addresses and standard ports only, no page content read; 404/410/no such name at once, failures after two at least 20 h apart | `quality/external.rs` (`Pacing::default`, `OK_REUSE`, `FAILING_SPREAD`); `ferrite-http/src/link_check.rs`; tests `external_off_by_default_contacts_nothing`, `external_cache_reuses_ok_for_7_days`, `external_broken_after_two_failures_20h_apart`, `failing_becomes_broken_after_two_failures_20h_apart`, `redirect_to_private_address_refused`, `non_default_port_unchecked_and_credentials_refused`, `body_never_read`, `robots_fetched_and_capped` | Verified |
+| ai-assistants, mcp-tools | `content_check` and `health_report`, read-only; 60 tools in 15 areas | `crates/ferrite-http/src/mcp/tools/quality.rs`; API `tools_list_has_both_with_annotations`, `reference_page_lists_every_tool` | Verified |

@@ -251,6 +251,7 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Users | `users_list`, `user_get` (no tokens, sessions or TOTP data) |
 | System | `system_status`, `jobs_list`, `audit_list` |
 | Changes (M6-5) | `changes_list` (read-only, the connection's own change sets; no revert tool, design 17 §10) |
+| Content quality (M6-4) | `content_check` (an item or a draft: findings with rule, severity, WCAG criteria, a sentence, a fix, and the type's gate), `health_report` (the newest content health run and a page of its findings; `edit_others`); both read-only, no tool suppresses or starts a run (design 16 §10, D16) |
 
 ### 5.3 Markdown out
 

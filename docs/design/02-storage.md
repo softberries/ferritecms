@@ -727,6 +727,16 @@ tables/columns would lose data.
   application connections, after which the waiting statement fails ([09 §3](09-operations.md#3-upgrade--rollback-cluster--postgres)). Its `.down.sql`
   runs in one transaction as every down does (`DROP INDEX` without `CONCURRENTLY`).
 
+### Content quality (M6-4, `0019_content_health`)
+
+`content_types.quality_gate` (`off` | `errors`, default `off`); `quality_suppressions`
+(item, rule, key, reason, user, created; cascades with the item; exported);
+`health_runs` (status, trigger, counters, totals JSON, truncated, error), `health_findings`
+(run, seq, rule, severity, category, item or redirect, type and locale copied, key,
+context, detail JSON; the newest run's only) and `link_checks` (the external link cache
+by the SHA-256 of the URL, shared by every node) are derived and `Export::Skip`. The down
+is lossy (suppressions and the gate). Design 16 §7.
+
 ## 8. Upgrade compatibility (expand/contract) — D8
 
 Goal (S5): binary *N-1* keeps working against schema produced by binary *N*. This is

@@ -647,11 +647,19 @@ M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
 
 ### M6-4 — Accessibility and content health
 
-- [ ] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
+- [x] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
   vague link text, empty headings, tables without headers; a per-type setting that blocks
-  publishing on errors; the same checks as an MCP tool.
-- [ ] Content health screen, fed by a periodic job: broken internal and external links,
-  orphan pages, missing alt text, redirect chains and loops, items not updated in a year.
+  publishing on errors; the same checks as an MCP tool (M6-4,
+  [`m6-4-exit.md`](superpowers/m6-4-exit.md); migration `0019_content_health`; design 16;
+  MCP `content_check`).
+- [x] Content health screen, fed by a periodic job: broken internal and external links,
+  orphan pages, missing alt text, redirect chains and loops, items not updated in a year
+  (M6-4; `content.health` daily at 04:00 UTC; MCP `health_report`).
+- Later (M6-4 follow-ups): plugin-provided rules (a `quality` WIT hook); a log-capture test
+  that the link checker names hosts only; the E2E specs `editor-quality` and `health` in
+  Firefox and WebKit; decorative images inside a paragraph lose the flag in Markdown;
+  change-set snapshots of a type do not hold its publish gate (a revert keeps the current
+  one).
 
 ### M6-5 — AI change sets
 

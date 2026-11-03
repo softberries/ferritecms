@@ -560,6 +560,8 @@ fn v10_archive(ex: &Exported) -> Vec<u8> {
         ("content_items", &["locale", "translation_group"][..]),
         ("terms", &["locale", "translation_group"][..]),
         ("menus", &["locale", "translation_of"][..]),
+        // M6-4's `0019`.
+        ("content_types", &["quality_gate"][..]),
     ] {
         let file = format!("tables/{table}.ndjson");
         let entry = entries.iter_mut().find(|(p, _)| *p == file).unwrap();
@@ -577,13 +579,15 @@ fn v10_archive(ex: &Exported) -> Vec<u8> {
     }
     // Tables added after schema 10 (M6-2's `0015`, M6-6's `0016`, M6-5's `0018`) are not in
     // a schema-10 archive.
-    const NEWER_TABLES: [&str; 6] = [
+    // M6-4's `0019` adds `quality_suppressions`.
+    const NEWER_TABLES: [&str; 7] = [
         "plugin_publishers",
         "plugin_owners",
         "plugin_registry",
         "webhook_endpoints",
         "change_sets",
         "change_set_changes",
+        "quality_suppressions",
     ];
     entries.retain(|(p, _)| {
         !NEWER_TABLES
