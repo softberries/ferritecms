@@ -74,6 +74,33 @@ pub struct PublicItem {
     /// Custom fields, filtered: `featured_image` is kept only if it resolved to public
     /// media, and UUID strings naming non-public content items are removed.
     pub fields: serde_json::Value,
+    /// The item's locale (13 §5).
+    pub locale: String,
+    /// The item's translation group (not shown to templates).
+    #[serde(skip)]
+    pub translation_group: ContentId,
+}
+
+/// Which locale a [`SiteReader`](crate::SiteReader) reads (13 §5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ReadLocale {
+    /// Every locale, with no locale predicate: what a one-locale site reads (D4).
+    #[default]
+    All,
+    /// Only this locale's items.
+    Only(String),
+}
+
+/// One public translation of an item ([`SiteReader::translations`](crate::SiteReader::translations)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TranslationLink {
+    pub locale: String,
+    pub label: String,
+    /// Public path (the locale's root for a front page translation).
+    pub url: String,
+    pub title: String,
+    /// The item asked about.
+    pub current: bool,
 }
 
 /// A content item ready for a template.
@@ -112,11 +139,51 @@ pub struct PageItem {
 pub struct Previewed {
     item: PageItem,
     status: ContentStatus,
+    source: PreviewSource,
+    seo: Option<serde_json::Value>,
+}
+
+/// What a preview shows (M6-3, design 15 §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewSource {
+    /// The item as stored.
+    Stored,
+    /// The caller's autosave slot over the stored item.
+    Working,
+    /// A release entry's staged change over the stored item.
+    Staged,
 }
 
 impl Previewed {
     pub(crate) fn new(item: PageItem, status: ContentStatus) -> Self {
-        Self { item, status }
+        Self {
+            item,
+            status,
+            source: PreviewSource::Stored,
+            seo: None,
+        }
+    }
+
+    pub(crate) fn with_source(
+        mut self,
+        source: PreviewSource,
+        seo: Option<serde_json::Value>,
+    ) -> Self {
+        self.source = source;
+        self.seo = seo;
+        self
+    }
+
+    /// Where the shown content comes from.
+    pub fn source(&self) -> PreviewSource {
+        self.source
+    }
+
+    /// The working copy's or staged change's SEO patch (`SeoPatch` JSON), applied over
+    /// the stored SEO meta for the head.
+    pub fn seo(&self) -> Option<&serde_json::Value> {
+        self.seo.as_ref()
     }
 
     pub fn item(&self) -> &PageItem {
@@ -312,6 +379,9 @@ pub struct SitemapEntry {
     pub url: String,
     /// The item's `updated_at`.
     pub lastmod: Timestamp,
+    /// `(locale tag, path)` of every public member of the item's translation group, the
+    /// item included; empty on a one-locale site (13 §5).
+    pub alternates: Vec<(String, String)>,
 }
 
 #[cfg(test)]

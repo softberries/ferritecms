@@ -16,6 +16,8 @@
     "keywords": "go to open screen",
     "account": "Account",
     "accountKeywords": "profile password security 2fa tokens sessions",
+    "openReleases": "Open releases",
+    "openReleasesKeywords": "releases open pending launch batch staged changes",
     "connectAi": "Connect an AI assistant",
     "connectAiKeywords": "ai claude chatgpt cursor vs code assistant agent connect llm mcp"
   },
@@ -35,7 +37,11 @@
     "redirect": "New redirect",
     "redirectKeywords": "create add new redirect forward moved address url structure",
     "user": "New user",
-    "userKeywords": "create add new user account person invite people"
+    "userKeywords": "create add new user account person invite people",
+    "webhook": "New webhook",
+    "webhookKeywords": "create add new webhook hook deploy notify integration callback",
+    "release": "New release",
+    "releaseKeywords": "create add new release launch batch bundle publish together schedule"
   },
   "preferences": {
     "light": "Light theme",

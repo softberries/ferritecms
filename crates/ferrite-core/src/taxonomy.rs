@@ -11,10 +11,11 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{Taxonomy, Term, TermId, Timestamp, UserId};
+use ferrite_domain::{ContentId, Taxonomy, Term, TermId, Timestamp, UserId};
 use ferrite_store::{MAX_CONTENT_KINDS, Repos, Store, StoreError, Tx};
 use serde_json::json;
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Area, Capability, require, require_read},
@@ -144,7 +145,7 @@ impl TaxonomyService {
             if tax.built_in {
                 return Err(CoreError::Invalid("built-in taxonomy".into()));
             }
-            if !tx.terms().list(&tax.name).await?.is_empty() {
+            if !tx.terms().list(&tax.name, None).await?.is_empty() {
                 return Err(CoreError::Invalid("taxonomy has terms".into()));
             }
             tx.taxonomies().delete(&tax.name).await?;
@@ -167,9 +168,10 @@ impl TaxonomyService {
         &self,
         actor: &Actor,
         taxonomy: &str,
+        locale: Option<&str>,
     ) -> Result<Vec<Term>, CoreError> {
         require_read(actor, Area::Terms)?;
-        self.list_terms(taxonomy).await
+        self.list_terms(taxonomy, locale).await
     }
 
     /// Term `id` (`require_read(Terms)`; missing: `NotFound`).
@@ -185,12 +187,17 @@ impl TaxonomyService {
 
     /// Lists all terms of `taxonomy` (unknown taxonomy: `NotFound`). No actor: for the
     /// public site and system paths; the API uses [`list_terms_for`](Self::list_terms_for).
-    pub async fn list_terms(&self, taxonomy: &str) -> Result<Vec<Term>, CoreError> {
+    /// `locale`: only that locale's terms; `None`: every locale.
+    pub async fn list_terms(
+        &self,
+        taxonomy: &str,
+        locale: Option<&str>,
+    ) -> Result<Vec<Term>, CoreError> {
         let repos = self.store.read();
         if repos.taxonomies().get(taxonomy).await?.is_none() {
             return Err(CoreError::NotFound);
         }
-        Ok(repos.terms().list(taxonomy).await?)
+        Ok(repos.terms().list(taxonomy, locale).await?)
     }
 
     /// Creates a term (an unknown `taxonomy` is `NotFound`). `slug = None` derives it
@@ -216,8 +223,166 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
-            let (saved, keys) =
-                create_term_in(tx.as_ref(), taxonomy, name, slug, parent, description).await?;
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
+            let (saved, keys) = create_term_in(
+                tx.as_ref(),
+                taxonomy,
+                name,
+                slug,
+                parent,
+                description,
+                TermPlacement::default(),
+            )
+            .await?;
+            tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// [`create_term`](Self::create_term) in `locale` (`None`: the default; it must be
+    /// one of the site's, `InvalidField { field: "locale" }`), joining the translation
+    /// group of term `translation_of` (of the same taxonomy; its group must have no term
+    /// in `locale`, [`CoreError::InUse`]). The parent must be in `locale`; the slug is
+    /// free per (taxonomy, locale).
+    pub async fn create_localized_term(
+        &self,
+        actor: &Actor,
+        input: NewTermInput,
+        place: TermPlacement,
+    ) -> Result<Term, CoreError> {
+        require(actor, Capability::ManageTerms)?;
+        let tx = self.store.begin().await?;
+        let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
+            let (saved, keys) = create_term_in(
+                tx.as_ref(),
+                &input.taxonomy,
+                &input.name,
+                input.slug,
+                input.parent,
+                &input.description,
+                place,
+            )
+            .await?;
+            tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Copies term `id` into `locale` (13 §2.5): name, slug and description; the parent
+    /// is the parent's translation in `locale`, else none. Same rules as
+    /// [`create_localized_term`](Self::create_localized_term).
+    pub async fn translate_term(
+        &self,
+        actor: &Actor,
+        id: TermId,
+        locale: &str,
+    ) -> Result<Term, CoreError> {
+        require(actor, Capability::ManageTerms)?;
+        let tx = self.store.begin().await?;
+        let done = async {
+            let source = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+            if source.locale == locale {
+                return Err(CoreError::invalid_field(
+                    "locale",
+                    "the term is in this locale already",
+                ));
+            }
+            let parent = match source.parent_id {
+                None => None,
+                Some(p) => match tx.terms().get(p).await? {
+                    Some(p) => tx
+                        .terms()
+                        .group_members(&[p.translation_group])
+                        .await?
+                        .into_iter()
+                        .find(|m| m.locale == locale)
+                        .map(|m| m.id),
+                    None => None,
+                },
+            };
+            let (saved, keys) = create_term_in(
+                tx.as_ref(),
+                &source.taxonomy,
+                &source.name,
+                Some(source.slug.clone()),
+                parent,
+                &source.description,
+                TermPlacement {
+                    locale: Some(locale.to_owned()),
+                    translation_of: Some(source.id),
+                },
+            )
+            .await?;
+            tx.events().append(&events::invalidate(keys)).await?;
+            Ok(saved)
+        }
+        .await;
+        finish(tx, done).await
+    }
+
+    /// Moves term `id` to another locale or translation group (`translation_of`: `None`
+    /// keeps the group, `Some(None)` leaves it, `Some(Some(t))` joins term `t`'s). A term
+    /// with child terms, or linked to items, cannot change its locale (`Invalid`); the
+    /// target locale must be free in the group and the slug is allocated again in it.
+    pub async fn relocate_term(
+        &self,
+        actor: &Actor,
+        id: TermId,
+        locale: Option<String>,
+        translation_of: Option<Option<TermId>>,
+    ) -> Result<Term, CoreError> {
+        require(actor, Capability::ManageTerms)?;
+        let tx = self.store.begin().await?;
+        let done = async {
+            let current = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+            let tax = get_taxonomy(tx.as_ref(), &current.taxonomy).await?;
+            let locales = crate::locales::read(tx.as_ref()).await?;
+            let locale = locale.unwrap_or_else(|| current.locale.clone());
+            check_listed(&locales, &locale)?;
+            let moves = locale != current.locale;
+            if moves {
+                let siblings = tx.terms().list(&current.taxonomy, None).await?;
+                if siblings.iter().any(|t| t.parent_id == Some(id)) {
+                    return Err(CoreError::Invalid(
+                        "the term has children: change their locale first".into(),
+                    ));
+                }
+                let mut used = site::published(Timestamp::now());
+                used.statuses.clear();
+                used.term = Some(id);
+                used.limit = 1;
+                if !tx.content().list(&used).await?.items.is_empty() {
+                    return Err(CoreError::Invalid(
+                        "items use the term: link them to its translation first".into(),
+                    ));
+                }
+            }
+            let group = match translation_of {
+                None => current.translation_group,
+                Some(None) => current.id,
+                Some(Some(of)) => group_of(tx.as_ref(), of, &current.taxonomy).await?,
+            };
+            check_term_group_free(tx.as_ref(), group, &locale, Some(id)).await?;
+            let old_group = current.translation_group;
+            let base = current.slug.clone();
+            let next = Term {
+                locale,
+                translation_group: group,
+                parent_id: if moves { None } else { current.parent_id },
+                ..current
+            };
+            let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
+            let mut keys = term_keys(&tax, &saved);
+            keys.push(events::term_group_key(old_group));
             tx.events().append(&events::invalidate(keys)).await?;
             Ok(saved)
         }
@@ -253,34 +418,11 @@ impl TaxonomyService {
         let explicit = slug.as_deref().map(slug::validate).transpose()?;
         let tx = self.store.begin().await?;
         let done = async {
-            let current = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
-            let tax = get_taxonomy(tx.as_ref(), &current.taxonomy).await?;
-            check_flat(&tax, parent)?;
-            if let Some(new_parent) = parent
-                && parent != current.parent_id
-            {
-                check_parent_taxonomy(tx.as_ref(), &current.taxonomy, new_parent).await?;
-                check_cycle(tx.as_ref(), id, new_parent).await?;
-            }
-            let base = explicit.unwrap_or_else(|| current.slug.clone());
-            let old_slug = current.slug.clone();
-            let next = Term {
-                name,
-                description: description.to_owned(),
-                parent_id: parent,
-                ..current
-            };
-            let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
-            if saved.slug != old_slug {
-                let new_path = term_path(&tax.name, &saved.slug);
-                if had_archive(tx.as_ref(), &tax, id).await? {
-                    // Also clears the redirects from the new path.
-                    record_move(tx.as_ref(), &term_path(&tax.name, &old_slug), &new_path).await?;
-                } else {
-                    clear_redirects_from(tx.as_ref(), &new_path).await?;
-                }
-            }
-            emit(tx.as_ref(), &tax, &saved).await?;
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermUpdate, &[ObjectRef::Term(id)]).await?;
+            let saved =
+                update_term_in(tx.as_ref(), id, name, explicit, parent, description).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -293,19 +435,103 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
-            let term = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
-            let tax = get_taxonomy(tx.as_ref(), &term.taxonomy).await?;
-            let siblings = tx.terms().list(&term.taxonomy).await?;
-            if siblings.iter().any(|t| t.parent_id == Some(id)) {
-                return Err(CoreError::Invalid("has children".into()));
-            }
-            tx.terms().delete(id).await?;
-            emit(tx.as_ref(), &tax, &term).await?;
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermDelete, &[ObjectRef::Term(id)]).await?;
+            delete_term_in(tx.as_ref(), id).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;
         finish(tx, done).await
     }
+}
+
+/// [`TaxonomyService::update_term`] inside the caller's `repos`, without the capability
+/// check: `slug` is the validated caller slug (`None` keeps the current one).
+pub(crate) async fn update_term_in(
+    tx: &dyn Tx,
+    id: TermId,
+    name: String,
+    slug: Option<String>,
+    parent: Option<TermId>,
+    description: &str,
+) -> Result<Term, CoreError> {
+    let repos: &dyn Repos = tx;
+    let current = repos.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+    let tax = get_taxonomy(repos, &current.taxonomy).await?;
+    check_flat(&tax, parent)?;
+    if let Some(new_parent) = parent
+        && parent != current.parent_id
+    {
+        check_parent_taxonomy(repos, &current.taxonomy, new_parent).await?;
+        check_cycle(repos, id, new_parent).await?;
+    }
+    let base = slug.unwrap_or_else(|| current.slug.clone());
+    let old_slug = current.slug.clone();
+    let next = Term {
+        name,
+        description: description.to_owned(),
+        parent_id: parent,
+        ..current
+    };
+    let saved = save_with_free_slug(tx, next, &base, true).await?;
+    if saved.slug != old_slug {
+        let new_path = term_path(&tax.name, &saved.slug);
+        if had_archive(repos, &tax, id).await? {
+            // Also clears the redirects from the new path.
+            record_move(repos, &term_path(&tax.name, &old_slug), &new_path).await?;
+        } else {
+            clear_redirects_from(repos, &new_path).await?;
+        }
+    }
+    emit(repos, &tax, &saved).await?;
+    Ok(saved)
+}
+
+/// [`TaxonomyService::delete_term`] inside the caller's `repos`, without the capability
+/// check (a term with child terms is `Invalid("has children")`).
+pub(crate) async fn delete_term_in(repos: &dyn Repos, id: TermId) -> Result<(), CoreError> {
+    let term = repos.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+    let tax = get_taxonomy(repos, &term.taxonomy).await?;
+    let siblings = repos.terms().list(&term.taxonomy, None).await?;
+    if siblings.iter().any(|t| t.parent_id == Some(id)) {
+        return Err(CoreError::Invalid("has children".into()));
+    }
+    repos.terms().delete(id).await?;
+    emit(repos, &tax, &term).await
+}
+
+/// Re-inserts a deleted `term` with its id (design 17 §7.3), then links each of `items`
+/// that still exists to it. Emits the term's keys and each linked item's `post:` key.
+pub(crate) async fn reinsert_term_in(
+    repos: &dyn Repos,
+    term: &Term,
+    items: &[ContentId],
+) -> Result<(), CoreError> {
+    let tax = get_taxonomy(repos, &term.taxonomy).await?;
+    repos.terms().insert(term).await?;
+    let mut keys = Vec::new();
+    for item in items {
+        if repos.content().get(*item).await?.is_none() {
+            continue;
+        }
+        let mut linked: Vec<TermId> = repos
+            .terms()
+            .for_item(*item)
+            .await?
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        if !linked.contains(&term.id) {
+            linked.push(term.id);
+            repos.terms().set_for_item(*item, &linked).await?;
+        }
+        keys.push(events::post_key(*item));
+    }
+    if !keys.is_empty() {
+        repos.events().append(&events::invalidate(keys)).await?;
+    }
+    emit(repos, &tax, term).await
 }
 
 /// The pure checks of [`TaxonomyService::create_taxonomy`]: the name rules, no
@@ -359,7 +585,31 @@ pub(crate) async fn create_term_in(
     slug: Option<String>,
     parent: Option<TermId>,
     description: &str,
+    place: TermPlacement,
 ) -> Result<(Term, Vec<String>), CoreError> {
+    let locales = crate::locales::read(tx).await?;
+    let locale = place.locale.unwrap_or_else(|| locales.default.tag.clone());
+    check_listed(&locales, &locale)?;
+    let group = match place.translation_of {
+        None => None,
+        Some(of) => {
+            let group = group_of(tx, of, taxonomy).await?;
+            check_term_group_free(tx, group, &locale, None).await?;
+            Some(group)
+        }
+    };
+    if let Some(parent) = parent
+        && let Some(p) = tx.terms().get(parent).await?
+        && p.locale != locale
+    {
+        return Err(CoreError::invalid_field(
+            "parent_id",
+            format!(
+                "the parent is in {}: a parent must share the term's locale",
+                p.locale
+            ),
+        ));
+    }
     let name = check_name(name)?;
     let base = match &slug {
         Some(s) => slug::validate(s)?,
@@ -370,13 +620,16 @@ pub(crate) async fn create_term_in(
     if let Some(parent) = parent {
         check_parent_taxonomy(tx, taxonomy, parent).await?;
     }
+    let id = TermId::new();
     let term = Term {
-        id: TermId::new(),
+        id,
         taxonomy: taxonomy.to_owned(),
         slug: String::new(),
         name,
         description: description.to_owned(),
         parent_id: parent,
+        locale,
+        translation_group: group.unwrap_or(id),
     };
     let saved = save_with_free_slug(tx, term, &base, false).await?;
     // The archive path is the term's now; a redirect there would outrank it.
@@ -529,7 +782,7 @@ async fn save_with_free_slug(
         let attempt = tx.begin_nested().await?;
         let mut taken: Vec<String> = attempt
             .terms()
-            .list(&term.taxonomy)
+            .list(&term.taxonomy, Some(&term.locale))
             .await?
             .into_iter()
             .filter(|t| t.id != term.id)
@@ -572,7 +825,78 @@ async fn emit(repos: &dyn Repos, tax: &Taxonomy, term: &Term) -> Result<(), Core
 
 /// The keys [`emit`] sends for `term`.
 fn term_keys(tax: &Taxonomy, term: &Term) -> Vec<String> {
-    std::iter::once(events::term_key(term.id))
-        .chain(tax.content_types.iter().map(|t| events::archive_key(t)))
-        .collect()
+    [
+        events::term_key(term.id),
+        events::term_group_key(term.translation_group),
+    ]
+    .into_iter()
+    .chain(tax.content_types.iter().map(|t| events::archive_key(t)))
+    .collect()
+}
+
+/// A term to create ([`TaxonomyService::create_localized_term`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewTermInput {
+    pub taxonomy: String,
+    pub name: String,
+    /// `None`: derived from the name.
+    pub slug: Option<String>,
+    pub parent: Option<TermId>,
+    pub description: String,
+}
+
+/// Where a new term goes (13 §2.5): its locale (`None`: the site's default) and the
+/// term whose translation group it joins (`None`: its own).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TermPlacement {
+    pub locale: Option<String>,
+    pub translation_of: Option<TermId>,
+}
+
+/// `InvalidField { field: "locale" }` unless `locale` is one of the site's.
+fn check_listed(
+    locales: &ferrite_domain::locale::SiteLocales,
+    locale: &str,
+) -> Result<(), CoreError> {
+    if locales.contains(locale) {
+        Ok(())
+    } else {
+        Err(CoreError::invalid_field(
+            "locale",
+            format!("{locale:?} is not one of the site's locales"),
+        ))
+    }
+}
+
+/// The translation group of term `of`, which must exist in `taxonomy`
+/// (`InvalidField { field: "translation_of" }`).
+async fn group_of(repos: &dyn Repos, of: TermId, taxonomy: &str) -> Result<TermId, CoreError> {
+    match repos.terms().get(of).await? {
+        Some(t) if t.taxonomy == taxonomy => Ok(t.translation_group),
+        _ => Err(CoreError::invalid_field(
+            "translation_of",
+            "unknown term to translate",
+        )),
+    }
+}
+
+/// [`CoreError::InUse`] naming the term when `group` has one in `locale` (other than
+/// `except`).
+async fn check_term_group_free(
+    repos: &dyn Repos,
+    group: TermId,
+    locale: &str,
+    except: Option<TermId>,
+) -> Result<(), CoreError> {
+    let members = repos.terms().group_members(&[group]).await?;
+    if let Some(m) = members
+        .iter()
+        .find(|m| m.locale == locale && Some(m.id) != except)
+    {
+        return Err(CoreError::InUse(format!(
+            "the translation into {locale} already exists: {}",
+            m.id
+        )));
+    }
+    Ok(())
 }

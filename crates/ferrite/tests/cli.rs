@@ -11,6 +11,39 @@ mod test_support;
 
 const PG_URL_ENV: &str = "FERRITE_TEST_PG_URL";
 
+/// The migration versions this binary has, ascending (derived, so a new migration needs
+/// no edit here).
+fn versions() -> Vec<i64> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrite-store-sqlite/migrations");
+    let mut v: Vec<i64> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| {
+            let name = e.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix(".up.sql")
+                .map(|n| n.split('_').next().unwrap().parse::<i64>().unwrap())
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// `database version: <newest>`.
+fn db_version_line() -> String {
+    format!("database version: {}", versions().last().unwrap())
+}
+
+/// The versions above `target` as the CLI lists them, newest first or oldest first.
+fn listed(target: i64, newest_first: bool) -> String {
+    let mut v: Vec<i64> = versions().into_iter().filter(|v| *v > target).collect();
+    if newest_first {
+        v.reverse();
+    }
+    v.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn ferrite() -> Command {
     let mut cmd = cargo_bin_cmd!("ferrite");
     cmd.env_clear();
@@ -184,7 +217,7 @@ fn migrate_status_output() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains(&db_version_line()), "{out}");
     assert!(
         out.contains(&format!("(ferrite {})", env!("CARGO_PKG_VERSION"))),
         "{out}"
@@ -210,7 +243,7 @@ fn migrate_status_output() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains(&format!("Reverted migrations: {}", listed(2, true))));
     let out = stdout_code(
         {
             let mut c = ferrite();
@@ -252,7 +285,7 @@ fn migrate_status_output() {
 
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"));
+    assert!(stdout(c).contains(&format!("Applied migrations: {}", listed(2, false))));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -275,7 +308,7 @@ fn migrate_down_requires_yes() {
         c.args(["migrate", "status", "--data"]).arg(tmp.path());
         c
     });
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains(&db_version_line()), "{out}");
 }
 
 #[test]
@@ -464,7 +497,7 @@ fn a_restore_tmp_with_the_wal_moved_aside_refuses() {
         },
         0,
     );
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains(&db_version_line()), "{out}");
 }
 
 /// M4-4 fix round 2 (Minor A): killed inside the `-wal` move (the link made, the source not
@@ -930,7 +963,7 @@ fn postgres_init_and_migrate() {
         stdout(c)
     };
     let out = status(tmp.path());
-    assert!(out.contains("database version: 13"), "{out}");
+    assert!(out.contains(&db_version_line()), "{out}");
     assert!(out.contains("verdict: up to date"), "{out}");
 
     let mut c = ferrite();
@@ -944,13 +977,13 @@ fn postgres_init_and_migrate() {
         "--data",
     ])
     .arg(tmp.path());
-    assert!(stdout(c).contains("Reverted migrations: 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3"));
+    assert!(stdout(c).contains(&format!("Reverted migrations: {}", listed(2, true))));
     let mut c = ferrite();
     c.args(["migrate", "status", "--data"]).arg(tmp.path());
     assert!(stdout_code(c, 2).contains("verdict: needs migrate up"));
     let mut c = ferrite();
     c.args(["migrate", "up", "--data"]).arg(tmp.path());
-    assert!(stdout(c).contains("Applied migrations: 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"));
+    assert!(stdout(c).contains(&format!("Applied migrations: {}", listed(2, false))));
     let mut c = ferrite();
     c.args(["migrate", "verify", "--data"]).arg(tmp.path());
     assert!(stdout(c).contains("checksums OK"));
@@ -971,7 +1004,7 @@ fn config_check_reports_effective_settings() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off"
+        "ok: mode=solo database=sqlite media=local workers=3 mail=off metrics=off tls=off backup=off webhooks=off"
     );
     // `server.metrics_listen` (P34) is reported as its address.
     let out = stdout({
@@ -982,6 +1015,17 @@ fn config_check_reports_effective_settings() {
         c
     });
     assert!(out.contains(" metrics=127.0.0.1:9464 "), "{out}");
+    // `[webhooks] local_targets` (M6-6) is reported as `local`, with a warning.
+    let mut c = ferrite();
+    c.args(["config", "check", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true");
+    let run = c.output().unwrap();
+    assert!(run.status.success());
+    let out = String::from_utf8_lossy(&run.stdout);
+    assert!(out.trim().ends_with(" webhooks=local"), "{out}");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("webhooks.local_targets"), "{err}");
     // `[server.tls]` (P33) is reported as its mode.
     let out = stdout({
         let mut c = ferrite();
@@ -1029,7 +1073,7 @@ fn config_check_prints_backup() {
     });
     assert_eq!(
         out.trim(),
-        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly"
+        "ok: mode=solo database=sqlite media=local workers=2 mail=off metrics=off tls=off backup=weekly webhooks=off"
     );
     // The environment switches it like `serve`; a missing `to` is a problem (exit 1).
     let out = stdout({
@@ -1039,7 +1083,7 @@ fn config_check_prints_backup() {
             .env("FERRITE_BACKUP__SCHEDULE", "daily");
         c
     });
-    assert!(out.trim().ends_with(" backup=daily"), "{out}");
+    assert!(out.trim().ends_with(" backup=daily webhooks=off"), "{out}");
     std::fs::write(
         data.join("ferrite.toml"),
         "[site]\nurl = \"https://example.com\"\n[backup]\nschedule = \"daily\"\n",
@@ -1074,7 +1118,10 @@ fn config_check_prints_backup() {
                 .args(["config", "check", "--data", "."]);
             c
         });
-        assert!(out.trim().ends_with(" backup=daily"), "{to}: {out}");
+        assert!(
+            out.trim().ends_with(" backup=daily webhooks=off"),
+            "{to}: {out}"
+        );
     }
 
     // The same location check as `serve`: a symlink into the data folder and the media
@@ -1139,7 +1186,7 @@ fn config_check_applies_env_like_serve() {
     // auto + Postgres + S3 resolves to cluster.
     assert_eq!(
         out.trim(),
-        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off"
+        "ok: mode=cluster database=postgres media=s3 workers=2 mail=off metrics=off tls=off backup=off webhooks=off"
     );
 }
 
@@ -2186,6 +2233,36 @@ fn seed_site(dir: &Path, pg: Option<&PgSchema>) {
     c.arg("--data").arg(dir).assert().success();
 }
 
+/// What `seed demo` prints after its summary while `admin` has no password
+/// (`seed_site` uses `https://example.com`).
+fn sign_in_hint(dir: &Path) -> String {
+    let d = dir.display();
+    format!(
+        "The admin user has no password yet. To sign in at https://example.com/admin/, set one \
+         (stop `ferrite serve` first):\n  \
+         ferrite user reset-password --data {d} --login admin\n\
+         or create your own account:\n  \
+         ferrite user create --data {d} --login me --email me@example.com\n"
+    )
+}
+
+#[test]
+fn seed_hint_goes_once_admin_has_a_password() {
+    on_both_backends(|dir, pg| {
+        seed_site(dir, pg);
+        stdout(seed_cmd(dir, &[]));
+        let mut c = user_cmd(
+            dir,
+            &["reset-password", "--login", "admin", "--password-stdin"],
+        );
+        c.write_stdin("a demo passphrase\n");
+        stdout(c);
+        let out = stdout(seed_cmd(dir, &["--force"]));
+        assert!(out.starts_with("Seeded demo content:"), "{out}");
+        assert!(!out.contains("no password"), "{out}");
+    });
+}
+
 fn seed_cmd(dir: &Path, extra: &[&str]) -> Command {
     let mut c = ferrite();
     c.args(["seed", "demo"]).args(extra).arg("--data").arg(dir);
@@ -2247,13 +2324,14 @@ fn seed_business_profile() {
             "next: ferrite theme activate business --data {}\n",
             dir.display()
         );
-        assert!(out.ends_with(&next), "{out}");
+        assert!(out.contains(&next), "{out}");
+        assert!(out.ends_with(&sign_in_hint(dir)), "{out}");
 
         with_seeded_store(dir, pg, async |store| {
             let read = store.read();
             let home = read
                 .content()
-                .get_by_slug("page", None, "home")
+                .get_by_slug("page", None, None, "home")
                 .await
                 .unwrap()
                 .expect("the front page");
@@ -2291,7 +2369,7 @@ fn seed_business_profile() {
             for slug in ["about", "contact"] {
                 let p = read
                     .content()
-                    .get_by_slug("page", None, slug)
+                    .get_by_slug("page", None, None, slug)
                     .await
                     .unwrap();
                 assert!(p.is_some(), "page {slug}");
@@ -2306,7 +2384,7 @@ fn seed_business_profile() {
                 .await
                 .unwrap()
                 .into_iter()
-                .map(|(n, _)| n)
+                .map(|m| m.name)
                 .collect();
             menus.sort();
             assert_eq!(menus, ["footer", "primary"]);
@@ -2318,7 +2396,7 @@ fn seed_business_profile() {
             assert_eq!(labels, ["Garden design", "About", "Contact", "RSS feed"]);
             let design = read
                 .content()
-                .get_by_slug("page", Some(home.id), "garden-design")
+                .get_by_slug("page", None, Some(home.id), "garden-design")
                 .await
                 .unwrap()
                 .expect("garden design");
@@ -2338,7 +2416,10 @@ fn seed_default_profile_is_unchanged() {
         "Seeded demo content: 12 posts, 3 pages, 4 terms, 2 menus, 1 image (admin user: admin).\n";
     on_both_backends(|dir, pg| {
         seed_site(dir, pg);
-        assert_eq!(stdout(seed_cmd(dir, &[])), LINE);
+        assert_eq!(
+            stdout(seed_cmd(dir, &[])),
+            format!("{LINE}{}", sign_in_hint(dir))
+        );
         with_seeded_store(dir, pg, async |store| {
             let read = store.read();
             let posts = read
@@ -2419,7 +2500,7 @@ fn seed_default_profile_is_unchanged() {
         // `--profile blog` is the same profile.
         assert_eq!(
             stdout(seed_cmd(dir, &["--profile", "blog", "--force"])),
-            LINE
+            format!("{LINE}{}", sign_in_hint(dir))
         );
     });
 }

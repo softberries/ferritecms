@@ -147,13 +147,22 @@ pub(crate) fn panic_response(_panic: Box<dyn std::any::Any + Send + 'static>) ->
 }
 
 /// The request span: method, path and the client address ([`ClientIp`], when known).
+/// `path` as logged: a preview link's token is a credential and is left out.
+fn logged_path(path: &str) -> &str {
+    if path.starts_with("/_preview/link/") {
+        "/_preview/link/<token>"
+    } else {
+        path
+    }
+}
+
 /// The query is never logged (`s=` may hold personal data); status and latency are
 /// recorded when the response is ready.
 pub(crate) fn request_span(req: &Request) -> Span {
     let span = tracing::info_span!(
         "request",
         method = %req.method(),
-        path = %req.uri().path(),
+        path = %logged_path(req.uri().path()),
         client_ip = tracing::field::Empty,
         status = tracing::field::Empty,
         latency_ms = tracing::field::Empty,

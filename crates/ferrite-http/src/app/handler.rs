@@ -29,7 +29,7 @@ use super::{
 };
 use crate::api::cookie::read_session_cookie;
 use crate::plugins::{CacheOutcome, ServedEvent, is_preview_path};
-use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve};
+use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve_localized};
 
 /// Longest wait for the `/readyz` database ping.
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -61,7 +61,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     }
     let path = req.uri().path().to_owned();
     let raw_query = req.uri().query().map(str::to_owned);
-    let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
+    let (_, route) = resolve_localized(&path, raw_query.as_deref(), &state.routes.load());
     match &route {
         Route::Health => return text(StatusCode::OK, "ok\n"),
         Route::Ready => return ready(&state).await,
@@ -75,11 +75,31 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
         // Before the redirect rows, so none can shadow it (F27); never cached.
         Route::Preview { id } => {
             let id = *id;
-            return preview(&state, req.headers(), route, path, id).await;
+            let kind = super::preview::kind_of(raw_query.as_deref());
+            return preview(&state, req.headers(), route, path, id, kind).await;
         }
+        Route::PreviewLink { token } => {
+            let token = token.clone();
+            return super::preview::link(&state, req.headers(), &token, raw_query.as_deref()).await;
+        }
+        Route::PreviewExit => return super::preview::exit(&state),
         _ => {}
     }
-    let (res, cache, logged_in) = page(&state, req.headers(), route, path, raw_query).await;
+    // A whole-site preview (design 15 §5.3): before the redirects, never cached, not
+    // counted.
+    let mut clear_preview = false;
+    match super::preview::cookie_page(&state, req.headers(), &path, raw_query.as_deref()).await {
+        super::preview::CookiePage::Served(res) => return res,
+        super::preview::CookiePage::Clear => clear_preview = true,
+        super::preview::CookiePage::None => {}
+    }
+    let (mut res, cache, logged_in) = page(&state, req.headers(), route, path, raw_query).await;
+    if clear_preview {
+        res.headers_mut().append(
+            header::SET_COOKIE,
+            crate::api::cookie::preview_cookie("", 0, state.cookie_secure),
+        );
+    }
     if let Some(metrics) = &state.metrics
         && is_page_view(req.method(), req.headers(), &res, logged_in)
     {
@@ -197,8 +217,9 @@ async fn page(
         let rendered = rendered.clone();
         async move {
             rendered.store(true, Ordering::Relaxed);
-            let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
-            pipeline::render(state, route, path, query, logged_in).await
+            let (locale, route) =
+                resolve_localized(&path, raw_query.as_deref(), &state.routes.load());
+            pipeline::render(state, route, locale, path, query, logged_in).await
         }
     };
     let (page, cache) = match key {
@@ -253,10 +274,11 @@ async fn preview(
     route: Route,
     path: String,
     id: ContentId,
+    kind: pipeline::PreviewKind,
 ) -> Response<Body> {
     let page = match session(state, headers).await {
         Some(who) if !who.user.must_reset => {
-            pipeline::preview(state.clone(), route, path, who.actor, id).await
+            pipeline::preview(state.clone(), route, path, who.actor, id, kind).await
         }
         _ => Err(pipeline::NotFound),
     };
@@ -272,12 +294,12 @@ async fn preview(
     res
 }
 
-async fn missing(state: &Arc<AppState>, kind: Missing) -> Response<Body> {
+pub(super) async fn missing(state: &Arc<AppState>, kind: Missing) -> Response<Body> {
     page_response(&*error_page::missing(state, kind).await, None)
 }
 
 /// Answers with redirect row `r`: its code and target, `410` as the gone page.
-async fn follow(state: &Arc<AppState>, r: Redirect) -> Response<Body> {
+pub(super) async fn follow(state: &Arc<AppState>, r: Redirect) -> Response<Body> {
     // Buffered, never I/O: the hit count must not delay the redirect.
     if let Some(hits) = &state.hits {
         hits.record(r.id);

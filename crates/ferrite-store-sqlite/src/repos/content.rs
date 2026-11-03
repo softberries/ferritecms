@@ -8,11 +8,11 @@ use ferrite_domain::{
     RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, FileBound, ListPart, MAX_ID_FILTER, MAX_META_KEYS,
-    MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo, StoreError, check_content_filters,
-    check_file_bounds, check_id_list, check_len, check_limit, content_cursor, content_list_plan,
-    encode_content_cursor, file_bounds_from_rows, media_kind_sql, slug_has_prefix,
-    slug_prefix_bounds, validate_json, validate_text,
+    ContentRepo, ContentTypeRepo, FileBound, ListPart, LocaleFilter, MAX_ID_FILTER, MAX_META_KEYS,
+    MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo, StoreError, TranslationRef,
+    check_content_filters, check_file_bounds, check_groups, check_id_list, check_len, check_limit,
+    content_cursor, content_list_plan, encode_content_cursor, file_bounds_from_rows, locale_filter,
+    media_kind_sql, slug_has_prefix, slug_prefix_bounds, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{QueryBuilder, Sqlite};
@@ -34,11 +34,11 @@ impl ContentTypeRepo for SqliteRepos {
         // `built_in` and `created_at` are fixed when the type is first inserted.
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (name) DO UPDATE SET label = excluded.label, \
              hierarchical = excluded.hierarchical, has_archive = excluded.has_archive, \
-             fields = excluded.fields"
+             fields = excluded.fields, quality_gate = excluded.quality_gate"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -47,6 +47,7 @@ impl ContentTypeRepo for SqliteRepos {
         .bind(codec::json_to_db(&ty.fields)?)
         .bind(ty.built_in)
         .bind(ty.created_at.as_micros())
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -57,8 +58,8 @@ impl ContentTypeRepo for SqliteRepos {
         validate_json(&ty.fields)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -67,6 +68,7 @@ impl ContentTypeRepo for SqliteRepos {
         .bind(codec::json_to_db(&ty.fields)?)
         .bind(ty.built_in)
         .bind(ty.created_at.as_micros())
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -117,6 +119,7 @@ impl ContentRepo for SqliteRepos {
         validate_text("content slug", &item.slug)?;
         validate_text("content title", &item.title)?;
         validate_text("content excerpt", &item.excerpt)?;
+        validate_text("content locale", &item.locale)?;
         if let Some(html) = &item.body_html {
             validate_text("content body_html", html)?;
         }
@@ -128,8 +131,8 @@ impl ContentRepo for SqliteRepos {
         let row = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO content_items (id, type, status, slug, parent_id, author_id, title, \
              excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, \
-             created_at, updated_at, version) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1) \
+             created_at, updated_at, version, locale, translation_group) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) \
              RETURNING {CONTENT_COLUMNS}"
         )))
         .bind(item.id.as_uuid())
@@ -148,6 +151,8 @@ impl ContentRepo for SqliteRepos {
         .bind(item.scheduled_at.map(|t| t.as_micros()))
         .bind(created)
         .bind(updated)
+        .bind(&item.locale)
+        .bind(item.translation_group.unwrap_or(item.id).as_uuid())
         .fetch_one(e))?;
         codec::content_item(&row)
     }
@@ -164,20 +169,86 @@ impl ContentRepo for SqliteRepos {
     async fn get_by_slug(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError> {
         validate_text("content kind", kind)?;
         validate_text("content slug", slug)?;
+        if let Some(l) = locale {
+            validate_text("content locale", l)?;
+        }
         let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {CONTENT_COLUMNS} FROM content_items \
-             WHERE type = ? AND parent_id IS ? AND slug = ?"
+             WHERE type = ? AND parent_id IS ? AND slug = ? AND (? IS NULL OR locale = ?) \
+             ORDER BY id LIMIT 1"
         )))
         .bind(kind)
         .bind(parent.map(|p| p.as_uuid()))
         .bind(slug)
+        .bind(locale)
+        .bind(locale)
         .fetch_optional(e))?;
         row.as_ref().map(codec::content_item).transpose()
+    }
+
+    async fn group_members(&self, groups: &[ContentId]) -> Result<Vec<TranslationRef>, StoreError> {
+        check_groups(groups.len())?;
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Sqlite>::new(
+            "SELECT id, coalesce(translation_group, id) AS grp, type, locale, status, slug, \
+             parent_id, published_at, title, author_id FROM content_items WHERE translation_group IN (",
+        );
+        let mut list = qb.separated(", ");
+        for g in groups {
+            list.push_bind(g.as_uuid());
+        }
+        list.push_unseparated(") OR (translation_group IS NULL AND id IN (");
+        let mut list = qb.separated(", ");
+        for g in groups {
+            list.push_bind(g.as_uuid());
+        }
+        list.push_unseparated(")) ORDER BY grp, locale, id");
+        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
+        rows.iter().map(codec::translation_ref).collect()
+    }
+
+    async fn relocate(
+        &self,
+        id: ContentId,
+        locale: &str,
+        group: ContentId,
+        slug: &str,
+        expected_version: i64,
+    ) -> Result<ContentItem, StoreError> {
+        validate_text("content locale", locale)?;
+        validate_text("content slug", slug)?;
+        let row = run!(&self.writer, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE content_items SET locale = ?, translation_group = ?, slug = ?, \
+             updated_at = ?, version = version + 1 \
+             WHERE id = ? AND version = ? RETURNING {CONTENT_COLUMNS}"
+        )))
+        .bind(locale)
+        .bind(group.as_uuid())
+        .bind(slug)
+        .bind(Timestamp::now().as_micros())
+        .bind(id.as_uuid())
+        .bind(expected_version)
+        .fetch_optional(e))?;
+        if let Some(row) = row {
+            return codec::content_item(&row);
+        }
+        let current: Option<i64> = run!(&self.writer, |e| sqlx::query_scalar(
+            "SELECT version FROM content_items WHERE id = ?"
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        match current {
+            Some(current_version) => Err(StoreError::Conflict { current_version }),
+            None => Err(StoreError::NotFound),
+        }
     }
 
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
@@ -345,24 +416,31 @@ impl ContentRepo for SqliteRepos {
     async fn slugs_with_prefix(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         prefix: &str,
     ) -> Result<Vec<String>, StoreError> {
         validate_text("content kind", kind)?;
         validate_text("slug prefix", prefix)?;
+        if let Some(l) = locale {
+            validate_text("content locale", l)?;
+        }
         let (from, to) = slug_prefix_bounds(prefix);
         let slugs: Vec<String> = run!(&self.reader, |e| {
             sqlx::query_scalar(
-            "SELECT slug FROM content_items WHERE type = ? AND parent_id IS ? AND (slug = ? OR (slug >= ? AND slug < ?)) \
-             ORDER BY slug LIMIT ?"
-        )
-        .bind(kind)
-        .bind(parent.map(|p| p.as_uuid()))
-        .bind(prefix)
-        .bind(&from)
-        .bind(&to)
-        .bind(i64::from(MAX_SLUG_PREFIX_RESULTS))
-        .fetch_all(e)
+                "SELECT DISTINCT slug FROM content_items WHERE type = ? AND parent_id IS ? \
+             AND (? IS NULL OR locale = ?) AND (slug = ? OR (slug >= ? AND slug < ?)) \
+             ORDER BY slug LIMIT ?",
+            )
+            .bind(kind)
+            .bind(parent.map(|p| p.as_uuid()))
+            .bind(locale)
+            .bind(locale)
+            .bind(prefix)
+            .bind(&from)
+            .bind(&to)
+            .bind(i64::from(MAX_SLUG_PREFIX_RESULTS))
+            .fetch_all(e)
         })?;
         Ok(slugs
             .into_iter()
@@ -493,6 +571,19 @@ fn push_filters(qb: &mut QueryBuilder<Sqlite>, query: &ContentQuery) {
         qb.push(" AND id IN (SELECT item_id FROM media WHERE ")
             .push(media_kind_sql(kind))
             .push(")");
+    }
+    if let Some(locale) = &query.locale {
+        match locale_filter(query) {
+            LocaleFilter::None => {}
+            LocaleFilter::Plain => {
+                qb.push(" AND locale = ").push_bind(locale.clone());
+            }
+            LocaleFilter::ExceptMedia => {
+                qb.push(" AND (locale = ")
+                    .push_bind(locale.clone())
+                    .push(" OR type = 'media')");
+            }
+        }
     }
 }
 

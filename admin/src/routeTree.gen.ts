@@ -21,17 +21,26 @@ import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as AppImportRouteImport } from './routes/_app/import'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppAiActivityIndexRouteImport } from './routes/_app/ai-activity.index'
+import { Route as AppAiActivityIdRouteImport } from './routes/_app/ai-activity.$id'
 import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
+import { Route as AppHealthIndexRouteImport } from './routes/_app/health.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
 import { Route as AppPluginsIndexRouteImport } from './routes/_app/plugins.index'
 import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
+import { Route as AppPluginsPublishersRouteImport } from './routes/_app/plugins.publishers'
+import { Route as AppReleasesIndexRouteImport } from './routes/_app/releases.index'
+import { Route as AppReleasesIdRouteImport } from './routes/_app/releases.$id'
+import { Route as AppReviewsIndexRouteImport } from './routes/_app/reviews.index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
 import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
 import { Route as AppSystemIndexRouteImport } from './routes/_app/system.index'
 import { Route as AppSystemTabRouteImport } from './routes/_app/system.$tab'
 import { Route as AppUsersIndexRouteImport } from './routes/_app/users.index'
+import { Route as AppWebhooksIndexRouteImport } from './routes/_app/webhooks.index'
+import { Route as AppWebhooksIdRouteImport } from './routes/_app/webhooks.$id'
 import { Route as AppContentTypeIndexRouteImport } from './routes/_app/content.$type.index'
 import { Route as AppContentTypeIdRouteImport } from './routes/_app/content.$type.$id'
 import { Route as AppContentTypeNewRouteImport } from './routes/_app/content.$type.new'
@@ -101,6 +110,16 @@ const LoginTotpRoute = LoginTotpRouteImport.update({
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppAiActivityIndexRoute = AppAiActivityIndexRouteImport.update({
+  id: '/ai-activity/',
+  path: '/ai-activity/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAiActivityIdRoute = AppAiActivityIdRouteImport.update({
+  id: '/ai-activity/$id',
+  path: '/ai-activity/$id',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
   id: '/appearance/themes',
   path: '/appearance/themes',
@@ -109,6 +128,11 @@ const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
 const AppCommentsIndexRoute = AppCommentsIndexRouteImport.update({
   id: '/comments/',
   path: '/comments/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppHealthIndexRoute = AppHealthIndexRouteImport.update({
+  id: '/health/',
+  path: '/health/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMediaIndexRoute = AppMediaIndexRouteImport.update({
@@ -124,6 +148,26 @@ const AppPluginsIndexRoute = AppPluginsIndexRouteImport.update({
 const AppPluginsNameRoute = AppPluginsNameRouteImport.update({
   id: '/plugins/$name',
   path: '/plugins/$name',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPluginsPublishersRoute = AppPluginsPublishersRouteImport.update({
+  id: '/plugins/publishers',
+  path: '/plugins/publishers',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReleasesIndexRoute = AppReleasesIndexRouteImport.update({
+  id: '/releases/',
+  path: '/releases/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReleasesIdRoute = AppReleasesIdRouteImport.update({
+  id: '/releases/$id',
+  path: '/releases/$id',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReviewsIndexRoute = AppReviewsIndexRouteImport.update({
+  id: '/reviews/',
+  path: '/reviews/',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
@@ -154,6 +198,16 @@ const AppSystemTabRoute = AppSystemTabRouteImport.update({
 const AppUsersIndexRoute = AppUsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWebhooksIndexRoute = AppWebhooksIndexRouteImport.update({
+  id: '/webhooks/',
+  path: '/webhooks/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWebhooksIdRoute = AppWebhooksIdRouteImport.update({
+  id: '/webhooks/$id',
+  path: '/webhooks/$id',
   getParentRoute: () => AppRoute,
 } as any)
 const AppContentTypeIndexRoute = AppContentTypeIndexRouteImport.update({
@@ -216,17 +270,26 @@ export interface FileRoutesByFullPath {
   '/account': typeof AppAccountRoute
   '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
+  '/ai-activity/$id': typeof AppAiActivityIdRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
+  '/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/releases/$id': typeof AppReleasesIdRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
+  '/webhooks/$id': typeof AppWebhooksIdRoute
+  '/ai-activity/': typeof AppAiActivityIndexRoute
   '/comments/': typeof AppCommentsIndexRoute
+  '/health/': typeof AppHealthIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
+  '/releases/': typeof AppReleasesIndexRoute
+  '/reviews/': typeof AppReviewsIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/system/': typeof AppSystemIndexRoute
   '/users/': typeof AppUsersIndexRoute
+  '/webhooks/': typeof AppWebhooksIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -249,17 +312,26 @@ export interface FileRoutesByTo {
   '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/ai-activity/$id': typeof AppAiActivityIdRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
+  '/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/releases/$id': typeof AppReleasesIdRoute
   '/settings/$group': typeof AppSettingsGroupRoute
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
+  '/webhooks/$id': typeof AppWebhooksIdRoute
+  '/ai-activity': typeof AppAiActivityIndexRoute
   '/comments': typeof AppCommentsIndexRoute
+  '/health': typeof AppHealthIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
+  '/releases': typeof AppReleasesIndexRoute
+  '/reviews': typeof AppReviewsIndexRoute
   '/settings': typeof AppSettingsIndexRoute
   '/system': typeof AppSystemIndexRoute
   '/users': typeof AppUsersIndexRoute
+  '/webhooks': typeof AppWebhooksIndexRoute
   '/content/$type/$id': typeof AppContentTypeIdRoute
   '/content/$type/new': typeof AppContentTypeNewRoute
   '/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -284,17 +356,26 @@ export interface FileRoutesById {
   '/_app/import': typeof AppImportRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/ai-activity/$id': typeof AppAiActivityIdRoute
   '/_app/appearance/themes': typeof AppAppearanceThemesRoute
   '/_app/plugins/$name': typeof AppPluginsNameRoute
+  '/_app/plugins/publishers': typeof AppPluginsPublishersRoute
+  '/_app/releases/$id': typeof AppReleasesIdRoute
   '/_app/settings/$group': typeof AppSettingsGroupRoute
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/system/$tab': typeof AppSystemTabRoute
+  '/_app/webhooks/$id': typeof AppWebhooksIdRoute
+  '/_app/ai-activity/': typeof AppAiActivityIndexRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
+  '/_app/health/': typeof AppHealthIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
+  '/_app/releases/': typeof AppReleasesIndexRoute
+  '/_app/reviews/': typeof AppReviewsIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/system/': typeof AppSystemIndexRoute
   '/_app/users/': typeof AppUsersIndexRoute
+  '/_app/webhooks/': typeof AppWebhooksIndexRoute
   '/_app/content/$type/$id': typeof AppContentTypeIdRoute
   '/_app/content/$type/new': typeof AppContentTypeNewRoute
   '/_app/structure/menus/$name': typeof AppStructureMenusNameRoute
@@ -319,17 +400,26 @@ export interface FileRouteTypes {
     | '/account'
     | '/import'
     | '/login/totp'
+    | '/ai-activity/$id'
     | '/appearance/themes'
     | '/plugins/$name'
+    | '/plugins/publishers'
+    | '/releases/$id'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
+    | '/webhooks/$id'
+    | '/ai-activity/'
     | '/comments/'
+    | '/health/'
     | '/media/'
     | '/plugins/'
+    | '/releases/'
+    | '/reviews/'
     | '/settings/'
     | '/system/'
     | '/users/'
+    | '/webhooks/'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -352,17 +442,26 @@ export interface FileRouteTypes {
     | '/import'
     | '/login/totp'
     | '/'
+    | '/ai-activity/$id'
     | '/appearance/themes'
     | '/plugins/$name'
+    | '/plugins/publishers'
+    | '/releases/$id'
     | '/settings/$group'
     | '/structure/redirects'
     | '/system/$tab'
+    | '/webhooks/$id'
+    | '/ai-activity'
     | '/comments'
+    | '/health'
     | '/media'
     | '/plugins'
+    | '/releases'
+    | '/reviews'
     | '/settings'
     | '/system'
     | '/users'
+    | '/webhooks'
     | '/content/$type/$id'
     | '/content/$type/new'
     | '/structure/menus/$name'
@@ -386,17 +485,26 @@ export interface FileRouteTypes {
     | '/_app/import'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/ai-activity/$id'
     | '/_app/appearance/themes'
     | '/_app/plugins/$name'
+    | '/_app/plugins/publishers'
+    | '/_app/releases/$id'
     | '/_app/settings/$group'
     | '/_app/structure/redirects'
     | '/_app/system/$tab'
+    | '/_app/webhooks/$id'
+    | '/_app/ai-activity/'
     | '/_app/comments/'
+    | '/_app/health/'
     | '/_app/media/'
     | '/_app/plugins/'
+    | '/_app/releases/'
+    | '/_app/reviews/'
     | '/_app/settings/'
     | '/_app/system/'
     | '/_app/users/'
+    | '/_app/webhooks/'
     | '/_app/content/$type/$id'
     | '/_app/content/$type/new'
     | '/_app/structure/menus/$name'
@@ -504,6 +612,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/ai-activity/': {
+      id: '/_app/ai-activity/'
+      path: '/ai-activity'
+      fullPath: '/ai-activity/'
+      preLoaderRoute: typeof AppAiActivityIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ai-activity/$id': {
+      id: '/_app/ai-activity/$id'
+      path: '/ai-activity/$id'
+      fullPath: '/ai-activity/$id'
+      preLoaderRoute: typeof AppAiActivityIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/appearance/themes': {
       id: '/_app/appearance/themes'
       path: '/appearance/themes'
@@ -516,6 +638,13 @@ declare module '@tanstack/react-router' {
       path: '/comments'
       fullPath: '/comments/'
       preLoaderRoute: typeof AppCommentsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/health/': {
+      id: '/_app/health/'
+      path: '/health'
+      fullPath: '/health/'
+      preLoaderRoute: typeof AppHealthIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/media/': {
@@ -537,6 +666,34 @@ declare module '@tanstack/react-router' {
       path: '/plugins/$name'
       fullPath: '/plugins/$name'
       preLoaderRoute: typeof AppPluginsNameRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/plugins/publishers': {
+      id: '/_app/plugins/publishers'
+      path: '/plugins/publishers'
+      fullPath: '/plugins/publishers'
+      preLoaderRoute: typeof AppPluginsPublishersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/releases/': {
+      id: '/_app/releases/'
+      path: '/releases'
+      fullPath: '/releases/'
+      preLoaderRoute: typeof AppReleasesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/releases/$id': {
+      id: '/_app/releases/$id'
+      path: '/releases/$id'
+      fullPath: '/releases/$id'
+      preLoaderRoute: typeof AppReleasesIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/reviews/': {
+      id: '/_app/reviews/'
+      path: '/reviews'
+      fullPath: '/reviews/'
+      preLoaderRoute: typeof AppReviewsIndexRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings/': {
@@ -579,6 +736,20 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users/'
       preLoaderRoute: typeof AppUsersIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/webhooks/': {
+      id: '/_app/webhooks/'
+      path: '/webhooks'
+      fullPath: '/webhooks/'
+      preLoaderRoute: typeof AppWebhooksIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/webhooks/$id': {
+      id: '/_app/webhooks/$id'
+      path: '/webhooks/$id'
+      fullPath: '/webhooks/$id'
+      preLoaderRoute: typeof AppWebhooksIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/content/$type/': {
@@ -653,17 +824,26 @@ interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
   AppImportRoute: typeof AppImportRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAiActivityIdRoute: typeof AppAiActivityIdRoute
   AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppPluginsNameRoute: typeof AppPluginsNameRoute
+  AppPluginsPublishersRoute: typeof AppPluginsPublishersRoute
+  AppReleasesIdRoute: typeof AppReleasesIdRoute
   AppSettingsGroupRoute: typeof AppSettingsGroupRoute
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppSystemTabRoute: typeof AppSystemTabRoute
+  AppWebhooksIdRoute: typeof AppWebhooksIdRoute
+  AppAiActivityIndexRoute: typeof AppAiActivityIndexRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
+  AppHealthIndexRoute: typeof AppHealthIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
+  AppReleasesIndexRoute: typeof AppReleasesIndexRoute
+  AppReviewsIndexRoute: typeof AppReviewsIndexRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppSystemIndexRoute: typeof AppSystemIndexRoute
   AppUsersIndexRoute: typeof AppUsersIndexRoute
+  AppWebhooksIndexRoute: typeof AppWebhooksIndexRoute
   AppContentTypeIdRoute: typeof AppContentTypeIdRoute
   AppContentTypeNewRoute: typeof AppContentTypeNewRoute
   AppStructureMenusNameRoute: typeof AppStructureMenusNameRoute
@@ -681,17 +861,26 @@ const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
   AppImportRoute: AppImportRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAiActivityIdRoute: AppAiActivityIdRoute,
   AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppPluginsNameRoute: AppPluginsNameRoute,
+  AppPluginsPublishersRoute: AppPluginsPublishersRoute,
+  AppReleasesIdRoute: AppReleasesIdRoute,
   AppSettingsGroupRoute: AppSettingsGroupRoute,
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppSystemTabRoute: AppSystemTabRoute,
+  AppWebhooksIdRoute: AppWebhooksIdRoute,
+  AppAiActivityIndexRoute: AppAiActivityIndexRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
+  AppHealthIndexRoute: AppHealthIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,
+  AppReleasesIndexRoute: AppReleasesIndexRoute,
+  AppReviewsIndexRoute: AppReviewsIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppSystemIndexRoute: AppSystemIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,
+  AppWebhooksIndexRoute: AppWebhooksIndexRoute,
   AppContentTypeIdRoute: AppContentTypeIdRoute,
   AppContentTypeNewRoute: AppContentTypeNewRoute,
   AppStructureMenusNameRoute: AppStructureMenusNameRoute,

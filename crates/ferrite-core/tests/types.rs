@@ -69,6 +69,7 @@ fn new_type(name: &str, fields: Vec<FieldDef>) -> NewType {
         hierarchical: false,
         has_archive: true,
         fields: Some(fields),
+        quality_gate: ferrite_domain::QualityGate::Off,
     }
 }
 
@@ -465,6 +466,7 @@ pub async fn type_delete_rules(db: &TestDb) {
                 label: Some(" Events ".into()),
                 has_archive: Some(false),
                 fields: Some(Some(vec![field("venue", FieldKind::Text)])),
+                quality_gate: None,
             },
         )
         .await
@@ -638,13 +640,13 @@ pub async fn taxonomy_register_and_delete(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!(
-        svc.list_terms_for(&admin, "genre").await.unwrap(),
+        svc.list_terms_for(&admin, "genre", None).await.unwrap(),
         std::slice::from_ref(&jazz)
     );
     assert_eq!(svc.get_term(&admin, jazz.id).await.unwrap(), jazz);
     let content_only = admin.with_scopes(Scopes::from_strs(&["content:read".into()]).unwrap());
     assert!(matches!(
-        svc.list_terms_for(&content_only, "genre").await,
+        svc.list_terms_for(&content_only, "genre", None).await,
         Err(CoreError::Forbidden("terms:read"))
     ));
     assert!(matches!(

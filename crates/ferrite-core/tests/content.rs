@@ -77,6 +77,8 @@ async fn term(store: &dyn Store, slug: &str) -> TermId {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -94,6 +96,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             readable_by: None,
             limit: 50,
             cursor: None,
+            locale: None,
         })
         .await
         .unwrap()
@@ -112,7 +115,12 @@ async fn last_event_keys(store: &dyn Store) -> Vec<String> {
     let events = store.read().events().since(0, 1000).await.unwrap();
     let last = events.last().unwrap();
     assert_eq!(last.kind, "invalidate");
-    last.keys.clone()
+    // Without the translation group key (M6-1; checked in `content_locales.rs`).
+    last.keys
+        .iter()
+        .filter(|k| !k.starts_with("group:"))
+        .cloned()
+        .collect()
 }
 
 /// Sets an item's status directly (lifecycle transitions are Task 7).
@@ -783,6 +791,8 @@ pub async fn reserved_and_dot_slugs(db: &TestDb) {
         "healthz",
         "_preview",
         "_Preview",
+        "mcp",
+        "oauth",
     ] {
         let mut d = draft("post", "X");
         d.slug = Some(s.into());

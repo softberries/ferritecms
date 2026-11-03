@@ -250,7 +250,7 @@ test("hostile_manifest_renders_as_text", async ({ as, site, siteKey }) => {
     const r = row(page, plugin);
     await expect(r.locator("[data-slot=plugin-description]")).toHaveText(fields.description);
     await expect(r.locator("[data-slot=plugin-publisher]")).toHaveText(
-      `By ${fields.publisher} (not verified)`,
+      `${fields.publisher} · Unsigned`,
     );
 
     await openDetail(page, plugin);

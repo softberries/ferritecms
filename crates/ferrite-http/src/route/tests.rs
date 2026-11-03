@@ -401,6 +401,20 @@ fn preview_paths() {
                 (&format!("/_preview/{ID}"), preview.clone()),
                 (&format!("/_preview/{ID}?x=1"), preview.clone()),
                 (&format!("/_preview/{ID}/"), Route::NotFound),
+                ("/_preview/exit", Route::PreviewExit),
+                ("/_preview/exit/", Route::NotFound),
+                (
+                    "/_preview/link/ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    Route::PreviewLink {
+                        token: "ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                    },
+                ),
+                ("/_preview/link/ferp_short", Route::NotFound),
+                (
+                    "/_preview/link/ferp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+",
+                    Route::NotFound,
+                ),
+                ("/_preview/link/", Route::NotFound),
                 (&format!("/_preview/{upper}"), Route::NotFound),
                 (&format!("/_preview/{simple}"), Route::NotFound),
                 (&format!("/_preview/{{{ID}}}"), Route::NotFound),
@@ -803,4 +817,152 @@ fn canonical_targets_are_safe_and_stable() {
         );
     }
     assert!(redirects > 1000, "only {redirects} redirects generated");
+}
+
+/// A table for a site in `en` (default), `de` and `pt-BR`.
+fn table_localized() -> RouteTable {
+    let locales = ferrite_domain::locale::SiteLocales::from_option(&serde_json::json!([
+        {"tag": "en"}, {"tag": "de"}, {"tag": "pt-BR"}
+    ]))
+    .unwrap();
+    let rules = PermalinkRules::default().with_locales(locales);
+    RouteTable::new(&rules, &types(), &["category".into(), "tag".into()])
+}
+
+fn check_localized(table: &RouteTable, cases: &[(&str, Option<&str>, Route)]) {
+    for (raw, tag, want) in cases {
+        let (path, query) = split(raw);
+        let (locale, route) = resolve_localized(path, query, table);
+        assert_eq!(&route, want, "{raw:?}");
+        if !matches!(route, Route::NotFound) {
+            assert_eq!(locale.tag.as_deref(), *tag, "{raw:?}");
+        }
+    }
+}
+
+#[test]
+fn prefix_routes_content_listing_feed_search() {
+    let t = table_localized();
+    check_localized(
+        &t,
+        &[
+            ("/de/", Some("de"), Route::Front { page: 1 }),
+            ("/de/page/2/", Some("de"), Route::Front { page: 2 }),
+            ("/de/about/", Some("de"), root("about")),
+            (
+                "/de/about/team/",
+                Some("de"),
+                Route::Content(vec![single("page", &["about", "team"])]),
+            ),
+            (
+                "/de/feed/",
+                Some("de"),
+                Route::Feed(FeedSource::Kind("post".into())),
+            ),
+            (
+                "/de/category/nachrichten/",
+                Some("de"),
+                Route::Term {
+                    taxonomy: "category".into(),
+                    slug: "nachrichten".into(),
+                    page: 1,
+                },
+            ),
+            (
+                "/de/?s=garten",
+                Some("de"),
+                Route::Search {
+                    q: "garten".into(),
+                    page: 1,
+                },
+            ),
+            ("/pt-br/sobre/", Some("pt-BR"), root("sobre")),
+            ("/about/", None, root("about")),
+            ("/", None, Route::Front { page: 1 }),
+            // The default locale's own tag is no prefix.
+            ("/en/", None, root("en")),
+        ],
+    );
+}
+
+#[test]
+fn prefix_canonicalises_case_and_slash() {
+    let t = table_localized();
+    check_localized(
+        &t,
+        &[
+            ("/de", Some("de"), canonical("/de/")),
+            ("/de?s=x", Some("de"), canonical("/de/?s=x")),
+            ("/DE/about/", Some("de"), canonical("/de/about/")),
+            ("/DE/about", Some("de"), canonical("/de/about/")),
+            ("/de/about", Some("de"), canonical("/de/about/")),
+            ("/de/page/1/", Some("de"), canonical("/de/")),
+            ("/PT-BR/", Some("pt-BR"), canonical("/pt-br/")),
+        ],
+    );
+}
+
+#[test]
+fn prefix_with_files_or_internal_routes_is_404() {
+    let t = table_localized();
+    for raw in [
+        "/de/robots.txt",
+        "/de/sitemap.xml",
+        "/de/sitemap-post-1.xml",
+        &format!("/de/_media/{HASH}/a.png"),
+        &format!("/de/_theme/{HASH}/style.css"),
+        "/de/_preview/0192f0a4-1b2c-7d3e-8f40-123456789abc",
+        "/de/healthz",
+        "/de/readyz",
+        "/de/_comment",
+    ] {
+        let (path, query) = split(raw);
+        assert_eq!(
+            resolve_localized(path, query, &t).1,
+            Route::NotFound,
+            "{raw}"
+        );
+    }
+    // Without a prefix they are what they always were.
+    assert_eq!(resolve_localized("/robots.txt", None, &t).1, Route::Robots);
+}
+
+#[test]
+fn unknown_two_letter_segment_is_content() {
+    let t = table_localized();
+    check_localized(
+        &t,
+        &[(
+            "/fr/about/",
+            None,
+            Route::Content(vec![single("page", &["fr", "about"])]),
+        )],
+    );
+}
+
+/// With no locale prefixes `resolve_localized` is `resolve`, for many generated paths.
+#[test]
+fn no_locales_means_resolve_unchanged() {
+    let t = table();
+    let mut seed = 7u64;
+    let mut next = |n: usize| {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        ((seed >> 33) as usize) % n
+    };
+    const TOKENS: [&str; 12] = [
+        "de", "DE", "about", "page", "2", "feed", "category", "news", "2024", "%41", "x", "en",
+    ];
+    for _ in 0..200 {
+        let mut path = String::new();
+        for _ in 0..1 + next(4) {
+            path.push('/');
+            path.push_str(TOKENS[next(TOKENS.len())]);
+        }
+        if next(2) == 0 {
+            path.push('/');
+        }
+        let (locale, route) = resolve_localized(&path, None, &t);
+        assert_eq!(locale, RouteLocale::default(), "{path}");
+        assert_eq!(route, resolve(&path, None, &t), "{path}");
+    }
 }

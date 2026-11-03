@@ -10,6 +10,8 @@
     "content": "Content",
     "media": "Media",
     "comments": "Comments",
+    "releases": "Releases",
+    "reviews": "Reviews",
     "structure": "Structure",
     "contentTypes": "Content types",
     "taxonomies": "Taxonomies",
@@ -19,13 +21,16 @@
     "users": "Users",
     "appearance": "Appearance",
     "plugins": "Plugins",
+    "webhooks": "Webhooks",
+    "aiActivity": "AI activity",
     "import": "Import",
     "settings": "Settings",
     "system": "System",
     "viewSite": "View site",
     "badge_one": "({{count}} waiting)",
     "badge_other": "({{count}} waiting)",
-    "account": "Account"
+    "account": "Account",
+    "health": "Content health"
   },
   "crumbs": {
     "dashboard": "Dashboard",
@@ -33,7 +38,8 @@
     "content": "Content",
     "new": "New",
     "untitled": "Untitled",
-    "connect": "Connect an app"
+    "connect": "Connect an app",
+    "publishers": "Publisher keys"
   },
   "topBar": {
     "search": "Search or jump to…",

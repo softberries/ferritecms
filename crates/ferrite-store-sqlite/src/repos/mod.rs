@@ -14,18 +14,23 @@
 
 mod auth;
 mod autosave;
+mod change_set;
 mod comment;
 mod content;
+mod editorial;
 mod event;
 mod idempotency;
 mod import;
 mod job;
+mod locale;
 mod menu;
 mod node;
 mod node_metrics;
 mod oauth;
 mod plugin;
 mod plugin_failure;
+mod plugin_trust;
+mod quality;
 
 pub use comment::comment_list_sql;
 pub use idempotency::PRUNE_IDEMPOTENCY_SQL;
@@ -34,14 +39,18 @@ mod search;
 mod site;
 mod taxonomy;
 mod user;
+mod webhook;
 
 use async_trait::async_trait;
+use ferrite_store::ChangeSetRepo;
+use ferrite_store::QualityRepo;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
-    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
+    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
     NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    PluginTrustRepo, PreviewLinkRepo, RateLimitRepo, RedirectRepo, ReleaseRepo, Repos, ReviewRepo,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo,
+    ThemeRepo, Tx, UserRepo, WebhookRepo, WorkflowRepo,
 };
 use sqlx::SqlitePool;
 
@@ -157,6 +166,33 @@ impl Repos for SqliteRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self
     }
+    fn locales(&self) -> &dyn LocaleRepo {
+        self
+    }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        self
+    }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self
+    }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -241,4 +277,13 @@ delegate_repos!(
     imports: ImportRepo,
     node_metrics: NodeMetricsRepo,
     oauth: OAuthRepo,
+    locales: LocaleRepo,
+    webhooks: WebhookRepo,
+    plugin_trust: PluginTrustRepo,
+    releases: ReleaseRepo,
+    workflows: WorkflowRepo,
+    reviews: ReviewRepo,
+    preview_links: PreviewLinkRepo,
+    change_sets: ChangeSetRepo,
+    quality: QualityRepo,
 );

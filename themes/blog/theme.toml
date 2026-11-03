@@ -22,3 +22,10 @@ hero = { width = 1280, height = 640, crop = true }
 accent_color  = { type = "color", default = "#c2410c", label = "Accent colour (mid-tones keep links readable in light and dark mode)" }
 show_author   = { type = "bool", default = true, label = "Show post authors" }
 show_excerpts = { type = "bool", default = true, label = "Show excerpts in listings" }
+
+# The theme's own texts in German (M6-1, `t()`); a text without an entry prints as written.
+[strings.de]
+"Skip to content" = "Zum Inhalt springen"
+"Preview: this content is not published." = "Vorschau: Dieser Inhalt ist nicht veröffentlicht."
+"Powered by FerriteCMS" = "Betrieben mit FerriteCMS"
+"Languages" = "Sprachen"

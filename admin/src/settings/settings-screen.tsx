@@ -17,8 +17,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "cn";
 import { AiAssistantsGroup } from "./ai-assistants";
+import { HealthGroup } from "./health";
 import { CommentsGroup } from "./comments";
 import { GeneralGroup } from "./general";
+import { LanguagesGroup } from "./languages";
 import { GROUP_ICONS, GROUP_KEYS, SETTINGS_GROUPS, type SettingsGroup } from "./groups";
 import { MailGroup } from "./mail";
 import { MediaSizesGroup } from "./media-sizes";
@@ -58,6 +60,8 @@ function GroupBody({ group, me }: { group: SettingsGroup; me: MeDto }) {
   switch (group) {
     case "general":
       return <GeneralGroup settings={settings.data} />;
+    case "languages":
+      return <LanguagesGroup settings={settings.data} />;
     case "reading":
       return <ReadingGroup settings={settings.data} />;
     case "permalinks":
@@ -66,6 +70,8 @@ function GroupBody({ group, me }: { group: SettingsGroup; me: MeDto }) {
       return <CommentsGroup settings={settings.data} />;
     case "ai-assistants":
       return <AiAssistantsGroup settings={settings.data} />;
+    case "health":
+      return <HealthGroup settings={settings.data} />;
   }
 }
 

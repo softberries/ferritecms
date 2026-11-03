@@ -48,7 +48,11 @@ export type Problem =
   | { code: "locale" }
   | { code: "integer"; min: number; max: number }
   | { code: "pickPage" }
-  | { code: "permalink"; detail: StructureProblem };
+  | { code: "permalink"; detail: StructureProblem }
+  | {
+      code: "localeList";
+      detail: "empty" | "tooMany" | "badTag" | "duplicate" | "labelTooLong";
+    };
 
 export interface FieldSpec<V> {
   /** The form's value for a stored one (`null`: unset, the default). */

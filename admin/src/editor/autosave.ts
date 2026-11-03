@@ -20,6 +20,8 @@ import type { SchemaAutosaveDto, SchemaSeoPatchDto } from "@/api/schema";
 
 /** How often a changed draft is written to the slot (07 §3). */
 export const AUTOSAVE_INTERVAL_MS = 10_000;
+/** The idle debounce while the live preview is open (design 15 §3.2, D15). */
+export const PREVIEW_DEBOUNCE_MS = 2_000;
 
 /**
  * An item's working draft as the slot holds it (`AutosaveInput`, pre-flight F11). `null`
@@ -60,6 +62,8 @@ export interface AutosaverOptions {
   now?: () => number;
   /** A failure that is not a network one (a `401`, a `403`, a `422`): not retried. */
   onError?: (error: unknown) => void;
+  /** A write landed: the slot holds `draft` now (the live preview reloads). */
+  onSaved?: (draft: Draft) => void;
   /** Where `online` comes from and `visibilitychange` happens (tests pass their own). */
   window?: Pick<Window, "addEventListener" | "removeEventListener">;
   document?: Pick<Document, "addEventListener" | "removeEventListener" | "visibilityState">;
@@ -80,6 +84,12 @@ export interface Autosaver {
    * release is called: an explicit save holds the autosaver around its `PATCH`.
    */
   hold(): Promise<() => void>;
+  /**
+   * `ms`: a changed draft is written once nothing changed for `ms` (an idle debounce;
+   * while the changes go on, still at least once per interval); `null`: back to the
+   * interval. The live preview sets it while its pane is open.
+   */
+  setDebounce(ms: number | null): void;
   /** Stops for good: no timer, no listener, no further write. */
   dispose(): void;
   /** Whether `dispose` ran (a lost session, the screen gone). */
@@ -120,13 +130,41 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
   let lastSaved: number | null = null;
   // Bumped by `markClean`: a write that fails after it does not bring its draft back.
   let cleaned = 0;
+  // The idle debounce (`setDebounce`), and when the draft first changed since the last
+  // write (the debounce never waits past the interval from then).
+  let debounce: number | null = null;
+  let dirtySince: number | null = null;
+  let lastWriteAt: number | null = null;
+
+  const clear = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
 
   const arm = () => {
-    if (timer !== null || disposed || pending === null) return;
-    timer = setTimeout(() => {
-      timer = null;
-      void write();
-    }, opts.intervalMs);
+    if (disposed || pending === null) return;
+    if (debounce === null) {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void write();
+      }, opts.intervalMs);
+      return;
+    }
+    // Idle debounce: re-armed by every change, capped at the interval since the first
+    // change, and never sooner than `debounce` after the previous write.
+    clear();
+    const t = now();
+    dirtySince ??= t;
+    let due = Math.min(t + debounce, dirtySince + opts.intervalMs);
+    if (lastWriteAt !== null) due = Math.max(due, lastWriteAt + debounce);
+    timer = setTimeout(
+      () => {
+        timer = null;
+        void write();
+      },
+      Math.max(0, due - t),
+    );
   };
 
   const settledState = (): AutosaveState => (pending === null ? "saved" : "dirty");
@@ -137,6 +175,8 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
     if (disposed || holds > 0 || pending === null) return Promise.resolve();
     const source = pending;
     pending = null;
+    dirtySince = null;
+    lastWriteAt = now();
     let draft: Draft;
     try {
       draft = typeof source === "function" ? source() : source;
@@ -151,7 +191,10 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       try {
         await opts.save(draft);
         lastSaved = now();
-        if (!disposed) state.set(settledState());
+        if (!disposed) {
+          state.set(settledState());
+          opts.onSaved?.(draft);
+        }
       } catch (e) {
         if (disposed) return;
         if (e instanceof NetworkError) {
@@ -199,8 +242,8 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
     markClean() {
       cleaned++;
       pending = null;
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
+      dirtySince = null;
+      clear();
       if (!disposed && state.get() !== "saving") state.set("saved");
     },
     flush,
@@ -224,6 +267,14 @@ export function createAutosaver(opts: AutosaverOptions): Autosaver {
       // closed window has no methods left; nothing is subscribed to by then.
       win?.removeEventListener?.("online", onOnline);
       doc?.removeEventListener?.("visibilitychange", onVisibility);
+    },
+    setDebounce(ms) {
+      if (ms === debounce) return;
+      debounce = ms;
+      // A waiting draft goes by the new rule from now on.
+      clear();
+      dirtySince = null;
+      arm();
     },
     disposed: () => disposed,
     state,

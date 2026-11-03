@@ -5,6 +5,7 @@ pub mod actions;
 mod actor;
 pub mod auth;
 pub mod blocks;
+pub mod changes;
 pub mod comments;
 pub mod content;
 pub mod diagnostics;
@@ -15,13 +16,17 @@ mod extensions;
 pub mod fields;
 pub mod import;
 pub mod jobs;
+pub mod locales;
 pub mod mail;
 mod media;
 mod menu;
 pub mod oauth;
 mod options;
 pub mod permalink;
+pub mod preview_link;
+pub mod quality;
 mod redirects;
+pub mod release;
 pub mod seed;
 pub mod settings;
 pub mod site;
@@ -31,23 +36,28 @@ mod taxonomy;
 mod tx;
 mod types;
 mod users;
+pub mod webhooks;
+pub mod workflow;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
 pub const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
-    Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
-    require_reader, role_can_edit, role_scopes,
+    Access, Actor, Agent, Area, Capability, Scope, Scopes, can, can_edit, can_read, require,
+    require_read, require_reader, role_can_edit, role_scopes,
 };
 pub use auth::{
     AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,
 };
 pub use content::{
-    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, SiteSearch,
+    AdminQuery, AutosaveDraft, ContentDraft, ContentService, MAX_REVISIONS_LISTED, Relocation,
+    SiteSearch, TranslateNote, Translated,
 };
 pub use error::{CoreError, RowError};
 pub use extensions::{
-    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,
+    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, InstallTrust, MAX_FAILURE_BUCKETS,
+    OwnerChange, RegistryContext, RegistryRefresh, RegistryStored, RetainedPluginData, SignerInput,
+    SignerSource, SignerView, TrustDecision, TrustWarning, owner_label,
 };
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,
@@ -65,11 +75,11 @@ pub use redirects::{
 };
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, SiteRead, SiteReader, SitemapEntry, SitemapFile, SitemapPage,
-    TermPublic, UserPublic,
+    PageItem, PreviewSource, Previewed, PublicItem, ReadLocale, SiteRead, SiteReader, SitemapEntry,
+    SitemapFile, SitemapPage, TermPublic, TranslationLink, UserPublic,
 };
 pub use system::{MetricsSeries, SystemService};
-pub use taxonomy::TaxonomyService;
+pub use taxonomy::{NewTermInput, TaxonomyService, TermPlacement};
 pub use types::{
     ContentTypeService, MAX_TYPE_LABEL, MAX_TYPE_NAME, NewType, TypePatch, is_type_name_shaped,
 };

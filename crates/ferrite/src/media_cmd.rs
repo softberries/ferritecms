@@ -142,6 +142,7 @@ async fn collect(args: GcArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = open_media(&config)?;
@@ -264,6 +265,7 @@ async fn regenerate(args: RegenerateArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = open_media(&config)?;

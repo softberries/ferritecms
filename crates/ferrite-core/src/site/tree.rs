@@ -108,10 +108,20 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.order = ContentOrder::MenuOrderAsc;
+        q.locale = self.tag().map(str::to_owned);
+        // Under a locale, the front page's translation is that locale's root (13 §4).
+        let front_group = match (self.tag(), front) {
+            (Some(_), Some(id)) => repos.content().get(id).await?.map(|f| f.translation_group),
+            _ => None,
+        };
+        let root = self.tag().map_or_else(
+            || "/".to_owned(),
+            |t| format!("/{}/", t.to_ascii_lowercase()),
+        );
         let mut nodes = Vec::new();
         walk_paths(repos, rules, &mut q, MAX_TREE_NODES, |item, url| {
-            let url = if front == Some(item.id) {
-                "/".to_owned()
+            let url = if front == Some(item.id) || front_group == Some(item.translation_group) {
+                root.clone()
             } else {
                 url
             };

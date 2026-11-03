@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { childEnv } from "./child-env";
 import type { Backend, SiteContent } from "./projects";
 import { ACCOUNTS } from "./users";
+import { writeRegistry } from "./registry-fixture";
 import { startSmtpSink } from "./smtp-sink";
 
 const adminDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -117,8 +118,17 @@ export async function startSite(opts: {
       ]);
     }
 
+    // M6-2: a signed file registry of its own for every admin site (the trust spec).
+    const registry = content === "demo" ? writeRegistry(join(root, "registry")) : null;
+    const registryEnv: Record<string, string> = registry
+      ? {
+          FERRITE_PLUGINS__REGISTRY: registry.url,
+          FERRITE_PLUGINS__REGISTRY_KEY: registry.registryKey,
+        }
+      : {};
     child = spawn(FERRITE_BIN, ["serve", "--data", data], {
       env: childEnv(process.env, {
+        ...registryEnv,
         FERRITE_LOG: process.env.FERRITE_LOG ?? "info",
         NO_COLOR: "1",
         FERRITE_SERVER__LISTEN: `127.0.0.1:${port}`,
@@ -126,6 +136,8 @@ export async function startSite(opts: {
         FERRITE_SERVER__TRUSTED_PROXIES: '["127.0.0.1/32"]',
         FERRITE_MAIL__SMTP_URL: `smtp://127.0.0.1:${sink.port}`,
         FERRITE_MAIL__FROM: "FerriteCMS <admin@example.test>",
+        // The webhooks spec's sink listens on loopback over http (M6-6).
+        FERRITE_WEBHOOKS__LOCAL_TARGETS: "true",
       }),
       stdio: ["ignore", "pipe", "pipe"],
     });

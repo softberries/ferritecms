@@ -468,7 +468,7 @@ rulings" R-b1–R-b17). M4-3 as a whole: [`m4-3-exit.md`](superpowers/m4-3-exit.
 - [x] Example plugins: SEO, privacy-friendly analytics, contact form (M4-3a P42–P47: `plugins/examples/{seo,analytics,contact-form}` with a README each, SDK helpers, one host change for `options.get("site.url"|"site.title")` (X1), core percent-encoding of `request.served` paths (X5), analytics' two storage tiers under the 10 MiB KV quota (`detail_days`, X7, from the final review); shipped as the release asset `ferrite-plugins-<version>.tar.gz` made by `.github/scripts/package-plugins.sh`; 05 §10 and §12, 09 §7).
 - [x] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b P54–P62: heading ids by GitHub's rule and `post.toc`; `SiteReader::tree` and the `page_tree()` helper with breadcrumbs and previous/next; `query(order="menu")`; `themes/docs` and `themes/business`, each under 150 KB; `seed demo --profile business`; `ferrite import markdown` in the new crate `ferrite-import-md`; code blocks as `<pre tabindex="0">` (R-b17); 06 §4 and §8, 08 §8, 09 §8).
 - [x] Docs site (built with FerriteCMS itself; M4-3b P63: `site/content/` (26 pages), `site/build.sh`, `site/VERIFIED.md` with every claim and how it was checked, `crates/ferrite/tests/docs_site.rs`; axe checks on all three starter themes, P64, in the `public-themes-chromium` Playwright project). Hosting it is the user's decision (`m4-3b-exit.md` "For the user").
-- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order, exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order (27 with M6-6's `webhooks.endpoints` and M6-2's `plugins.trust`), exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
 
 ### M4-4 — follow-ups (done)
 
@@ -568,6 +568,137 @@ Follow-ups (not in M5):
 - Pruning unused `oauth_clients` rows (Task 1 Minor 7); several resources per grant (Task 2 Minor 5).
 - From design 12 §10: plugins contributing tools (a WIT `mcp` interface), a stdio bridge, per-tool allow lists per grant, MCP elicitation for confirmations, the ChatGPT Apps SDK widgets.
 
+## M6 — Editorial platform
+
+What the competitor review of 2026-11-02
+([`research/2026-11-02-cms-competitors.md`](superpowers/research/2026-11-02-cms-competitors.md))
+found missing here, plus what no product offers well and FerriteCMS can build on what it
+has (revisions, the audit log, grant-bound tokens, the job queue, the axe checks).
+
+Done (2026-11-03; exit [`m6-exit.md`](superpowers/m6-exit.md), parts in `m6-1-exit.md` …
+`m6-6-exit.md`; designs 13–18; rulings `rulings/m6.md`; migrations `0014`–`0019`). After M6
+the MCP server lists 70 tools (38 write, 32 read-only), 2 resources, 1 resource template
+and 5 prompts. The unticked items below are follow-ups that stay open. Left out on purpose: a page builder and e-commerce (BRIEF §4), GraphQL (REST
+with OpenAPI and MCP cover headless use).
+
+### M6-1 — Multilingual content
+
+Done (2026-11-03, branch `m6-1-multilingual`; exit
+[`m6-1-exit.md`](superpowers/m6-1-exit.md), migration `0014_locales`, design 13).
+
+- [x] Site locales: a default locale and a list of locales in settings (BCP 47 tags); a
+  site with one locale behaves exactly as today. (`site.locales`; the golden test of the
+  one-locale output, `crates/ferrite/tests/serve/single_locale.rs`.)
+- [x] A locale on every content item and a translation group linking an item's
+  translations (one group per original); terms and menus per locale.
+- [x] Locale-prefixed permalinks for the non-default locales (`/de/…`), `hreflang` links in
+  the head, sitemap alternates, `<html lang>`, RSS per locale.
+- [x] Theme helpers: the current locale, `translations()` of an item, a language switcher;
+  the starter themes use them. (`site.locales`, `translations()`, `locale_links()`, `t()`
+  with `[strings.<tag>]`.)
+- [x] Admin: a locale filter on lists, "Translate" (copies the item as a draft in the target
+  locale), side-by-side translation status; the API and the MCP content tools take `locale`.
+  (Settings → Languages; the taxonomy and menu screens per locale; the MCP term and menu
+  tools take `locale`.)
+- [x] WordPress import keeps an item's language where the WXR carries one (WPML / Polylang
+  data; what the export holds is checked first, not assumed). (Checked against the
+  plugins' documented shapes with hand-written files only; no real export was available.)
+- Follow-ups:
+  - [x] Admin: locales on the taxonomy and menu screens (translate a term, a menu per
+    locale; plan Task 16).
+  - [x] MCP: `locale` on `terms_list`, `term_create`, `menu_get`, `menu_set`.
+  - [ ] WordPress import against a real Polylang export (and WPML's Export and Import if
+    a licence is available); `--default-locale`; the report's `languages` section; terms
+    in the locale of the items that use them.
+  - [ ] Per-locale status counts on the content list tabs.
+  - [ ] Screenshots of Settings → Languages and the Translations section for the guide.
+
+### M6-2 — Plugin trust
+
+- [x] Publisher keys (minisign, as releases use) and a signature over the plugin bundle;
+  install verifies it and the permission report shows the verified publisher.
+- [x] Plugin data and sealed secrets keyed by publisher and name, so a same-named plugin from
+  another publisher cannot read them (05 §2, M2a-2a R22). As built: the name's data is bound
+  to its publisher (`plugin_owners`, design 14 D12) rather than re-keyed.
+- [x] A registry index (a signed static JSON file, hostable on GitHub Pages):
+  `ferrite plugin search|install NAME`, update checks on the Plugins screen, and the three
+  example plugins published there. As built (ruling P5): the publishing steps run once the
+  user creates the plugin and registry keys (09 §7 "Plugin keys"); until then the plugins
+  ship unsigned and no index is published.
+
+M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
+
+- [ ] Create the plugin publisher key and the registry key, commit `crates/ferrite/registry.pub`
+  and the key in `registry/publishers.json`, store the four secrets; then the first signed
+  release and the first Pages publication of the index (neither run yet).
+- [ ] Content meta under `plugin.<name>.*` is not erased with a plugin's data, so a new owner
+  of a freed name can read it (design 14 §12; ruling P5: Later).
+- [ ] Record a failed first registry fetch when there is no cache row yet (the Plugins screen
+  and doctor then show only "not checked yet").
+- [ ] A submission flow for third-party publishers, signed theme bundles, a transparency log
+  of index versions, an index expiry (design 14 §14).
+
+### M6-3 — Editing
+
+- [x] Live preview beside the editor: the item's unsaved state rendered by the active theme,
+  refreshed on autosave (M6-3, [`m6-3-exit.md`](superpowers/m6-3-exit.md); design 15; a
+  sandboxed frame on a signed preview link, ruling P7).
+- [x] Releases: a named set of changes (staged changes, publish, unpublish) applied together
+  in one transaction, now or on a schedule, with a whole-site preview of the site as it will
+  look (menus, listings, page tree, sitemap) and signed, expiring preview links (migration
+  `0017_releases_workflows`; MCP release tools).
+- [x] Approval workflows: configurable steps per content type, required approvals before
+  publishing, reviewer assignment and mail notifications (extends submit-for-review; P7:
+  approvers may edit live items in place, audited).
+- [x] Eligible approvers for the reviewer pickers without `manage_users`:
+  `GET /workflows/{type}/approvers` (final review, 2026-11-03).
+- Later (M6-3 follow-ups): sharing the `?working=1` / `?release=` preview modes with other
+  people (they stay bound to the link creator's session, ruling P8b); `GET /workflows/{type}` 404 for a type
+  without a workflow is logged by browsers; change mode keeps no local backup and its
+  "Back to the item" skips the leave guard; the working preview's SEO patch is not applied
+  to the head; scroll position across preview reloads (the sandboxed frame is opaque);
+  `Idempotency-Key` on release apply; the release E2E specs in Firefox and WebKit; a
+  property test over roles x statuses x review states for `allowed`; tests for the
+  preview slot 503, the 15 s sandbox deadline and the plugin `kv.set` refusal; plugin
+  hooks for releases and reviews (design 15 §17).
+
+### M6-4 — Accessibility and content health
+
+- [x] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
+  vague link text, empty headings, tables without headers; a per-type setting that blocks
+  publishing on errors; the same checks as an MCP tool (M6-4,
+  [`m6-4-exit.md`](superpowers/m6-4-exit.md); migration `0019_content_health`; design 16;
+  MCP `content_check`).
+- [x] Content health screen, fed by a periodic job: broken internal and external links,
+  orphan pages, missing alt text, redirect chains and loops, items not updated in a year
+  (M6-4; `content.health` daily at 04:00 UTC; MCP `health_report`).
+- Later (M6-4 follow-ups): plugin-provided rules (a `quality` WIT hook); a log-capture test
+  that the link checker names hosts only; the E2E specs `editor-quality` and `health` in
+  Firefox and WebKit; decorative images inside a paragraph lose the flag in Markdown;
+  change-set snapshots of a type do not hold its publish gate (a revert keeps the current
+  one).
+
+### M6-5 — AI change sets
+
+- [x] Writes through an OAuth grant or a personal token over MCP are grouped into change
+  sets (per grant and session window), with before-images for what has no revisions
+  (terms, menus, settings, redirects) (M6-5, [`m6-5-exit.md`](superpowers/m6-5-exit.md);
+  migration `0018_change_sets`; design 17).
+- [x] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
+  one change, refusing where a later edit conflicts (M6-5; MCP `changes_list` read-only).
+
+### M6-6 — Outgoing webhooks
+
+- [x] Webhooks on content, media, comment, user and release events: HMAC-signed bodies,
+  retries through the job queue, the plugin `http` import's SSRF checks, a delivery log
+  (M6-6, [`m6-6-exit.md`](superpowers/m6-6-exit.md); migration `0016_webhooks`; `release.*`
+  is reserved for M6-3, which adds and emits it).
+- [x] Admin screen and API (`/api/v1/webhooks`), test delivery, secrets write-only (M6-6).
+
+Considered and parked (2026-11-02): OpenTelemetry export (traces and logs over OTLP, for
+example to Tayga; needs spans in the plugin host, renderer, store and jobs first),
+memberships and newsletters, ActivityPub, A/B tests, real-time co-editing.
+
 ## Before v0.1.0
 
 What the first release needs from the user or from a first real run (M4 ruling P66). Nothing
@@ -584,14 +715,20 @@ here is code that can be written and tested locally.
 ## Later
 
 - Multi-site and multi-host sites (cache-key host pinned to `site.url`, M1c-2 R25, M2a P27); read replicas; multi-region.
-- Signed plugin registry with verified publishers.
 - TOTP recovery codes (M2a P9: none; an operator or, since M2b-3, an admin switches TOTP off, M2b P43) and a user agent per session so sessions can be told apart by more than their times (M2b P45; needs a migration).
 - JS/Go/Python plugin SDKs (after checking Component Model toolchain maturity).
-- Built-in forms, i18n/multilingual content, full-text search UI.
+- Built-in forms, full-text search UI (multilingual content is M6-1).
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
+- Webhooks (design 18 §12, M6-6): inbound webhooks; per-endpoint custom headers; `v1a`
+  (ed25519) signatures; payload version 2; filters beyond the content type (term, author);
+  per-endpoint rate limits and FIFO ordering; a dashboard card; events for terms, menus,
+  settings, themes and plugins; plugin-defined events (a new WIT world); a signing helper in
+  the guest SDK; the official `standardwebhooks` libraries run against a real delivery (the
+  by-hand checks were); real Netlify/Vercel deploy hooks and a real CDN purge.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
-- Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
+- Multilingual later list (design 13 §13): per-locale media text, translated type and taxonomy prefixes, locale-aware `date` names, a domain per locale, optional fallback listings, term language import from Polylang, a translation memory or glossary for assistants, side-by-side editing, `hreflang` on term archives.
+- Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), a `locale` on `post` (M6-1 P6; `request-info.locale` already carries the page's), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
 - Docs and themes, later (M4-3b, left out on purpose): syntax highlighting in the `docs` theme (code blocks are plain, the language is only a `language-x` class), search snippets and section-scoped search, a static export (`ferrite site export --html`), versioned docs, admonitions, footnotes and task lists in Markdown import, YAML front matter (TOML only; the error says how to convert), per-menu-item attributes, and content types shipped by a theme.
 - SEO example, later (M4 P43): IndexNow pings, `robots.txt` and sitemap changes (core owns both), content analysis.
 - `ferrite doctor`, later (M4 P48, P53): `--json` output, a clock check against an HTTP `Date` header, detecting that it runs as another user than the service, and whether the binary's update path is writable for `self-update`.

@@ -6,7 +6,7 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 # MCP tools
 
 These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
-56 of them, in 13 areas. To connect an assistant, see
+70 of them, in 16 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 How to read the tables:
@@ -25,18 +25,21 @@ How to read the tables:
   `![alt](ferrite:media/<id>)`, and anything Markdown cannot express travels as a
   `ferrite-block` fence that the assistant keeps as it is. Updates take the `version` the
   assistant read, so a change made meanwhile by someone else is never overwritten.
-- Successful writes are recorded in the audit log as `mcp.<tool>` under the app's name.
+- Successful writes are recorded in the audit log as `mcp.<tool>` under the app's name,
+  and as change sets with the object before and after, which you review and undo in the
+  admin under **AI activity** ([AI assistants](../02-guides/08-ai-assistants.md)).
 - Each user can make 120 tool calls a minute.
 
 Installing or removing plugins and themes, managing users, tokens, sessions and connected
 apps, switching the MCP endpoint, imports, backups, restores and retrying jobs are not
-offered: they stay with a person in the admin.
+offered: they stay with a person in the admin. So do approving or rejecting reviews,
+overriding approvals and configuring approval workflows.
 
 ## Site
 
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
-| `site_overview` | Describes the site and the caller: URLs, version, active theme, content types with counts, taxonomies, menus, role and scopes. | none (each section needs its own read scope) | read |
+| `site_overview` | Describes the site and the caller: URLs, version, active theme, the site's languages, content types with counts, taxonomies, menus, role and scopes. | none (each section needs its own read scope) | read |
 | `site_search` | Full-text search over the content the caller may read. | `content:read` | read |
 
 ## Content
@@ -49,13 +52,14 @@ offered: they stay with a person in the admin.
 | `content_update` | Changes an item; what is left out is kept, and a stale `version` is refused with the current item. | `content:write` | write |
 | `content_publish` | Publishes a draft, pending or scheduled item now. | `content:write` | write |
 | `content_unpublish` | Takes a published item off the site and turns it back into a draft. | `content:write` | write |
-| `content_submit_for_review` | Offers a draft for review as `pending`. | `content:write` | write |
+| `content_submit_for_review` | Offers a draft for review as `pending`; in a type with an approval workflow it starts the review, optionally naming reviewers and a note. | `content:write` | write |
 | `content_schedule` | Schedules a draft or pending item to publish at a future time. | `content:write` | write |
 | `content_trash` | Moves an item to the trash. | `content:write` | write |
 | `content_restore` | Brings a trashed item back as a draft. | `content:write` | write |
 | `content_revisions` | Lists an item's saved revisions. | `content:read` | read |
 | `content_restore_revision` | Brings an earlier revision back as a new version of the item. | `content:write` | write |
-| `content_preview_link` | Returns the preview link of an item, for a signed-in browser. | `content:read` | read |
+| `content_preview_link` | Makes a signed preview link of an item that opens without signing in until it expires (1 to 168 hours). | `content:write` | write |
+| `content_translate` | Makes a draft copy of an item in another of the site's languages, linked to it as its translation, and returns it with notes on what it could not carry over. | `content:write` | write |
 
 ## Media
 
@@ -73,8 +77,8 @@ offered: they stay with a person in the admin.
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
 | `taxonomies_list` | Lists the taxonomies, such as categories and tags. | `content:read` | read |
-| `terms_list` | Lists the terms of one taxonomy, with filters and paging. | `terms:read` | read |
-| `term_create` | Creates a term in a taxonomy. | `terms:write` | write |
+| `terms_list` | Lists the terms of one taxonomy, with filters (a language among them) and paging. | `terms:read` | read |
+| `term_create` | Creates a term in a taxonomy, in a language and as another term's translation if asked. | `terms:write` | write |
 | `term_update` | Changes a term's name, slug, parent or description. | `terms:write` | write |
 | `term_delete` | Deletes a term; the content that had it stays. | `terms:write` | write |
 
@@ -83,8 +87,8 @@ offered: they stay with a person in the admin.
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
 | `menus_list` | Lists the menus and the locations the active theme declares. | `menus:read` | read |
-| `menu_get` | Returns one menu as a nested tree of entries. | `menus:read` | read |
-| `menu_set` | Replaces a menu's whole item tree. | `menus:write` | write |
+| `menu_get` | Returns one menu as a nested tree of entries, with its language and the menu it translates. | `menus:read` | read |
+| `menu_set` | Replaces a menu's whole item tree; sets its language and the default-language menu it translates. | `menus:write` | write |
 
 ## Content types
 
@@ -132,11 +136,14 @@ offered: they stay with a person in the admin.
 
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
-| `plugins_list` | Lists the installed plugins with their state and approved permissions. | `extensions:read` | read |
+| `plugins_list` | Lists the installed plugins with their state, approved permissions and publisher (verified, signed or unsigned, and an update the registry offers). | `extensions:read` | read |
 | `plugin_enable` | Turns on an installed plugin. | `extensions:write` | write |
 | `plugin_disable` | Turns off an installed plugin; its settings and data are kept. | `extensions:write` | write |
 | `plugin_settings_get` | Reads a plugin's settings; a secret shows only whether it is set. | `extensions:read` | read |
 | `plugin_settings_update` | Changes a plugin's settings; a secret can be set or cleared but never read back. | `extensions:write` | write |
+
+Installing, updating and removing plugins, and revoking publisher keys, stay with a person in
+the admin or the CLI: no tool does them.
 
 ## Users
 
@@ -145,6 +152,21 @@ offered: they stay with a person in the admin.
 | `users_list` | Lists user accounts with their role and status, never sign-in data. | `users:read` | read |
 | `user_get` | Reads one user account. | `users:read` | read |
 
+## Releases and reviews
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `releases_list` | Lists the releases the caller may see, with status, schedule and entry count. | `content:read` | read |
+| `release_get` | Returns a release with its entries: actions, staged changes (Markdown), conflicts and reviews. | `content:read` | read |
+| `release_create` | Creates an empty release. | `content:write` | write |
+| `release_stage` | Adds or replaces an item's entry: a staged change and/or publish or unpublish. | `content:write` | write |
+| `release_unstage` | Removes an item's entry from a release. | `content:write` | write |
+| `release_check` | Reports what applying the release now would do, entry by entry, without writing. | `content:read` | read |
+| `release_schedule` | Schedules a release (its items are locked) or takes it off the schedule. | `content:write` | write |
+| `release_apply` | Applies a release now, all entries in one transaction. | `content:write` | write |
+| `release_preview_link` | Makes a signed link showing the whole site as the release will make it. | `content:write` | write |
+| `reviews_list` | Lists open reviews: what waits for approval, at which step. | `content:read` | read |
+
 ## System
 
 | Tool | What it does | Scope | Access |
@@ -152,6 +174,22 @@ offered: they stay with a person in the admin.
 | `system_status` | Reports versions, mode, backends, schema state, job counts and nodes. | `system:read` | read |
 | `jobs_list` | Lists background jobs, with filters by state and kind. | `system:read` | read |
 | `audit_list` | Reads the audit log, with filters by actor, action and target. | `system:read` | read |
+
+## Your changes
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `changes_list` | Lists this connection's own recent change sets with each change and a link where you review and undo them; never the before/after content. | none (its own changes only) | read |
+
+## Content quality
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `content_check` | Checks an item, or a draft before it is written, for accessibility and link problems (alt text, headings, link text, tables, missing media, broken links on the site), each finding with its WCAG criteria and how to fix it, and says whether the type's publish gate would refuse it. | `content:read` | read |
+| `health_report` | Reads the site's content health report: the last daily run's totals and a page of findings (broken links, orphan pages, missing alt text, redirect chains, stale items), filtered by category, rule, severity, type or language. Editors and administrators only. | `content:read` | read |
+
+No tool suppresses a finding or starts a health run: a suppression is a person's decision
+with a reason, made in the admin.
 
 ## Resources and prompts
 
@@ -172,4 +210,6 @@ commands):
   suggestions;
 - `site_health`: sums up the site's status, dead jobs and queued ones with a last error,
   and plugin failures;
-- `tidy_media`: finds images without alt text and proposes some.
+- `tidy_media`: finds images without alt text and proposes some;
+- `translate` (`type`, `id`, `locale`): translates one item into another of the site's
+  languages as a draft for you to review.

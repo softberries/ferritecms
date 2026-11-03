@@ -1635,3 +1635,184 @@ fn tls_config_parses_and_validates() {
     };
     assert_eq!(a.redirect_http, Some("0.0.0.0:80".parse().unwrap()));
 }
+
+#[test]
+fn webhooks_local_targets() {
+    // Off by default, without a warning.
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    assert!(!c.webhooks.local_targets);
+    assert!(c.warnings.iter().all(|w| !w.path.starts_with("webhooks")));
+    // On from the file and from the environment, with a warning.
+    let (_d, r) = run(
+        Some(&format!("{MIN}[webhooks]\nlocal_targets = true\n")),
+        &[],
+    );
+    let c = r.unwrap();
+    assert!(c.webhooks.local_targets);
+    let w = c
+        .warnings
+        .iter()
+        .find(|w| w.path == "webhooks.local_targets")
+        .expect("a warning");
+    assert!(w.message.contains("development only"), "{}", w.message);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true")]);
+    assert!(r.unwrap().webhooks.local_targets);
+    // Not a bool, or an unknown key: a problem.
+    let (_d, r) = run(
+        Some(&format!("{MIN}[webhooks]\nlocal_targets = \"yes\"\n")),
+        &[],
+    );
+    assert_eq!(paths(&r.unwrap_err()), ["webhooks.local_targets"]);
+    let (_d, r) = run(Some(&format!("{MIN}[webhooks]\nschedule = 1\n")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["webhooks.schedule"]);
+}
+
+/// M6-2: `[plugins] signatures`, `registry`, `registry_key`, `registry_check`.
+mod plugin_trust {
+    use ferrite_domain::plugin_trust::SignaturePolicy;
+
+    use super::*;
+
+    const KEY: &str = "RWRloJt7IFEgQ3QWSMCPZT0k6xJ8KEMme02/HBySQSajqZ9ld96QHy9a";
+
+    fn ok(toml: &str, vars: &[(&str, &str)]) -> PluginTrustConfig {
+        let (_d, r) = run(Some(&format!("{MIN}{toml}")), vars);
+        r.unwrap_or_else(|e| panic!("{toml}: {e}")).plugins.trust
+    }
+
+    fn bad(toml: &str) -> Vec<String> {
+        let (_d, r) = run(Some(&format!("{MIN}{toml}")), &[]);
+        let e = r.expect_err(toml);
+        paths(&e).into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn trust_defaults() {
+        let t = ok("", &[]);
+        assert_eq!(t.signatures, SignaturePolicy::Any);
+        assert_eq!(t.registry.as_deref(), Some(DEFAULT_REGISTRY_URL));
+        assert_eq!(t.registry_key, None);
+        assert_eq!(t.registry_check, RegistryCheck::Off);
+        assert_eq!(t, PluginTrustConfig::default());
+    }
+
+    #[test]
+    fn signatures_values() {
+        for (v, want) in [
+            ("any", SignaturePolicy::Any),
+            ("signed", SignaturePolicy::Signed),
+            ("trusted", SignaturePolicy::Trusted),
+        ] {
+            assert_eq!(
+                ok(&format!("[plugins]\nsignatures = \"{v}\"\n"), &[]).signatures,
+                want
+            );
+        }
+        assert_eq!(
+            bad("[plugins]\nsignatures = \"some\"\n"),
+            ["plugins.signatures"]
+        );
+    }
+
+    #[test]
+    fn registry_off() {
+        let t = ok("[plugins]\nregistry = \"\"\n", &[]);
+        assert_eq!(t.registry, None);
+        assert_eq!(
+            bad("[plugins]\nregistry = \"\"\nregistry_check = \"daily\"\n"),
+            ["plugins.registry_check"]
+        );
+        assert_eq!(
+            ok("[plugins]\nregistry_check = \"daily\"\n", &[]).registry_check,
+            RegistryCheck::Daily
+        );
+        assert_eq!(
+            bad("[plugins]\nregistry_check = \"hourly\"\n"),
+            ["plugins.registry_check"]
+        );
+    }
+
+    #[test]
+    fn registry_needs_key_when_custom() {
+        assert_eq!(
+            bad("[plugins]\nregistry = \"https://plugins.example.dev/index.json\"\n"),
+            ["plugins.registry_key"]
+        );
+        let t = ok(
+            &format!(
+                "[plugins]\nregistry = \"https://plugins.example.dev/index.json\"\nregistry_key = \"{KEY}\"\n"
+            ),
+            &[],
+        );
+        assert_eq!(t.registry_key.as_deref(), Some(KEY));
+        // The key file form works too; the default URL with a key is fine.
+        let file = format!("untrusted comment: minisign public key 432051207B9BA065\n{KEY}\n");
+        let t = ok(&format!("[plugins]\nregistry_key = '''{file}'''\n"), &[]);
+        assert_eq!(t.registry_key.as_deref(), Some(KEY));
+    }
+
+    #[test]
+    fn registry_http_refused() {
+        for url in [
+            "http://plugins.example.dev/index.json",
+            "ftp://x/y",
+            "https://u:p@example.dev/i.json",
+            "not a url",
+        ] {
+            let p = bad(&format!(
+                "[plugins]\nregistry = \"{url}\"\nregistry_key = \"{KEY}\"\n"
+            ));
+            assert_eq!(p, ["plugins.registry"], "{url}");
+        }
+    }
+
+    #[test]
+    fn registry_file_must_be_absolute() {
+        let t = ok(
+            &format!(
+                "[plugins]\nregistry = \"file:///srv/registry/index.json\"\nregistry_key = \"{KEY}\"\n"
+            ),
+            &[],
+        );
+        assert_eq!(
+            t.registry.as_deref(),
+            Some("file:///srv/registry/index.json")
+        );
+        for url in ["file://host/srv/index.json", "file:index.json"] {
+            let p = bad(&format!(
+                "[plugins]\nregistry = \"{url}\"\nregistry_key = \"{KEY}\"\n"
+            ));
+            assert_eq!(p, ["plugins.registry"], "{url}");
+        }
+    }
+
+    #[test]
+    fn bad_registry_key_refused() {
+        assert_eq!(
+            bad("[plugins]\nregistry_key = \"not a key\"\n"),
+            ["plugins.registry_key"]
+        );
+        assert_eq!(
+            bad("[plugins]\nregistry_key = \"# placeholder\"\n"),
+            ["plugins.registry_key"]
+        );
+    }
+
+    #[test]
+    fn env_overrides() {
+        let t = ok(
+            "",
+            &[
+                ("FERRITE_PLUGINS__SIGNATURES", "trusted"),
+                ("FERRITE_PLUGINS__REGISTRY", "file:///tmp/r/index.json"),
+                ("FERRITE_PLUGINS__REGISTRY_KEY", KEY),
+                ("FERRITE_PLUGINS__REGISTRY_CHECK", "daily"),
+            ],
+        );
+        assert_eq!(t.signatures, SignaturePolicy::Trusted);
+        assert_eq!(t.registry.as_deref(), Some("file:///tmp/r/index.json"));
+        assert_eq!(t.registry_key.as_deref(), Some(KEY));
+        assert_eq!(t.registry_check, RegistryCheck::Daily);
+    }
+}

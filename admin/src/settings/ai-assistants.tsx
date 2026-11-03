@@ -22,19 +22,25 @@ import { mcpUrl } from "@/api/oauth";
 import type { SettingsDto } from "@/api/settings";
 import { AI_CLIENTS, AI_GUIDE_URL, clientSnippets } from "@/oauth/model";
 import { CopyCode, CopyField } from "@/components/kit/copy-field";
-import { SwitchRow } from "@/components/kit/form-field";
+import { FormField, SwitchRow } from "@/components/kit/form-field";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { boolSpec } from "./fields";
+import { boolSpec, intSpec } from "./fields";
 import { GroupFormFrame } from "./group-frame";
 import { useGroupForm } from "./use-group-form";
 
 /** `MCP_ENABLED_DEFAULT` in `ferrite-core/src/settings.rs`. */
 const MCP_ENABLED_DEFAULT = true;
+/** `CHANGE_SETS_DAYS_DEFAULT` in `ferrite-core/src/settings.rs` (M6-5). */
+const CHANGE_SETS_DAYS_DEFAULT = 90;
 
-const SPECS = { "mcp.enabled": boolSpec(MCP_ENABLED_DEFAULT) };
+const SPECS = {
+  "mcp.enabled": boolSpec(MCP_ENABLED_DEFAULT),
+  "mcp.change_sets_days": intSpec(1, 365),
+};
 
 export function AiAssistantsGroup({ settings }: { settings: SettingsDto }) {
   const { t } = useTranslation("admin");
@@ -64,6 +70,28 @@ export function AiAssistantsGroup({ settings }: { settings: SettingsDto }) {
             />
           )}
         </SwitchRow>
+        <FormField
+          slot="setting-change-sets-days"
+          label={ta("settings.retention")}
+          hint={ta("settings.retentionHint", { value: CHANGE_SETS_DAYS_DEFAULT })}
+          error={form.errors["mcp.change_sets_days"]}
+        >
+          {(control) => (
+            <span className="flex items-center gap-2">
+              <Input
+                {...control}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder={String(CHANGE_SETS_DAYS_DEFAULT)}
+                value={form.draft["mcp.change_sets_days"]}
+                disabled={form.saving}
+                className="max-w-28 font-mono tabular-nums"
+                onChange={(e) => form.set("mcp.change_sets_days", e.currentTarget.value)}
+              />
+              <span className="text-sm text-muted-foreground">{ta("settings.retentionUnit")}</span>
+            </span>
+          )}
+        </FormField>
         <ul className="grid gap-3 border-t pt-5 sm:grid-cols-3">
           <Safety icon={CircleUserRoundIcon}>{ta("settings.safety.login.body")}</Safety>
           <Safety icon={ShieldCheckIcon}>{ta("settings.safety.role.body")}</Safety>

@@ -10,16 +10,20 @@ use serde::{Deserialize, Deserializer};
 use zeroize::Zeroizing;
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
+pub mod editorial;
 pub mod extensions;
 pub mod import;
 pub mod media;
 pub mod oauth;
+pub mod quality;
 pub mod site;
 pub mod system;
 pub mod types;
 pub mod users;
+pub mod webhooks;
 
 /// A password in a request body (M2a-2b P24): deserialised through a `String` that is
 /// wiped when the value is dropped, and redacted in `Debug`. In the OpenAPI document a

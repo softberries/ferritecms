@@ -880,24 +880,29 @@ async fn preview_link_works_for_draft(api: Api) -> Api {
     .await;
     let link = item(&r);
     let url = link["url"].as_str().unwrap();
-    assert_eq!(url, format!("{SITE_URL}/_preview/{id}"), "{link}");
-    // The preview needs the signed-in browser session: there is no expiry to name.
-    assert!(link["expires_at"].is_null(), "{link}");
-    assert_eq!(link["requires_sign_in"], true, "{link}");
+    // M6-3: a signed link (design 15 §7) that opens without a session until it expires.
     assert!(
-        link["note"].as_str().is_some_and(|n| n.contains("sign")),
+        url.starts_with(&format!("{SITE_URL}/_preview/link/ferp_")),
         "{link}"
     );
+    assert!(link["expires_at"].is_string(), "{link}");
+    assert_eq!(link["requires_sign_in"], false, "{link}");
 
     let path = url.strip_prefix(SITE_URL).unwrap();
-    // The editor, in a browser, sees the draft...
-    let mut browser = api.logged_in("eddie").await;
-    let page = browser.get(&api, path).await;
+    // Anyone with the link sees the draft, with the core preview bar.
+    let page = api.get(path).await;
     assert_eq!(page.status, StatusCode::OK, "{page:?}");
     assert!(page.body.contains("Secret draft"), "{}", page.body);
-    // ...nobody else does: not an anonymous visitor, not the bearer token.
-    assert_eq!(api.get(path).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(t.get(&api, path).await.status, StatusCode::NOT_FOUND);
+    assert!(
+        page.body.contains("aria-label=\"Preview\""),
+        "{}",
+        page.body
+    );
+    // The editor's own preview path still needs the session.
+    assert_eq!(
+        api.get(&format!("/_preview/{id}")).await.status,
+        StatusCode::NOT_FOUND
+    );
 
     // A trashed item has no preview.
     let trashed = tool(
@@ -1355,12 +1360,7 @@ async fn content_tools_are_annotated(api: Api) -> Api {
             .find(|t| t["name"] == name)
             .unwrap_or_else(|| panic!("{name} missing"))
     };
-    let reads = [
-        "content_list",
-        "content_get",
-        "content_revisions",
-        "content_preview_link",
-    ];
+    let reads = ["content_list", "content_get", "content_revisions"];
     let safe_writes = [
         "content_create",
         "content_update",
@@ -1369,6 +1369,7 @@ async fn content_tools_are_annotated(api: Api) -> Api {
         "content_submit_for_review",
         "content_restore",
         "content_restore_revision",
+        "content_preview_link",
     ];
     let destructive = ["content_unpublish", "content_trash"];
     for name in reads {
@@ -1423,7 +1424,8 @@ async fn content_tools_are_annotated(api: Api) -> Api {
         assert_eq!(t["inputSchema"]["additionalProperties"], false, "{name}");
     }
     for name in safe_writes.iter().chain(&destructive) {
-        if *name == "content_create" {
+        // Creating (an item, a preview link) needs no version.
+        if *name == "content_create" || *name == "content_preview_link" {
             continue;
         }
         let req = by(name)["inputSchema"]["required"].to_string();

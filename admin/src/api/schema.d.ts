@@ -212,6 +212,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_change_sets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_change_set"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}/changes/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_change_set_change"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revert_change_set"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/comments": {
         parameters: {
             query?: never;
@@ -292,6 +356,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/content/{type}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["check_content"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/content/{type}/counts": {
         parameters: {
             query?: never;
@@ -350,6 +430,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["submit_comment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/content/{type}/{id}/preview-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_content_preview_links"];
+        put?: never;
+        post: operations["create_content_preview_link"];
         delete?: never;
         options?: never;
         head?: never;
@@ -468,6 +564,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/content/{type}/{id}/suppressions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_suppressions"];
+        put?: never;
+        post: operations["create_suppression"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/content/{type}/{id}/suppressions/{rule}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_suppression"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/content/{type}/{id}/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["translate_content"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/content/{type}/{id}/unpublish": {
         parameters: {
             query?: never;
@@ -478,6 +622,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["unpublish_content"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["health_findings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["start_health_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["health_summary"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -804,6 +996,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plugins/publishers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_plugin_publishers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/publishers/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revoke_plugin_publisher"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_plugin_registry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["inspect_registry_plugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["install_registry_plugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plugins/registry/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh_plugin_registry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plugins/retained": {
         parameters: {
             query?: never;
@@ -916,6 +1204,22 @@ export interface paths {
         patch: operations["update_plugin_settings"];
         trace?: never;
     };
+    "/api/v1/preview-links/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revoke_preview_link"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/redirects": {
         parameters: {
             query?: never;
@@ -978,6 +1282,262 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["update_redirect"];
+        trace?: never;
+    };
+    "/api/v1/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_releases"];
+        put?: never;
+        post: operations["create_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_release"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_release"];
+        options?: never;
+        head?: never;
+        patch: operations["update_release"];
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["apply_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["check_release"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["add_release_item"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/items/{item}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_release_item"];
+        post?: never;
+        delete: operations["delete_release_item"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/items/{item}/rebase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rebase_release_item"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/items/{item}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submit_release_item"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/preview-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_release_preview_links"];
+        put?: never;
+        post: operations["create_release_preview_link"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["schedule_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/releases/{id}/unschedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["unschedule_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_reviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_review"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/{id}/assignees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["assign_review"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/{id}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decide_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/{id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["withdraw_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/settings": {
@@ -1188,6 +1748,22 @@ export interface paths {
         patch: operations["update_term"];
         trace?: never;
     };
+    "/api/v1/terms/{id}/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["translate_term"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/themes": {
         parameters: {
             query?: never;
@@ -1364,6 +1940,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhooks"];
+        put?: never;
+        post: operations["create_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhook_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_webhook"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_webhook"];
+        options?: never;
+        head?: never;
+        patch: operations["update_webhook"];
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhook_deliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries/{delivery}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_webhook_delivery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries/{delivery}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeliver_webhook_delivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeliver_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rotate_webhook_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["test_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_workflows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_workflow"];
+        put: operations["put_workflow"];
+        post?: never;
+        delete: operations["delete_workflow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{type}/approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_workflow_approvers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1379,9 +2147,15 @@ export interface components {
             delete: boolean;
             /** @description `PATCH` (and revision restore). */
             edit: boolean;
+            /** @description Publish or schedule would be allowed but the workflow's approval is missing. */
+            needs_approval: boolean;
+            /** @description An admin may publish without the approval, with `override_reason`. */
+            override: boolean;
             publish: boolean;
             restore: boolean;
             schedule: boolean;
+            /** @description A public item of a workflow type: change it through a release. */
+            stage: boolean;
             submit: boolean;
             /** @description `DELETE` without `force`. */
             trash: boolean;
@@ -1396,6 +2170,54 @@ export interface components {
         ApproveInput: {
             /** @description At least one, each in the request's `grantable`. */
             scopes: string[];
+        };
+        /** @description Someone who may approve a workflow step (a reviewer picker's entry). */
+        ApproverDto: {
+            /** @description The display name, or the login when it is empty. */
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+        };
+        /** @description The approvers of a workflow step, by display name (at most 200). */
+        ApproverList: {
+            items: components["schemas"]["ApproverDto"][];
+        };
+        /** @description Who may approve a step. */
+        ApproversDto: {
+            /** @description `editor` and/or `admin`. */
+            roles?: string[];
+            users?: string[];
+        };
+        /** @description An assignee of a step. */
+        AssigneeDto: {
+            /** Format: int32 */
+            step: number;
+            /** Format: uuid */
+            user_id: string;
+        };
+        /** @description The assignees of a review. */
+        AssigneeList: {
+            items: components["schemas"]["AssigneeDto"][];
+        };
+        /** @description `PUT /reviews/{id}/assignees`. */
+        AssigneesInput: {
+            /** Format: int32 */
+            step: number;
+            users: string[];
+        };
+        /** @description One attempt of a delivery. */
+        AttemptDto: {
+            /** Format: int32 */
+            attempt: number;
+            /** Format: int32 */
+            duration_ms: number;
+            error?: string | null;
+            /** @description At most 1 KiB of the receiver's answer, as plain text (show it escaped). */
+            response_excerpt?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: int32 */
+            status_code?: number | null;
         };
         /** @description Who wrote an audit row. */
         AuditActorDto: {
@@ -1525,6 +2347,138 @@ export interface components {
              * @description Lookups that did not.
              */
             misses: number;
+        };
+        /**
+         * @description The category of a rule.
+         * @enum {string}
+         */
+        CategoryDto: "accessibility" | "links" | "media" | "site" | "freshness";
+        /** @description One change with its images. */
+        ChangeDetailDto: {
+            /** @description The object after (`null`: deleted, hidden or too large). */
+            after?: unknown;
+            /** @description The object before (`null`: it did not exist, or hidden, or too large). */
+            before?: unknown;
+            change: components["schemas"]["ChangeDto"];
+            /**
+             * @description `shown`, or `hidden` when you may not read the object's area now.
+             * @example shown
+             */
+            images: string;
+        };
+        /** @description One change. */
+        ChangeDto: {
+            /** Format: date-time */
+            at: string;
+            /** @description The write created the object. */
+            created: boolean;
+            /** @description The write deleted the object. */
+            deleted: boolean;
+            /** @description Reverted over a later edit. */
+            forced: boolean;
+            object: components["schemas"]["ChangeObjectDto"];
+            /** @example content.update */
+            op: string;
+            /** @description `false` when an image was too large to keep. */
+            revertable: boolean;
+            /** Format: date-time */
+            reverted_at?: string | null;
+            /** Format: uuid */
+            reverted_by?: string | null;
+            /** Format: int32 */
+            seq: number;
+        };
+        /** @description The object a change touched. */
+        ChangeObjectDto: {
+            /** @description The admin screen of the object when it still exists (relative to `/admin`). */
+            admin_path?: string | null;
+            id: string;
+            /**
+             * @description `content`, `media`, `term`, `menu`, `type`, `redirect`, `comment`, `option`,
+             *     `theme` or `plugin`.
+             */
+            kind: string;
+            /** @description Its title or name at write time. */
+            label: string;
+        };
+        /** @description The connection that wrote. */
+        ChangeSetAgentDto: {
+            /** @description The client's name when the set opened. */
+            client: string;
+            /** @description Whether the grant or token still exists. */
+            connected: boolean;
+            /**
+             * Format: uuid
+             * @description The grant or token id.
+             */
+            id: string;
+            /**
+             * @description `oauth` (a connected app) or `token` (a personal API token).
+             * @example oauth
+             */
+            kind: string;
+        };
+        ChangeSetDetailDto: {
+            /** @description Newest first. */
+            changes: components["schemas"]["ChangeDto"][];
+            set: components["schemas"]["ChangeSetDto"];
+        };
+        /** @description One change set. */
+        ChangeSetDto: {
+            agent: components["schemas"]["ChangeSetAgentDto"];
+            /** Format: int32 */
+            changes: number;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_at: string;
+            /** @description Whether the assistant's next write still lands here. */
+            open: boolean;
+            /**
+             * Format: int32
+             * @description How many changes are reverted.
+             */
+            reverted: number;
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * @description `open`, `closed`, `reverted` or `partly_reverted`.
+             * @example open
+             */
+            status: string;
+            user?: components["schemas"]["ChangeSetUserDto"] | null;
+        };
+        ChangeSetList: {
+            items: components["schemas"]["ChangeSetDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description Who a set belongs to. */
+        ChangeSetUserDto: {
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            login: string;
+        };
+        /** @description `POST /content/{type}/check`: the editor's working draft. */
+        CheckRequestDto: {
+            /** @description The block tree. */
+            body: Record<string, never>;
+            /** @description Custom fields (rich-text fields are checked; `featured_image` too). */
+            fields?: Record<string, never> | null;
+            /**
+             * Format: uuid
+             * @description The stored item this is a draft of (its suppressions and locale apply).
+             */
+            id?: string | null;
+            /** @description The locale of a new item; the site's default when absent. */
+            locale?: string | null;
+            title?: string;
+        };
+        /** @description What a check found. */
+        CheckResponseDto: {
+            counts: components["schemas"]["CountsDto"];
+            findings: components["schemas"]["FindingDto"][];
+            gate: components["schemas"]["GateDto"];
         };
         /**
          * @description How a client is known.
@@ -1721,6 +2675,8 @@ export interface components {
             fields: unknown;
             /** Format: uuid */
             id: string;
+            /** @description The item's locale (a tag of `GET /meta`'s `locales`). */
+            locale: string;
             /** Format: int32 */
             menu_order: number;
             /** Format: uuid */
@@ -1729,6 +2685,12 @@ export interface components {
             permalink: string;
             /** Format: date-time */
             published_at?: string | null;
+            /**
+             * @description Releases (not applied) holding the item that the caller may see, at most 10;
+             *     left out when there are none.
+             */
+            releases?: components["schemas"]["ReleaseRefDto"][];
+            review?: components["schemas"]["ReviewSummaryDto"] | null;
             /** Format: date-time */
             scheduled_at?: string | null;
             /** @description The SEO title and description (`content_meta` `seo.title`, `seo.description`). */
@@ -1739,6 +2701,13 @@ export interface components {
             /** @description Term ids in their stored order. */
             terms: string[];
             title: string;
+            /**
+             * Format: uuid
+             * @description The id of the translation group's original (the item's own id when alone).
+             */
+            translation_group: string;
+            /** @description The other members of the item's translation group the caller may read. */
+            translations: components["schemas"]["TranslationRefDto"][];
             /** @description The content type (`post`, `page`, …). */
             type: string;
             /** Format: date-time */
@@ -1756,6 +2725,8 @@ export interface components {
             /** @description Derived from the body (160 characters) when absent. */
             excerpt?: string | null;
             fields?: Record<string, never>;
+            /** @description One of the site's locales (`GET /meta`); absent: the default. */
+            locale?: string | null;
             /** Format: int32 */
             menu_order?: number;
             /**
@@ -1769,6 +2740,12 @@ export interface components {
             /** @description Term ids, in order; duplicates are ignored. */
             terms?: string[];
             title: string;
+            /**
+             * Format: uuid
+             * @description An item of the same type whose translation group the new item joins (its locale
+             *     must be free there, else `409`).
+             */
+            translation_of?: string | null;
         };
         /** @description `GET /content/{type}`. */
         ContentList: {
@@ -1786,6 +2763,11 @@ export interface components {
             body?: Record<string, never>;
             excerpt?: string | null;
             fields?: Record<string, never>;
+            /**
+             * @description Moves the item to another of the site's locales (a published item's old path
+             *     redirects; not for an item with children).
+             */
+            locale?: string;
             /** Format: int32 */
             menu_order?: number;
             /** Format: uuid */
@@ -1800,6 +2782,11 @@ export interface components {
             /** @description Replaces the item's terms; `[]` removes them all. */
             terms?: string[];
             title?: string;
+            /**
+             * Format: uuid
+             * @description Joins the translation group of this item; `null` leaves the group.
+             */
+            translation_of?: string | null;
         };
         /** @description An item named by id (`GET /content/refs`). */
         ContentRefDto: {
@@ -1837,6 +2824,8 @@ export interface components {
             fields: unknown;
             /** Format: uuid */
             id: string;
+            /** @description The item's locale. */
+            locale: string;
             /** Format: int32 */
             menu_order: number;
             /** Format: uuid */
@@ -1848,6 +2837,8 @@ export interface components {
             slug: string;
             status: string;
             title: string;
+            /** @description The other members of its translation group the caller may read. */
+            translations: components["schemas"]["TranslationStatusDto"][];
             type: string;
             /** Format: date-time */
             updated_at: string;
@@ -1870,6 +2861,8 @@ export interface components {
             hierarchical: boolean;
             label: string;
             name: string;
+            /** @description The publish gate (M6-4, design 16 §5). */
+            quality_gate: components["schemas"]["QualityGateDto"];
         };
         /** @description `POST /types`. */
         ContentTypeInput: {
@@ -1887,6 +2880,7 @@ export interface components {
              *     page slug, and not a first segment of a permalink structure.
              */
             name: string;
+            quality_gate?: components["schemas"]["QualityGateDto"] | null;
         };
         /** @description `GET /types`: every type, by name. */
         ContentTypeList: {
@@ -1903,6 +2897,22 @@ export interface components {
             fields?: components["schemas"]["FieldDefDto"][] | null;
             has_archive?: boolean;
             label?: string;
+            /**
+             * @description The publish gate (M6-4): `errors` refuses publishing while accessibility errors
+             *     remain; the `media` type refuses it (`422`, field `quality_gate`).
+             */
+            quality_gate?: components["schemas"]["QualityGateDto"];
+        };
+        /** @description Unsuppressed findings per severity, and the suppressed ones. */
+        CountsDto: {
+            /** Format: int32 */
+            error: number;
+            /** Format: int32 */
+            notice: number;
+            /** Format: int32 */
+            suppressed: number;
+            /** Format: int32 */
+            warning: number;
         };
         /**
          * @description The created token. `token` is the bearer value (`Authorization: Bearer <token>`),
@@ -1920,6 +2930,129 @@ export interface components {
             name: string;
             scopes: string[];
             token: string;
+        };
+        /** @description `201` of `POST /webhooks`: the endpoint and its secret, shown this once. */
+        CreatedWebhookDto: {
+            /** @description `whsec_…`: store it now; it is never shown again. */
+            secret: string;
+            webhook: components["schemas"]["WebhookDto"];
+        };
+        /** @description One decision. */
+        DecisionDto: {
+            /** Format: date-time */
+            at: string;
+            comment?: string | null;
+            /** @description `approve` or `request_changes`. */
+            decision: string;
+            /** Format: int32 */
+            step: number;
+            /** Format: uuid */
+            user_id?: string | null;
+        };
+        /** @description `POST /reviews/{id}/decisions`. */
+        DecisionInput: {
+            comment?: string | null;
+            /** @description `approve` or `request_changes`. */
+            decision: string;
+        };
+        /** @description Deliveries by status. */
+        DeliveryCountsDto: {
+            /** Format: int64 */
+            delivered: number;
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            skipped: number;
+        };
+        /** @description `GET /webhooks/{id}/deliveries/{delivery}`. */
+        DeliveryDetailDto: {
+            attempts: components["schemas"]["AttemptDto"][];
+            delivery: components["schemas"]["DeliveryDto"];
+            event: components["schemas"]["WebhookEventDto"];
+        };
+        /** @description One delivery (one event for this endpoint). */
+        DeliveryDto: {
+            /** Format: int32 */
+            attempts: number;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The event id, also the `webhook-id` header of every attempt.
+             */
+            event_id: string;
+            event_type: string;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** @description The error class of the last attempt (`status 503`, `timed out`, …). */
+            last_error?: string | null;
+            /** Format: int32 */
+            last_status_code?: number | null;
+            /** Format: date-time */
+            next_attempt_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The delivery this one redelivers.
+             */
+            redelivery_of?: string | null;
+            status: components["schemas"]["DeliveryStatusDto"];
+        };
+        /** @description `GET /webhooks/{id}/deliveries`: one page, newest first. */
+        DeliveryList: {
+            items: components["schemas"]["DeliveryDto"][];
+            next_cursor?: string | null;
+        };
+        /**
+         * @description A delivery's status.
+         * @enum {string}
+         */
+        DeliveryStatusDto: "pending" | "delivered" | "failed" | "skipped";
+        /**
+         * @description Why an endpoint is disabled.
+         * @enum {string}
+         */
+        DisabledReasonDto: "manual" | "failing" | "gone";
+        /** @description One line of a check report. */
+        EntryCheckDto: {
+            capability?: string | null;
+            /** Format: int64 */
+            current_version?: number | null;
+            field?: string | null;
+            /** Format: uuid */
+            item: string;
+            message?: string | null;
+            /** @description `ok`, `conflict`, `needs_approval`, `forbidden` or `invalid`. */
+            outcome: string;
+            step?: string | null;
+        };
+        /** @description `POST /releases/{id}/items`, `PUT /releases/{id}/items/{item}`. */
+        EntryInput: {
+            changes?: components["schemas"]["StagedChangeDto"] | null;
+            /**
+             * Format: uuid
+             * @description Required on `POST`; on `PUT` the path names the item.
+             */
+            item_id?: string | null;
+            transition?: components["schemas"]["TransitionDto"];
+        };
+        /** @description `GET /webhooks/events`. */
+        EventCatalogueDto: {
+            types: components["schemas"]["EventTypeDto"][];
+            /**
+             * Format: int32
+             * @description The payload version.
+             */
+            version: number;
+        };
+        /** @description One event type of the catalogue. */
+        EventTypeDto: {
+            description: string;
+            group: string;
+            type: string;
         };
         /** @description Failures of one hook in one hour, every node's (the shared counters, P20). */
         FailureBucketDto: {
@@ -1972,6 +3105,27 @@ export interface components {
          * @enum {string}
          */
         FieldKindDto: "text" | "rich_text" | "number" | "date" | "bool" | "select" | "relation" | "media" | "repeater";
+        /** @description One finding. */
+        FindingDto: {
+            category: components["schemas"]["CategoryDto"];
+            /** @description What was found: link text, alt, href or heading text (at most 120 characters). */
+            context?: string | null;
+            /** @description Rule-specific facts, e.g. `{"href": "/x/", "status": 404}`. */
+            detail: Record<string, never>;
+            /** @description The suppression key of this finding. */
+            key: string;
+            location: components["schemas"]["LocationDto"];
+            rule: components["schemas"]["RuleId"];
+            severity: components["schemas"]["SeverityDto"];
+            suppressed?: components["schemas"]["SuppressionDto"] | null;
+            /** @description WCAG 2.2 success criteria, e.g. `1.1.1`. */
+            wcag: string[];
+        };
+        /** @description The type's publish gate and whether it refuses this draft now. */
+        GateDto: {
+            blocked: boolean;
+            mode: components["schemas"]["QualityGateDto"];
+        };
         /** @description A connected app: one grant of a user to a client. */
         GrantDto: {
             client: components["schemas"]["OAuthClientDto"];
@@ -2027,6 +3181,77 @@ export interface components {
             limits: components["schemas"]["LimitItemDto"][];
             plugin: string;
             version: string;
+        };
+        /** @description One finding of the health report. */
+        HealthFindingDto: {
+            category: components["schemas"]["CategoryDto"];
+            context?: string | null;
+            /** @description Rule-specific facts; `location` says where in the item. */
+            detail: Record<string, never>;
+            item?: components["schemas"]["HealthItemRefDto"] | null;
+            key: string;
+            redirect?: components["schemas"]["RedirectRefDto"] | null;
+            rule: components["schemas"]["RuleId"];
+            severity: components["schemas"]["SeverityDto"];
+            suppressed?: components["schemas"]["SuppressionDto"] | null;
+            wcag: string[];
+        };
+        /** @description `GET /health/findings`. */
+        HealthFindingList: {
+            items: components["schemas"]["HealthFindingDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description The item a health finding is on. */
+        HealthItemRefDto: {
+            /** @description The item's editor in the admin. */
+            admin_url: string;
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            status: string;
+            title: string;
+            type: string;
+        };
+        /** @description One health run. */
+        HealthRunDto: {
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            items_checked: number;
+            /** Format: int64 */
+            paths_checked: number;
+            /** Format: uuid */
+            requested_by?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            /** @description `running`, `done`, `failed` or `abandoned`. */
+            status: string;
+            /** @description Unsuppressed findings: `{"rules": {"<rule>": n}, "severity": {"error": n, …}}`. */
+            totals: Record<string, never>;
+            /** @description `schedule` or `manual`. */
+            trigger: string;
+            truncated: boolean;
+            /** Format: int64 */
+            urls_checked: number;
+        };
+        /** @description `POST /health/runs`: the queued job. */
+        HealthRunQueuedDto: {
+            /** Format: uuid */
+            job_id: string;
+        };
+        /** @description `GET /health/summary`. */
+        HealthSummaryDto: {
+            /** @description Whether external links are checked (`health.external_links`). */
+            external_links: boolean;
+            last?: components["schemas"]["HealthRunDto"] | null;
+            /**
+             * Format: date-time
+             * @description The next daily run (04:00 UTC).
+             */
+            next_at: string;
+            running?: components["schemas"]["HealthRunDto"] | null;
         };
         /** @description One hook's calls on the answering node since it started. */
         HookStatsDto: {
@@ -2218,6 +3443,18 @@ export interface components {
              */
             wxr: string;
         };
+        /** @description An installed plugin's trust (design 14 §7.1). */
+        InstalledTrustDto: {
+            owner?: components["schemas"]["OwnerDto"] | null;
+            signer?: components["schemas"]["SignerDto"] | null;
+            source?: components["schemas"]["SourceDto"] | null;
+            /**
+             * @description `verified` (a registry publisher's key), `signed` (a key of this site),
+             *     `unsigned`, or `revoked` (its signing key is revoked).
+             */
+            state: string;
+            update?: components["schemas"]["UpdateDto"] | null;
+        };
         /** @description Jobs per status. */
         JobCountsDto: {
             /** Format: int64 */
@@ -2295,6 +3532,37 @@ export interface components {
             name: string;
             /** Format: int64 */
             requested: number;
+        };
+        /** @description One entry of `site.locales`. */
+        LocaleEntryDto: {
+            /** @description What the language switcher shows (1–50 characters; default the native name). */
+            label?: string | null;
+            /**
+             * @description A BCP 47 tag `language[-Script][-REGION]` (e.g. `de`, `pt-BR`); its lowercase is
+             *     the URL prefix of a non-default locale.
+             */
+            tag: string;
+        };
+        /** @description The texts of one locale in `site.locale_texts`. */
+        LocaleTextDto: {
+            /** @description At most 1000 characters. */
+            description?: string | null;
+            /** @description At most 200 characters. */
+            title?: string | null;
+        };
+        /** @description Where a finding is. */
+        LocationDto: {
+            /** @description For `field`: the field's path, e.g. `chapters[1].summary`. */
+            field?: string | null;
+            /** @description `title`, `body`, `field`, `featured_image`, `item` or `redirect`. */
+            kind: string;
+            /** @description For `body` and `field`: the child indices from the document root. */
+            path?: number[] | null;
+            /**
+             * Format: uuid
+             * @description For `redirect`: the redirect's id.
+             */
+            redirect_id?: string | null;
         };
         /** @description `POST /auth/login`. */
         LoginRequest: {
@@ -2450,8 +3718,12 @@ export interface components {
         MenuDto: {
             items: components["schemas"]["MenuItemDto"][];
             label: string;
+            /** @description The menu's locale. */
+            locale: string;
             /** @description Lowercase, no whitespace or `/` (a theme's menu location, e.g. `primary`). */
             name: string;
+            /** @description The default-locale menu this one translates (`primary` for `primary-de`). */
+            translation_of?: string | null;
         };
         /**
          * @description `PUT /menus/{name}`: the whole menu (the path names it; a `name` member, if sent,
@@ -2462,7 +3734,11 @@ export interface components {
             items?: components["schemas"]["MenuItemDto"][];
             /** @description At most 200 characters. */
             label?: string;
+            /** @description One of the site's locales; absent: the stored menu's (a new menu: the default). */
+            locale?: string | null;
             name?: string | null;
+            /** @description The name of the default-locale menu this one translates; absent or `null`: none. */
+            translation_of?: string | null;
         };
         /**
          * @description One menu entry. The tree is flat: `parent_id` names another entry of the same menu
@@ -2513,19 +3789,36 @@ export interface components {
             /** @description The location, and the name of the menu the theme shows there. */
             name: string;
         };
-        /** @description A menu's name and label. */
+        /** @description A menu's name, label and locale. */
         MenuSummary: {
             label: string;
+            locale: string;
             name: string;
+            /** @description The default-locale menu this one translates. */
+            translation_of?: string | null;
         };
         /** @description The API version and the site it serves. */
         MetaDto: {
             /** @description Always `v1` under `/api/v1`. */
             api: string;
+            /** @description The default locale's tag (M6-1). */
+            default_locale: string;
+            /**
+             * @description Every locale of the site, the default first (public: the `hreflang` links show
+             *     them anyway, design 13 D19).
+             */
+            locales: components["schemas"]["MetaLocaleDto"][];
             /** @description `site.url`. */
             site_url: string;
             /** @description The FerriteCMS version serving the request. */
             version: string;
+        };
+        /** @description One of the site's locales. */
+        MetaLocaleDto: {
+            label: string;
+            /** @description The URL prefix (`de` for `/de/`); `null` for the default locale. */
+            prefix?: string | null;
+            tag: string;
         };
         /** @description `GET /system/metrics/series`: every bucket of the range, ascending (dense). */
         MetricsSeriesDto: {
@@ -2562,6 +3855,11 @@ export interface components {
              * @description Template renders (pages and error pages) since the node started.
              */
             renders: number;
+        };
+        /** @description `POST /releases`. */
+        NewReleaseInput: {
+            description?: string;
+            title: string;
         };
         /** @description Registered nodes by heartbeat age (live: within 30 s of the database clock). */
         NodeCountsDto: {
@@ -2685,6 +3983,31 @@ export interface components {
              */
             name: string;
         };
+        /** @description An optional override of missing approvals (admins, design 15 §6.5). */
+        OverrideInput: {
+            override_reason?: string | null;
+        };
+        /** @description What an install does to the owner of the plugin name's data. */
+        OwnerChangeDto: {
+            /** @description `bind`, `bind_unsigned`, `same`, `claim` or `unsigned_update`. */
+            change: string;
+            /**
+             * @description The current owner (`reg:<key>:<publisher>` or `key:<key>`); `null` when unsigned
+             *     or none.
+             */
+            current?: string | null;
+            /** @description The owner after the install. */
+            next?: string | null;
+            /** @description `next` in words ("FerriteCMS (registry)", "key 5A1C…"). */
+            next_label?: string | null;
+        };
+        /** @description The owner of an installed plugin's data. */
+        OwnerDto: {
+            /** @description `reg:<registry key>:<publisher>` or `key:<key id>`. */
+            id: string;
+            /** @description In words: "FerriteCMS (registry)" or "key 5A1C…". */
+            label: string;
+        };
         /** @description `POST /auth/password`. */
         PasswordChange: {
             /** Format: password */
@@ -2760,6 +4083,8 @@ export interface components {
             license?: string | null;
             /** @description The manifest's `plugin.publisher` (text, unverified). */
             publisher?: string | null;
+            /** @description Who signed it and whose data it gets (M6-2, design 14 §7.2). */
+            trust: components["schemas"]["TrustDto"];
             /** @description Whether a plugin of this name is installed: `added` is then against its grant. */
             update: boolean;
         };
@@ -2788,13 +4113,16 @@ export interface components {
             /** @description The stored manifest's `plugin.publisher` (text, unverified). */
             publisher?: string | null;
             report?: components["schemas"]["GrantReportDto"] | null;
+            /** @description Who signed it, whose data it holds, and an update the registry offers (M6-2). */
+            trust: components["schemas"]["InstalledTrustDto"];
             /** Format: date-time */
             updated_at: string;
             version: string;
         };
         /**
          * @description `POST /plugins/inspect` (`multipart/form-data`; the schema only, the handler reads
-         *     the parts itself). Every part is required; an unknown or repeated one is refused.
+         *     the parts itself). `manifest` and `component` are required; an unknown or repeated
+         *     part is refused.
          */
         PluginInspectUpload: {
             /**
@@ -2804,6 +4132,16 @@ export interface components {
             component: string;
             /** @description `ferrite-plugin.toml` (UTF-8, at most 64 KiB). */
             manifest: string;
+            /**
+             * @description `ferrite-plugin.pub`: the publisher's minisign public key (at most 1 KiB), for a
+             *     key this site does not know yet.
+             */
+            publisher_key?: string | null;
+            /**
+             * @description `ferrite-plugin.minisig`: the publisher's minisign signature over the signing
+             *     payload (UTF-8, at most 4 KiB).
+             */
+            signature?: string | null;
         };
         /** @description `GET /plugins`: every installed plugin, by name. */
         PluginList: {
@@ -2877,8 +4215,8 @@ export interface components {
             failures: number;
         };
         /**
-         * @description `POST /plugins` (`multipart/form-data`; the schema only). Every part is required;
-         *     an unknown or repeated one is refused.
+         * @description `POST /plugins` (`multipart/form-data`; the schema only). `manifest`, `component`
+         *     and `approve` are required; an unknown or repeated part is refused.
          */
         PluginUpload: {
             /**
@@ -2893,14 +4231,59 @@ export interface components {
             component: string;
             /** @description `ferrite-plugin.toml` (UTF-8, at most 64 KiB). */
             manifest: string;
+            /** @description `ferrite-plugin.pub` (at most 1 KiB). */
+            publisher_key?: string | null;
+            /** @description `ferrite-plugin.minisig` (UTF-8, at most 4 KiB). */
+            signature?: string | null;
+        };
+        /** @description A preview link. `token` and `url` only in the create answer (shown once). */
+        PreviewLinkDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            /** Format: uuid */
+            target_id: string;
+            /** @description `item` or `release`. */
+            target_kind: string;
+            token?: string | null;
+            url?: string | null;
+        };
+        /** @description `POST …/preview-links`. */
+        PreviewLinkInput: {
+            /**
+             * Format: int32
+             * @description 1 to 168; default 24.
+             */
+            expires_in_hours?: number | null;
+        };
+        /** @description The links of a target. */
+        PreviewLinkList: {
+            items: components["schemas"]["PreviewLinkDto"][];
         };
         /** @description The body of a problem response (the OpenAPI schema `ProblemDocument`). */
         ProblemDocument: {
             /** @description The current resource; only on `precondition-failed` (412). */
             current?: unknown;
             detail: string;
+            /**
+             * @description One `{item, outcome, …}` per release entry (`EntryCheckDto`); only on
+             *     `release-conflict` and `release-not-ready` (409).
+             */
+            entries?: unknown;
             /** @description Omitted when empty. */
             errors?: components["schemas"]["FieldError"][];
+            /**
+             * @description The blocking findings (`FindingDto`); only on `content-quality` (422), when the
+             *     type's publish gate refuses the item (M6-4).
+             */
+            findings?: components["schemas"]["FindingDto"][] | null;
             /**
              * @description The permission report (`PermissionReportDto`) of the refused upload; only on a
              *     `validation` (422) of `POST /plugins` whose `approve` does not match, so the
@@ -2912,6 +4295,69 @@ export interface components {
             title: string;
             /** @description `/api/v1/problems/<slug>`. */
             type: string;
+        };
+        /**
+         * @description A publisher key this site knows: its own (approved, operator), the configured
+         *     registry's, and every revocation.
+         */
+        PublisherKeyDto: {
+            compromised: boolean;
+            key_id: string;
+            label: string;
+            /** @description The installed or retained plugins whose current version it signed. */
+            plugins: string[];
+            /** @description The minisign public key (base64 line). */
+            public_key: string;
+            registry_publisher?: components["schemas"]["PublisherRefDto"] | null;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            revoked_reason?: string | null;
+            /** @description `approved`, `operator` or `registry`. */
+            source: string;
+            /**
+             * Format: date-time
+             * @description When this site trusted it; `null` for a registry key with no row here.
+             */
+            trusted_at?: string | null;
+        };
+        /** @description `GET /plugins/publishers`. */
+        PublisherKeyList: {
+            items: components["schemas"]["PublisherKeyDto"][];
+            /** @description `[plugins] signatures`. */
+            policy: string;
+        };
+        /** @description A registry publisher as the index names it. */
+        PublisherRefDto: {
+            id: string;
+            name: string;
+        };
+        /**
+         * @description A type's publish gate.
+         * @enum {string}
+         */
+        QualityGateDto: "off" | "errors";
+        /** @description `202` of a test delivery or a redelivery. */
+        QueuedDeliveryDto: {
+            /** Format: uuid */
+            delivery: string;
+        };
+        /** @description `POST /webhooks/{id}/redeliver`. */
+        RedeliverInput: {
+            /**
+             * Format: date-time
+             * @description Deliveries created at or after this time.
+             */
+            since: string;
+            /** @description Default `["failed", "skipped"]`; `pending` is refused. */
+            statuses?: components["schemas"]["DeliveryStatusDto"][] | null;
+        };
+        /** @description `202` of `POST /webhooks/{id}/redeliver`. */
+        RedeliveredDto: {
+            /**
+             * Format: int32
+             * @description Deliveries queued again (at most 1 000).
+             */
+            count: number;
         };
         /** @description A redirect. */
         RedirectDto: {
@@ -2961,6 +4407,179 @@ export interface components {
             source?: string;
             target?: string;
         };
+        /** @description The redirect a health finding is on. */
+        RedirectRefDto: {
+            /** Format: uuid */
+            id: string;
+            source: string;
+            target: string;
+        };
+        /** @description `GET /plugins/registry`. */
+        RegistryDto: {
+            /**
+             * @description Refresh only (empty otherwise): site keys whose id the index lists under other key
+             *     bytes; they were removed and the plugins they signed disabled (M6-2 review).
+             */
+            collisions: string[];
+            /** @description The cached index's plugins matching `q`, by name (at most 50). */
+            plugins: components["schemas"]["RegistryPluginDto"][];
+            registry?: components["schemas"]["RegistryMetaDto"] | null;
+        };
+        /** @description `POST /plugins/registry/inspect`. */
+        RegistryInspectRequest: {
+            name: string;
+            /** @description Default: the newest version this binary runs, not yanked. */
+            version?: string | null;
+        };
+        /** @description `POST /plugins/registry/install`. */
+        RegistryInstallRequest: {
+            /** @description The `fingerprint` of the report `POST /plugins/registry/inspect` gave. */
+            approve: string;
+            name: string;
+            version: string;
+        };
+        /** @description A registry plugin that is installed here. */
+        RegistryInstalledDto: {
+            /**
+             * @description The registry publisher owns this plugin's data (`false`: unsigned-owned, an
+             *     update binds its data to the registry publisher).
+             */
+            publisher_matches: boolean;
+            /** @description A newer version this binary runs is listed (and may be installed over it). */
+            update_available: boolean;
+            version: string;
+        };
+        /** @description The configured registry and its cached copy. */
+        RegistryMetaDto: {
+            /**
+             * Format: date-time
+             * @description The last successful check.
+             */
+            checked_at?: string | null;
+            /** Format: date-time */
+            generated_at?: string | null;
+            /** @description The last failed check's error, cleared by a successful one. */
+            last_error?: string | null;
+            /** Format: date-time */
+            last_error_at?: string | null;
+            /** @description The index's `name`; `null` before the first successful check. */
+            name?: string | null;
+            /** Format: int64 */
+            serial?: number | null;
+            /** @description The index URL. */
+            url: string;
+        };
+        /** @description One plugin of the registry. */
+        RegistryPluginDto: {
+            description: string;
+            homepage?: string | null;
+            installed?: components["schemas"]["RegistryInstalledDto"] | null;
+            /** @description The newest version this binary runs, not yanked; `null` when none. */
+            latest?: string | null;
+            license?: string | null;
+            name: string;
+            publisher: components["schemas"]["PublisherRefDto"];
+            /** @description Every listed version, newest first (yanked ones included). */
+            versions: components["schemas"]["RegistryVersionDto"][];
+        };
+        /** @description One listed version. */
+        RegistryVersionDto: {
+            /** Format: date-time */
+            published_at?: string | null;
+            version: string;
+            world: string;
+            /** @description Why it was yanked; `null` when it is not. */
+            yanked?: string | null;
+        };
+        /** @description `GET /releases/{id}/check`. */
+        ReleaseCheckDto: {
+            /** @description Every entry is `ok`. */
+            clean: boolean;
+            entries: components["schemas"]["EntryCheckDto"][];
+        };
+        /** @description A release with its entries. */
+        ReleaseDetailDto: components["schemas"]["ReleaseDto"] & {
+            entries: components["schemas"]["ReleaseEntryDto"][];
+        };
+        /** @description A release without its entries. */
+        ReleaseDto: {
+            /** Format: date-time */
+            applied_at?: string | null;
+            /** Format: uuid */
+            applied_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by?: string | null;
+            description: string;
+            /**
+             * Format: int32
+             * @description Number of entries (lists; the detail has them).
+             */
+            entry_count: number;
+            /** @description The last failure (`{at, reason, entries}`), while `failed`. */
+            failure?: unknown;
+            /** Format: uuid */
+            id: string;
+            override_reason?: string | null;
+            /** Format: date-time */
+            scheduled_at?: string | null;
+            /** Format: uuid */
+            scheduled_by?: string | null;
+            /** @description `open`, `scheduled`, `applied` or `failed`. */
+            status: string;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int64 */
+            version: number;
+        };
+        /** @description One entry with its item. */
+        ReleaseEntryDto: {
+            /** Format: int64 */
+            base_version: number;
+            changes?: components["schemas"]["StagedChangeDto"] | null;
+            /** @description The item moved since the entry's base: rebase first. */
+            conflict: boolean;
+            /** Format: int64 */
+            entry_version: number;
+            has_changes: boolean;
+            /** Format: uuid */
+            item_id: string;
+            /**
+             * Format: int64
+             * @description The item's version now.
+             */
+            item_version: number;
+            locale: string;
+            /** Format: int32 */
+            position: number;
+            review?: components["schemas"]["ReviewSummaryDto"] | null;
+            /** @description The item's status now. */
+            status: string;
+            title: string;
+            transition: components["schemas"]["TransitionDto"];
+            type: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description A page of releases. */
+        ReleaseList: {
+            items: components["schemas"]["ReleaseDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description `PATCH /releases/{id}`. */
+        ReleasePatch: {
+            description?: string | null;
+            title?: string | null;
+        };
+        /** @description A release holding a content item (on the content DTO). */
+        ReleaseRefDto: {
+            /** Format: uuid */
+            id: string;
+            status: string;
+            title: string;
+        };
         /** @description A deleted plugin whose KV and settings are still kept (M2b-3 P47). */
         RetainedPluginDto: {
             /** Format: date-time */
@@ -2976,6 +4595,86 @@ export interface components {
         /** @description `GET /plugins/retained`: every deleted plugin whose data is kept, by name. */
         RetainedPluginList: {
             items: components["schemas"]["RetainedPluginDto"][];
+        };
+        /** @description `POST /change-sets/{id}/revert`. */
+        RevertInput: {
+            /** @description The seqs to revert (at most 500); omitted: every change not reverted yet. */
+            changes?: number[] | null;
+            /** @description Check and report only; nothing is written. */
+            dry_run?: boolean;
+            /** @description Overwrite later edits. */
+            force?: boolean;
+        };
+        RevertNoteDto: {
+            /** Format: int32 */
+            seq: number;
+            text: string;
+        };
+        /** @description What a revert did (or, with `dry_run`, would do). */
+        RevertReportDto: {
+            dry_run: boolean;
+            forced: number[];
+            notes: components["schemas"]["RevertNoteDto"][];
+            /** @description Newest first. */
+            reverted: number[];
+            skipped: number[];
+        };
+        /** @description A review. */
+        ReviewDto: {
+            assignees?: components["schemas"]["AssigneeDto"][] | null;
+            /** Format: date-time */
+            decided_at?: string | null;
+            /** @description Detail only. */
+            decisions?: components["schemas"]["DecisionDto"][] | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            item_id: string;
+            /** @description The item's title and type (detail and queue). */
+            item_title?: string | null;
+            item_type?: string | null;
+            note?: string | null;
+            /** Format: uuid */
+            release_id?: string | null;
+            /** @description `in_review`, `approved`, `changes_requested`, `withdrawn` or `stale`. */
+            status: string;
+            /** Format: int32 */
+            step: number;
+            steps: components["schemas"]["WorkflowStepDto"][];
+            /** Format: date-time */
+            submitted_at: string;
+            /** Format: uuid */
+            submitted_by?: string | null;
+            /** @description `item` or `entry`. */
+            target_kind: string;
+            /** Format: int64 */
+            version: number;
+        };
+        /** @description A page of reviews. */
+        ReviewList: {
+            /**
+             * Format: int64
+             * @description In-review reviews assigned to the caller at their current step.
+             */
+            assigned_to_me: number;
+            items: components["schemas"]["ReviewDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description The open review of an item or entry. */
+        ReviewSummaryDto: {
+            /** @description It approves what is stored now. */
+            current: boolean;
+            /** Format: uuid */
+            id: string;
+            /** @description `in_review` or `approved`. */
+            status: string;
+            /** Format: int32 */
+            step: number;
+            step_label?: string | null;
+            /** Format: int32 */
+            steps: number;
+            /** Format: int64 */
+            version: number;
         };
         /** @description One revision: the saved title, excerpt, body and fields. */
         RevisionDto: {
@@ -3013,6 +4712,13 @@ export interface components {
             note?: string | null;
             title: string;
         };
+        /** @description `POST /plugins/publishers/{key_id}/revoke`. */
+        RevokeKeyRequest: {
+            /** @description The key was stolen or leaked: every installed plugin it signed is disabled. */
+            compromised?: boolean;
+            /** @description Why (1..=500 characters; shown with the key and on disabled plugins). */
+            reason: string;
+        };
         /**
          * @description A robots directive of an item's page.
          * @enum {string}
@@ -3023,6 +4729,28 @@ export interface components {
          * @enum {string}
          */
         RoleDto: "admin" | "editor" | "author" | "contributor";
+        /** @description `200` of `POST /webhooks/{id}/secret`. */
+        RotatedSecretDto: {
+            /**
+             * Format: date-time
+             * @description Until then deliveries carry a signature with the previous secret too.
+             */
+            previous_valid_until: string;
+            /** @description The new secret, shown this once. */
+            secret: string;
+        };
+        /**
+         * @description Every rule id (`ferrite_core::quality::RULES`, design 16 §3); a test keeps the two
+         *     equal.
+         * @enum {string}
+         */
+        RuleId: "image-alt-missing" | "image-alt-empty" | "image-alt-filename" | "heading-empty" | "heading-level-skipped" | "link-text-empty" | "link-text-vague" | "link-text-url" | "table-header-missing" | "table-header-empty" | "html-unchecked" | "media-missing" | "featured-alt-missing" | "link-internal-broken" | "link-internal-redirected" | "link-anchor-missing" | "link-external-broken" | "orphan" | "redirect-chain" | "redirect-loop" | "redirect-target-broken" | "stale" | "check-truncated" | "findings-truncated";
+        /** @description `POST /releases/{id}/schedule`. */
+        ScheduleReleaseInput: {
+            /** Format: date-time */
+            at: string;
+            override_reason?: string | null;
+        };
         /** @description `POST /content/{type}/{id}/schedule`. */
         ScheduleRequest: {
             /**
@@ -3030,6 +4758,11 @@ export interface components {
              * @description When to publish; must lie in the future.
              */
             at: string;
+            /**
+             * @description Admins only, in a type with an approval workflow: schedules without the
+             *     approval (1 to 500 characters, audited; M6-3).
+             */
+            override_reason?: string | null;
         };
         /** @description The schema part of [`SystemStatusDto`]. */
         SchemaStatusDto: {
@@ -3223,6 +4956,23 @@ export interface components {
              */
             "comments.per_page"?: number | null;
             /**
+             * @description Whether the content health run checks external links (default `false`; the
+             *     server then contacts every linked site, M6-4).
+             */
+            "health.external_links"?: boolean | null;
+            /**
+             * Format: int64
+             * @description Days without an edit after which a published item is reported `stale` (30 to
+             *     3650, default 365).
+             */
+            "health.stale_days"?: number | null;
+            /**
+             * Format: int64
+             * @description 1..=365 (default 90): how many days AI change sets are kept (M6-5). Not
+             *     writable over MCP.
+             */
+            "mcp.change_sets_days"?: number | null;
+            /**
              * @description Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer
              *     (default `true`); when off they answer `404` and existing connections stay.
              */
@@ -3250,6 +5000,16 @@ export interface components {
             "site.description"?: string | null;
             /** @description 1 to 35 ASCII letters, digits, `-` or `_` (e.g. `en`, `pt-BR`). */
             "site.locale"?: string | null;
+            /** @description The site title and tagline per non-default locale, keyed by its tag. */
+            "site.locale_texts"?: {
+                [key: string]: components["schemas"]["LocaleTextDto"];
+            } | null;
+            /**
+             * @description The site's locales, the default first (1–20). A prefix that would shadow a
+             *     route, type, taxonomy or top-level page is `422`; removing a locale that still
+             *     holds content is `409` with the counts. Cannot be reset to `null`.
+             */
+            "site.locales"?: components["schemas"]["LocaleEntryDto"][] | null;
             /** @description At most 200 characters. */
             "site.title"?: string | null;
         };
@@ -3259,6 +5019,80 @@ export interface components {
          *     default (for a secret: deletes it). Keys not in the body stay as they are.
          */
         SettingsPatch: Record<string, never>;
+        /**
+         * @description The severity of a rule.
+         * @enum {string}
+         */
+        SeverityDto: "error" | "warning" | "notice";
+        /** @description The key that signed a plugin. */
+        SignerDto: {
+            /** @description The manifest's `plugin.publisher` (text; verified only when `publisher` is set). */
+            claimed: string;
+            /** @description 16 uppercase hex digits, as minisign prints it. */
+            key_id: string;
+            publisher?: components["schemas"]["PublisherRefDto"] | null;
+            /**
+             * @description `registry` (listed by the configured registry), `approved` (approved at an earlier
+             *     install), `operator` (`ferrite plugin keys trust`) or `new` (approving trusts it).
+             */
+            source: string;
+        };
+        /** @description How a plugin arrives. */
+        SourceDto: {
+            /** @description `upload`, `folder` or `registry`. */
+            kind: string;
+            /** @description The registry index URL, for `registry`. */
+            url?: string | null;
+            /** @description The registry version, for `registry`. */
+            version?: string | null;
+        };
+        /**
+         * @description A staged change: what the item will hold once the release is applied (the editable
+         *     fields of a content `PATCH`, all present).
+         */
+        StagedChangeDto: {
+            /** @description The block document (`{"type":"doc",…}`). */
+            body: unknown;
+            excerpt?: string | null;
+            fields?: unknown;
+            /** Format: int32 */
+            menu_order?: number;
+            /** Format: uuid */
+            parent_id?: string | null;
+            /** @description An SEO patch (`title`, `description`, `canonical`, `robots`). */
+            seo?: unknown;
+            slug?: string | null;
+            terms?: string[];
+            title: string;
+        };
+        /** @description An optional submit body: assignees of the first step and a note. */
+        SubmitInput: {
+            note?: string | null;
+            reviewers?: string[];
+        };
+        /** @description `POST /content/{type}/{id}/suppressions`. */
+        SuppressInput: {
+            /** @description One finding's key, or `""` for every finding of the rule on the item. */
+            key?: string;
+            /** @description Why (1 to 500 characters). */
+            reason: string;
+            rule: components["schemas"]["RuleId"];
+        };
+        /** @description Who accepted a finding, and why. */
+        SuppressionDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description `""`: every finding of the rule on the item. */
+            key: string;
+            reason: string;
+            rule: components["schemas"]["RuleId"];
+            /** Format: uuid */
+            user_id?: string | null;
+        };
+        /** @description An item's suppressions. */
+        SuppressionList: {
+            items: components["schemas"]["SuppressionDto"][];
+        };
         /** @description `GET /system/status`. */
         SystemStatusDto: {
             /** @description `sqlite` or `postgres`. */
@@ -3315,16 +5149,25 @@ export interface components {
             description: string;
             /** Format: uuid */
             id: string;
+            /** @description The term's locale. */
+            locale: string;
             name: string;
             /** Format: uuid */
             parent_id?: string | null;
             /** @description Unique in the taxonomy; the archive is `/{taxonomy}/{slug}/`. */
             slug: string;
             taxonomy: string;
+            /**
+             * Format: uuid
+             * @description The id of the term translation group's original.
+             */
+            translation_group: string;
         };
         /** @description `POST /taxonomies/{taxonomy}/terms`. */
         TermInput: {
             description?: string;
+            /** @description One of the site's locales; absent: the default. */
+            locale?: string | null;
             /** @description Not empty after trimming. */
             name: string;
             /**
@@ -3334,6 +5177,11 @@ export interface components {
             parent_id?: string | null;
             /** @description Derived from the name when absent; a taken slug gets `-2`, `-3`, …. */
             slug?: string | null;
+            /**
+             * Format: uuid
+             * @description A term of the same taxonomy whose translation group the new term joins.
+             */
+            translation_of?: string | null;
         };
         /** @description `GET /taxonomies/{taxonomy}/terms`: every term of the taxonomy. */
         TermList: {
@@ -3352,6 +5200,11 @@ export interface components {
             parent_id?: string | null;
             /** @description A taken slug gets `-2`, `-3`, …. */
             slug?: string;
+        };
+        /** @description The body of `POST /terms/{id}/translations`. */
+        TermTranslateInput: {
+            /** @description One of the site's locales the term's group has no member in yet. */
+            locale: string;
         };
         /**
          * Format: binary
@@ -3579,6 +5432,68 @@ export interface components {
             secret_base32: string;
         };
         /**
+         * @description An entry's transition.
+         * @enum {string}
+         */
+        TransitionDto: "none" | "publish" | "unpublish";
+        /** @description `POST /content/{type}/{id}/translations`. */
+        TranslateInput: {
+            /** @description The target locale (one of the site's, not the item's). */
+            locale: string;
+        };
+        /** @description The new translation (`201`) and what it could not take over. */
+        TranslationCreated: {
+            item: components["schemas"]["ContentDto"];
+            /** @description `parent_untranslated`, `term_untranslated:<term id>`. */
+            notes: string[];
+        };
+        /** @description Another item of a translation group. */
+        TranslationRefDto: {
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            /** @description The public path (whatever the status). */
+            permalink: string;
+            /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
+            status: string;
+            title: string;
+        };
+        /** @description A list row's translation: its locale and status. */
+        TranslationStatusDto: {
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            status: string;
+        };
+        /** @description The trust part of a permission report (design 14 §7.2). */
+        TrustDto: {
+            owner?: components["schemas"]["OwnerChangeDto"] | null;
+            /** @description `[plugins] signatures`: `any`, `signed` or `trusted`. */
+            policy: string;
+            refusal?: components["schemas"]["TrustRefusalDto"] | null;
+            /** @description `verified` (a signature verified) or `unsigned`. */
+            signature: string;
+            signer?: components["schemas"]["SignerDto"] | null;
+            source: components["schemas"]["SourceDto"];
+            /** @description `unsigned`, `new_key`, `unsigned_data_claimed`, `unsigned_reads_data`. */
+            warnings: string[];
+        };
+        /** @description A trust refusal (the install would be refused with this `422`). */
+        TrustRefusalDto: {
+            /** @description `signature` or `publisher`. */
+            field: string;
+            message: string;
+        };
+        /** @description An update the cached registry index offers for an installed plugin. */
+        UpdateDto: {
+            /**
+             * @description Whether the registry's publisher is this plugin's owner (`false` for an
+             *     unsigned-owned plugin: updating binds its data to that publisher).
+             */
+            publisher_matches: boolean;
+            version: string;
+        };
+        /**
          * @description A user account. Only the user themselves and accounts with `manage_users` can read
          *     one, so `email` is never shown to anyone else.
          */
@@ -3651,6 +5566,129 @@ export interface components {
          * @enum {string}
          */
         UserStatusDto: "active" | "disabled";
+        /** @description An endpoint. Never its secret. */
+        WebhookDto: {
+            /** Format: int32 */
+            consecutive_failures: number;
+            /** @description Content types `content.*` events are narrowed to; `null` for all. */
+            content_types?: string[] | null;
+            /** @description Deliveries created in the last 24 hours, by status. */
+            counts_24h: components["schemas"]["DeliveryCountsDto"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            disabled_at?: string | null;
+            disabled_reason?: components["schemas"]["DisabledReasonDto"] | null;
+            enabled: boolean;
+            /** @description Subscription patterns: exact types, `<group>.*` or `*`. */
+            events: string[];
+            /**
+             * Format: date-time
+             * @description Since the first failed attempt after a success (cleared by a `2xx`).
+             */
+            failing_since?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_failure_at?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            name: string;
+            /** Format: int32 */
+            payload_version: number;
+            /**
+             * Format: date-time
+             * @description Until when the previous secret still signs (a rotation in progress).
+             */
+            secret_rotating_until?: string | null;
+            state: components["schemas"]["WebhookStateDto"];
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * @description The whole URL (a deploy hook may carry a token in it): shown to `webhooks:read`
+             *     callers only; the audit log holds its host.
+             */
+            url: string;
+        };
+        /** @description The event a delivery carries. */
+        WebhookEventDto: {
+            /** @description The event's `data` as stored (`url` is added at delivery): a JSON object. */
+            data: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            timestamp: string;
+            type: string;
+        };
+        /** @description `POST /webhooks`. */
+        WebhookInput: {
+            /**
+             * @description Narrows `content.*` events to these content types (1 to 50); absent or `null`
+             *     for all.
+             */
+            content_types?: string[] | null;
+            /** @description Default `true`. */
+            enabled?: boolean | null;
+            /** @description 1 to 50 patterns: exact types, `<group>.*` or `*`. */
+            events: string[];
+            /** @description 1 to 100 characters. */
+            name: string;
+            /**
+             * Format: password
+             * @description Bring your own secret: `whsec_` + base64 of 24 to 64 bytes. Generated when
+             *     absent.
+             */
+            secret?: string | null;
+            /** @description Absolute `https` URL (no user information, no fragment, at most 2048 bytes). */
+            url: string;
+        };
+        /** @description `GET /webhooks`: every endpoint, by name. */
+        WebhookList: {
+            items: components["schemas"]["WebhookDto"][];
+        };
+        /**
+         * @description `PATCH /webhooks/{id}`: absent members keep the stored value; `content_types: null`
+         *     clears the filter; `enabled: true` re-enables (and un-pauses) the endpoint.
+         */
+        WebhookPatch: {
+            content_types?: string[] | null;
+            enabled?: boolean;
+            events?: string[];
+            name?: string;
+            url?: string;
+        };
+        /**
+         * @description What state an endpoint is in.
+         * @enum {string}
+         */
+        WebhookStateDto: "active" | "failing" | "disabled" | "paused";
+        /** @description A content type's workflow. */
+        WorkflowDto: {
+            steps: components["schemas"]["WorkflowStepDto"][];
+            type: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            updated_by?: string | null;
+            /** Format: int64 */
+            version: number;
+        };
+        /** @description `PUT /workflows/{type}`. */
+        WorkflowInput: {
+            steps: components["schemas"]["WorkflowStepDto"][];
+        };
+        /** @description Every workflow. */
+        WorkflowList: {
+            items: components["schemas"]["WorkflowDto"][];
+        };
+        /** @description One workflow step. */
+        WorkflowStepDto: {
+            approvers: components["schemas"]["ApproversDto"];
+            key: string;
+            label: string;
+            /** Format: int32 */
+            required: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -3660,6 +5698,13 @@ export interface components {
 }
 export type SchemaAllowedActionsDto = components['schemas']['AllowedActionsDto'];
 export type SchemaApproveInput = components['schemas']['ApproveInput'];
+export type SchemaApproverDto = components['schemas']['ApproverDto'];
+export type SchemaApproverList = components['schemas']['ApproverList'];
+export type SchemaApproversDto = components['schemas']['ApproversDto'];
+export type SchemaAssigneeDto = components['schemas']['AssigneeDto'];
+export type SchemaAssigneeList = components['schemas']['AssigneeList'];
+export type SchemaAssigneesInput = components['schemas']['AssigneesInput'];
+export type SchemaAttemptDto = components['schemas']['AttemptDto'];
 export type SchemaAuditActorDto = components['schemas']['AuditActorDto'];
 export type SchemaAuditDto = components['schemas']['AuditDto'];
 export type SchemaAuditList = components['schemas']['AuditList'];
@@ -3667,6 +5712,17 @@ export type SchemaAuthorRefDto = components['schemas']['AuthorRefDto'];
 export type SchemaAutosaveDto = components['schemas']['AutosaveDto'];
 export type SchemaAutosaveInput = components['schemas']['AutosaveInput'];
 export type SchemaCacheStatsDto = components['schemas']['CacheStatsDto'];
+export type SchemaCategoryDto = components['schemas']['CategoryDto'];
+export type SchemaChangeDetailDto = components['schemas']['ChangeDetailDto'];
+export type SchemaChangeDto = components['schemas']['ChangeDto'];
+export type SchemaChangeObjectDto = components['schemas']['ChangeObjectDto'];
+export type SchemaChangeSetAgentDto = components['schemas']['ChangeSetAgentDto'];
+export type SchemaChangeSetDetailDto = components['schemas']['ChangeSetDetailDto'];
+export type SchemaChangeSetDto = components['schemas']['ChangeSetDto'];
+export type SchemaChangeSetList = components['schemas']['ChangeSetList'];
+export type SchemaChangeSetUserDto = components['schemas']['ChangeSetUserDto'];
+export type SchemaCheckRequestDto = components['schemas']['CheckRequestDto'];
+export type SchemaCheckResponseDto = components['schemas']['CheckResponseDto'];
 export type SchemaClientKindDto = components['schemas']['ClientKindDto'];
 export type SchemaCommentCountsDto = components['schemas']['CommentCountsDto'];
 export type SchemaCommentDto = components['schemas']['CommentDto'];
@@ -3689,14 +5745,36 @@ export type SchemaContentTypeDto = components['schemas']['ContentTypeDto'];
 export type SchemaContentTypeInput = components['schemas']['ContentTypeInput'];
 export type SchemaContentTypeList = components['schemas']['ContentTypeList'];
 export type SchemaContentTypePatch = components['schemas']['ContentTypePatch'];
+export type SchemaCountsDto = components['schemas']['CountsDto'];
 export type SchemaCreatedTokenDto = components['schemas']['CreatedTokenDto'];
+export type SchemaCreatedWebhookDto = components['schemas']['CreatedWebhookDto'];
+export type SchemaDecisionDto = components['schemas']['DecisionDto'];
+export type SchemaDecisionInput = components['schemas']['DecisionInput'];
+export type SchemaDeliveryCountsDto = components['schemas']['DeliveryCountsDto'];
+export type SchemaDeliveryDetailDto = components['schemas']['DeliveryDetailDto'];
+export type SchemaDeliveryDto = components['schemas']['DeliveryDto'];
+export type SchemaDeliveryList = components['schemas']['DeliveryList'];
+export type SchemaDeliveryStatusDto = components['schemas']['DeliveryStatusDto'];
+export type SchemaDisabledReasonDto = components['schemas']['DisabledReasonDto'];
+export type SchemaEntryCheckDto = components['schemas']['EntryCheckDto'];
+export type SchemaEntryInput = components['schemas']['EntryInput'];
+export type SchemaEventCatalogueDto = components['schemas']['EventCatalogueDto'];
+export type SchemaEventTypeDto = components['schemas']['EventTypeDto'];
 export type SchemaFailureBucketDto = components['schemas']['FailureBucketDto'];
 export type SchemaFieldDefDto = components['schemas']['FieldDefDto'];
 export type SchemaFieldError = components['schemas']['FieldError'];
 export type SchemaFieldKindDto = components['schemas']['FieldKindDto'];
+export type SchemaFindingDto = components['schemas']['FindingDto'];
+export type SchemaGateDto = components['schemas']['GateDto'];
 export type SchemaGrantDto = components['schemas']['GrantDto'];
 export type SchemaGrantList = components['schemas']['GrantList'];
 export type SchemaGrantReportDto = components['schemas']['GrantReportDto'];
+export type SchemaHealthFindingDto = components['schemas']['HealthFindingDto'];
+export type SchemaHealthFindingList = components['schemas']['HealthFindingList'];
+export type SchemaHealthItemRefDto = components['schemas']['HealthItemRefDto'];
+export type SchemaHealthRunDto = components['schemas']['HealthRunDto'];
+export type SchemaHealthRunQueuedDto = components['schemas']['HealthRunQueuedDto'];
+export type SchemaHealthSummaryDto = components['schemas']['HealthSummaryDto'];
 export type SchemaHookStatsDto = components['schemas']['HookStatsDto'];
 export type SchemaImportCountsDto = components['schemas']['ImportCountsDto'];
 export type SchemaImportJobDto = components['schemas']['ImportJobDto'];
@@ -3705,10 +5783,14 @@ export type SchemaImportReportDto = components['schemas']['ImportReportDto'];
 export type SchemaImportRunDto = components['schemas']['ImportRunDto'];
 export type SchemaImportRunPageDto = components['schemas']['ImportRunPageDto'];
 export type SchemaImportStartUpload = components['schemas']['ImportStartUpload'];
+export type SchemaInstalledTrustDto = components['schemas']['InstalledTrustDto'];
 export type SchemaJobCountsDto = components['schemas']['JobCountsDto'];
 export type SchemaJobDto = components['schemas']['JobDto'];
 export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaLimitItemDto = components['schemas']['LimitItemDto'];
+export type SchemaLocaleEntryDto = components['schemas']['LocaleEntryDto'];
+export type SchemaLocaleTextDto = components['schemas']['LocaleTextDto'];
+export type SchemaLocationDto = components['schemas']['LocationDto'];
 export type SchemaLoginRequest = components['schemas']['LoginRequest'];
 export type SchemaLoginResponse = components['schemas']['LoginResponse'];
 export type SchemaMailStatusDto = components['schemas']['MailStatusDto'];
@@ -3727,8 +5809,10 @@ export type SchemaMenuList = components['schemas']['MenuList'];
 export type SchemaMenuLocationDto = components['schemas']['MenuLocationDto'];
 export type SchemaMenuSummary = components['schemas']['MenuSummary'];
 export type SchemaMetaDto = components['schemas']['MetaDto'];
+export type SchemaMetaLocaleDto = components['schemas']['MetaLocaleDto'];
 export type SchemaMetricsSeriesDto = components['schemas']['MetricsSeriesDto'];
 export type SchemaMetricsSummaryDto = components['schemas']['MetricsSummaryDto'];
+export type SchemaNewReleaseInput = components['schemas']['NewReleaseInput'];
 export type SchemaNodeCountsDto = components['schemas']['NodeCountsDto'];
 export type SchemaNodeDto = components['schemas']['NodeDto'];
 export type SchemaNodeHookStatsDto = components['schemas']['NodeHookStatsDto'];
@@ -3738,6 +5822,9 @@ export type SchemaNodePluginDto = components['schemas']['NodePluginDto'];
 export type SchemaNodeThemeDto = components['schemas']['NodeThemeDto'];
 export type SchemaNodeThemeOrigin = components['schemas']['NodeThemeOrigin'];
 export type SchemaOAuthClientDto = components['schemas']['OAuthClientDto'];
+export type SchemaOverrideInput = components['schemas']['OverrideInput'];
+export type SchemaOwnerChangeDto = components['schemas']['OwnerChangeDto'];
+export type SchemaOwnerDto = components['schemas']['OwnerDto'];
 export type SchemaPasswordChange = components['schemas']['PasswordChange'];
 export type SchemaPasswordChanged = components['schemas']['PasswordChanged'];
 export type SchemaPasswordResetConfirm = components['schemas']['PasswordResetConfirm'];
@@ -3753,19 +5840,54 @@ export type SchemaPluginNodeState = components['schemas']['PluginNodeState'];
 export type SchemaPluginSettingsDto = components['schemas']['PluginSettingsDto'];
 export type SchemaPluginTotalsDto = components['schemas']['PluginTotalsDto'];
 export type SchemaPluginUpload = components['schemas']['PluginUpload'];
+export type SchemaPreviewLinkDto = components['schemas']['PreviewLinkDto'];
+export type SchemaPreviewLinkInput = components['schemas']['PreviewLinkInput'];
+export type SchemaPreviewLinkList = components['schemas']['PreviewLinkList'];
 export type SchemaProblemDocument = components['schemas']['ProblemDocument'];
+export type SchemaPublisherKeyDto = components['schemas']['PublisherKeyDto'];
+export type SchemaPublisherKeyList = components['schemas']['PublisherKeyList'];
+export type SchemaPublisherRefDto = components['schemas']['PublisherRefDto'];
+export type SchemaQualityGateDto = components['schemas']['QualityGateDto'];
+export type SchemaQueuedDeliveryDto = components['schemas']['QueuedDeliveryDto'];
+export type SchemaRedeliverInput = components['schemas']['RedeliverInput'];
+export type SchemaRedeliveredDto = components['schemas']['RedeliveredDto'];
 export type SchemaRedirectDto = components['schemas']['RedirectDto'];
 export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
 export type SchemaRedirectOriginDto = components['schemas']['RedirectOriginDto'];
 export type SchemaRedirectPatch = components['schemas']['RedirectPatch'];
+export type SchemaRedirectRefDto = components['schemas']['RedirectRefDto'];
+export type SchemaRegistryDto = components['schemas']['RegistryDto'];
+export type SchemaRegistryInspectRequest = components['schemas']['RegistryInspectRequest'];
+export type SchemaRegistryInstallRequest = components['schemas']['RegistryInstallRequest'];
+export type SchemaRegistryInstalledDto = components['schemas']['RegistryInstalledDto'];
+export type SchemaRegistryMetaDto = components['schemas']['RegistryMetaDto'];
+export type SchemaRegistryPluginDto = components['schemas']['RegistryPluginDto'];
+export type SchemaRegistryVersionDto = components['schemas']['RegistryVersionDto'];
+export type SchemaReleaseCheckDto = components['schemas']['ReleaseCheckDto'];
+export type SchemaReleaseDetailDto = components['schemas']['ReleaseDetailDto'];
+export type SchemaReleaseDto = components['schemas']['ReleaseDto'];
+export type SchemaReleaseEntryDto = components['schemas']['ReleaseEntryDto'];
+export type SchemaReleaseList = components['schemas']['ReleaseList'];
+export type SchemaReleasePatch = components['schemas']['ReleasePatch'];
+export type SchemaReleaseRefDto = components['schemas']['ReleaseRefDto'];
 export type SchemaRetainedPluginDto = components['schemas']['RetainedPluginDto'];
 export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList'];
+export type SchemaRevertInput = components['schemas']['RevertInput'];
+export type SchemaRevertNoteDto = components['schemas']['RevertNoteDto'];
+export type SchemaRevertReportDto = components['schemas']['RevertReportDto'];
+export type SchemaReviewDto = components['schemas']['ReviewDto'];
+export type SchemaReviewList = components['schemas']['ReviewList'];
+export type SchemaReviewSummaryDto = components['schemas']['ReviewSummaryDto'];
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
+export type SchemaRevokeKeyRequest = components['schemas']['RevokeKeyRequest'];
 export type SchemaRobotsDto = components['schemas']['RobotsDto'];
 export type SchemaRoleDto = components['schemas']['RoleDto'];
+export type SchemaRotatedSecretDto = components['schemas']['RotatedSecretDto'];
+export type SchemaRuleId = components['schemas']['RuleId'];
+export type SchemaScheduleReleaseInput = components['schemas']['ScheduleReleaseInput'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
 export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
@@ -3779,6 +5901,14 @@ export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
+export type SchemaSeverityDto = components['schemas']['SeverityDto'];
+export type SchemaSignerDto = components['schemas']['SignerDto'];
+export type SchemaSourceDto = components['schemas']['SourceDto'];
+export type SchemaStagedChangeDto = components['schemas']['StagedChangeDto'];
+export type SchemaSubmitInput = components['schemas']['SubmitInput'];
+export type SchemaSuppressInput = components['schemas']['SuppressInput'];
+export type SchemaSuppressionDto = components['schemas']['SuppressionDto'];
+export type SchemaSuppressionList = components['schemas']['SuppressionList'];
 export type SchemaSystemStatusDto = components['schemas']['SystemStatusDto'];
 export type SchemaTaxonomyDto = components['schemas']['TaxonomyDto'];
 export type SchemaTaxonomyInput = components['schemas']['TaxonomyInput'];
@@ -3788,6 +5918,7 @@ export type SchemaTermDto = components['schemas']['TermDto'];
 export type SchemaTermInput = components['schemas']['TermInput'];
 export type SchemaTermList = components['schemas']['TermList'];
 export type SchemaTermPatch = components['schemas']['TermPatch'];
+export type SchemaTermTranslateInput = components['schemas']['TermTranslateInput'];
 export type SchemaThemeBundle = components['schemas']['ThemeBundle'];
 export type SchemaThemeDto = components['schemas']['ThemeDto'];
 export type SchemaThemeImageDto = components['schemas']['ThemeImageDto'];
@@ -3805,11 +5936,29 @@ export type SchemaTotpConfirm = components['schemas']['TotpConfirm'];
 export type SchemaTotpDisable = components['schemas']['TotpDisable'];
 export type SchemaTotpLoginRequest = components['schemas']['TotpLoginRequest'];
 export type SchemaTotpSetupDto = components['schemas']['TotpSetupDto'];
+export type SchemaTransitionDto = components['schemas']['TransitionDto'];
+export type SchemaTranslateInput = components['schemas']['TranslateInput'];
+export type SchemaTranslationCreated = components['schemas']['TranslationCreated'];
+export type SchemaTranslationRefDto = components['schemas']['TranslationRefDto'];
+export type SchemaTranslationStatusDto = components['schemas']['TranslationStatusDto'];
+export type SchemaTrustDto = components['schemas']['TrustDto'];
+export type SchemaTrustRefusalDto = components['schemas']['TrustRefusalDto'];
+export type SchemaUpdateDto = components['schemas']['UpdateDto'];
 export type SchemaUserDto = components['schemas']['UserDto'];
 export type SchemaUserInput = components['schemas']['UserInput'];
 export type SchemaUserList = components['schemas']['UserList'];
 export type SchemaUserPatchInput = components['schemas']['UserPatchInput'];
 export type SchemaUserStatusDto = components['schemas']['UserStatusDto'];
+export type SchemaWebhookDto = components['schemas']['WebhookDto'];
+export type SchemaWebhookEventDto = components['schemas']['WebhookEventDto'];
+export type SchemaWebhookInput = components['schemas']['WebhookInput'];
+export type SchemaWebhookList = components['schemas']['WebhookList'];
+export type SchemaWebhookPatch = components['schemas']['WebhookPatch'];
+export type SchemaWebhookStateDto = components['schemas']['WebhookStateDto'];
+export type SchemaWorkflowDto = components['schemas']['WorkflowDto'];
+export type SchemaWorkflowInput = components['schemas']['WorkflowInput'];
+export type SchemaWorkflowList = components['schemas']['WorkflowList'];
+export type SchemaWorkflowStepDto = components['schemas']['WorkflowStepDto'];
 export type $defs = Record<string, never>;
 export interface operations {
     login: {
@@ -4460,6 +6609,250 @@ export interface operations {
             };
         };
     };
+    list_change_sets: {
+        parameters: {
+            query?: {
+                /** @description Another user's sets (`manage_users`), or `all` for every user's. */
+                user?: string;
+                /** @description Only one connection's (a grant or token id). */
+                agent?: string;
+                /** @description Only open (`true`) or closed (`false`) sets. */
+                open?: boolean;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Change sets, newest last change first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetList"];
+                };
+            };
+            /** @description `malformed-query` or `invalid-cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`; another user's or `all`: `manage_users`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`limit`, `user`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_change_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The set and its changes, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` (also another user's set without `manage_users`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_change_set_change: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The change with its before and after images (`images: hidden` without your read right on the object's area; plugin secrets as `{"secret": "set"}`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revert_change_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevertInput"];
+            };
+        };
+        responses: {
+            /** @description Reverted (or, with `dry_run`, what would be) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevertReportDto"];
+                };
+            };
+            /** @description `malformed-json` or `malformed-header` (`Idempotency-Key`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (a token, not a session; or a reverse write's missing capability, `report.change` naming the change), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `change-conflict` (`report.conflicts`), or an `Idempotency-Key` still in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`changes`: unknown seq or more than 500; or a reverse write's own error, `report.change` naming the change) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     list_comments: {
         parameters: {
             query?: {
@@ -4777,6 +7170,8 @@ export interface operations {
                 limit?: number;
                 /** @description `next_cursor` of the previous page of the same query. */
                 cursor?: string;
+                /** @description Only items in this locale (one of `GET /meta`'s; another is `400 invalid-locale`). */
+                locale?: string;
             };
             header?: never;
             path: {
@@ -4924,9 +7319,74 @@ export interface operations {
             };
         };
     };
-    count_content: {
+    check_content: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckRequestDto"];
+            };
+        };
+        responses: {
+            /** @description The findings of the draft, their counts and the type's gate */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckResponseDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such type, or `id` names no item of this type you may read */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    count_content: {
+        parameters: {
+            query?: {
+                /** @description Only items in this locale (`400 invalid-locale` for another). */
+                locale?: string;
+            };
             header?: never;
             path: {
                 /** @description Content type */
@@ -4943,6 +7403,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContentCountsDto"];
+                };
+            };
+            /** @description `invalid-locale` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
             /** @description `unauthenticated` */
@@ -5205,7 +7674,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation` */
+            /** @description `validation`; `content-quality` (`findings`): an edit of a live item of a gated type adds accessibility errors */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -5510,6 +7979,129 @@ export interface operations {
             };
         };
     };
+    list_content_preview_links: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item's links (without tokens) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewLinkList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_content_preview_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PreviewLinkInput"] | null;
+            };
+        };
+        responses: {
+            /** @description The link with its `token` and `url` (shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewLinkDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`expires_in_hours` 1 to 168) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 30 links per user and hour */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     publish_content: {
         parameters: {
             query?: never;
@@ -5523,7 +8115,12 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description Optional; `override_reason` (admins) publishes a workflow type's item without its approval */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["OverrideInput"] | null;
+            };
+        };
         responses: {
             /** @description Published (from draft, pending or scheduled; `ETag`) */
             200: {
@@ -5579,7 +8176,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: illegal transition */
+            /** @description `validation`: illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item's accessibility errors */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -5964,7 +8561,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `at` not in the future, or illegal transition */
+            /** @description `validation`: `at` not in the future, or illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -5997,7 +8594,12 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description Optional; in a type with a workflow, the first step's reviewers and a note */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SubmitInput"] | null;
+            };
+        };
         responses: {
             /** @description Submitted for review (draft to pending; `ETag`) */
             200: {
@@ -6064,6 +8666,270 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_suppressions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item's suppressions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_suppression: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuppressInput"];
+            };
+        };
+        responses: {
+            /** @description Suppressed (an existing one for the same rule and key is replaced) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (the right to edit the item; `edit_others` for an error on a gated type; `content:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `rule`, `key` or `reason`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_suppression: {
+        parameters: {
+            query?: {
+                /** @description The finding's key; absent or empty: the suppression of the whole rule. */
+                key?: string;
+            };
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+                rule: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden`, `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such item or suppression */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `rule` or `key`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    translate_content: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranslateInput"];
+            };
+        };
+        responses: {
+            /** @description The new draft translation (`Location`) and its notes */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationCreated"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (needs `edit_own`, `content:write`) or `csrf` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such item the caller may read */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: the locale has a translation already (`detail` names its id) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`locale`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6153,6 +9019,160 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    health_findings: {
+        parameters: {
+            query?: {
+                /** @description `accessibility`, `links`, `media`, `site` or `freshness`. */
+                category?: string;
+                /** @description A rule id. */
+                rule?: string;
+                /** @description `error`, `warning` or `notice`. */
+                severity?: string;
+                /** @description A content type. */
+                type?: string;
+                locale?: string;
+                /** @description 1 to 200 (default 50). */
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the newest run's findings, each with its item or redirect */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthFindingList"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `limit` or `cursor`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `category`, `rule` or `severity`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    start_health_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthRunQueuedDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: a run is queued or running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    health_summary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest run, the running one, the next run and whether external links are checked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthSummaryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:read`) or `password-reset-required` */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7725,6 +10745,378 @@ export interface operations {
             };
         };
     };
+    list_plugin_publishers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's keys, the cached registry's keys and every revocation, by key id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublisherKeyList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revoke_plugin_publisher: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 16 hex digits */
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked (audited `plugin.publisher.revoke`): installs and updates signed by it are refused; with `compromised` its plugins are disabled on every node */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublisherKeyDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such key here or in the cached registry */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `reason` empty or over 500 characters */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_plugin_registry: {
+        parameters: {
+            query?: {
+                /** @description Matches name, description and publisher name (case-insensitive). */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configured registry and its cached plugins matching `q` (at most 50); `registry: null` when none is configured. Nothing is fetched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    inspect_registry_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description The permission report of the registry version; nothing is stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionReportDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry is configured, or no such plugin or version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-invalid` (a file does not match the index, another world, not signed by its publisher) or `validation` (`signature`, `publisher`; the body's `report` is the version's report) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable`: a file could not be fetched */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    install_registry_plugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistryInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Installed (`Location`), as an upload */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry, plugin or version */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description As for the inspection; or `validation` with `errors[0].field` = `approve` when `approve` is not the fingerprint of this version's report (a file that changed in between changes it) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable` */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `busy`: another extension change holds the lock (`Retry-After`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    refresh_plugin_registry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fetched, verified and stored (revocations applied); the registry as `GET` answers it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_plugins`, `extensions:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no registry is configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-invalid`: the index's signature, schema or serial (a rollback) is refused; the cached copy stays */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: one refresh per minute per site (`Retry-After`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `registry-unavailable`: the index could not be fetched; the cached copy stays */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     list_retained_plugins: {
         parameters: {
             query?: never;
@@ -8251,6 +11643,53 @@ export interface operations {
             };
         };
     };
+    revoke_preview_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     list_redirects: {
         parameters: {
             query?: {
@@ -8643,6 +12082,1469 @@ export interface operations {
             };
             /** @description `validation` (`errors[0].field`: `source` (also taken by another redirect), `target` or `code`) */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_releases: {
+        parameters: {
+            query?: {
+                /** @description `open`, `scheduled`, `applied` or `failed`. */
+                status?: string;
+                /** @description `true`: only the caller's own releases. */
+                mine?: boolean;
+                cursor?: string;
+                /** @description 1..=100, default 50. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Releases the caller may see, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseList"];
+                };
+            };
+            /** @description `validation` (`status`, `limit`, `cursor`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_release: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewReleaseInput"];
+            };
+        };
+        responses: {
+            /** @description Created (`Location`, `ETag`) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`title`, `description`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_release: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The release with its entries (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_release: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its entries, reviews and preview links */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: scheduled or applied */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    update_release: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleasePatch"];
+            };
+        };
+        responses: {
+            /** @description Updated (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`; a scheduled or applied release */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    apply_release: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional; `override_reason` (admins) for entries without approval */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["OverrideInput"] | null;
+            };
+        };
+        responses: {
+            /** @description Applied in one transaction (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden`: `admin` for an override, or a scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `release-conflict` (`entries`): nothing was written */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: no entries, scheduled or applied, `override_reason` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    check_release: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What applying it now would do, per entry (nothing is written) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseCheckDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    add_release_item: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the release */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntryInput"];
+            };
+        };
+        responses: {
+            /** @description The release with the entry (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden`: the item's edit or publish right, or a scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `item_id`, `transition`, the staged change's fields, at most 200 entries */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    put_release_item: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the release */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                item: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EntryInput"];
+            };
+        };
+        responses: {
+            /** @description The release with the replaced entry (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_release_item: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the release */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                item: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The release without the entry (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    rebase_release_item: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the release */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+                item: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry is based on the item's current version (`ETag`); its approval goes stale */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    submit_release_item: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                item: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SubmitInput"] | null;
+            };
+        };
+        responses: {
+            /** @description The entry review */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: no workflow, already in review, `reviewers`, `note` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_release_preview_links: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The release's links (without tokens) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewLinkList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_release_preview_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Optional */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PreviewLinkInput"] | null;
+            };
+        };
+        responses: {
+            /** @description The link with its `token` and `url` (shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewLinkDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`expires_in_hours` 1 to 168) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 30 links per user and hour */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    schedule_release: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleReleaseInput"];
+            };
+        };
+        responses: {
+            /** @description Scheduled; its items are locked (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `release-not-ready` (`entries`), or `release-locked`: an item is in another scheduled release */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `at` not in the future or more than a year ahead, `override_reason` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    unschedule_release: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open again; locks removed (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` (`current`) */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: not scheduled */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_reviews: {
+        parameters: {
+            query?: {
+                /** @description Default `in_review`; `all` for every status. */
+                status?: string;
+                /** @description `me`: assigned to the caller at the current step. */
+                assigned?: string;
+                /** @description `me`: submitted by the caller. */
+                submitted?: string;
+                /** @description A content type. */
+                type?: string;
+                cursor?: string;
+                /** @description 1..=100, default 50. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review queue, oldest first (without `edit_others`: the caller's own submissions) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewList"];
+                };
+            };
+            /** @description `validation` (`status`, `assigned`, `submitted`, `limit`, `cursor`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review with its steps, decisions and assignees (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    assign_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssigneesInput"];
+            };
+        };
+        responses: {
+            /** @description Every assignee of the review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssigneeList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`step`, `reviewers`: at most 10 eligible approvers) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    decide_review: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the review */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Recorded; the review as it is now (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden`: not an approver of this step, the submitter or the item's author */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: closed, already decided, `decision`, `comment` */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    withdraw_review: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` of the review */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn; a pending item is back to draft (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: closed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9490,7 +14392,10 @@ export interface operations {
     };
     list_terms: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only terms in this locale (`400 invalid-locale` for another). */
+                locale?: string;
+            };
             header?: never;
             path: {
                 /** @description Taxonomy */
@@ -9500,13 +14405,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every term of the taxonomy */
+            /** @description Every term of the taxonomy (in `locale` when given) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["TermList"];
+                };
+            };
+            /** @description `invalid-locale` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
             /** @description `unauthenticated` */
@@ -9608,7 +14522,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation` (name, slug, parent) */
+            /** @description `validation` (name, slug, parent, `locale`, `translation_of`: another taxonomy or a locale its group has already) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -9803,6 +14717,86 @@ export interface operations {
                 };
             };
             /** @description `validation` (name, slug, parent) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    translate_term: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermTranslateInput"];
+            };
+        };
+        responses: {
+            /** @description The new term in `locale`, same name and slug, in the term's translation group (`Location`) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TermDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_terms`, `terms:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: the group has a term in that locale already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`locale`) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -11082,6 +16076,960 @@ export interface operations {
                 };
             };
             /** @description `validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every webhook, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookInput"];
+            };
+        };
+        responses: {
+            /** @description Created (`Location`); the secret is shown this once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedWebhookDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `name`, `url`, `events`, `content_types` or `secret`), or at most 20 webhooks */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhook_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event types endpoints can subscribe to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventCatalogueDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The webhook */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, with its deliveries */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    update_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookPatch"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `name`, `url`, `events` or `content_types`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhook_deliveries: {
+        parameters: {
+            query?: {
+                /** @description Only deliveries in this status. */
+                status?: components["schemas"]["DeliveryStatusDto"];
+                /** @description 1..=200; default 50. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page of the same query. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deliveries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryList"];
+                };
+            };
+            /** @description `validation`: `limit`, `cursor` or `status` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_webhook_delivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                delivery: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The delivery with its event and attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` (also a delivery of another webhook) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    redeliver_webhook_delivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                delivery: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new delivery of the same event is queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedDeliveryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the webhook is disabled or paused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    redeliver_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeliverInput"];
+            };
+        };
+        responses: {
+            /** @description Deliveries since the time queued again (at most 1 000, oldest first) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeliveredDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `statuses` (`pending`), or the webhook is disabled or paused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    rotate_webhook_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new secret, shown this once; the old one signs too for 24 hours */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedSecretDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    test_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A `webhook.ping` delivery is queued (poll it) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedDeliveryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: paused (a copied or restored database) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 10 test deliveries per user and minute (`Retry-After`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_workflows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every workflow, by type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The type's workflow (`ETag`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: the type has no workflow */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    put_workflow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description `"<version>"` to replace one; absent to create */
+                "If-Match"?: string | null;
+            };
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowInput"];
+            };
+        };
+        responses: {
+            /** @description Saved (`ETag`); open reviews keep their steps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_settings`, `settings:write`) or `csrf` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field` = `steps`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_workflow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description `"<version>"` */
+                "If-Match": string;
+            };
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed; its open reviews are withdrawn */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_settings`, `settings:write`) or `csrf` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-failed` */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `precondition-required` */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_workflow_approvers: {
+        parameters: {
+            query?: {
+                /** @description The step (0-based), default 0: the first step, whose reviewers a submit picks. */
+                step?: number;
+            };
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active users who may approve the step (`edit_others`, named by its roles or users), by display name; for anyone who may submit for review (`edit_own`, `content:read`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproverList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: the type has no workflow */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field` = `step`) */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -6,6 +6,12 @@ name: Pages
 # (site/brand/) and builds the Pagefind search index (npx; the runner has Node.js). Every push to `main`
 # publishes, and a manual run does too. Repository setup (once): Settings -> Pages ->
 # Source "GitHub Actions".
+#
+# M6-2: the plugin registry index of the latest release (`ferrite-registry-index.json`
+# and its `.minisig`, design 14 §11) is verified with crates/ferrite/registry.pub and
+# placed at registry/v1/index.json(.minisig); a release without them (v0.2.0 and older,
+# or one made before the plugin keys exist) or the placeholder key skips it with a
+# notice. release.yml starts this workflow after a release.
 
 on:
   push:
@@ -46,6 +52,30 @@ jobs:
           BASE_URL: ${{ steps.pages.outputs.base_url }}
           FERRITE: target/debug/ferrite
         run: site/export-static.sh "$RUNNER_TEMP/site" "$BASE_URL"
+      - name: registry index
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          base="https://github.com/$REPO/releases/latest/download"
+          dir="$RUNNER_TEMP/registry"
+          mkdir -p "$dir"
+          if ! curl -fsSL -o "$dir/index.json" "$base/ferrite-registry-index.json" \
+            || ! curl -fsSL -o "$dir/index.json.minisig" "$base/ferrite-registry-index.json.minisig"; then
+            echo "::notice::the latest release has no registry index: none is published"
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          rc=0
+          .github/scripts/verify-file.sh crates/ferrite/registry.pub "$dir/index.json" || rc=$?
+          if [ "$rc" = 3 ]; then
+            echo "::notice::crates/ferrite/registry.pub is the placeholder: no index is published"
+            exit 0
+          elif [ "$rc" != 0 ]; then
+            exit "$rc"
+          fi
+          mkdir -p "$RUNNER_TEMP/site/registry/v1"
+          cp "$dir/index.json" "$dir/index.json.minisig" "$RUNNER_TEMP/site/registry/v1/"
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: ${{ runner.temp }}/site

@@ -45,6 +45,8 @@ export interface Term {
   slug: string;
   description: string;
   parent_id?: string | null;
+  locale?: string;
+  translation_group?: string;
 }
 
 /** A menu as `GET /menus/{name}` answers. */
@@ -234,6 +236,26 @@ export class ContentApi {
     await this.ctx.delete(`/api/v1/terms/${id}`, { headers: this.headers() });
   }
 
+  /**
+   * Any API call on this session (`/api/v1` + `path`), with the CSRF token and, given a
+   * version, `If-Match`; fails the test unless it succeeds. M6-3 specs use it for releases,
+   * workflows and reviews.
+   */
+  async call<T>(
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+    path: string,
+    options: { data?: unknown; version?: number } = {},
+  ): Promise<T> {
+    return this.ok<T>(
+      await this.ctx.fetch(`/api/v1${path}`, {
+        method,
+        headers: this.headers(options.version),
+        ...(options.data === undefined ? {} : { data: options.data }),
+      }),
+      `${method} ${path}`,
+    );
+  }
+
   async create(
     type: string,
     title: string,
@@ -400,7 +422,15 @@ export class ContentApi {
   }
 
   /** `PUT /menus/{name}`: creates the menu or replaces its whole tree. */
-  async putMenu(name: string, menu: { label: string; items: Menu["items"] }): Promise<Menu> {
+  async putMenu(
+    name: string,
+    menu: {
+      label: string;
+      items: Menu["items"];
+      locale?: string;
+      translation_of?: string | null;
+    },
+  ): Promise<Menu> {
     return this.ok(
       await this.ctx.put(`/api/v1/menus/${name}`, { headers: this.headers(), data: menu }),
       `put menu ${name}`,
@@ -590,6 +620,32 @@ export class ContentApi {
         multipart: { ...parts, approve: report.fingerprint },
       }),
       "install plugin",
+    );
+  }
+
+  /** M6-2: `POST /plugins/registry/refresh` (a `429` within a minute is fine: it is fresh). */
+  async refreshRegistry(): Promise<void> {
+    const res = await this.ctx.post("/api/v1/plugins/registry/refresh", {
+      headers: this.headers(),
+    });
+    expect([200, 429], `refresh registry: ${await res.text()}`).toContain(res.status());
+  }
+
+  /** M6-2: inspect, then install a registry version (`approve` = its fingerprint). */
+  async installFromRegistry(name: string, version: string): Promise<PluginInfo> {
+    const report = await this.ok<{ fingerprint: string }>(
+      await this.ctx.post("/api/v1/plugins/registry/inspect", {
+        headers: this.headers(),
+        data: { name, version },
+      }),
+      "inspect registry plugin",
+    );
+    return this.ok(
+      await this.ctx.post("/api/v1/plugins/registry/install", {
+        headers: this.headers(),
+        data: { name, version, approve: report.fingerprint },
+      }),
+      "install registry plugin",
     );
   }
 

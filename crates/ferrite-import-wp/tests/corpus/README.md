@@ -10,6 +10,8 @@ scratch WordPress 7.1.3. All content (posts, users, comments, images) is synthet
 | `site-a-uploads/`, `site-b-uploads/` | The `wp-content/uploads` folders of both sites (flat-colour PNG and JPEG files, their generated sizes, one PDF). |
 | `site-a.php`, `site-b.php` | The builder scripts that created the content. |
 | `corpus-types.php` | The mu-plugin that registers `book` and `genre` for site A. |
+| `polylang-shape.xml` | **Synthetic, hand-written** (M6-1): five posts in the shape Polylang's storage implies (`language` terms on items, a `post_translations` term with a PHP-serialised `code => post id` map). Not exported from a real Polylang site: no WordPress with Polylang was run. |
+| `wpml-shape.xml` | **Synthetic, hand-written** (M6-1): three posts with the post meta WPML's "Export and Import" add-on documents (`_wpml_import_language_code`, `_wpml_import_translation_group`, `_wpml_import_source_language_code`). WPML is commercial and was not run. |
 
 ## How they were made
 

@@ -40,6 +40,10 @@ infer = "0.22"
 # The Markdown import (M4-3b P62): CommonMark to HTML only, no CLI (`getopts`).
 pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
 # No `debug` feature: no debug() global, no source snippets in errors (name + line stay).
+# Plugin and release signatures (M6-2, design 14 §2): verify only; `minisign` makes throwaway
+# keys in tests.
+minisign = { version = "=0.10.0", default-features = false }
+minisign-verify = { version = "=0.3.0", default-features = false }
 moka = { version = "0.12", features = ["future"] }
 minijinja = { version = "=3.0.2", default-features = false, features = ["builtins", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "json", "fuel", "urlencode"] }
 percent-encoding = "2"

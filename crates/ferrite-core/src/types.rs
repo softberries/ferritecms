@@ -33,10 +33,13 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{ContentQuery, ContentType, NewAudit, Timestamp, UserId};
+use ferrite_domain::{
+    ContentQuery, ContentType, MEDIA_KIND, NewAudit, QualityGate, Timestamp, UserId,
+};
 use ferrite_store::{LOCK_TYPES, LockGuard, Repos, Store, StoreError, Tx, lock};
 use serde_json::{Value, json};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, require, require_read},
@@ -68,6 +71,8 @@ pub struct NewType {
     /// The schema items are validated against; `None` registers the type without one
     /// (any `fields` object, like the built-in types).
     pub fields: Option<Vec<FieldDef>>,
+    /// The publish gate (M6-4, design 16 §5).
+    pub quality_gate: QualityGate,
 }
 
 /// A change to a content type; `None` keeps the stored value. The name and
@@ -80,6 +85,8 @@ pub struct TypePatch {
     /// `Some(None)` removes it (any object). Stored items are not re-validated; each is
     /// checked on its next save.
     pub fields: Option<Option<Vec<FieldDef>>>,
+    /// The publish gate (M6-4); the `media` type refuses `errors`.
+    pub quality_gate: Option<QualityGate>,
 }
 
 /// Registers and manages content types (see the module docs).
@@ -118,8 +125,11 @@ impl ContentTypeService {
         let ty = check_new_type(&new)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TypeCreate, &[]).await?;
             create_in(tx.as_ref(), actor.user, &ty, new.fields.as_deref()).await?;
             invalidate_all(tx.as_ref()).await?;
+            cap.created(ObjectRef::Type(ty.name.clone()));
+            cap.finish(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;
@@ -142,8 +152,16 @@ impl ContentTypeService {
         }
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::TypeUpdate,
+                &[ObjectRef::Type(name.to_owned())],
+            )
+            .await?;
             let ty = update_in(tx.as_ref(), actor.user, name, label, &patch).await?;
             invalidate_all(tx.as_ref()).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(ty)
         }
         .await;
@@ -159,66 +177,7 @@ impl ContentTypeService {
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         let (guard, tx) = begin_locked(self.store.as_ref()).await?;
-        let done = async {
-            let ty = tx.types().get(name).await?.ok_or(CoreError::NotFound)?;
-            if ty.built_in {
-                return Err(CoreError::Invalid("built-in type".into()));
-            }
-            let items = tx
-                .content()
-                .list(&ContentQuery {
-                    kind: Some(ty.name.clone()),
-                    limit: 1,
-                    ..ContentQuery::default()
-                })
-                .await?;
-            if !items.items.is_empty() {
-                return Err(CoreError::Invalid("type has content".into()));
-            }
-            for other in tx.types().list().await? {
-                if other.name == ty.name {
-                    continue;
-                }
-                // A stored schema that no longer parses is not ignored: it might name this
-                // type. Not the request's fault, so plain `Invalid` naming the type (as a
-                // stored permalink option that no longer parses).
-                let defs = fields::schema_of(&other.fields).map_err(|e| {
-                    CoreError::Invalid(format!(
-                        "the stored field schema of type {:?} is unreadable: {e}",
-                        other.name
-                    ))
-                })?;
-                if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
-                    return Err(CoreError::Invalid(format!(
-                        "type is a relation target of type {:?}",
-                        other.name
-                    )));
-                }
-            }
-            if let Some(tax) = tx
-                .taxonomies()
-                .list()
-                .await?
-                .into_iter()
-                .find(|t| t.content_types.contains(&ty.name))
-            {
-                return Err(CoreError::Invalid(format!(
-                    "type is used by taxonomy {:?}",
-                    tax.name
-                )));
-            }
-            tx.types().delete(&ty.name).await?;
-            announce(
-                tx.as_ref(),
-                actor.user,
-                Change::Type,
-                "delete",
-                &ty.name,
-                json!({}),
-            )
-            .await
-        }
-        .await;
+        let done = delete_in(tx.as_ref(), actor.user, name).await;
         finish_locked(guard, tx, done).await
     }
 }
@@ -239,7 +198,66 @@ pub(crate) fn check_new_type(new: &NewType) -> Result<ContentType, CoreError> {
         fields: stored_schema(new.fields.as_deref()),
         built_in: false,
         created_at: Timestamp::now(),
+        quality_gate: new.quality_gate,
     })
+}
+
+/// [`ContentTypeService::delete`] inside the caller's `repos` (which holds
+/// [`LOCK_TYPES`](ferrite_store::LOCK_TYPES)), without the capability check.
+pub(crate) async fn delete_in(
+    repos: &dyn Repos,
+    user: UserId,
+    name: &str,
+) -> Result<(), CoreError> {
+    let ty = repos.types().get(name).await?.ok_or(CoreError::NotFound)?;
+    if ty.built_in {
+        return Err(CoreError::Invalid("built-in type".into()));
+    }
+    let items = repos
+        .content()
+        .list(&ContentQuery {
+            kind: Some(ty.name.clone()),
+            limit: 1,
+            ..ContentQuery::default()
+        })
+        .await?;
+    if !items.items.is_empty() {
+        return Err(CoreError::Invalid("type has content".into()));
+    }
+    for other in repos.types().list().await? {
+        if other.name == ty.name {
+            continue;
+        }
+        // A stored schema that no longer parses is not ignored: it might name this
+        // type. Not the request's fault, so plain `Invalid` naming the type (as a
+        // stored permalink option that no longer parses).
+        let defs = fields::schema_of(&other.fields).map_err(|e| {
+            CoreError::Invalid(format!(
+                "the stored field schema of type {:?} is unreadable: {e}",
+                other.name
+            ))
+        })?;
+        if defs.is_some_and(|defs| fields::names_type(&defs, &ty.name)) {
+            return Err(CoreError::Invalid(format!(
+                "type is a relation target of type {:?}",
+                other.name
+            )));
+        }
+    }
+    if let Some(tax) = repos
+        .taxonomies()
+        .list()
+        .await?
+        .into_iter()
+        .find(|t| t.content_types.contains(&ty.name))
+    {
+        return Err(CoreError::Invalid(format!(
+            "type is used by taxonomy {:?}",
+            tax.name
+        )));
+    }
+    repos.types().delete(&ty.name).await?;
+    announce(repos, user, Change::Type, "delete", &ty.name, json!({})).await
 }
 
 /// Registers `ty` (from [`check_new_type`]; `defs` its schema) inside the caller's `Tx`,
@@ -285,6 +303,15 @@ pub(crate) async fn update_in(
     if let Some(has_archive) = patch.has_archive {
         ty.has_archive = has_archive;
     }
+    if let Some(gate) = patch.quality_gate {
+        if ty.name == MEDIA_KIND && gate == QualityGate::Errors {
+            return Err(CoreError::invalid_field(
+                "quality_gate",
+                "media has no body to check",
+            ));
+        }
+        ty.quality_gate = gate;
+    }
     if let Some(defs) = &patch.fields {
         if let Some(defs) = defs {
             check_targets(repos, defs, None).await?;
@@ -297,6 +324,7 @@ pub(crate) async fn update_in(
         "label": patch.label.is_some(),
         "has_archive": patch.has_archive,
         "fields": patch.fields.as_ref().map(|f| f.as_ref().map(Vec::len)),
+        "quality_gate": patch.quality_gate.map(|g| g.as_str()),
     });
     announce_in(repos, actor, Change::Type, "update", &ty.name, details).await?;
     Ok(ty)
@@ -455,10 +483,17 @@ pub(crate) async fn check_name_free(
     if is_taxonomy {
         return Err(CoreError::invalid_field(NAME, "name is a taxonomy"));
     }
+    // A locale prefix (13 §2.2): `/<prefix>/…` is that locale's site.
+    if crate::locales::read(repos).await?.by_prefix(name).is_some() {
+        return Err(CoreError::invalid_field(
+            NAME,
+            "name is the URL prefix of one of the site's locales",
+        ));
+    }
     for kind in ROOT_TYPES {
         if repos
             .content()
-            .get_by_slug(kind, None, name)
+            .get_by_slug(kind, None, None, name)
             .await?
             .is_some()
         {

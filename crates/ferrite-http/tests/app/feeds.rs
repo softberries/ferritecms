@@ -213,7 +213,7 @@ async fn sitemaps(app: App) -> App {
         .store
         .read()
         .content()
-        .get_by_slug("post", None, "secret")
+        .get_by_slug("post", None, None, "secret")
         .await
         .unwrap()
         .unwrap();
@@ -414,6 +414,8 @@ async fn fixed_row(
             scheduled_at: published.filter(|_| status == ContentStatus::Scheduled),
             created_at: Some(at(0)),
             updated_at: Some(at(updated)),
+            locale: "en".into(),
+            translation_group: None,
         })
         .await
         .unwrap();

@@ -85,7 +85,7 @@ pub fn rich_site() -> Dump {
                 json!({"name": "Book_x", "label": "Books", "hierarchical": true,
                        "has_archive": true,
                        "fields": {"isbn": {"type": "text", "required": true}},
-                       "created_at": T_NOW}),
+                       "created_at": T_NOW, "quality_gate": "errors"}),
             ]),
         ),
         (
@@ -275,6 +275,34 @@ pub fn rich_site() -> Dump {
             ]),
         ),
         (
+            "plugin_publishers",
+            rows(vec![json!({
+                "key_id": "0102030405060708",
+                "public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                "label": "example.dev", "source": "approved", "trusted_at": T_NOW,
+                "revoked_at": T_EDGE, "revoked_reason": "rotated", "compromised": false})]),
+        ),
+        (
+            "plugin_owners",
+            rows(vec![
+                json!({"plugin": "seo", "owner": "key:0102030405060708",
+                       "signer_key": "0102030405060708",
+                       "signer_public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                       "signature": "untrusted comment: x\n",
+                       "publisher": "example.dev", "source": "upload",
+                       "bound_at": T_NOW, "updated_at": T_NOW}),
+                json!({"plugin": "old", "publisher": "x", "source": "folder",
+                       "bound_at": T_PRE_1970, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
+            "plugin_registry",
+            rows(vec![json!({
+                "url": "file:///srv/registry/index.json", "serial": 7,
+                "index_json": "{}", "signature": "untrusted comment: x\n",
+                "generated_at": T_NOW, "fetched_at": T_NOW, "checked_at": T_NOW})]),
+        ),
+        (
             "themes",
             rows(vec![json!({
                 "name": "blog", "version": "0.1.0", "artifact_hash": h('d'),
@@ -308,6 +336,120 @@ pub fn rich_site() -> Dump {
                 "title": "Hello!", "excerpt": null, "slug": "hello-2",
                 "parent_id": uid(P1), "menu_order": 2, "terms": [uid(T3)], "body": [],
                 "fields": {}, "saved_at": T_NOW, "seo": {"title": "x"}})]),
+        ),
+        (
+            "webhook_endpoints",
+            rows(vec![
+                json!({"id": uid(0xa01), "name": "deploy", "url": "https://hooks.example/x?t=1",
+                       "events": ["content.*"], "content_types": ["post"], "enabled": true,
+                       "install_id": "install-rich", "secret_sealed": "sealed",
+                       "previous_secret_sealed": "old",
+                       "previous_secret_expires_at": T_NOW, "payload_version": 1,
+                       "failing_since": T_NOW, "consecutive_failures": 2,
+                       "last_success_at": T_PRE_1970, "last_failure_at": T_NOW,
+                       "created_by": uid(U1), "created_at": T_NOW, "updated_at": T_NOW}),
+                json!({"id": uid(0xa02), "name": "gone", "url": "https://other.example/",
+                       "events": ["*"], "content_types": null, "enabled": false,
+                       "disabled_reason": "gone", "disabled_at": T_NOW,
+                       "install_id": "install-rich", "secret_sealed": "sealed2",
+                       "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
+        ),
+        // M6-3 (0017): a scheduled release with a staged change, its lock, a workflow,
+        // an entry review with a decision and an assignee.
+        (
+            "releases",
+            rows(vec![
+                json!({"id": uid(0xb01), "title": "Spring", "description": "d",
+                       "status": "scheduled", "scheduled_at": T_NOW,
+                       "scheduled_by": uid(U1), "override_reason": "urgent",
+                       "failure": {"reason": "x"}, "created_by": uid(U1),
+                       "created_at": T_PRE_1970, "updated_at": T_NOW,
+                       "applied_at": T_EDGE, "applied_by": uid(U2), "version": 3}),
+                json!({"id": uid(0xb02), "title": "Open", "status": "open",
+                       "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
+            "release_items",
+            rows(vec![json!({
+                "release_id": uid(0xb01), "item_id": uid(POST), "position": 1,
+                "transition": "publish",
+                "changes": {"title": "New", "body": [], "fields": {}, "terms": []},
+                "base_version": 2, "entry_version": 4, "added_by": uid(U2),
+                "updated_at": T_NOW})]),
+        ),
+        (
+            "release_locks",
+            rows(vec![
+                json!({"item_id": uid(POST), "release_id": uid(0xb01)}),
+            ]),
+        ),
+        (
+            "workflows",
+            rows(vec![json!({
+                "type": "post",
+                "steps": [{"key": "copy", "label": "Copy", "approvers": {"roles": ["editor"], "users": []}, "required": 1}],
+                "updated_by": uid(U1), "updated_at": T_NOW, "version": 2})]),
+        ),
+        (
+            "reviews",
+            rows(vec![json!({
+                "id": uid(0xb11), "target": format!("entry:{}:{}", uid(0xb01), uid(POST)),
+                "item_id": uid(POST), "release_id": uid(0xb01), "entry_version": 4,
+                "status": "in_review", "step": 0,
+                "steps": [{"key": "copy", "label": "Copy", "approvers": {"roles": ["editor"], "users": []}, "required": 1}],
+                "note": "n", "submitted_by": uid(U2), "submitted_at": T_NOW, "version": 1})]),
+        ),
+        (
+            "review_decisions",
+            rows(vec![json!({
+                "id": uid(0xb21), "review_id": uid(0xb11), "step": 0, "user_id": uid(U1),
+                "decision": "approve", "comment": "ok", "at": T_NOW})]),
+        ),
+        (
+            "review_assignees",
+            rows(vec![
+                json!({"review_id": uid(0xb11), "step": 0, "user_id": uid(U1)}),
+            ]),
+        ),
+        (
+            "change_sets",
+            rows(vec![
+                json!({"id": uid(0xc01), "user_id": uid(U1), "agent_kind": "oauth",
+                       "agent_id": uid(0xc0f), "client": "Claude", "open_key": null,
+                       "started_at": T_PRE_1970, "last_at": T_NOW, "changes": 2,
+                       "reverted_at": T_NOW, "reverted_by": uid(U1)}),
+                json!({"id": uid(0xc02), "user_id": null, "agent_kind": "token",
+                       "agent_id": uid(0xc0e), "client": "API token cli",
+                       "open_key": "token:x", "started_at": T_NOW, "last_at": T_NOW,
+                       "changes": 0, "reverted_at": null, "reverted_by": null}),
+            ]),
+        ),
+        (
+            "change_set_changes",
+            rows(vec![
+                json!({"set_id": uid(0xc01), "seq": 1, "at": T_NOW, "op": "content.create",
+                       "object_kind": "content", "object_id": "x", "label": "Hello",
+                       "before_image": null, "before_hash": null, "after_image": "AP8=",
+                       "after_hash": "h1", "reverted_at": T_NOW, "reverted_by": uid(U1),
+                       "revert_forced": true}),
+                json!({"set_id": uid(0xc01), "seq": 2, "at": T_NOW, "op": "term.update",
+                       "object_kind": "term", "object_id": "y", "label": "",
+                       "before_image": "AP8=", "before_hash": "h2", "after_image": null,
+                       "after_hash": "h3", "reverted_at": null, "reverted_by": null,
+                       "revert_forced": false}),
+            ]),
+        ),
+        (
+            "quality_suppressions",
+            rows(vec![
+                json!({"item_id": uid(POST), "rule": "image-alt-missing", "key": "/a.png",
+                       "reason": "a decorative divider", "user_id": uid(U1),
+                       "created_at": T_NOW}),
+                json!({"item_id": uid(POST), "rule": "link-text-vague", "key": "",
+                       "reason": "the design asks for it", "created_at": T_PRE_1970}),
+            ]),
         ),
         (
             "import_runs",

@@ -66,6 +66,11 @@
       "read": "See site health, background jobs and the audit log.",
       "write": "Nothing more than reading: jobs and backups stay in the admin."
     },
+    "webhooks": {
+      "label": "Webhooks",
+      "read": "Never granted to assistants: webhooks stay in the admin.",
+      "write": "Never granted to assistants: webhooks stay in the admin."
+    },
     "off": "Not allowed."
   },
   "consent": {
@@ -218,7 +223,10 @@
         "short": "Audited",
         "body": "Audited: every change it makes is in the audit log, under the app's name."
       }
-    }
+    },
+    "retention": "Keep AI change history for",
+    "retentionHint": "Days, 1 to 365 (default {{value}}). Older change sets are deleted; assistants cannot change this.",
+    "retentionUnit": "days"
   },
   "dashboard": {
     "title": "Manage this site with AI",
@@ -234,6 +242,138 @@
     "offTitle": "AI assistants are off",
     "offBody": "The MCP endpoint is turned off for this site.",
     "offAction": "Turn on",
-    "offPaused": "Connected apps are paused until it is turned back on."
+    "offPaused": "Connected apps are paused until it is turned back on.",
+    "recent_one": "{{count}} change by assistants in the last 24 hours",
+    "recent_other": "{{count}} changes by assistants in the last 24 hours",
+    "review": "Review"
+  },
+  "activity": {
+    "title": "AI activity",
+    "description": "Everything AI assistants changed on this site over MCP, grouped by connection and session. Review the changes and undo what you do not want.",
+    "list": "Change sets",
+    "filters": {
+      "label": "Filter change sets",
+      "status": "Status",
+      "all": "Any status",
+      "allUsers": "Every user's",
+      "connection": "One connection",
+      "clear": "Show all connections"
+    },
+    "columns": {
+      "client": "Assistant",
+      "user": "Acting as",
+      "started": "Started",
+      "last": "Last change",
+      "changes": "Changes",
+      "status": "Status"
+    },
+    "status": {
+      "open": "Open",
+      "closed": "Closed",
+      "reverted": "Reverted",
+      "partly_reverted": "Partly reverted"
+    },
+    "token": "Personal API token",
+    "disconnected": "Disconnected",
+    "deletedUser": "Deleted user",
+    "changes_one": "{{count}} change",
+    "changes_other": "{{count}} changes",
+    "revertedCount": "{{count}} reverted",
+    "empty": {
+      "title": "No AI changes yet",
+      "body": "When an assistant you connected changes something on the site, its changes appear here, ready to review and undo."
+    },
+    "back": "AI activity",
+    "span": "{{start}} to {{end}}",
+    "revertAll": "Revert all",
+    "revertOne": "Revert this change",
+    "revertOneLabel": "Revert change {{seq}}: {{label}}",
+    "show": "Show changes",
+    "hide": "Hide changes",
+    "showLabel": "Show the changes of {{label}}",
+    "open": "Open",
+    "created": "Created",
+    "deleted": "Deleted",
+    "reverted": "Reverted by {{who}}",
+    "revertedAnon": "Reverted",
+    "forced": "Overwrote later edits",
+    "tooLarge": "Too large to keep: cannot be reverted",
+    "hidden": "You cannot see this object's contents with your current role.",
+    "noDiff": "Nothing that a person edits changed.",
+    "loading": "Loading the change",
+    "diff": {
+      "title": "Title",
+      "excerpt": "Excerpt",
+      "body": "Body",
+      "fields": "Other fields",
+      "path": "Field",
+      "before": "Before",
+      "after": "After",
+      "absent": "(none)"
+    },
+    "ops": {
+      "content.create": "Created",
+      "content.translate": "Translated",
+      "content.update": "Edited",
+      "content.publish": "Published",
+      "content.unpublish": "Unpublished",
+      "content.schedule": "Scheduled",
+      "content.submit": "Submitted for review",
+      "content.trash": "Trashed",
+      "content.restore": "Restored",
+      "content.restore_revision": "Restored a revision of",
+      "media.upload": "Uploaded",
+      "media.update": "Edited media",
+      "media.trash": "Trashed media",
+      "media.restore": "Restored media",
+      "term.create": "Created term",
+      "term.update": "Edited term",
+      "term.delete": "Deleted term",
+      "menu.put": "Changed menu",
+      "type.create": "Created content type",
+      "type.update": "Changed content type",
+      "redirect.create": "Set redirect",
+      "redirect.update": "Changed redirect",
+      "redirect.delete": "Deleted redirect",
+      "comment.moderate": "Moderated comment",
+      "comment.create": "Replied to comments on",
+      "settings.update": "Changed setting",
+      "theme.activate": "Activated theme",
+      "theme.settings": "Changed theme settings",
+      "plugin.enable": "Enabled plugin",
+      "plugin.disable": "Disabled plugin",
+      "plugin.settings": "Changed plugin setting",
+      "release.schedule": "Scheduled release",
+      "release.unschedule": "Took off the schedule"
+    },
+    "dialog": {
+      "titleAll": "Revert this change set?",
+      "titleOne": "Revert this change?",
+      "checking": "Checking what would change",
+      "will_one": "{{count}} change will be reverted, newest first, in one step.",
+      "will_other": "{{count}} changes will be reverted, newest first, in one step.",
+      "asYou": "Each object goes back through the normal editing paths, as you: your role applies, and content gets a revision you can undo.",
+      "conflicts": "Some changes were edited since",
+      "blocked": "These changes cannot be reverted",
+      "force": "Overwrite later edits",
+      "forceHint": "The later edits are replaced; for content they stay in the revisions.",
+      "notes": "Notes",
+      "failed": "Change {{seq}} could not be reverted: {{reason}}",
+      "cancel": "Cancel",
+      "confirm": "Revert",
+      "reverting": "Reverting…",
+      "done_one": "{{count}} change reverted",
+      "done_other": "{{count}} changes reverted",
+      "raced": "Something changed meanwhile: check the list again."
+    },
+    "conflict": {
+      "changedBy": "Edited by {{who}} {{when}}",
+      "changed": "Changed since the assistant's edit",
+      "later": "Changed again later in this set (change {{seq}}): revert that one too",
+      "gone": "Deleted since",
+      "tooLarge": "Too large to keep"
+    },
+    "link": "Activity",
+    "linkLabel": "AI activity of {{name}}"
   }
 }

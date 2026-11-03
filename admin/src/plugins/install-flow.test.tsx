@@ -1,12 +1,13 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { type PermissionReportDto, type PluginDto, pluginsQuery } from "@/api/plugins";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
-import { permission, plugin, report } from "./fixtures";
+import { permission, plugin, report, trust, verifiedTrust } from "./fixtures";
 import { InstallPluginDialog } from "./install-flow";
+import { slotOf } from "./plugin-model";
 
 interface Reply {
   status: number;
@@ -220,4 +221,79 @@ test("closing_during_install_refreshes_the_list", async () => {
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(lists()).toBeGreaterThan(before));
+});
+
+// ---- M6-2: signed uploads --------------------------------------------------------------
+
+test("install_sends_signature_parts", async () => {
+  stubRoutes({ "/api/v1/plugins": () => json({ items: [] }) });
+  FakeXhr.replies.push(
+    { status: 200, body: report({ trust: verifiedTrust() }) },
+    { status: 201, body: plugin({ enabled: false }) },
+  );
+  renderWithRouter(<InstallPluginDialog open onOpenChange={() => {}} onInstalled={() => {}} />);
+  await screen.findByRole("dialog", { name: "Install a plugin" });
+  // All four dropped at once are matched by name.
+  const drop = document.querySelector<HTMLElement>("[data-slot=plugin-drop]");
+  if (!drop) throw new Error("no drop zone");
+  const files = [
+    new File([MANIFEST], "ferrite-plugin.toml"),
+    new File([new Uint8Array([0, 97, 115, 109])], "seo_helper.wasm"),
+    new File(["untrusted comment: sig\n"], "ferrite-plugin.minisig"),
+    new File(["untrusted comment: key\n"], "ferrite-plugin.pub"),
+  ];
+  fireEvent.drop(drop, { dataTransfer: { files, types: ["Files"] } });
+  await userEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+  expect(await screen.findByText("Verified publisher")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Approve and install" }));
+  await waitFor(() => expect(FakeXhr.sent).toHaveLength(2));
+  for (const sent of FakeXhr.sent) {
+    expect((sent.body.get("signature") as File).name).toBe("ferrite-plugin.minisig");
+    expect((sent.body.get("publisher_key") as File).name).toBe("ferrite-plugin.pub");
+  }
+});
+
+test("install_shows_publisher_refusal_from_422", async () => {
+  stubRoutes({ "/api/v1/plugins": () => json({ items: [] }) });
+  const refused = report({
+    trust: trust({
+      owner: null,
+      refusal: {
+        field: "publisher",
+        message: "the data of `seo-helper` belongs to publisher FerriteCMS (registry)",
+      },
+    }),
+  });
+  FakeXhr.replies.push({
+    status: 422,
+    type: "application/problem+json",
+    body: {
+      type: "/api/v1/problems/validation",
+      title: "Validation failed",
+      status: 422,
+      detail: "the data of `seo-helper` belongs to publisher FerriteCMS (registry)",
+      errors: [
+        {
+          field: "publisher",
+          detail: "the data of `seo-helper` belongs to publisher FerriteCMS (registry)",
+        },
+      ],
+      report: refused,
+    },
+  });
+  renderWithRouter(<InstallPluginDialog open onOpenChange={() => {}} onInstalled={() => {}} />);
+  await screen.findByRole("dialog", { name: "Install a plugin" });
+  await pickBoth();
+  await userEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+  expect(await screen.findByText("This plugin cannot be installed")).toBeVisible();
+  expect(screen.getAllByText(/belongs to publisher FerriteCMS/).length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "Approve and install" })).toBeDisabled();
+});
+
+test("dropped_files_are_matched_by_name", () => {
+  expect(slotOf("ferrite-plugin.toml")).toBe("manifest");
+  expect(slotOf("SEO.WASM")).toBe("component");
+  expect(slotOf("ferrite-plugin.minisig")).toBe("signature");
+  expect(slotOf("ferrite-plugin.pub")).toBe("key");
+  expect(slotOf("readme.md")).toBeNull();
 });

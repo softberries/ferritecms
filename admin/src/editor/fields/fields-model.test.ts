@@ -34,6 +34,7 @@ const type = (fields: FieldDef[] | null | undefined): ContentTypeDto => ({
   name: "book",
   label: "Books",
   built_in: false,
+  quality_gate: "off",
   has_archive: false,
   hierarchical: false,
   ...(fields === undefined ? {} : { fields }),

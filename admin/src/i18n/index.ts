@@ -12,9 +12,13 @@ import importNs from "./en/import.json";
 import kit from "./en/kit.json";
 import media from "./en/media.json";
 import palette from "./en/palette.json";
+import releases from "./en/releases.json";
+import reviews from "./en/reviews.json";
+import quality from "./en/quality.json";
 import shell from "./en/shell.json";
 import structure from "./en/structure.json";
 import styleguide from "./en/styleguide.json";
+import webhooks from "./en/webhooks.json";
 
 /** Every namespace, one per area of the admin. English only in M2b. */
 export const resources = {
@@ -34,6 +38,10 @@ export const resources = {
     admin,
     ai,
     import: importNs,
+    webhooks,
+    releases,
+    reviews,
+    quality,
   },
 } as const;
 

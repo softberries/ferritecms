@@ -44,7 +44,32 @@ fn ts_opt(micros: Option<i64>) -> Result<Option<Timestamp>, StoreError> {
 
 pub(crate) const CONTENT_COLUMNS: &str = "id, type, status, slug, parent_id, author_id, title, \
      excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, created_at, \
-     updated_at, version";
+     updated_at, version, locale, translation_group";
+
+/// Maps a `group_members` row (`id, grp, type, locale, status, slug, parent_id,
+/// published_at, title`).
+pub(crate) fn translation_ref(
+    row: &SqliteRow,
+) -> Result<ferrite_store::TranslationRef, StoreError> {
+    let id: Uuid = row.try_get("id").map_err(map_db_err)?;
+    let group: Uuid = row.try_get("grp").map_err(map_db_err)?;
+    let parent: Option<Uuid> = row.try_get("parent_id").map_err(map_db_err)?;
+    let status: String = row.try_get("status").map_err(map_db_err)?;
+    Ok(ferrite_store::TranslationRef {
+        id: ContentId::from_uuid(id),
+        group: ContentId::from_uuid(group),
+        kind: row.try_get("type").map_err(map_db_err)?,
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        status: status.parse()?,
+        slug: row.try_get("slug").map_err(map_db_err)?,
+        parent_id: parent.map(ContentId::from_uuid),
+        published_at: ts_opt(row.try_get("published_at").map_err(map_db_err)?)?,
+        title: row.try_get("title").map_err(map_db_err)?,
+        author_id: ferrite_domain::UserId::from_uuid(
+            row.try_get::<Uuid, _>("author_id").map_err(map_db_err)?,
+        ),
+    })
+}
 
 /// Maps a row selected with [`CONTENT_COLUMNS`].
 pub(crate) fn content_item(row: &SqliteRow) -> Result<ContentItem, StoreError> {
@@ -72,11 +97,17 @@ pub(crate) fn content_item(row: &SqliteRow) -> Result<ContentItem, StoreError> {
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
         updated_at: ts(row.try_get("updated_at").map_err(map_db_err)?)?,
         version: row.try_get("version").map_err(map_db_err)?,
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        translation_group: ContentId::from_uuid(
+            row.try_get::<Option<Uuid>, _>("translation_group")
+                .map_err(map_db_err)?
+                .unwrap_or(id),
+        ),
     })
 }
 
 pub(crate) const TYPE_COLUMNS: &str =
-    "name, label, hierarchical, has_archive, fields, built_in, created_at";
+    "name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate";
 
 /// Maps a row selected with [`TYPE_COLUMNS`].
 pub(crate) fn content_type(row: &SqliteRow) -> Result<ContentType, StoreError> {
@@ -89,6 +120,10 @@ pub(crate) fn content_type(row: &SqliteRow) -> Result<ContentType, StoreError> {
         fields: json_from_db(&fields)?,
         built_in: row.try_get("built_in").map_err(map_db_err)?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        quality_gate: {
+            let g: String = row.try_get("quality_gate").map_err(map_db_err)?;
+            g.parse()?
+        },
     })
 }
 
@@ -160,7 +195,7 @@ pub(crate) fn taxonomy(row: &SqliteRow) -> Result<Taxonomy, StoreError> {
 
 /// Term columns qualified with the `t` alias so joins stay unambiguous.
 pub(crate) const TERM_COLUMNS: &str =
-    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id";
+    "t.id, t.taxonomy, t.slug, t.name, t.description, t.parent_id, t.locale, t.translation_group";
 
 /// Maps a row selected with [`TERM_COLUMNS`].
 pub(crate) fn term(row: &SqliteRow) -> Result<Term, StoreError> {
@@ -173,6 +208,12 @@ pub(crate) fn term(row: &SqliteRow) -> Result<Term, StoreError> {
         name: row.try_get("name").map_err(map_db_err)?,
         description: row.try_get("description").map_err(map_db_err)?,
         parent_id: parent.map(TermId::from_uuid),
+        locale: row.try_get("locale").map_err(map_db_err)?,
+        translation_group: TermId::from_uuid(
+            row.try_get::<Option<Uuid>, _>("translation_group")
+                .map_err(map_db_err)?
+                .unwrap_or(id),
+        ),
     })
 }
 

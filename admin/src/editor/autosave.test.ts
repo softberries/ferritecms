@@ -296,6 +296,101 @@ describe("autosave", () => {
     expect(a.disposed()).toBe(true);
   });
 
+  // The live preview (M6-3, design 15 §3.2): while the pane is open the slot follows a
+  // 2 s idle debounce instead of the 10 s interval, and each completed write is reported.
+  test("debounce_puts_once_after_2s_idle", async () => {
+    const save = vi.fn(() => Promise.resolve());
+    const { a } = setup(save);
+    a.setDebounce(2_000);
+    // Typing every 500 ms for 1.5 s: nothing yet.
+    for (const word of ["a", "ab", "abc", "abcd"]) {
+      a.markDirty(draft(word));
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(save).not.toHaveBeenCalled();
+    // 2 s after the last keystroke: one write of the newest draft.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ title: "abcd" }));
+    // Nothing changed since: no further write.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(save).toHaveBeenCalledTimes(1);
+    a.dispose();
+  });
+
+  test("debounce_keeps_one_put_per_2s_while_typing", async () => {
+    const save = vi.fn(() => Promise.resolve());
+    const { a } = setup(save);
+    a.setDebounce(2_000);
+    // Typing without a pause for 10 s (a key every 300 ms): the writes are at least
+    // 2 s apart and none waits longer than the regular interval.
+    const at: number[] = [];
+    save.mockImplementation(() => {
+      at.push(Date.now());
+      return Promise.resolve();
+    });
+    const start = Date.now();
+    for (let i = 0; i < 34; i++) {
+      a.markDirty(draft(`t${i}`));
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    expect(at.length).toBeGreaterThanOrEqual(1);
+    expect(at[0]! - start).toBeLessThanOrEqual(AUTOSAVE_INTERVAL_MS);
+    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(2_000);
+    a.dispose();
+  });
+
+  test("debounce_off_goes_back_to_the_interval", async () => {
+    const save = vi.fn(() => Promise.resolve());
+    const { a } = setup(save);
+    a.setDebounce(2_000);
+    a.setDebounce(null);
+    a.markDirty(draft("x"));
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(save).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(7_500);
+    expect(save).toHaveBeenCalledTimes(1);
+    a.dispose();
+  });
+
+  test("debounce_rearms_a_waiting_draft", async () => {
+    const save = vi.fn(() => Promise.resolve());
+    const { a } = setup(save);
+    a.markDirty(draft("x"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The pane opens: the waiting draft goes 2 s from now, not at 10 s.
+    a.setDebounce(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(save).toHaveBeenCalledTimes(1);
+    a.dispose();
+  });
+
+  test("on_saved_reports_each_completed_write", async () => {
+    const onSaved = vi.fn();
+    let fail = true;
+    const save = vi.fn(() =>
+      fail ? Promise.reject(new NetworkError("offline")) : Promise.resolve(),
+    );
+    const win = new EventTarget();
+    const a = createAutosaver({
+      save,
+      intervalMs: AUTOSAVE_INTERVAL_MS,
+      window: win,
+      document: new FakeDocument(),
+      onSaved,
+    });
+    a.markDirty(draft("x"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    // A failed write is not reported.
+    expect(onSaved).not.toHaveBeenCalled();
+    fail = false;
+    win.dispatchEvent(new Event("online"));
+    await settle();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ title: "x" }));
+    a.dispose();
+  });
+
   test("pending_drafts_belong_to_their_account", () => {
     const entry = { userId: "u1", draft: draft("kept"), at: "2026-10-26T10:00:00Z" };
     pendingDrafts.set("item-1", entry);

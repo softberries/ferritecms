@@ -462,6 +462,8 @@ async fn unsafe_menu_urls_are_dropped(app: App) -> App {
             entry(2, "/about/", "About"),
             entry(3, "mailto:hi@example.com", "Mail"),
         ],
+        locale: "en".into(),
+        translation_of: None,
     };
     app.site.store.read().menus().put(&menu).await.unwrap();
     let r = app.get("/hello-world/").await;

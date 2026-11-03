@@ -14,12 +14,15 @@
 //! | `term:<term id>` | one term: its name, slug, description, and the list of items in it |
 //! | `archive:<kind>` | the listing of a content type (home, feeds, type archives, term archives of each type of the taxonomy, date archives, search) |
 //! | `menu:<name>` | a menu's items |
+//! | `group:<content id>` | the members of a content translation group (13 §5): which translations exist, their status and URL |
+//! | `tgroup:<term id>` | the members of a term translation group |
 //! | `option:<key>` | one option value |
 //! | `user:<user id>` | the public face of a user (login, display name) shown as an author |
 //! | `redirect:<source path>` | a redirect (informational, see below) |
 //! | `theme` | the active theme or its files; recorded by every page |
 //! | `plugins` | the set of enabled plugins; recorded by every page |
 //! | `all` | flush everything; the cache honours it by dropping every entry |
+//! | `run:<health run id>` | a finished content health run ([`HEALTH_COMPLETED`], M6-4); no page records it |
 //!
 //! # Emitter side (write paths in this crate)
 //!
@@ -112,6 +115,16 @@ pub fn archive_key(kind: &str) -> String {
 /// Dependency key of a term.
 pub fn term_key(id: TermId) -> String {
     format!("term:{id}")
+}
+
+/// Dependency key of a content translation group (the id of its original, M6-1).
+pub fn group_key(group: ContentId) -> String {
+    format!("group:{group}")
+}
+
+/// Dependency key of a term translation group (M6-1).
+pub fn term_group_key(group: TermId) -> String {
+    format!("tgroup:{group}")
 }
 
 /// Dependency key of a menu.
@@ -210,6 +223,19 @@ pub fn options_changed(key: &str) -> NewEvent {
     NewEvent {
         kind: OPTIONS_CHANGED.to_owned(),
         keys: vec![option_key(key)],
+        origin_node: None,
+    }
+}
+
+/// A content health run finished (M6-4, design 16 §9); keys `[run:<id>]`, which no page
+/// records, so the cache drops nothing.
+pub const HEALTH_COMPLETED: &str = "health.completed";
+
+/// The [`HEALTH_COMPLETED`] event of run `id`.
+pub fn health_completed(id: ferrite_domain::HealthRunId) -> NewEvent {
+    NewEvent {
+        kind: HEALTH_COMPLETED.to_owned(),
+        keys: vec![format!("run:{id}")],
         origin_node: None,
     }
 }

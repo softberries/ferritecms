@@ -10,10 +10,14 @@
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
 mod backup;
+mod editorial;
 mod gc;
+mod health;
 mod import;
 pub(crate) mod media;
 mod permalinks;
+mod registry;
+mod webhooks;
 
 use std::{sync::Arc, time::Duration};
 
@@ -37,15 +41,29 @@ pub(crate) use backup::backup_location;
 pub use backup::{
     SITE_BACKUP_KIND, SITE_BACKUP_MAX_ATTEMPTS, SITE_BACKUP_TIMEOUT, SiteBackupHandler, site_backup,
 };
+pub use editorial::{
+    EditorialNotifyHandler, PREVIEW_LINKS_PRUNE_EVERY, PreviewLinksPruneHandler,
+    RELEASE_APPLY_DUE_EVERY, ReleaseApplyDueHandler, ReleaseApplyHandler,
+    preview_links_prune_periodic, release_apply_due_periodic,
+};
 pub use gc::{
     ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_OFFSET, ARTIFACTS_GC_TIMEOUT,
     ArtifactsGcHandler, artifacts_gc_periodic,
 };
+pub use health::{ContentHealthHandler, content_health_periodic};
 pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};
 pub use permalinks::PermalinkRedirectsHandler;
+pub use registry::{
+    REGISTRY_CHECK_EVERY, REGISTRY_CHECK_KIND, REGISTRY_CHECK_OFFSET, RegistryCheckHandler,
+    registry_check_periodic,
+};
+pub use webhooks::{
+    WEBHOOK_DELIVER_TIMEOUT, WEBHOOKS_PRUNE_EVERY, WebhookDeliverHandler, WebhookNotice,
+    WebhooksPruneHandler, notice_mail, webhook_slots, webhooks_prune_periodic,
+};
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
@@ -349,13 +367,18 @@ pub fn handlers(
 }
 
 /// The periodics `serve` schedules besides `ferrite-cluster`'s built-ins:
-/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`] and
-/// [`artifacts_gc_periodic`].
+/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`],
+/// [`artifacts_gc_periodic`], [`webhooks_prune_periodic`], [`release_apply_due_periodic`]
+/// and [`preview_links_prune_periodic`].
 pub fn core_periodics() -> Vec<Periodic> {
     vec![
         publish_due_periodic(),
         plugin_purge_sweep_periodic(),
         artifacts_gc_periodic(),
+        webhooks_prune_periodic(),
+        release_apply_due_periodic(),
+        preview_links_prune_periodic(),
+        content_health_periodic(),
     ]
 }
 

@@ -117,7 +117,7 @@ async fn term(store: &dyn Store, taxonomy: &str, slug: &str) -> Term {
     store
         .read()
         .terms()
-        .get_by_slug(taxonomy, slug)
+        .get_by_slug(taxonomy, None, slug)
         .await
         .unwrap()
         .unwrap_or_else(|| panic!("no term {taxonomy}/{slug}"))
@@ -783,7 +783,7 @@ pub async fn pass1_and_pass2_dry_run(db: &TestDb) {
     let none: Option<TermId> = store
         .read()
         .terms()
-        .get_by_slug("category", "local")
+        .get_by_slug("category", None, "local")
         .await
         .unwrap()
         .map(|t| t.id);
@@ -1110,11 +1110,11 @@ pub async fn pass3_fixup_queue_survives_a_crash(db: &TestDb) {
     let site = site(db, site_a_uploads()).await;
     let store = db.store();
     // One item per batch: 4 users, 9 term batches, 4 × 2 media batches, the permalink
-    // structure, 4 attachment lookups, "Hello world!" (27), then "Every core block"
-    // (28).
+    // structure, 4 attachment lookups, the site's locales (M6-1), "Hello world!" (28),
+    // then "Every core block" (29).
     let opts = ImportOptions {
         batch_items: Some(1),
-        fail_after_batches: Some(28),
+        fail_after_batches: Some(29),
         ..ImportOptions::default()
     };
     let err = run(site.ctx.clone(), &corpus("site-a.xml"), opts)

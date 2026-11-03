@@ -102,6 +102,10 @@ pub struct MenuDto {
     pub name: String,
     pub label: String,
     pub items: Vec<MenuItemDto>,
+    /// The menu's locale.
+    pub locale: String,
+    /// The default-locale menu this one translates (`primary` for `primary-de`).
+    pub translation_of: Option<String>,
 }
 
 impl From<Menu> for MenuDto {
@@ -110,6 +114,8 @@ impl From<Menu> for MenuDto {
             name: m.name,
             label: m.label,
             items: m.items.into_iter().map(MenuItemDto::from).collect(),
+            locale: m.locale,
+            translation_of: m.translation_of,
         }
     }
 }
@@ -126,13 +132,22 @@ pub struct MenuInput {
     /// At most 500 entries.
     #[serde(default)]
     pub items: Vec<MenuItemDto>,
+    /// One of the site's locales; absent: the stored menu's (a new menu: the default).
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The name of the default-locale menu this one translates; absent or `null`: none.
+    #[serde(default)]
+    pub translation_of: Option<String>,
 }
 
-/// A menu's name and label.
+/// A menu's name, label and locale.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MenuSummary {
     pub name: String,
     pub label: String,
+    pub locale: String,
+    /// The default-locale menu this one translates.
+    pub translation_of: Option<String>,
 }
 
 /// A menu location of the theme the answering node serves (its `[menus]` table).
@@ -289,6 +304,16 @@ pub struct SettingsDto {
     #[serde(rename = "site.locale")]
     #[schema(value_type = Option<String>)]
     pub site_locale: Value,
+    /// The site's locales, the default first (1–20). A prefix that would shadow a
+    /// route, type, taxonomy or top-level page is `422`; removing a locale that still
+    /// holds content is `409` with the counts. Cannot be reset to `null`.
+    #[serde(rename = "site.locales")]
+    #[schema(value_type = Option<Vec<LocaleEntryDto>>)]
+    pub site_locales: Value,
+    /// The site title and tagline per non-default locale, keyed by its tag.
+    #[serde(rename = "site.locale_texts")]
+    #[schema(value_type = Option<std::collections::BTreeMap<String, LocaleTextDto>>)]
+    pub site_locale_texts: Value,
     /// 1..=100.
     #[serde(rename = "reading.per_page")]
     #[schema(value_type = Option<i64>)]
@@ -331,6 +356,21 @@ pub struct SettingsDto {
     #[serde(rename = "mcp.enabled")]
     #[schema(value_type = Option<bool>)]
     pub mcp_enabled: Value,
+    /// 1..=365 (default 90): how many days AI change sets are kept (M6-5). Not
+    /// writable over MCP.
+    #[serde(rename = "mcp.change_sets_days")]
+    #[schema(value_type = Option<i64>)]
+    pub mcp_change_sets_days: Value,
+    /// Whether the content health run checks external links (default `false`; the
+    /// server then contacts every linked site, M6-4).
+    #[serde(rename = "health.external_links")]
+    #[schema(value_type = Option<bool>)]
+    pub health_external_links: Value,
+    /// Days without an edit after which a published item is reported `stale` (30 to
+    /// 3650, default 365).
+    #[serde(rename = "health.stale_days")]
+    #[schema(value_type = Option<i64>)]
+    pub health_stale_days: Value,
 }
 
 impl SettingsDto {
@@ -341,6 +381,8 @@ impl SettingsDto {
             site_title: take("site.title"),
             site_description: take("site.description"),
             site_locale: take("site.locale"),
+            site_locales: take("site.locales"),
+            site_locale_texts: take("site.locale_texts"),
             reading_per_page: take("reading.per_page"),
             reading_front_page: take("reading.front_page"),
             reading_discourage_indexing: take("reading.discourage_indexing"),
@@ -350,8 +392,30 @@ impl SettingsDto {
             comments_moderation: take("comments.moderation"),
             comments_per_page: take("comments.per_page"),
             mcp_enabled: take("mcp.enabled"),
+            mcp_change_sets_days: take("mcp.change_sets_days"),
+            health_external_links: take("health.external_links"),
+            health_stale_days: take("health.stale_days"),
         }
     }
+}
+
+/// One entry of `site.locales`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LocaleEntryDto {
+    /// A BCP 47 tag `language[-Script][-REGION]` (e.g. `de`, `pt-BR`); its lowercase is
+    /// the URL prefix of a non-default locale.
+    pub tag: String,
+    /// What the language switcher shows (1–50 characters; default the native name).
+    pub label: Option<String>,
+}
+
+/// The texts of one locale in `site.locale_texts`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LocaleTextDto {
+    /// At most 200 characters.
+    pub title: Option<String>,
+    /// At most 1000 characters.
+    pub description: Option<String>,
 }
 
 #[cfg(test)]

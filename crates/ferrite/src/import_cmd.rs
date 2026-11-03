@@ -79,6 +79,10 @@ pub struct MarkdownArgs {
     /// Make the folder's root `index.md` (or `README.md`) the site's front page.
     #[arg(long)]
     pub front_page: bool,
+    /// The locale of files whose front matter names none (one of the site's; default:
+    /// the site's default locale).
+    #[arg(long, value_name = "TAG")]
+    pub locale: Option<String>,
     /// Run everything, then roll every write back.
     #[arg(long)]
     pub dry_run: bool,
@@ -153,6 +157,7 @@ async fn wordpress(args: WordpressArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = Arc::new(open_media(&config)?);
@@ -230,6 +235,7 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         let media = open_media(&config)?;
@@ -263,6 +269,12 @@ async fn markdown(args: MarkdownArgs) -> anyhow::Result<ExitCode> {
             kind: args.kind.clone(),
             front_page: args.front_page,
             dry_run: args.dry_run,
+            locale: args
+                .locale
+                .as_deref()
+                .map(ferrite_domain::locale::parse_tag)
+                .transpose()
+                .context("--locale")?,
             max_upload: config.uploads.max_upload,
             strip_metadata: config.uploads.strip_metadata,
             work_dir: args.data.join("import"),

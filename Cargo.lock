@@ -1636,7 +1636,6 @@ dependencies = [
  "hyper-util",
  "image",
  "minisign",
- "minisign-verify",
  "object_store",
  "rcgen",
  "reqwest",
@@ -1750,6 +1749,7 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+ "zstd 0.14.3",
 ]
 
 [[package]]
@@ -1758,6 +1758,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1793,6 +1794,7 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "lettre",
+ "minisign",
  "percent-encoding",
  "quick-xml 0.41.0",
  "reqwest",
@@ -1918,9 +1920,12 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
+ "base64 0.23.1",
  "bytes",
  "criterion",
  "ferrite-domain",
+ "minisign",
+ "minisign-verify",
  "semver",
  "serde_json",
  "sha2 0.11.1",
@@ -1997,6 +2002,7 @@ name = "ferrite-store-tests"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "chrono",
  "ferrite-domain",
  "ferrite-store",

@@ -58,6 +58,34 @@ pub enum CoreError {
     Hashing,
     #[error(transparent)]
     Store(StoreError),
+    /// The write conflicts with what exists (`409`): a locale that still holds content,
+    /// a translation group that already has a member in the locale. The text says what
+    /// and names the existing row's id or the counts (M6-1).
+    #[error("in use: {0}")]
+    InUse(String),
+    /// The item is in a scheduled release (M6-3, design 15 §4.3): unschedule the release
+    /// first (`409 release-locked`).
+    #[error("locked by scheduled release {release}")]
+    Locked { release: ferrite_domain::ReleaseId },
+    /// One or more entries of a release cannot be applied (`409 release-conflict`), with
+    /// what is wrong with each.
+    #[error("release conflict in {} entries", .0.len())]
+    ReleaseConflict(Vec<crate::release::EntryCheck>),
+    /// A release cannot be scheduled: its check is not clean (`409 release-not-ready`).
+    #[error("release not ready")]
+    ReleaseNotReady(crate::release::ReleaseCheck),
+    /// The type has a workflow and the item (or entry) has no approved, current review
+    /// (`409 approval-required`); `step` names the step it waits for.
+    #[error("approval required")]
+    ApprovalRequired { step: Option<String> },
+    /// A public item of a workflow type is changed through a release, not in place
+    /// (`409 staging-required`).
+    #[error("staging required: stage the change in a release")]
+    StagingRequired,
+    /// The type's publish gate refuses the item: these unsuppressed accessibility
+    /// errors remain (at most 50; M6-4, design 16 §5). `422 content-quality`.
+    #[error("accessibility errors block publishing")]
+    QualityBlocked(Box<Vec<crate::quality::Finding>>),
 }
 
 /// One invalid row of a batch ([`CoreError::InvalidRows`]).

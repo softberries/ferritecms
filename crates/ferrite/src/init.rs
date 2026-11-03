@@ -155,6 +155,8 @@ async fn prepare(data: &Path, created: &mut Vec<PathBuf>) -> anyhow::Result<()> 
     )
     .await?;
     tracing::info!(?applied, "database migrated");
+    // No locale settle here (ruling R-1-4): `import-site` needs the new database empty;
+    // the first command that opens it (`serve`, `seed`, `user`, …) settles the locales.
     Ok(())
 }
 

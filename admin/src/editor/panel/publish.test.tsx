@@ -18,6 +18,7 @@ import {
   isPast,
   notAParent,
   predictPermalink,
+  releaseActions,
   statusActions,
   utcToWallClock,
   wallClockToUtc,
@@ -44,6 +45,9 @@ const NONE: SchemaAllowedActionsDto = {
   unpublish: false,
   trash: false,
   trash_undoable: false,
+  needs_approval: false,
+  stage: false,
+  override: false,
   restore: false,
   delete: false,
 };
@@ -59,6 +63,9 @@ function itemWith(status: string, allowed: Partial<SchemaAllowedActionsDto>): Sc
     excerpt: "",
     fields: {},
     seo: { title: null, description: null, canonical: null, robots: [] },
+    locale: "en",
+    translation_group: "0190f1c0-0000-7000-8000-0000000000aa",
+    translations: [],
     terms: [],
     menu_order: 0,
     permalink: "/2026/10/spring-notes/",
@@ -127,6 +134,10 @@ function fakeDoc(
     fieldErrors: {},
     clearFieldError: vi.fn(),
     saveAttempted: false,
+    onAutosaved: () => () => {},
+    setAutosaveDebounce: vi.fn(),
+    autosaves: true,
+    changeMode: false,
     editor: {} as EditorDocument["editor"],
     ...extra,
   };
@@ -192,6 +203,43 @@ describe("publish", () => {
     expect(ids(statusActions(itemWith("trash", { restore: true }), false))).toEqual(["|"]);
     // A new item: only saving it as a draft.
     expect(ids(statusActions(null, false))).toEqual(["save", "|"]);
+  });
+
+  test("releases_staging_and_override_actions", () => {
+    // M6-3: Add to release and Share preview for items that can be edited or staged
+    // (share for every stored item); Save as change replaces Update when the item can only
+    // be staged (P7 D20); an admin's override offers Publish and Schedule despite the
+    // missing approval (the dialog then asks for a reason).
+    expect(releaseActions(itemWith("draft", { edit: true }), false, false)).toEqual([
+      "release",
+      "share",
+    ]);
+    expect(
+      ids(statusActions(itemWith("published", { stage: true, unpublish: true }), false)),
+    ).toEqual(["saveChange", "|", "unpublish", "preview"]);
+    expect(releaseActions(itemWith("published", { stage: true }), false, false)).toEqual([
+      "release",
+      "share",
+    ]);
+    // An approver edits in place (and may still stage).
+    expect(ids(statusActions(itemWith("published", { edit: true, stage: true }), false))).toEqual([
+      "save",
+      "|",
+      "preview",
+    ]);
+    expect(
+      ids(
+        statusActions(
+          itemWith("draft", { edit: true, submit: true, needs_approval: true, override: true }),
+          false,
+        ),
+      ),
+    ).toEqual(["publish", "schedule", "submit", "save", "|", "preview"]);
+    // Read-only: share only; change mode and the trash: none; a new item: none.
+    expect(releaseActions(itemWith("published", {}), true, false)).toEqual(["share"]);
+    expect(releaseActions(itemWith("draft", { edit: true }), false, true)).toEqual([]);
+    expect(releaseActions(itemWith("trash", { restore: true }), false, false)).toEqual([]);
+    expect(releaseActions(null, false, false)).toEqual([]);
   });
 
   test("buttons_rendered_for_each_allowed_combination", () => {
@@ -292,6 +340,75 @@ describe("publish", () => {
       await userEvent.setup().click(within(dialog).getByRole("button", { name: "Publish now" }));
     });
     expect(vi.mocked(doc.transition).mock.calls[0]?.[0]).toBe("publish");
+  });
+
+  test("an_override_needs_a_reason", async () => {
+    // M6-3 §6.5: an admin may publish without the approval, with a reason (the audit's).
+    const item = itemWith("draft", { edit: true, needs_approval: true, override: true });
+    const doc = fakeDoc(item);
+    wrap(
+      <PublishDialog
+        doc={doc}
+        mode="now"
+        onClose={vi.fn()}
+        siteUrl="http://localhost:8080"
+        taxonomies={[]}
+        terms={new Map()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const user = userEvent.setup();
+    const confirm = within(dialog).getByRole("button", { name: "Publish now" });
+    // Without the override the approval is missing: nothing to confirm.
+    expect(confirm).toBeDisabled();
+    expect(dialog).toHaveTextContent("waits for approval");
+    await user.click(within(dialog).getByText("Override approval"));
+    await user.click(within(dialog).getByRole("checkbox", { name: /without the missing/ }));
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Reason"), "Press embargo lifted");
+    await act(async () => {
+      await user.click(confirm);
+    });
+    expect(vi.mocked(doc.transition).mock.calls[0]).toEqual([
+      "publish",
+      expect.objectContaining({ overrideReason: "Press embargo lifted" }),
+    ]);
+  });
+
+  test("gate_blocked_disables_confirm", () => {
+    const item = itemWith("draft", { edit: true, publish: true, schedule: true });
+    const doc = fakeDoc(item, {});
+    wrap(
+      <PublishDialog
+        doc={doc}
+        mode="now"
+        onClose={vi.fn()}
+        siteUrl="http://localhost:8080"
+        taxonomies={[]}
+        terms={new Map()}
+        quality={{
+          findings: [
+            {
+              rule: "image-alt-missing",
+              severity: "error",
+              category: "accessibility",
+              wcag: ["1.1.1"],
+              location: { kind: "body", path: [0] },
+              key: "/a.png",
+              context: null,
+              detail: {},
+              suppressed: null,
+            },
+          ],
+          counts: { error: 1, warning: 0, notice: 0, suppressed: 0 },
+          gate: { mode: "errors", blocked: true },
+        }}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("1 accessibility error");
+    expect(dialog).toHaveTextContent("An image has no alt text.");
+    expect(within(dialog).getByRole("button", { name: "Publish now" })).toBeDisabled();
   });
 
   test("rfc3339_keeps_the_wall_clock_time", () => {

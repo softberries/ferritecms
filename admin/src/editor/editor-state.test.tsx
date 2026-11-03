@@ -24,6 +24,9 @@ function item(version: number, text: string): SchemaContentDto {
     excerpt: "",
     fields: {},
     seo: { title: null, description: null, canonical: null, robots: [] },
+    locale: "en",
+    translation_group: "0190f1c0-0000-7000-8000-0000000000aa",
+    translations: [],
     terms: [],
     menu_order: 0,
     permalink: "/restore-me/",
@@ -41,6 +44,9 @@ function item(version: number, text: string): SchemaContentDto {
       submit: false,
       trash: true,
       trash_undoable: true,
+      needs_approval: false,
+      stage: false,
+      override: false,
       unpublish: false,
     },
   };
@@ -195,6 +201,27 @@ describe("autosave_slot", () => {
     act(() => doc?.setTitle("Second edit"));
     await act(() => vi.advanceTimersByTimeAsync(11_000));
     await waitFor(() => expect(log.at(-1)).toEqual({ method: "PUT", title: "Second edit" }));
+  });
+
+  test("the_live_preview_debounce_writes_2s_after_typing_and_reports_it", async () => {
+    // Design 15 §3.2: while the preview pane is open the slot takes the draft after 2 s
+    // idle, and the pane hears of each completed write (it reloads then).
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const log = slotLog();
+    renderWithRouter(<Harness start={item(4, "Stored text")} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    const heard = vi.fn();
+    const off = doc!.onAutosaved(heard);
+    act(() => doc?.setAutosaveDebounce(2_000));
+    act(() => doc?.setTitle("Live title"));
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    await waitFor(() => expect(log).toEqual([{ method: "PUT", title: "Live title" }]));
+    await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
+    off();
+    act(() => doc?.setTitle("Live title 2"));
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    await waitFor(() => expect(log).toHaveLength(2));
+    expect(heard).toHaveBeenCalledTimes(1);
   });
 
   test("an_edit_undone_before_the_slot_took_it_writes_nothing", async () => {
@@ -597,5 +624,87 @@ describe("seo", () => {
     expect(input("ftp://example.com/")).not.toHaveProperty("canonical");
     expect(input(" https://example.com/a ")).toHaveProperty("canonical", " https://example.com/a ");
     expect(input(null)).toHaveProperty("canonical", null);
+  });
+});
+
+// M6-3 (design 15 §6.4, §11.2; P7 D20): a public item of a workflow type that this account
+// may not edit in place is staged instead (`allowed.stage`); change mode edits a release
+// entry's staged change and saves it through the release, never the item or its slot.
+function StagingHarness({
+  start,
+  onStageRequired,
+  saveChange,
+}: {
+  start: SchemaContentDto;
+  onStageRequired?: () => void;
+  saveChange?: (s: unknown) => Promise<void>;
+}) {
+  const d = useEditorDocument({
+    type: "post",
+    item: start,
+    placeholder: "",
+    bodyLabel: "Body",
+    ...(onStageRequired ? { onStageRequired } : {}),
+    ...(saveChange ? { saveChange } : {}),
+  });
+  useEffect(() => {
+    doc = d;
+  });
+  return <EditorContent editor={d.editor} />;
+}
+
+const staged = (version: number): SchemaContentDto => {
+  const i = item(version, "Live text");
+  return {
+    ...i,
+    status: "published",
+    allowed: { ...i.allowed, edit: false, stage: true, publish: false, schedule: false },
+  };
+};
+
+describe("staging", () => {
+  test("a_stage_only_item_is_editable_and_its_save_asks_for_a_release", async () => {
+    const seen = stubRoutes({
+      [`/api/v1/content/post/${ID}/autosave`]: () => new Response(null, { status: 204 }),
+    });
+    const onStageRequired = vi.fn();
+    renderWithRouter(<StagingHarness start={staged(3)} onStageRequired={onStageRequired} />);
+    await waitFor(() => expect(doc?.editor.isEditable).toBe(true));
+    expect(doc?.readOnly).toBeNull();
+    act(() => doc?.setTitle("Typo fixed"));
+    let result: unknown = "pending";
+    await act(async () => {
+      result = await doc?.save();
+    });
+    expect(result).toBeNull();
+    expect(onStageRequired).toHaveBeenCalledTimes(1);
+    expect(seen.filter((u) => u.pathname === `/api/v1/content/post/${ID}`)).toEqual([]);
+  });
+
+  test("change_mode_saves_through_the_release_and_never_the_slot", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const seen = stubRoutes({});
+    const saveChange = vi.fn<(s: unknown) => Promise<void>>(() => Promise.resolve());
+    const start = item(3, "Staged text");
+    renderWithRouter(<StagingHarness start={start} saveChange={saveChange} />);
+    await waitFor(() => expect(doc?.editor.isEditable).toBe(true));
+    act(() => doc?.setTitle("Staged title"));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    // No autosave slot in change mode (D36).
+    expect(seen).toEqual([]);
+    await act(async () => {
+      await doc?.save();
+    });
+    expect(saveChange).toHaveBeenCalledTimes(1);
+    expect(saveChange.mock.calls[0]?.[0]).toMatchObject({
+      title: "Staged title",
+      slug: "restore-me",
+      terms: [],
+      body: { type: "doc" },
+    });
+    expect(doc?.dirty).toBe(false);
+    expect(doc?.saveState).toBe("saved");
+    expect(seen).toEqual([]);
+    vi.useRealTimers();
   });
 });

@@ -17,6 +17,8 @@ import { PageHeader } from "@/components/kit/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSiteLocales } from "@/lib/locales";
+import { LocaleTabs } from "../locale-tabs";
 import { DeleteTermDialog, TermSheet, type TermSheetState } from "./term-form";
 import { TermTable } from "./term-table";
 import { TermTree } from "./term-tree";
@@ -40,7 +42,15 @@ export function TaxonomyScreen({
   const [origin, setOrigin] = useState<string | null>(null);
   const [settings, setSettings] = useState(false);
   const [query, setQuery] = useState("");
-  const list = useMemo(() => terms.data ?? [], [terms.data]);
+  // M6-1: on a multilingual site the screen shows one locale's terms at a time.
+  const locales = useSiteLocales();
+  const [picked, setPicked] = useState<string | null>(null);
+  const locale = picked ?? locales.default;
+  const all = useMemo(() => terms.data ?? [], [terms.data]);
+  const list = useMemo(
+    () => (locales.multilingual ? all.filter((term) => term.locale === locale) : all),
+    [all, locales.multilingual, locale],
+  );
 
   const typeLabels = taxonomy.content_types.map(
     (name) => types.data?.find((ty) => ty.name === name)?.label ?? name,
@@ -114,6 +124,8 @@ export function TaxonomyScreen({
         }
       />
 
+      <LocaleTabs locales={locales} value={locale} onChange={setPicked} />
+
       {terms.isError && !terms.data ? (
         <ErrorState error={terms.error} retry={() => void terms.refetch()} />
       ) : taxonomy.hierarchical ? (
@@ -168,6 +180,8 @@ export function TaxonomyScreen({
       <TermSheet
         taxonomy={taxonomy}
         terms={list}
+        allTerms={all}
+        locale={locales.multilingual ? locale : null}
         state={sheet}
         origin={origin}
         onClose={() => setSheet(null)}

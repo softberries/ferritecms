@@ -92,6 +92,8 @@ mod tests {
             name: "m".into(),
             label: "M".into(),
             items,
+            locale: "en".into(),
+            translation_of: None,
         }
     }
 

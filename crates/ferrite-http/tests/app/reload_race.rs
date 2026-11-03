@@ -190,6 +190,35 @@ impl Repos for HookRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.inner.read().locales()
+    }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.read().webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.read().plugin_trust()
+    }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.inner.read().releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.inner.read().workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.inner.read().reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.inner.read().preview_links()
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.read().quality()
+    }
 }
 
 #[async_trait]
@@ -261,6 +290,7 @@ async fn route_swap_during_lookup_is_not_cached(app: App) -> App {
             fields: json!({}),
             built_in: false,
             created_at: Timestamp::now(),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

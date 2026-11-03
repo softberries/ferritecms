@@ -20,6 +20,9 @@ const NONE: SchemaAllowedActionsDto = {
   submit: false,
   trash: false,
   trash_undoable: false,
+  needs_approval: false,
+  stage: false,
+  override: false,
   unpublish: false,
 };
 

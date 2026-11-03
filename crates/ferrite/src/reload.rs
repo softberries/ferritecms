@@ -66,7 +66,7 @@ use crate::{
 };
 
 /// Option keys whose change rebuilds the permalink rules and the route table.
-const PERMALINK_OPTIONS: [&str; 2] = ["permalink.post", "permalink.page"];
+const PERMALINK_OPTIONS: [&str; 3] = ["permalink.post", "permalink.page", "site.locales"];
 /// First delay before a failed reload is retried.
 pub const RETRY_MIN: Duration = Duration::from_secs(5);
 /// The retry delay doubles up to this.
@@ -458,6 +458,15 @@ mod tests {
         assert_eq!(flags(&r), [true, false, true]);
         let r = Reloader::new(host());
         r.on_event(&event(TYPES_CHANGED, &["type:event"]));
+        assert_eq!(flags(&r), [false, false, true]);
+    }
+
+    #[test]
+    fn locales_option_marks_permalinks_dirty() {
+        let r = Reloader::new(host());
+        r.on_event(&event(OPTIONS_CHANGED, &["option:site.locale_texts"]));
+        assert_eq!(flags(&r), [false, false, false]);
+        r.on_event(&event(OPTIONS_CHANGED, &["option:site.locales"]));
         assert_eq!(flags(&r), [false, false, true]);
     }
 

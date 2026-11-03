@@ -1,0 +1,86 @@
+404 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Page not found – Larkspur Studio</title>
+<meta name="robots" content="noindex">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+
+<style>:root{--accent:#0f766e}</style>
+
+</head>
+<body class="is-error">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <a class="site-title" href="/" rel="home">Larkspur Studio</a>
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="menu" role="list">
+  <li class="menu__item">
+    <a href="&#x2f;">Home</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;post&#x2f;">News</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+</ul>
+    </nav>
+    
+<a class="button site-header__cta" href="&#x2f;contact&#x2f;">Get in touch</a>
+  </div>
+</header>
+<main id="content" class="site-main" tabindex="-1">
+
+<div class="wrap wrap--prose error-page">
+  <p class="error-page__code">404</p>
+  <h1 class="page-title">Page not found</h1>
+  <p>There is nothing at this address. It may have moved, or the link may be mistyped.</p>
+  <form class="search-form" role="search" method="get" action="/">
+  <label for="search-error">Search this site</label>
+  <div class="search-form__row">
+    <input type="search" id="search-error" name="s" value="" required>
+    <button type="submit">Search</button>
+  </div>
+</form>
+  <p><a href="/">Go to the home page</a></p>
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">Larkspur Studio</p>
+      <p class="site-footer__description">Garden design, planting and aftercare for small city spaces.</p>
+    </div>
+    <nav class="footer-nav" aria-label="Footer">
+      <ul class="menu" role="list">
+  <li class="menu__item">
+    <a href="&#x2f;home&#x2f;garden-design&#x2f;">Garden design</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;feed&#x2f;">RSS feed</a>
+  </li>
+</ul>
+    </nav>
+    <p class="site-credit">Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

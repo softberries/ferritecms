@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use ferrite_domain::{ContentId, ContentStatus, Menu, MenuItem, MenuItemKind, TermId};
-use ferrite_store::{Repos, Store};
+use ferrite_store::{MenuSummary, Repos, Store};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, require, require_read},
@@ -29,18 +30,18 @@ pub struct MenuLocation {
 }
 
 /// The `declared` locations (name, label) in the given order, each with whether one of
-/// `menus` (name, label; from [`MenuService::list_for`]) has its name. Core knows no
+/// `menus` (from [`MenuService::list_for`]) has its name. Core knows no
 /// theme: the caller passes the locations of the theme it serves.
 pub fn menu_locations<'a>(
     declared: impl IntoIterator<Item = (&'a str, &'a str)>,
-    menus: &[(String, String)],
+    menus: &[MenuSummary],
 ) -> Vec<MenuLocation> {
     declared
         .into_iter()
         .map(|(name, label)| MenuLocation {
             name: name.to_owned(),
             label: label.to_owned(),
-            menu: menus.iter().any(|(m, _)| m == name),
+            menu: menus.iter().any(|m| m.name == name),
         })
         .collect()
 }
@@ -65,9 +66,19 @@ impl MenuService {
             .ok_or(CoreError::NotFound)
     }
 
-    /// Lists menus as (name, label) pairs.
-    pub async fn list(&self) -> Result<Vec<(String, String)>, CoreError> {
+    /// Lists every menu (name, label, locale, `translation_of`), by name.
+    pub async fn list(&self) -> Result<Vec<MenuSummary>, CoreError> {
         Ok(self.store.read().menus().list().await?)
+    }
+
+    /// The menu a theme location `name` shows in `locale` (13 §2.6, D11): the menu that
+    /// translates `name` into `locale`, else `name` itself (`None` when neither exists).
+    pub async fn for_location(&self, name: &str, locale: &str) -> Result<Option<Menu>, CoreError> {
+        let menus = self.store.read().menus();
+        if let Some(m) = menus.get_translation(name, locale).await? {
+            return Ok(Some(m));
+        }
+        Ok(menus.get(name).await?)
     }
 
     /// [`get`](Self::get) for the admin (`require_read(Menus)`, F16).
@@ -77,7 +88,7 @@ impl MenuService {
     }
 
     /// [`list`](Self::list) for the admin (`require_read(Menus)`, F16).
-    pub async fn list_for(&self, actor: &Actor) -> Result<Vec<(String, String)>, CoreError> {
+    pub async fn list_for(&self, actor: &Actor) -> Result<Vec<MenuSummary>, CoreError> {
         require_read(actor, Area::Menus)?;
         self.list().await
     }
@@ -93,10 +104,16 @@ impl MenuService {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
         let done = async {
-            put_in(tx.as_ref(), menu).await?;
-            tx.events()
-                .append(&events::invalidate([events::menu_key(&menu.name)]))
-                .await?;
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::MenuPut,
+                &[ObjectRef::Menu(menu.name.clone())],
+            )
+            .await?;
+            let keys = put_in(tx.as_ref(), menu).await?;
+            tx.events().append(&events::invalidate(keys)).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;
@@ -107,19 +124,20 @@ impl MenuService {
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
-        let done = async {
-            if tx.menus().get(name).await?.is_none() {
-                return Err(CoreError::NotFound);
-            }
-            tx.menus().delete(name).await?;
-            tx.events()
-                .append(&events::invalidate([events::menu_key(name)]))
-                .await?;
-            Ok(())
-        }
-        .await;
+        let done = delete_in(tx.as_ref(), name).await;
         finish(tx, done).await
     }
+}
+
+/// [`MenuService::delete`] inside the caller's `repos`, without the capability check.
+pub(crate) async fn delete_in(repos: &dyn Repos, name: &str) -> Result<(), CoreError> {
+    let Some(stored) = repos.menus().get(name).await? else {
+        return Err(CoreError::NotFound);
+    };
+    repos.menus().delete(name).await?;
+    let keys = menu_keys(name, [stored.translation_of.as_deref()]);
+    repos.events().append(&events::invalidate(keys)).await?;
+    Ok(())
 }
 
 /// The checks of [`MenuService::put`] that need no store: name, label, item count.
@@ -142,13 +160,85 @@ fn check_menu(menu: &Menu) -> Result<(), CoreError> {
 /// [`MenuService::put`] without the capability check, the transaction and the event:
 /// validates the menu and every item against `repos` and replaces the menu. The caller
 /// emits `menu:<name>` (the WordPress import collects it into its batch's event).
-pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<(), CoreError> {
+///
+/// An empty `menu.locale` keeps the stored menu's locale (a new menu takes the site's
+/// default locale).
+///
+/// Returns the invalidation keys of the write: `menu:<name>`, and `menu:<of>` for the
+/// menu it translates now and the one it translated before (pages in that locale showed
+/// the default menu at that location until now, and depend on its key).
+pub(crate) async fn put_in(repos: &dyn Repos, menu: &Menu) -> Result<Vec<String>, CoreError> {
     check_menu(menu)?;
     for item in &menu.items {
         check_item(repos, item).await?;
     }
-    repos.menus().put(menu).await?;
-    Ok(())
+    let locales = crate::locales::read(repos).await?;
+    let stored = repos.menus().get(&menu.name).await?;
+    let mut menu = menu.clone();
+    if menu.locale.is_empty() {
+        menu.locale = match &stored {
+            Some(stored) if !stored.locale.is_empty() => stored.locale.clone(),
+            _ => locales.default.tag.clone(),
+        };
+    }
+    let keys = menu_keys(
+        &menu.name,
+        [
+            menu.translation_of.as_deref(),
+            stored.as_ref().and_then(|s| s.translation_of.as_deref()),
+        ],
+    );
+    if !locales.contains(&menu.locale) {
+        return Err(CoreError::invalid_field(
+            "locale",
+            format!("{:?} is not one of the site's locales", menu.locale),
+        ));
+    }
+    if let Some(of) = &menu.translation_of {
+        if of == &menu.name {
+            return Err(CoreError::invalid_field(
+                "translation_of",
+                "a menu cannot translate itself",
+            ));
+        }
+        match repos.menus().get(of).await? {
+            Some(original) if original.locale == locales.default.tag => {}
+            _ => {
+                return Err(CoreError::invalid_field(
+                    "translation_of",
+                    "translation_of must name a menu in the default locale",
+                ));
+            }
+        }
+        if menu.locale == locales.default.tag {
+            return Err(CoreError::invalid_field(
+                "translation_of",
+                "a translation is in another locale than the default",
+            ));
+        }
+        if let Some(taken) = repos.menus().get_translation(of, &menu.locale).await?
+            && taken.name != menu.name
+        {
+            return Err(CoreError::InUse(format!(
+                "the translation of {of} into {} already exists: {}",
+                menu.locale, taken.name
+            )));
+        }
+    }
+    repos.menus().put(&menu).await?;
+    Ok(keys)
+}
+
+/// `menu:<name>` and `menu:<of>` for each translated menu named (deduplicated).
+fn menu_keys<'a>(name: &str, of: impl IntoIterator<Item = Option<&'a str>>) -> Vec<String> {
+    let mut keys = vec![events::menu_key(name)];
+    for of in of.into_iter().flatten() {
+        let key = events::menu_key(of);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// `InvalidField { field, .. }` when `label` is longer than [`MAX_MENU_LABEL`].
@@ -239,10 +329,13 @@ mod tests {
 
     #[test]
     fn locations_mark_existing_menus() {
-        let menus = [
-            ("primary".to_owned(), "Main".to_owned()),
-            ("sidebar".to_owned(), "Side".to_owned()),
-        ];
+        let summary = |name: &str, label: &str| ferrite_store::MenuSummary {
+            name: name.into(),
+            label: label.into(),
+            locale: "en".into(),
+            translation_of: None,
+        };
+        let menus = [summary("primary", "Main"), summary("sidebar", "Side")];
         let got = menu_locations([("footer", "Footer"), ("primary", "Primary")], &menus);
         let loc = |name: &str, label: &str, menu| MenuLocation {
             name: name.into(),

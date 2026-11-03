@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use ferrite_domain::{ContentId, Taxonomy, Term, TermId};
 use ferrite_store::{
-    StoreError, TaxonomyRepo, TermRepo, check_id_list, validate_json, validate_text,
+    StoreError, TaxonomyRepo, TermRepo, check_groups, check_id_list, validate_json, validate_text,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 use uuid::Uuid;
@@ -139,8 +139,8 @@ impl TermRepo for SqliteRepos {
         validate_text("term name", &term.name)?;
         validate_text("term description", &term.description)?;
         run!(&self.writer, |e| sqlx::query(
-            "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id) \
-             VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id, locale, \
+             translation_group) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(term.id.as_uuid())
         .bind(&term.taxonomy)
@@ -148,6 +148,8 @@ impl TermRepo for SqliteRepos {
         .bind(&term.name)
         .bind(&term.description)
         .bind(term.parent_id.map(|p| p.as_uuid()))
+        .bind(&term.locale)
+        .bind(term.translation_group.as_uuid())
         .execute(e))
         .map(|_| ())
     }
@@ -159,13 +161,15 @@ impl TermRepo for SqliteRepos {
         validate_text("term description", &term.description)?;
         let done = run!(&self.writer, |e| sqlx::query(
             "UPDATE terms SET taxonomy = ?, slug = ?, name = ?, description = ?, \
-             parent_id = ? WHERE id = ?"
+             parent_id = ?, locale = ?, translation_group = ? WHERE id = ?"
         )
         .bind(&term.taxonomy)
         .bind(&term.slug)
         .bind(&term.name)
         .bind(&term.description)
         .bind(term.parent_id.map(|p| p.as_uuid()))
+        .bind(&term.locale)
+        .bind(term.translation_group.as_uuid())
         .bind(term.id.as_uuid())
         .execute(e))?;
         if done.rows_affected() == 0 {
@@ -183,25 +187,78 @@ impl TermRepo for SqliteRepos {
         row.as_ref().map(codec::term).transpose()
     }
 
-    async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError> {
+    async fn get_by_slug(
+        &self,
+        tax: &str,
+        locale: Option<&str>,
+        slug: &str,
+    ) -> Result<Option<Term>, StoreError> {
         validate_text("term taxonomy", tax)?;
         validate_text("term slug", slug)?;
-        let row = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? AND t.slug = ?"
-        )))
-        .bind(tax)
-        .bind(slug)
-        .fetch_optional(e))?;
+        let row = match locale {
+            None => run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? AND t.slug = ? \
+                 ORDER BY t.id LIMIT 1"
+            )))
+            .bind(tax)
+            .bind(slug)
+            .fetch_optional(e))?,
+            Some(l) => {
+                validate_text("term locale", l)?;
+                run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {TERM_COLUMNS} FROM terms t \
+                     WHERE t.taxonomy = ? AND t.locale = ? AND t.slug = ?"
+                )))
+                .bind(tax)
+                .bind(l)
+                .bind(slug)
+                .fetch_optional(e))?
+            }
+        };
         row.as_ref().map(codec::term).transpose()
     }
 
-    async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError> {
+    async fn list(&self, tax: &str, locale: Option<&str>) -> Result<Vec<Term>, StoreError> {
         validate_text("term taxonomy", tax)?;
-        let rows = run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? ORDER BY t.name, t.id"
-        )))
-        .bind(tax)
-        .fetch_all(e))?;
+        let rows = match locale {
+            None => run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? ORDER BY t.name, t.id"
+            )))
+            .bind(tax)
+            .fetch_all(e))?,
+            Some(l) => {
+                validate_text("term locale", l)?;
+                run!(&self.reader, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = ? AND t.locale = ? \
+                     ORDER BY t.name, t.id"
+                )))
+                .bind(tax)
+                .bind(l)
+                .fetch_all(e))?
+            }
+        };
+        rows.iter().map(codec::term).collect()
+    }
+
+    async fn group_members(&self, groups: &[TermId]) -> Result<Vec<Term>, StoreError> {
+        check_groups(groups.len())?;
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut qb = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.translation_group IN ("
+        ));
+        let mut list = qb.separated(", ");
+        for g in groups {
+            list.push_bind(g.as_uuid());
+        }
+        list.push_unseparated(") OR (t.translation_group IS NULL AND t.id IN (");
+        let mut list = qb.separated(", ");
+        for g in groups {
+            list.push_bind(g.as_uuid());
+        }
+        list.push_unseparated(")) ORDER BY coalesce(t.translation_group, t.id), t.locale, t.id");
+        let rows = run!(&self.reader, |e| qb.build().fetch_all(e))?;
         rows.iter().map(codec::term).collect()
     }
 

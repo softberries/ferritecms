@@ -74,6 +74,8 @@ impl ImportBatch<'_> {
             terms: Vec::new(),
             seo: None,
             meta: Vec::new(),
+            locale: None,
+            translation_group: None,
         };
         let out = self.write_content(ImportMapKind::Media, item).await?;
         let repos = self.tx.as_ref();

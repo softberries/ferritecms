@@ -37,6 +37,9 @@ function itemWith(extra: Partial<SchemaContentDto> = {}): SchemaContentDto {
     excerpt: "An excerpt",
     fields: {},
     seo: { title: null, description: null, canonical: null, robots: [] },
+    locale: "en",
+    translation_group: "0190f1c0-0000-7000-8000-0000000000aa",
+    translations: [],
     terms: [],
     menu_order: 0,
     permalink: "/spring-notes/",
@@ -54,6 +57,9 @@ function itemWith(extra: Partial<SchemaContentDto> = {}): SchemaContentDto {
       submit: false,
       trash: true,
       trash_undoable: true,
+      needs_approval: false,
+      stage: false,
+      override: false,
       unpublish: false,
     },
     ...extra,
@@ -397,9 +403,9 @@ describe("conflict", () => {
     expect(dialog.querySelector("[data-slot=conflict-paused]")).toHaveTextContent(
       "Publishing was paused so nothing goes live by surprise.",
     );
-    expect(seen.map((u) => u.pathname).filter((p) => p.startsWith("/api/v1/content/"))).toEqual([
-      `/api/v1/content/post/${ID}`,
-    ]);
+    // The checks (M6-4) are not writes.
+    const writes = (p: string) => p.startsWith("/api/v1/content/") && !p.endsWith("/check");
+    expect(seen.map((u) => u.pathname).filter(writes)).toEqual([`/api/v1/content/post/${ID}`]);
   });
 
   test("a_transition_412_without_edits_moves_to_their_version", async () => {
@@ -421,7 +427,11 @@ describe("conflict", () => {
     await user.click(within(publish).getByRole("button", { name: "Publish now" }));
     await waitFor(() => expect(reopen).toHaveBeenCalledWith({ item: theirs }));
     expect(document.querySelector("[data-slot=conflict-dialog]")).toBeNull();
-    expect(seen.filter((u) => u.pathname.startsWith("/api/v1/content/")).length).toBe(1);
+    expect(
+      seen.filter(
+        (u) => u.pathname.startsWith("/api/v1/content/") && !u.pathname.endsWith("/check"),
+      ).length,
+    ).toBe(1);
   });
 
   test("the_kept_copy_is_not_autosaved_over_until_discarded", async () => {

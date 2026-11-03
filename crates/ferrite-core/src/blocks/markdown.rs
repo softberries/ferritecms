@@ -302,6 +302,22 @@ fn block_fence(node: &Value) -> String {
 }
 
 fn image(map: &Map<String, Value>) -> Option<String> {
+    // A decorative image (design 16 §4.1) keeps its flag only as a `ferrite-block`
+    // fence: `![](…)` reads back as an image that is not decorative.
+    if map
+        .get("attrs")
+        .and_then(|a| a.get("decorative"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return None;
+    }
+    image_markdown(map)
+}
+
+/// `![alt](src "title")` of an image, decorative or not (an inline image has no fence
+/// to fall back to, so it loses the flag).
+fn image_markdown(map: &Map<String, Value>) -> Option<String> {
     let src = attr_str(map, "src").filter(|s| !s.trim().is_empty())?;
     let alt = attr_str(map, "alt").unwrap_or("");
     let alt = alt
@@ -488,7 +504,7 @@ fn inline(nodes: &[Value], ctx: Ctx) -> String {
                 Ctx::Heading => " ",
                 Ctx::Cell => "<br>",
             }),
-            Item::Image(map) => out.push_str(&image(map).unwrap_or_default()),
+            Item::Image(map) => out.push_str(&image_markdown(map).unwrap_or_default()),
             Item::Plain(t) => out.push_str(&escape(&t.replace(['\n', '\r'], " "))),
         }
         i += 1;

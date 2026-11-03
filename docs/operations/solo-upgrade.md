@@ -74,6 +74,11 @@ swap. Two updates without a restart in between leave a `ferrite.prev` the site n
 and `rollback --schema` then refuses (the record names the binary that did run). Rollback
 always goes back one step.
 
+**Rolling back across `0014_locales` (to 0.2.0).** The down migration deletes the
+content items, terms and menus that are not in the default language, so `rollback
+--schema` refuses it without `--allow-lossy`; `--restore-snapshot` brings back the
+database as it was before the update instead. The refusal comes on a one-language site too, which loses nothing to the down migration.
+
 **File ownership.** `self-update --data` and every `rollback` with `--data` open the
 database as root. On SQLite that can leave root-owned files in the data folder (the
 database's `-wal`/`-shm`, a snapshot, a database moved under `backups/`). Before starting

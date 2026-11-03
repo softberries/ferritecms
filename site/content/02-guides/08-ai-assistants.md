@@ -202,23 +202,32 @@ assistant cannot be used anywhere else.
 
 ## What an assistant can do
 
-56 tools cover what an editor or administrator does in the admin:
+70 tools cover what an editor or administrator does in the admin:
 
 - **Content**: list, search, read, write, publish, schedule, submit for review, trash
   and restore posts, pages and custom types, with revisions and preview links. Bodies are
   Markdown both ways; images are `![alt](ferrite:media/<id>)`.
 - **Media**: upload a file (up to 6 MiB, as data or from a public `https` URL), set titles
   and alt text, trash and restore.
+- **Releases**: group changes in a release, check it, schedule or apply it, and hand out
+  a signed link that previews the whole site as the release will make it. Approvals stay
+  with people: an assistant submits for review and lists the queue, but cannot approve,
+  request changes or override.
 - **Structure**: terms, menus, content types with their custom fields, redirects.
 - **Comments**: moderate and reply.
 - **Site**: settings, the active theme and its settings, turning plugins on or off and
   their settings (secrets can be set, never read back).
+- **Content quality**: check an item or a draft for accessibility and link problems
+  before publishing (`content_check`), and read the site's content health report
+  (`health_report`).
 - **System**: site health, background jobs and the audit log; users and their roles (read
   only).
+- **Its own changes**: `changes_list` shows what this connection changed and where you
+  review it.
 
 The server also offers **resources** the assistant can read (the site overview, any item as
 Markdown, the site's writing guide) and **prompts** for common jobs (`write_post`,
-`review_seo`, `site_health`, `tidy_media`). The [MCP tools](../05-reference/02-mcp-tools.md)
+`review_seo`, `site_health`, `tidy_media`, `translate`). The [MCP tools](../05-reference/02-mcp-tools.md)
 reference lists everything.
 
 Changes are live as soon as a tool returns. The server tells the assistant to create
@@ -226,6 +235,38 @@ drafts unless you asked it to publish and to ask you before anything destructive
 tools that remove or replace things are marked so, which most clients use to ask for your
 confirmation. `content_trash` and `media_trash` move things to the trash, where they can
 be restored; `term_delete` and `redirect_delete` delete outright.
+
+## Review and undo what an assistant did
+
+Every change an assistant makes over MCP is recorded with the object as it was before and
+after, whether it connected through the consent screen or with a personal token. Changes
+made close together (no more than 30 minutes apart) form one **change set**. Open
+**AI activity** in the sidebar (every role sees its own; administrators can tick
+**Every user's**), or **Activity** next to an app in **Account → Connected apps** or next
+to a token:
+
+- the list shows each set with the assistant's name, when it started, its last change, how
+  many changes it holds, and whether it is open, closed, reverted or partly reverted;
+- a set lists its changes newest first. Expand one to see the difference: for posts and
+  pages the title, excerpt and body as in the revisions drawer, plus the other fields
+  that changed; for everything else each changed field with the old and the new value.
+  Changes to an area you may no longer see (after a role change) show only what was done.
+
+<figure><img src="../images/admin-ai-activity.webp" alt="A change set of API token Claude Code acting as Ana Kowalska: four changes newest first, a setting, a publish, an edit expanded to show the title and body differences, and a create, each with Revert this change, and Revert all"><figcaption>AI activity: one change set with an edit expanded to its diff.</figcaption></figure>
+
+**Revert all** or **Revert this change** first checks what would happen. If someone edited
+an object after the assistant, the dialog says so (for posts and pages, who and when), and the revert waits until
+you tick **Overwrite later edits** (for posts and pages the later edit stays in the
+revisions). A change cannot be reverted when its object was deleted since, or when a
+later change of the same set touched it and is not reverted with it. A revert runs as
+you, through the normal editing paths: your role applies, and posts get a revision named
+"Reverted an AI change". Content the assistant created goes to the trash, never deleted.
+
+An assistant cannot revert anything itself; asked to undo something, it makes a new edit,
+which is recorded too. Change sets are kept for 90 days; change that under **Settings →
+AI assistants → Keep AI change history** (1 to 365 days; an assistant cannot change it).
+REST API calls and scripts are not recorded as change sets: the audit log and revisions
+cover them.
 
 ## What stays with people
 

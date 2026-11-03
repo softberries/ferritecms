@@ -140,6 +140,7 @@ pub async fn run(cmd: UserCommand) -> anyhow::Result<()> {
             &binary_version()?,
             &config.database,
             &config.data_dir,
+            &config.site.locale,
         )
         .await?;
         execute(store.clone(), action).await

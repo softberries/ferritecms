@@ -1,0 +1,162 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Writing your first plugin – FerriteCMS Demo</title>
+<meta name="description" content="Plugins are WebAssembly components. They get only the capabilities their manifest declares. What you get A single binary and a single data folder Plugins in a…">
+<meta property="og:title" content="Writing your first plugin">
+<meta property="og:description" content="Plugins are WebAssembly components. They get only the capabilities their manifest declares. What you get A single binary and a single data folder Plugins in a…">
+<meta property="og:url" content="http://127.0.0.1:8080/writing-your-first-plugin/">
+<meta property="og:type" content="article">
+<link rel="canonical" href="http://127.0.0.1:8080/writing-your-first-plugin/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+
+<style>:root{--accent:#c2410c}</style>
+
+</head>
+<body class="is-single">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <div class="site-brand">
+      <a class="site-title" href="/" rel="home">FerriteCMS Demo</a>
+      <p class="site-description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
+    
+    
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;">Home</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;category&#x2f;news&#x2f;">News</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+</ul>
+    </nav>
+    
+  </div>
+</header>
+
+<main id="content" class="site-main" tabindex="-1">
+
+<article class="entry">
+  <header class="entry-header wrap wrap--prose">
+    <h1 class="entry-title">Writing your first plugin</h1>
+    <p class="entry-meta"><time datetime="<date>"><date></time><span class="entry-meta__author">by <a class="author" href="/author/admin/" rel="author">Site Admin</a></span>
+    </p>
+  </header>
+  
+  <div class="entry-content prose wrap wrap--prose">
+    <p>Plugins are WebAssembly components. They get only the capabilities their manifest declares.</p><h2 id="what-you-get">What you get</h2><ul><li><p>A single binary and a single data folder</p></li><li><p>Plugins in a capability-scoped sandbox</p></li><li><p>Themes that are templates, not programs</p></li></ul><p>Try it on your own machine:</p><pre tabindex="0"><code class="language-sh">ferrite init --data ./site --url http://localhost:8080
+ferrite seed demo --data ./site
+ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. They get only what their manifest declares.</p></blockquote><p>Read more in <a href="/about/">the about page</a>.</p>
+  </div>
+  <footer class="entry-footer wrap wrap--prose">
+    <h2 class="visually-hidden">Topics</h2>
+    <ul class="terms">
+      <li><a href="&#x2f;category&#x2f;guides&#x2f;" rel="tag">Guides</a></li>
+      <li><a href="&#x2f;tag&#x2f;rust&#x2f;" rel="tag">rust</a></li>
+      <li><a href="&#x2f;tag&#x2f;cms&#x2f;" rel="tag">cms</a></li>
+    </ul>
+  </footer>
+</article>
+<section class="comments wrap wrap--prose" id="comments" aria-labelledby="comments-title">
+  <h2 id="comments-title" class="section-title">No comments yet</h2>
+  <p id="comment-pending" class="comment-notice" role="status">Thank you. Your comment is awaiting moderation.</p>
+  <h3 class="comment-form__title">Leave a comment</h3>
+  
+<form class="comment-form" method="post" action="&#x2f;_comment">
+  <input type="hidden" name="post" value="<uuid>">
+  <p class="comment-form__field">
+    <label for="comment-form-author">Name</label>
+    <input type="text" id="comment-form-author" name="author" maxlength="100" autocomplete="name" required>
+  </p>
+  <p class="comment-form__field">
+    <label for="comment-form-email">E-mail <span class="comment-form__hint">(not published)</span></label>
+    <input type="email" id="comment-form-email" name="email" maxlength="254" autocomplete="email" required>
+  </p>
+  <p class="comment-form__field">
+    <label for="comment-form-url">Website <span class="comment-form__hint">(optional)</span></label>
+    <input type="url" id="comment-form-url" name="url" maxlength="200" autocomplete="url">
+  </p>
+  <div class="comment-form__trap" aria-hidden="true">
+    <label for="comment-form-trap">Leave this field empty</label>
+    <input type="text" id="comment-form-trap" name="website" tabindex="-1" autocomplete="off">
+  </div>
+  <p class="comment-form__field">
+    <label for="comment-form-comment">Comment</label>
+    <textarea id="comment-form-comment" name="comment" rows="6" maxlength="10000" required></textarea>
+  </p>
+  <p><button type="submit">Post comment</button></p>
+</form>
+</section>
+<section class="related wrap" aria-labelledby="related-title">
+  <h2 id="related-title" class="section-title">Related posts</h2>
+  <ul class="card-grid" role="list">
+    <li><article class="card">
+  <div class="card__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+  </div>
+  <div class="card__body">
+    <h3 class="card__title"><a href="&#x2f;themes-without-code&#x2f;">Themes without code</a></h3>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">A theme is a folder of templates and assets. Templates get data and a fixed set of safe helpers. What you get A single binary and a single data folder Plugins…</p>
+  </div>
+</article></li>
+    <li><article class="card">
+  <div class="card__body">
+    <h3 class="card__title"><a href="&#x2f;importing-from-wordpress&#x2f;">Importing from WordPress</a></h3>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">Posts, pages, terms and media come over from a WXR export; PHP plugins and themes do not. What you get A single binary and a single data folder Plugins in a…</p>
+  </div>
+</article></li>
+    <li><article class="card">
+  <div class="card__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+  </div>
+  <div class="card__body">
+    <h3 class="card__title"><a href="&#x2f;solo-or-cluster&#x2f;">Solo or cluster</a></h3>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">SQLite and a local folder for one node, or Postgres and S3 for many: the same binary runs both. What you get A single binary and a single data folder Plugins in…</p>
+  </div>
+</article></li>
+  </ul>
+</section>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    
+    
+    <nav class="footer-nav" aria-label="Footer">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;team&#x2f;">Team</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;feed&#x2f;">RSS feed</a>
+  </li>
+</ul>
+    </nav>
+    
+    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

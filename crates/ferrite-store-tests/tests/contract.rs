@@ -1,11 +1,14 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
+use ferrite_store_tests::change_sets::*;
+use ferrite_store_tests::editorial::*;
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
-    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
-    menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
-    oauth::*, plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*,
-    tx::*, user::*, user_filters::*,
+    event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*,
+    locale::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
+    node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, plugin_trust::*, pool::*,
+    quality::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    webhooks::*,
 };
 
 backend_tests!(
@@ -22,7 +25,31 @@ backend_tests!(
     migration_0010_roundtrip,
     migration_0012_roundtrip,
     migration_0013_roundtrip,
+    migration_0015_roundtrip,
     migrate_up_reports_snapshot,
+    migration_0014_roundtrip,
+    backfill_uses_site_locale_option,
+    old_style_insert_without_new_columns_works,
+    slug_unique_per_locale,
+    translation_unique_per_group,
+    down_deletes_non_default_rows_and_restores_indexes,
+);
+
+backend_tests!(
+    insert_defaults_group_to_id,
+    locale_filter_on_list_count_and_file_bounds,
+    media_ignores_locale_filter,
+    get_by_slug_with_and_without_locale,
+    same_slug_two_locales,
+    group_members_batches_and_caps,
+    relocate_checks_version_and_group_uniqueness,
+    term_slug_per_locale,
+    menu_translation_lookup,
+    locale_usage_counts,
+    relabel_all_and_blank,
+    relabel_media_moves_only_media,
+    fill_groups_sets_null_groups,
+    search_locale_filter,
 );
 
 backend_tests!(
@@ -37,6 +64,18 @@ backend_tests!(
     delete_codes_for_user_leaves_used_and_foreign_codes,
     export_leaves_out_oauth_tokens,
     import_refuses_oauth_token_rows,
+);
+
+backend_tests!(
+    owner_round_trip_with_null_owner,
+    owner_outlives_plugin_row,
+    owners_signed_by_finds_current_signer,
+    key_upsert_and_revoke,
+    public_key_unique,
+    registry_row_replaced_by_url,
+    registry_checked_keeps_index,
+    export_catalogue_lists_owner_and_key_tables,
+    key_delete_and_owner_signer_key,
 );
 
 backend_tests!(
@@ -416,4 +455,76 @@ backend_tests!(
     import_writer_rollback_leaves_nothing,
     import_writer_self_refs_any_order,
     import_writer_site_id_batches_refusals,
+);
+
+backend_tests!(
+    migration_0016_roundtrip,
+    endpoint_crud_and_cascade,
+    active_for_emit_needs_enabled_and_install_id,
+    record_attempt_is_single_use,
+    set_status_only_from_pending,
+    deliveries_page_newest_first,
+    delivery_counts_by_status_since,
+    prune_keeps_events_with_pending_deliveries,
+    nul_in_text_is_invalid,
+    fail_stale_pending_only_old_pending,
+);
+
+// M6-3: releases, workflows, reviews and preview links (0017).
+backend_tests!(
+    migration_0017_roundtrip,
+    release_version_conflict,
+    put_entry_replaces_and_bumps_entry_version,
+    entries_in_position_order,
+    deleting_item_drops_its_entries_and_lock,
+    lock_is_exclusive_per_item,
+    unlock_all_frees_items,
+    due_lists_scheduled_releases_by_time,
+    list_filters_and_pages,
+    deleting_user_keeps_release,
+    workflow_version_conflict,
+    deleting_type_deletes_workflow,
+    one_open_review_per_target,
+    closed_reviews_do_not_block_a_new_one,
+    mark_stale_item_closes_only_open_item_reviews,
+    mark_stale_entry,
+    decision_once_per_step_and_user,
+    assignees_replace_per_step,
+    deleting_release_entry_cascades_its_reviews,
+    item_review_ignores_release_fk,
+    withdraw_for_type,
+    counts_for_user,
+    preview_link_by_hash,
+    prune_removes_expired_links,
+    delete_for_target,
+    deleting_user_deletes_links,
+);
+
+backend_tests!(
+    migration_0018_roundtrip,
+    extend_open_returns_consecutive_seqs,
+    idle_set_is_not_extended,
+    full_set_is_not_extended,
+    open_closes_the_stale_set_and_starts_a_new_one,
+    images_round_trip_bytes_and_hashes,
+    list_is_newest_first_with_cursor_and_filters,
+    reverted_counts_in_list,
+    deleting_user_nulls_user_and_reverted_by,
+    prune_deletes_old_sets_and_their_changes,
+);
+
+backend_tests_spawning!(concurrent_open_meets_in_one_set);
+
+backend_tests!(
+    migration_0019_roundtrip,
+    quality_gate_defaults_off_and_round_trips,
+    suppression_upsert_and_delete,
+    suppressions_cascade_with_item,
+    published_page_skips_drafts_media_and_trash,
+    last_revision_at_groups_per_item,
+    findings_page_filters_and_cursor,
+    findings_cascade_with_run_and_item,
+    delete_findings_except_keeps_one_run,
+    abandon_running_marks_old_runs,
+    link_cache_put_get_prune,
 );

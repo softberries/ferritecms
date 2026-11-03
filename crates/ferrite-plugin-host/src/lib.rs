@@ -22,6 +22,7 @@ mod stats;
 #[cfg(test)]
 mod test_support;
 mod trace;
+pub mod trust;
 mod types;
 mod validate;
 
@@ -46,7 +47,7 @@ pub use grant::{
 pub use inspect::{ComponentReport, inspect};
 pub use manifest::{
     Capabilities, HtmlMode, LimitRequest, MAX_MANIFEST_BYTES, MailScope, Manifest, PluginMeta,
-    RESERVED_PLUGIN_NAMES, RouteSpec, SettingKind, SettingSpec,
+    RESERVED_PLUGIN_NAMES, RouteSpec, SettingKind, SettingSpec, WORLD,
 };
 pub use report::{LimitItem, PermissionItem, PermissionReport, Risk};
 pub use services::{

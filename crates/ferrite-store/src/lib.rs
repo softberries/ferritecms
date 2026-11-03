@@ -1,22 +1,37 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
 pub mod catalogue;
+mod change_set;
+mod editorial;
 mod error;
 mod export;
 mod import;
 mod import_writer;
 mod json;
+mod locale;
 mod lock;
 mod menu;
 mod migrate;
 mod node_metrics;
 mod notify;
 mod paging;
+mod plugin_trust;
+mod quality;
 mod repos;
 mod search;
 mod session;
 mod text;
+mod webhook;
 
+pub use change_set::{
+    ChangeSetRepo, MAX_CHANGES_READ, change_set_cursor, check_new_change, check_new_change_set,
+    encode_change_set_cursor,
+};
+pub use editorial::{
+    MAX_RELEASES_OF, PreviewLinkRepo, RELEASE_CURSOR_TAG, REVIEW_CURSOR_TAG, ReleaseRepo,
+    ReviewRepo, WorkflowRepo, check_release, check_review, check_steps, encode_release_cursor,
+    encode_review_cursor, micros_cursor,
+};
 pub use error::StoreError;
 pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
 pub use import::{check_import_map, check_import_run, token_from_db, token_to_db};
@@ -24,9 +39,10 @@ pub use import_writer::{
     ImportWriter, InsertBatch, LoadTarget, Loader, MAX_LOAD_BATCH, delete_sql, insert_sql,
 };
 pub use json::validate_json;
+pub use locale::{LocaleFilter, check_groups, kinds_locale_filter, locale_filter};
 pub use lock::{
-    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES,
-    LockGuard, check_lock_name, lock,
+    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_HEALTH, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL,
+    LOCK_TYPES, LockGuard, check_lock_name, lock,
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{
@@ -55,13 +71,22 @@ pub use paging::{
     grant_cursor, idempotency_status, job_backoff, job_cursor, like_contains, media_kind_sql,
     rate_hit, sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
 };
+pub use plugin_trust::{
+    PluginTrustRepo, check_plugin_owner, check_registry_row, check_trusted_key,
+};
+pub use quality::{
+    FINDING_CURSOR_TAG, MAX_FINDING_BATCH, MAX_LINK_BATCH, QualityRepo, RunEnd, check_finding,
+    check_finding_query, check_link, check_run, check_suppression, encode_finding_cursor,
+    finding_cursor, link_url_hash,
+};
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
-    MarkCounts, MediaRepo, MenuRepo, MetaRepo, NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo,
-    PluginFailureRepo, PluginKvRepo, PluginRepo, PoolStats, RateLimitRepo, RedirectRepo, Repos,
-    RetainedPlugin, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, Store, TaxonomyRepo,
-    TermRepo, ThemeRepo, Tx, UserRepo, retained_marker,
+    LocaleRepo, LocaleUsage, MAX_GROUPS, MarkCounts, MediaRepo, MenuRepo, MenuSummary, MetaRepo,
+    NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
+    PoolStats, RateLimitRepo, RedirectRepo, Repos, RetainedPlugin, RevisionRepo, SchemaMetaRepo,
+    SearchRepo, SessionRepo, Store, TaxonomyRepo, TermRepo, ThemeRepo, TranslationRef, Tx,
+    UserRepo, retained_marker,
 };
 pub use search::{
     IndexTerms, IndexedTerm, MAX_INDEX_TERMS, MAX_QUERY_TERMS, MAX_SEARCH_KINDS, MAX_TERM_CHARS,
@@ -69,6 +94,10 @@ pub use search::{
 };
 pub use session::session_public_id;
 pub use text::{email_key, validate_text};
+pub use webhook::{
+    MAX_WEBHOOK_ENDPOINTS_READ, WEBHOOK_DELIVERY_CURSOR_TAG, WebhookRepo, check_webhook_attempt,
+    check_webhook_endpoint, encode_webhook_delivery_cursor, webhook_delivery_cursor,
+};
 
 /// Attempts a job gets by default.
 pub use ferrite_domain::DEFAULT_MAX_ATTEMPTS;

@@ -22,6 +22,7 @@ use super::{ContentDraft, ContentService, Edit, Seo, SeoPatch, WALKED, check_bod
 use crate::{
     Actor, CoreError, DepKeys,
     actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
+    changes::{Capture, ObjectRef, Op},
     site::{has_public_page, public_paths},
     tx::finish,
 };
@@ -46,6 +47,8 @@ pub struct AdminQuery {
     pub limit: u32,
     /// `next_cursor` of the previous page of the same query.
     pub cursor: Option<String>,
+    /// Only items in this locale (M6-1); `None`: every locale.
+    pub locale: Option<String>,
 }
 
 impl AdminQuery {
@@ -61,6 +64,7 @@ impl AdminQuery {
             order: ContentOrder::UpdatedDesc,
             limit: 50,
             cursor: None,
+            locale: None,
         }
     }
 
@@ -216,6 +220,7 @@ impl ContentService {
                     order: query.order,
                     limit: query.limit,
                     cursor: query.cursor.clone(),
+                    locale: query.locale.clone(),
                     ..ContentQuery::default()
                 })
                 .await?);
@@ -234,6 +239,7 @@ impl ContentService {
                 readable_by,
                 limit: query.limit,
                 cursor: query.cursor.clone(),
+                locale: query.locale.clone(),
             })
             .await?;
         // An empty id set short-circuits (M1c-1 R3).
@@ -305,6 +311,7 @@ impl ContentService {
                 readable_by: readable_by(actor, now),
                 limit: search.limit,
                 cursor: search.cursor.clone(),
+                locale: None,
             })
             .await?;
         let items = if hits.items.is_empty() {
@@ -366,6 +373,38 @@ impl ContentService {
             .map(|t| t.id)
             .collect();
         Ok((terms, Seo::load(repos, item.id).await?))
+    }
+
+    /// The workflow state of `item` for `actor` (M6-3): whether its type has a workflow,
+    /// its open review and whether `actor` may approve, for
+    /// [`allowed_actions`](crate::content::allowed_actions).
+    pub async fn workflow_state(
+        &self,
+        actor: &Actor,
+        item: &ContentItem,
+    ) -> Result<crate::workflow::WorkflowState, CoreError> {
+        crate::workflow::state_of(self.store.read(), actor, item).await
+    }
+
+    /// [`workflow_state`](Self::workflow_state) of each of `items` (one read of the
+    /// workflows; reviews only for items of workflow types).
+    pub async fn workflow_states(
+        &self,
+        actor: &Actor,
+        items: &[ContentItem],
+    ) -> Result<HashMap<ContentId, crate::workflow::WorkflowState>, CoreError> {
+        let repos = self.store.read();
+        let workflows = repos.workflows().list().await?;
+        let mut out = HashMap::new();
+        for item in items {
+            if workflows.iter().any(|w| w.type_name == item.kind) {
+                out.insert(
+                    item.id,
+                    crate::workflow::state_of(repos, actor, item).await?,
+                );
+            }
+        }
+        Ok(out)
     }
 
     /// The terms of item `id`, in their stored order (as [`get_for`](Self::get_for)
@@ -453,6 +492,14 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            super::live_edit_checks(tx.as_ref(), actor, id).await?;
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::ContentRestoreRevision,
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
             let rev = tx
                 .revisions()
                 .get(rid)
@@ -479,18 +526,21 @@ impl ContentService {
                 terms,
                 seo: None,
             };
-            self.update_in(
-                tx.as_ref(),
-                rules.as_ref(),
-                actor,
-                Edit {
-                    id,
-                    expected_version,
-                    draft,
-                    note: Some(format!("restored from {rid}")),
-                },
-            )
-            .await
+            let saved = self
+                .update_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    Edit {
+                        id,
+                        expected_version,
+                        draft,
+                        note: Some(format!("restored from {rid}")),
+                    },
+                )
+                .await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
         }
         .await;
         finish(tx, done).await
@@ -595,7 +645,12 @@ impl ContentService {
     /// How many items of type `kind` are in each status, counting only what `actor` may
     /// read, with the same `readable_by` filter as [`list`](Self::list) (needs
     /// `require_read(Content)`; an unknown type is `NotFound`). One count per status.
-    pub async fn counts(&self, actor: &Actor, kind: &str) -> Result<StatusCounts, CoreError> {
+    pub async fn counts(
+        &self,
+        actor: &Actor,
+        kind: &str,
+        locale: Option<&str>,
+    ) -> Result<StatusCounts, CoreError> {
         require_read(actor, Area::Content)?;
         let repos = self.store.read();
         if repos.types().get(kind).await?.is_none() {
@@ -609,6 +664,7 @@ impl ContentService {
                     kind: Some(kind.to_owned()),
                     statuses: vec![status],
                     readable_by,
+                    locale: locale.map(str::to_owned),
                     ..ContentQuery::default()
                 })
                 .await
@@ -625,6 +681,43 @@ impl ContentService {
 }
 
 impl ContentService {
+    /// The translations of `items` (M6-1): for each item's translation group, the
+    /// members other than the item that `actor` may read, keyed by the item's id, in
+    /// one `group_members` read per 200 groups.
+    pub async fn translations(
+        &self,
+        actor: &Actor,
+        items: &[ContentItem],
+    ) -> Result<std::collections::HashMap<ContentId, Vec<ferrite_store::TranslationRef>>, CoreError>
+    {
+        let mut groups: Vec<ContentId> = items.iter().map(|i| i.translation_group).collect();
+        groups.sort_by_key(|g| g.as_uuid());
+        groups.dedup();
+        let repos = self.store.read();
+        let mut members = Vec::new();
+        for chunk in groups.chunks(ferrite_store::MAX_GROUPS) {
+            members.extend(repos.content().group_members(chunk).await?);
+        }
+        let now = Timestamp::now();
+        let readable = |m: &ferrite_store::TranslationRef| {
+            m.author_id == actor.user
+                || crate::actor::can(actor.role, crate::actor::Capability::EditOthers)
+                || (m.status == ContentStatus::Published
+                    && m.published_at.is_some_and(|at| at <= now))
+        };
+        Ok(items
+            .iter()
+            .map(|i| {
+                let of_item = members
+                    .iter()
+                    .filter(|m| m.group == i.translation_group && m.id != i.id && readable(m))
+                    .cloned()
+                    .collect();
+                (i.id, of_item)
+            })
+            .collect())
+    }
+
     /// `actor`'s autosave of item `id`, if any. Read like revisions (F12):
     /// [`get_for`](Self::get_for) (`NotFound` when the item cannot be read), then
     /// [`role_can_edit`] (`Forbidden` otherwise), so a read-only token of a role that may

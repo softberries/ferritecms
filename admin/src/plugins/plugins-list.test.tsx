@@ -1,9 +1,17 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { expect, test } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, test, vi } from "vitest";
 import type { PluginMetricsDto } from "@/api/plugins";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
-import { NODE_A, NODE_B, plugin } from "./fixtures";
+import { NODE_A, NODE_B, installedTrust, plugin } from "./fixtures";
 import { PluginsScreen } from "./plugins-list";
+
+const toast = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 const metrics = (failures: { hook: string; count: number }[]): PluginMetricsDto => ({
   window_secs: 86_400,
@@ -93,7 +101,7 @@ test("manifest_text_is_text", async () => {
   renderWithRouter(<PluginsScreen />);
   await screen.findByText("<img src=x onerror=alert(1)>");
   await waitFor(() => expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeVisible());
-  expect(screen.getByText("By <script>alert(1)</script> (not verified)")).toBeVisible();
+  expect(screen.getByText("<script>alert(1)</script> · Unsigned")).toBeVisible();
   expect(document.querySelector("img")).toBeNull();
 });
 
@@ -118,4 +126,56 @@ test("retained_data_lists_and_offers_erase", async () => {
   expect(
     within(section).getByRole("button", { name: "Erase the data of old-seo now" }),
   ).toBeVisible();
+});
+
+test("list_shows_update_chip", async () => {
+  stubRoutes({
+    "/api/v1/plugins": () =>
+      json({
+        items: [
+          plugin({
+            name: "seo",
+            version: "0.2.0",
+            trust: installedTrust({
+              state: "verified",
+              update: { version: "0.3.0", publisher_matches: true },
+            }),
+          }),
+          plugin({ name: "plain" }),
+        ],
+      }),
+    "/api/v1/plugins/retained": () => json({ items: [] }),
+    "/api/v1/plugins/seo/metrics": () => json(metrics([])),
+    "/api/v1/plugins/plain/metrics": () => json(metrics([])),
+  });
+  renderWithRouter(<PluginsScreen />);
+  const chip = await screen.findByRole("button", { name: "Update seo to 0.3.0" });
+  expect(chip).toHaveTextContent("Update 0.3.0");
+  expect(within(row("plain")).queryByText(/Update/)).toBeNull();
+});
+
+// M6-2 review: a registry check that removed colliding publisher keys says so.
+test("registry_check_warns_about_key_collisions", async () => {
+  const meta = {
+    url: "https://example.dev/registry/v1/index.json",
+    name: "Test registry",
+    serial: 3,
+    generated_at: null,
+    checked_at: null,
+    last_error: null,
+    last_error_at: null,
+  };
+  stubRoutes({
+    "/api/v1/plugins": () => json({ items: [] }),
+    "/api/v1/plugins/retained": () => json({ items: [] }),
+    "/api/v1/plugins/registry": () => json({ registry: meta, plugins: [], collisions: [] }),
+    "/api/v1/plugins/registry/refresh": () =>
+      json({ registry: meta, plugins: [], collisions: ["0123456789ABCDEF"] }),
+  });
+  renderWithRouter(<PluginsScreen />);
+  await userEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+  expect(toast.warning.mock.calls[0]?.[0]).toBe(
+    "Publisher key 0123456789ABCDEF had the id of a registry key with other key bytes. It was removed and the plugins it signed were disabled.",
+  );
 });

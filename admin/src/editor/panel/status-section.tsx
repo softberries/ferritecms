@@ -3,7 +3,7 @@
 // (`statusActions`, Review Focus 4); Publish and Schedule open the publish dialog, the
 // rest run here. A transition with unsaved changes saves them first (F40).
 
-import { ExternalLinkIcon, UndoDotIcon } from "lucide-react";
+import { ExternalLinkIcon, PackagePlusIcon, Share2Icon, UndoDotIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { isContentStatus } from "@/api/content";
 import { RelativeTime } from "@/components/kit/relative-time";
@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import type { EditorDocument } from "../editor-state";
 import { ActionButton } from "./action-button";
 import { useActionRunner } from "./actions";
-import { formatWhen, statusActions } from "./publishing";
+import { useEditorActions } from "./editor-actions";
+import { formatWhen, releaseActions, statusActions } from "./publishing";
 
 export interface StatusSectionProps {
   doc: EditorDocument;
@@ -32,6 +33,8 @@ export function StatusSection({ doc, onPublish }: StatusSectionProps) {
   const { item } = doc;
   const { label, run, busy } = useActionRunner(doc);
   const actions = statusActions(item, doc.readOnly !== null);
+  const releaseRow = releaseActions(item, doc.readOnly !== null, doc.changeMode);
+  const editorActions = useEditorActions();
 
   const [first, ...rest] = actions.primary;
   const author = item?.author;
@@ -154,6 +157,35 @@ export function StatusSection({ doc, onPublish }: StatusSectionProps) {
                 ) : null,
               )}
             </div>
+          ) : null}
+        </div>
+      ) : null}
+      {releaseRow.length > 0 ? (
+        <div data-slot="panel-release-actions" className="-mt-2 flex flex-wrap gap-1">
+          {releaseRow.includes("release") ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              disabled={busy}
+              onClick={() => editorActions.release(false)}
+            >
+              <PackagePlusIcon data-icon="inline-start" />
+              {t("panel.actions.release")}
+            </Button>
+          ) : null}
+          {releaseRow.includes("share") ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => editorActions.share()}
+            >
+              <Share2Icon data-icon="inline-start" />
+              {t("panel.actions.share")}
+            </Button>
           ) : null}
         </div>
       ) : null}

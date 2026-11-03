@@ -7,6 +7,9 @@ Task-oriented guides for running a site day to day.
   menus, moderate comments, check the site's health.
 - [Writing and publishing](01-writing.md): the editor, publishing and scheduling,
   autosave, revisions and previews.
+- [Releases and reviews](12-releases-and-reviews.md): live preview beside the editor,
+  releases applied together now or on a schedule, whole-site and shared previews,
+  approval workflows.
 - [Media](02-media.md): uploads, image sizes, featured and inline images.
 - [Content types, taxonomies and menus](03-content-types.md): model your content and
   your navigation.
@@ -16,3 +19,7 @@ Task-oriented guides for running a site day to day.
 - [Import from WordPress](06-import-wordpress.md): move a WordPress site over, with
   redirects from the old addresses.
 - [Import Markdown](07-import-markdown.md): turn a folder of Markdown files into pages.
+- [Multilingual sites](10-multilingual.md): languages, translations, per-language
+  addresses, menus and search engines.
+- [Webhooks](09-webhooks.md): call your own URLs when content, media, comments, users or
+  imports change, signed and retried: deploy hooks, CDN purges, chat notices.

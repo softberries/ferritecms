@@ -22,6 +22,8 @@ fn item(title: &str, excerpt: &str) -> PageItem {
             menu_order: 0,
             parent_id: None,
             fields: serde_json::json!({}),
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         },
         url: "/hello/".into(),
         html: String::new(),
@@ -33,7 +35,11 @@ fn item(title: &str, excerpt: &str) -> PageItem {
 }
 
 fn page<'a>(item: Option<&'a PageItem>, path: &'a str) -> HeadPage<'a> {
-    HeadPage { item, path }
+    HeadPage {
+        item,
+        path,
+        alternates: &[],
+    }
 }
 
 fn render(h: &Head) -> String {

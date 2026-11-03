@@ -9,11 +9,11 @@ use ferrite_domain::{
     RevisionId, Timestamp, UserId,
 };
 use ferrite_store::{
-    ContentRepo, ContentTypeRepo, FileBound, ListPart, MAX_ID_FILTER, MAX_META_KEYS,
-    MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo, StoreError, check_content_filters,
-    check_file_bounds, check_id_list, check_len, check_limit, content_cursor, content_list_plan,
-    encode_content_cursor, file_bounds_from_rows, media_kind_sql, slug_has_prefix,
-    slug_prefix_bounds, validate_json, validate_text,
+    ContentRepo, ContentTypeRepo, FileBound, ListPart, LocaleFilter, MAX_ID_FILTER, MAX_META_KEYS,
+    MAX_SLUG_PREFIX_RESULTS, MetaRepo, RevisionRepo, StoreError, TranslationRef,
+    check_content_filters, check_file_bounds, check_groups, check_id_list, check_len, check_limit,
+    content_cursor, content_list_plan, encode_content_cursor, file_bounds_from_rows, locale_filter,
+    media_kind_sql, slug_has_prefix, slug_prefix_bounds, validate_json, validate_text,
 };
 use serde_json::Value;
 use sqlx::{Postgres, QueryBuilder, types::Json};
@@ -43,11 +43,11 @@ impl ContentTypeRepo for PgRepos {
         // `built_in` and `created_at` are fixed when the type is first inserted.
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (name) DO UPDATE SET label = excluded.label, \
              hierarchical = excluded.hierarchical, has_archive = excluded.has_archive, \
-             fields = excluded.fields"
+             fields = excluded.fields, quality_gate = excluded.quality_gate"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -56,6 +56,7 @@ impl ContentTypeRepo for PgRepos {
         .bind(Json(&ty.fields))
         .bind(ty.built_in)
         .bind(dt(ty.created_at))
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -66,8 +67,8 @@ impl ContentTypeRepo for PgRepos {
         validate_json(&ty.fields)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -76,6 +77,7 @@ impl ContentTypeRepo for PgRepos {
         .bind(Json(&ty.fields))
         .bind(ty.built_in)
         .bind(dt(ty.created_at))
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -126,6 +128,7 @@ impl ContentRepo for PgRepos {
         validate_text("content slug", &item.slug)?;
         validate_text("content title", &item.title)?;
         validate_text("content excerpt", &item.excerpt)?;
+        validate_text("content locale", &item.locale)?;
         if let Some(html) = &item.body_html {
             validate_text("content body_html", html)?;
         }
@@ -137,9 +140,9 @@ impl ContentRepo for PgRepos {
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO content_items (id, type, status, slug, parent_id, author_id, title, \
              excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, \
-             created_at, updated_at, version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1) \
-             RETURNING {CONTENT_COLUMNS}"
+             created_at, updated_at, version, locale, translation_group) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, \
+             $17, $18) RETURNING {CONTENT_COLUMNS}"
         )))
         .bind(item.id.as_uuid())
         .bind(&item.kind)
@@ -157,6 +160,8 @@ impl ContentRepo for PgRepos {
         .bind(item.scheduled_at.map(dt))
         .bind(created)
         .bind(updated)
+        .bind(&item.locale)
+        .bind(item.translation_group.unwrap_or(item.id).as_uuid())
         .fetch_one(e))?;
         codec::content_item(&row)
     }
@@ -173,20 +178,79 @@ impl ContentRepo for PgRepos {
     async fn get_by_slug(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError> {
         validate_text("content kind", kind)?;
         validate_text("content slug", slug)?;
+        if let Some(l) = locale {
+            validate_text("content locale", l)?;
+        }
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {CONTENT_COLUMNS} FROM content_items \
-             WHERE type = $1 AND parent_id IS NOT DISTINCT FROM $2 AND slug = $3"
+             WHERE type = $1 AND parent_id IS NOT DISTINCT FROM $2 AND slug = $3 \
+             AND ($4::text IS NULL OR locale = $4) ORDER BY id LIMIT 1"
         )))
         .bind(kind)
         .bind(parent.map(|p| p.as_uuid()))
         .bind(slug)
+        .bind(locale)
         .fetch_optional(e))?;
         row.as_ref().map(codec::content_item).transpose()
+    }
+
+    async fn group_members(&self, groups: &[ContentId]) -> Result<Vec<TranslationRef>, StoreError> {
+        check_groups(groups.len())?;
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = groups.iter().map(|g| g.as_uuid()).collect();
+        let rows = run!(&self.exec, |e| sqlx::query(
+            "SELECT id, coalesce(translation_group, id) AS grp, type, locale, status, slug, \
+             parent_id, published_at, title, author_id FROM content_items \
+             WHERE translation_group = ANY($1) OR (translation_group IS NULL AND id = ANY($1)) \
+             ORDER BY grp, locale, id"
+        )
+        .bind(&ids)
+        .fetch_all(e))?;
+        rows.iter().map(codec::translation_ref).collect()
+    }
+
+    async fn relocate(
+        &self,
+        id: ContentId,
+        locale: &str,
+        group: ContentId,
+        slug: &str,
+        expected_version: i64,
+    ) -> Result<ContentItem, StoreError> {
+        validate_text("content locale", locale)?;
+        validate_text("content slug", slug)?;
+        let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE content_items SET locale = $1, translation_group = $2, slug = $3, \
+             updated_at = $4, version = version + 1 \
+             WHERE id = $5 AND version = $6 RETURNING {CONTENT_COLUMNS}"
+        )))
+        .bind(locale)
+        .bind(group.as_uuid())
+        .bind(slug)
+        .bind(dt(Timestamp::now()))
+        .bind(id.as_uuid())
+        .bind(expected_version)
+        .fetch_optional(e))?;
+        if let Some(row) = row {
+            return codec::content_item(&row);
+        }
+        let current: Option<i64> = run!(&self.exec, |e| sqlx::query_scalar(
+            "SELECT version FROM content_items WHERE id = $1"
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(e))?;
+        match current {
+            Some(current_version) => Err(StoreError::Conflict { current_version }),
+            None => Err(StoreError::NotFound),
+        }
     }
 
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError> {
@@ -362,24 +426,31 @@ impl ContentRepo for PgRepos {
     async fn slugs_with_prefix(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         prefix: &str,
     ) -> Result<Vec<String>, StoreError> {
         validate_text("content kind", kind)?;
         validate_text("slug prefix", prefix)?;
+        if let Some(l) = locale {
+            validate_text("content locale", l)?;
+        }
         let (from, to) = slug_prefix_bounds(prefix);
         let slugs: Vec<String> = run!(&self.exec, |e| {
             sqlx::query_scalar(
-            "SELECT slug FROM content_items WHERE type = $1 AND parent_id IS NOT DISTINCT FROM $2 AND (slug = $3 OR (slug >= $4 AND slug < $5)) \
-             ORDER BY slug COLLATE \"C\" LIMIT $6"
-        )
-        .bind(kind)
-        .bind(parent.map(|p| p.as_uuid()))
-        .bind(prefix)
-        .bind(&from)
-        .bind(&to)
-        .bind(i64::from(MAX_SLUG_PREFIX_RESULTS))
-        .fetch_all(e)
+                "SELECT DISTINCT slug FROM content_items WHERE type = $1 \
+             AND parent_id IS NOT DISTINCT FROM $2 AND ($7::text IS NULL OR locale = $7) \
+             AND (slug = $3 OR (slug >= $4 AND slug < $5)) \
+             ORDER BY slug LIMIT $6",
+            )
+            .bind(kind)
+            .bind(parent.map(|p| p.as_uuid()))
+            .bind(prefix)
+            .bind(&from)
+            .bind(&to)
+            .bind(i64::from(MAX_SLUG_PREFIX_RESULTS))
+            .bind(locale)
+            .fetch_all(e)
         })?;
         Ok(slugs
             .into_iter()
@@ -509,6 +580,19 @@ fn push_filters(qb: &mut QueryBuilder<Postgres>, query: &ContentQuery) {
         qb.push(" AND id IN (SELECT item_id FROM media WHERE ")
             .push(media_kind_sql(kind))
             .push(")");
+    }
+    if let Some(locale) = &query.locale {
+        match locale_filter(query) {
+            LocaleFilter::None => {}
+            LocaleFilter::Plain => {
+                qb.push(" AND locale = ").push_bind(locale.clone());
+            }
+            LocaleFilter::ExceptMedia => {
+                qb.push(" AND (locale = ")
+                    .push_bind(locale.clone())
+                    .push(" OR type = 'media')");
+            }
+        }
     }
 }
 

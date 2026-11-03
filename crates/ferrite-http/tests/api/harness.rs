@@ -305,7 +305,12 @@ impl Api {
             })
             .expect("app state")
             // Sessions are resolved for `/_preview/<id>`.
-            .with_auth(auth.clone()),
+            .with_auth(auth.clone())
+            // Link and whole-site previews (M6-3).
+            .with_editorial(
+                editorial_api(store.clone()).releases,
+                editorial_api(store.clone()).preview_links,
+            ),
         );
         let mailer = Arc::new(MemoryMailer::new());
         let content = Arc::new(ContentService::new(
@@ -353,6 +358,17 @@ impl Api {
                 }),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
+                change_sets: Arc::new(ferrite_core::changes::ChangeSetService::new(
+                    store.clone(),
+                    Arc::new(PermalinkRules::default()),
+                )),
+                quality: Arc::new(ferrite_core::quality::QualityService::new(
+                    store.clone(),
+                    SITE_URL.into(),
+                )),
+                probe: Some(Arc::new(ferrite_http::SiteProbe::new(app.clone()))),
+                editorial: editorial_api(store.clone()),
             })
             .expect("api state"),
         );
@@ -466,6 +482,23 @@ impl Api {
         (router, uploader)
     }
 
+    /// The whole site again, with the same store and services but an installer with
+    /// `trust` (M6-2: a signature policy, a registry).
+    pub fn router_with_trust(&self, trust: ferrite_http::extensions::TrustSettings) -> Router {
+        self.router_with(ApiParts {
+            installer: Arc::new(
+                Installer::new(
+                    self.store.clone(),
+                    self.api.media.clone(),
+                    HostConfig::default(),
+                )
+                .expect("installer")
+                .with_trust(trust),
+            ),
+            ..self.same_parts()
+        })
+    }
+
     /// Every file under the media store's root (artifacts and staging objects alike).
     pub fn stored_files(&self) -> Vec<PathBuf> {
         fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -520,6 +553,11 @@ impl Api {
             mail: a.mail.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
+            webhooks: a.webhooks.clone(),
+            change_sets: a.change_sets.clone(),
+            quality: a.quality.clone(),
+            probe: a.probe.clone(),
+            editorial: a.editorial.clone(),
         }
     }
 
@@ -575,6 +613,17 @@ impl Api {
                 mail: self.api.mail.clone(),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
+                change_sets: Arc::new(ferrite_core::changes::ChangeSetService::new(
+                    store.clone(),
+                    Arc::new(PermalinkRules::default()),
+                )),
+                quality: Arc::new(ferrite_core::quality::QualityService::new(
+                    store.clone(),
+                    SITE_URL.into(),
+                )),
+                probe: None,
+                editorial: editorial_api(store.clone()),
             })
             .expect("api state"),
         );
@@ -915,6 +964,22 @@ impl Client {
         self.send_on(&api.router, req).await
     }
 
+    /// [`multipart`](Self::multipart) on another router of the site.
+    pub async fn multipart_on(
+        &mut self,
+        router: &Router,
+        path: &str,
+        parts: &[(&str, &[u8])],
+    ) -> Resp {
+        let (content_type, body) = multipart_body(parts);
+        let req = self
+            .builder(Method::POST, path)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send_on(router, req).await
+    }
+
     /// `POST path` with `body` as `Content-Type: content_type`.
     pub async fn raw(&mut self, api: &Api, path: &str, content_type: &str, body: Vec<u8>) -> Resp {
         let req = self
@@ -1118,4 +1183,35 @@ macro_rules! api_tests {
             }
         }
     )*};
+}
+
+/// The editorial services of the API tests (M6-3).
+pub fn editorial_api(store: Arc<dyn Store>) -> ferrite_http::api::releases::EditorialApi {
+    let rules = Arc::new(PermalinkRules::default());
+    let content = Arc::new(ContentService::new(store.clone(), rules.clone()));
+    ferrite_http::api::releases::EditorialApi::new(
+        store.clone(),
+        Arc::new(ferrite_core::release::ReleaseService::new(
+            store.clone(),
+            rules,
+            content,
+        )),
+        Arc::new(ferrite_core::preview_link::PreviewLinkService::new(store)),
+    )
+}
+
+/// The webhook service of the API tests: any address allowed (the transport is a fake
+/// or not used), so URLs like `https://hooks.example.com/` pass.
+pub fn webhook_service(store: Arc<dyn Store>) -> Arc<ferrite_core::webhooks::WebhookService> {
+    fn any(_: std::net::IpAddr) -> bool {
+        true
+    }
+    Arc::new(ferrite_core::webhooks::WebhookService::new(
+        store,
+        SiteKey::from_hex(&"cd".repeat(32)).expect("key"),
+        ferrite_core::webhooks::UrlPolicy {
+            local_targets: false,
+            allow_ip: any,
+        },
+    ))
 }

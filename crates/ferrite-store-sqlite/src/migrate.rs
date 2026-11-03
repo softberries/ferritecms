@@ -58,6 +58,15 @@ pub fn latest_schema_version() -> i64 {
     embedded_versions().into_iter().max().unwrap_or(0)
 }
 
+/// The embedded version `n` steps below the latest (`0` is the latest), or `0` past the
+/// first. Versions need not be consecutive (parts of a milestone take their numbers in
+/// parallel), so "the previous schema" is this, never `latest - 1`.
+pub fn schema_version_below(n: usize) -> i64 {
+    let mut versions = embedded_versions();
+    versions.sort_unstable_by(|a, b| b.cmp(a));
+    versions.get(n).copied().unwrap_or(0)
+}
+
 fn mig_err(e: MigrateError) -> StoreError {
     StoreError::Migration(e.to_string())
 }
@@ -478,8 +487,15 @@ mod tests {
         store.migrate_up(None).await.unwrap();
         let names = snapshots(&backups);
         assert_eq!(names.len(), 2, "{names:?}");
+        let latest = store
+            .migration_status(&semver::Version::new(0, 0, 0))
+            .await
+            .unwrap()
+            .binary_version;
         assert!(
-            names.iter().all(|n| n.starts_with("pre-0-to-13-")),
+            names
+                .iter()
+                .all(|n| n.starts_with(&format!("pre-0-to-{latest}-"))),
             "{names:?}"
         );
 

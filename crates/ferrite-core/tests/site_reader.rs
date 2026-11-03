@@ -121,6 +121,8 @@ async fn insert(store: &dyn Store, author: &User, it: Item) -> ContentId {
             scheduled_at: (it.status == ContentStatus::Scheduled).then(|| at(HOUR)),
             created_at: None,
             updated_at: None,
+            locale: "en".into(),
+            translation_group: None,
         })
         .await
         .unwrap();
@@ -145,6 +147,8 @@ async fn term(store: &dyn Store, taxonomy: &str, slug: &str) -> TermId {
             name: format!("{slug} name"),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -585,6 +589,8 @@ pub async fn search_total_is_capped(db: &TestDb) {
                 scheduled_at: None,
                 created_at: None,
                 updated_at: None,
+                locale: "en".into(),
+                translation_group: None,
             })
             .await
             .unwrap();
@@ -1637,6 +1643,7 @@ async fn book_genre(store: &dyn Store) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

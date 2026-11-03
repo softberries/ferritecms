@@ -25,6 +25,10 @@ pub struct FrontMatter {
     pub description: Option<String>,
     /// The description was longer than [`MAX_SEO_DESCRIPTION`] characters and was cut.
     pub description_cut: bool,
+    /// The page's locale as written (M6-1); checked against the site's locales by the run.
+    pub locale: Option<String>,
+    /// The page this one translates: a path relative to this file (M6-1).
+    pub translation_of: Option<String>,
 }
 
 /// Splits `text` into its front matter and the Markdown after it.
@@ -104,6 +108,8 @@ struct Raw {
     draft: bool,
     date: Option<toml::Spanned<toml::Value>>,
     description: Option<toml::Spanned<String>>,
+    locale: Option<toml::Spanned<String>>,
+    translation_of: Option<toml::Spanned<String>>,
 }
 
 /// The TOML block, or the byte offset in it and the message of what is wrong.
@@ -162,7 +168,23 @@ fn parse(block: &str) -> Result<FrontMatter, (usize, String)> {
             ((!text.is_empty()).then_some(text), cut)
         }
     };
+    let locale = match raw.locale {
+        None => None,
+        Some(l) => {
+            let offset = l.span().start.min(block.len());
+            Some(
+                ferrite_domain::locale::parse_tag(l.get_ref().trim()).map_err(|_| {
+                    (
+                        offset,
+                        "`locale` must be a language tag, as \"de\" or \"pt-BR\"".to_owned(),
+                    )
+                })?,
+            )
+        }
+    };
     Ok(FrontMatter {
+        locale,
+        translation_of: not_blank("translation_of", raw.translation_of, block)?,
         title: not_blank("title", title, block)?,
         slug: not_blank("slug", raw.slug, block)?,
         order: raw.order,
@@ -248,7 +270,8 @@ mod tests {
     #[test]
     fn every_key() {
         let text = "+++\ntitle = \"Install\"\nslug = \"setup\"\norder = 3\ndraft = true\n\
-                    date = 2026-10-30T12:00:00Z\ndescription = \"How to install.\"\n+++\n# Body\n";
+                    date = 2026-10-30T12:00:00Z\ndescription = \"How to install.\"\n\
+                    locale = \"pt_BR\"\ntranslation_of = \"../en/install.md\"\n+++\n# Body\n";
         let (fm, body) = split(text).unwrap();
         assert_eq!(
             fm,
@@ -260,6 +283,8 @@ mod tests {
                 date: Some(ts("2026-10-30T12:00:00Z")),
                 description: Some("How to install.".into()),
                 description_cut: false,
+                locale: Some("pt-BR".into()),
+                translation_of: Some("../en/install.md".into()),
             }
         );
         assert_eq!(body, "# Body\n");

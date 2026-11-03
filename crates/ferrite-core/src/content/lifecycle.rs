@@ -17,14 +17,16 @@
 //! `published` (publish, and the scheduler's publish) enqueues the `post.published`
 //! action jobs in its transaction ([`actions`](crate::actions), M2a-2 P20).
 
-use ferrite_domain::{ContentId, ContentItem, ContentStatus, Role, Term, Timestamp};
+use ferrite_domain::{ContentId, ContentItem, ContentStatus, ReviewTarget, Role, Term, Timestamp};
 use ferrite_store::{Repos, StoreError};
 
 use super::ContentService;
 use crate::{
     Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
-    blocks, events, jobs,
+    blocks,
+    changes::{Capture, ObjectRef, Op},
+    events, jobs,
     permalink::{Permalinks, load_input},
     redirects::{delete_redirects_from, emit_redirects_changed},
     tx::finish,
@@ -34,7 +36,7 @@ use crate::{
 const DUE_BATCH: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum Action {
+pub(crate) enum Action {
     Publish,
     /// Publish by the scheduler: the item must be scheduled.
     PublishDue,
@@ -163,7 +165,11 @@ impl ContentService {
         expected_version: i64,
     ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
-        let done = delete_in(tx.as_ref(), actor, id, expected_version).await;
+        let rules = self.permalinks.pin();
+        let done = match crate::release::check_unlocked(tx.as_ref(), id).await {
+            Ok(()) => delete_in(tx.as_ref(), rules.as_ref(), actor, id, expected_version).await,
+            Err(e) => Err(e),
+        };
         finish(tx, done).await
     }
 
@@ -254,6 +260,19 @@ impl ContentService {
         transition_item(repos, rules, actor, item, version, Action::Publish).await
     }
 
+    /// [`unpublish`](Self::unpublish) of `item` (as read or written in the caller's `Tx`,
+    /// at its current version) inside the caller's `repos`: the same checks and
+    /// `invalidate` keys (release apply, M6-3).
+    pub(crate) async fn unpublish_in(
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        actor: &Actor,
+        item: ContentItem,
+    ) -> Result<ContentItem, CoreError> {
+        let version = item.version;
+        transition_item(repos, rules, actor, item, version, Action::Unpublish).await
+    }
+
     /// [`trash`](Self::trash) of item `id` inside the caller's `repos` with the caller's
     /// pinned `rules`: the same checks, search removal and `invalidate` event.
     pub(crate) async fn trash_in(
@@ -299,20 +318,232 @@ impl ContentService {
         expected_version: i64,
         action: Action,
     ) -> Result<ContentItem, CoreError> {
+        self.transition_with(actor, id, expected_version, action, Gate::default())
+            .await
+    }
+
+    /// [`transition`](Self::transition) with the M6-3 additions: the release lock, the
+    /// approval gate of workflow types for publish and schedule (an admin's
+    /// `override_reason` passes it, audited), and the review a submit starts.
+    pub(super) async fn transition_with(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        action: Action,
+        extras: Gate,
+    ) -> Result<ContentItem, CoreError> {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = transition_in(
-            tx.as_ref(),
-            rules.as_ref(),
-            actor,
-            id,
-            expected_version,
-            action,
-        )
+        let done = async {
+            crate::release::check_unlocked(tx.as_ref(), id).await?;
+            // An assistant's transition is recorded (design 17 §3.3).
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                capture_op(action),
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
+            let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
+            let repos = tx.as_ref();
+            if let Action::Submit = action
+                && current.status == ContentStatus::Pending
+                && crate::workflow::gate::workflow_of(repos, &current.kind)
+                    .await?
+                    .is_some()
+            {
+                // Resubmit: a new review, no status change (design 15 §6.2).
+                authorize(actor, &current, Action::Submit)?;
+                if current.version != expected_version {
+                    return Err(CoreError::Conflict {
+                        current_version: current.version,
+                    });
+                }
+                crate::workflow::start_in(
+                    repos,
+                    actor,
+                    &current,
+                    ReviewTarget::Item(id),
+                    None,
+                    extras.submit.unwrap_or_default(),
+                )
+                .await?;
+                cap.finish(repos).await?;
+                return Ok(current);
+            }
+            let saved = guarded_item(
+                repos,
+                rules.as_ref(),
+                actor,
+                current,
+                expected_version,
+                action,
+                extras,
+            )
+            .await?;
+            // Here, not in `transition_item`: `seed demo` and uploads publish through
+            // that and emit nothing (design 18 §3.4).
+            crate::webhooks::emit_content(
+                repos,
+                rules.as_ref(),
+                webhook_type(action),
+                &saved,
+                Some(actor.user),
+            )
+            .await?;
+            cap.finish(repos).await?;
+            Ok(saved)
+        }
         .await;
         finish(tx, done).await
     }
+
+    /// [`publish`](Self::publish) with an admin's override of a missing approval
+    /// (design 15 §6.5): `override_reason` (1–500 characters) is audited as
+    /// `workflow.override` when the gate would refuse.
+    pub async fn publish_with_override(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        override_reason: Option<String>,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason,
+            submit: None,
+        };
+        self.transition_with(actor, id, expected_version, Action::Publish, gate)
+            .await
+    }
+
+    /// [`schedule`](Self::schedule) with an admin's override (as
+    /// [`publish_with_override`](Self::publish_with_override)).
+    pub async fn schedule_with_override(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        at: Timestamp,
+        override_reason: Option<String>,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason,
+            submit: None,
+        };
+        self.transition_with(actor, id, expected_version, Action::Schedule(at), gate)
+            .await
+    }
+
+    /// [`submit`](Self::submit) with reviewers and a note: in a type with a workflow it
+    /// starts a review at step 0 (and from `pending` without an open review, a new one:
+    /// "Resubmit"); elsewhere the input is ignored (D25).
+    pub async fn submit_with(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        expected_version: i64,
+        input: crate::workflow::SubmitInput,
+    ) -> Result<ContentItem, CoreError> {
+        let gate = Gate {
+            override_reason: None,
+            submit: Some(input),
+        };
+        self.transition_with(actor, id, expected_version, Action::Submit, gate)
+            .await
+    }
+}
+
+/// The extras of a gated transition.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Gate {
+    pub(super) override_reason: Option<String>,
+    pub(super) submit: Option<crate::workflow::SubmitInput>,
+}
+
+/// The publish gate (design 16 §5) of a person's publish or schedule, after the
+/// transition's own rights and version checks: the type's gate refuses an item with
+/// unsuppressed accessibility errors ([`quality::gate::check`](crate::quality::gate::check)).
+/// The scheduler's due-time publish, `publish_in` (seed, uploads) and imports are never
+/// gated (D6, D7).
+async fn gate(repos: &dyn Repos, action: Action, item: &ContentItem) -> Result<(), CoreError> {
+    if !matches!(action, Action::Publish | Action::Schedule(_)) {
+        return Ok(());
+    }
+    let Some(ty) = repos.types().get(&item.kind).await? else {
+        return Ok(());
+    };
+    crate::quality::gate::check(repos, item, &ty).await
+}
+
+/// A person's transition of `current` (read in this `Tx`) with the checks of
+/// [`transition_with`](ContentService::transition_with) after the release lock: the
+/// approval gate of workflow types for publish and schedule, the transition itself, the
+/// publish gate (M6-4) and, for a submit, the review it starts. Emits no webhook.
+async fn guarded_item(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    actor: &Actor,
+    current: ContentItem,
+    expected_version: i64,
+    action: Action,
+    extras: Gate,
+) -> Result<ContentItem, CoreError> {
+    let id = current.id;
+    if matches!(action, Action::Publish | Action::Schedule(_)) {
+        // Rights first, so the gate never tells a reader about approvals.
+        authorize(actor, &current, action)?;
+        crate::workflow::gate::require_approval(
+            repos,
+            actor,
+            &current,
+            ReviewTarget::Item(id),
+            None,
+            extras.override_reason.as_deref(),
+        )
+        .await?;
+    }
+    let saved = transition_item(repos, rules, actor, current, expected_version, action).await?;
+    // The publish gate (M6-4), after the transition's own checks.
+    gate(repos, action, &saved).await?;
+    if let Action::Submit = action {
+        crate::workflow::start_in(
+            repos,
+            actor,
+            &saved,
+            ReviewTarget::Item(id),
+            None,
+            extras.submit.unwrap_or_default(),
+        )
+        .await?;
+    }
+    Ok(saved)
+}
+
+/// A person's transition of item `id` inside the caller's `repos`, with every check a
+/// public transition applies (the release lock, approval, the publish gate; no override)
+/// and no webhook: the reverse writes of a change-set revert (design 17 §7.3).
+pub(crate) async fn guarded_transition_in(
+    repos: &dyn Repos,
+    rules: &dyn Permalinks,
+    actor: &Actor,
+    id: ContentId,
+    expected_version: i64,
+    action: Action,
+) -> Result<ContentItem, CoreError> {
+    crate::release::check_unlocked(repos, id).await?;
+    let current = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+    guarded_item(
+        repos,
+        rules,
+        actor,
+        current,
+        expected_version,
+        action,
+        Gate::default(),
+    )
+    .await
 }
 
 async fn transition_in(
@@ -372,8 +603,33 @@ async fn transition_item(
     Ok(saved)
 }
 
+/// The webhook event type of a transition (design 18 §3.1).
+pub(crate) fn webhook_type(action: Action) -> &'static str {
+    match action {
+        Action::Publish | Action::PublishDue => "content.published",
+        Action::Unpublish => "content.unpublished",
+        Action::Schedule(_) => "content.scheduled",
+        Action::Submit => "content.submitted",
+        Action::Trash => "content.trashed",
+        Action::Restore => "content.restored",
+    }
+}
+
+/// The change-set op of a transition (design 17 §3.3).
+fn capture_op(action: Action) -> Op {
+    match action {
+        Action::Publish | Action::PublishDue => Op::ContentPublish,
+        Action::Unpublish => Op::ContentUnpublish,
+        Action::Schedule(_) => Op::ContentSchedule,
+        Action::Submit => Op::ContentSubmit,
+        Action::Trash => Op::ContentTrash,
+        Action::Restore => Op::ContentRestore,
+    }
+}
+
 async fn delete_in(
     repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
     actor: &Actor,
     id: ContentId,
     expected_version: i64,
@@ -392,6 +648,15 @@ async fn delete_in(
     repos.content().update(&current).await?;
     // Read the terms first: the links go with the item.
     let terms = repos.terms().for_item(id).await?;
+    // Before the delete, while the path can still be computed; a refused delete rolls
+    // the event back with the `Tx`.
+    let actor_id = Some(actor.user);
+    crate::webhooks::emit_content(repos, permalinks, "content.deleted", &current, actor_id).await?;
+    // A link never outlives what it shows (D40).
+    repos
+        .preview_links()
+        .delete_for_target(&ferrite_domain::PreviewTarget::Item(id))
+        .await?;
     match repos.content().delete(id).await {
         Err(StoreError::ForeignKey { .. }) => {
             return Err(CoreError::Invalid("has children".into()));
@@ -436,6 +701,8 @@ async fn publish_one(
     let cleared = reclaim_path(repos, permalinks, &saved).await?;
     emit_redirects_changed(repos, cleared).await?;
     enqueue_published(repos, &saved).await?;
+    // A system write: no actor.
+    crate::webhooks::emit_content(repos, permalinks, "content.published", &saved, None).await?;
     emit(repos, &saved).await?;
     Ok(true)
 }
@@ -565,13 +832,17 @@ async fn emit(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
     emit_for(repos, item, &terms).await
 }
 
-/// `post:<id>`, `archive:<kind>`, `term:<t>` for every term in `terms` and
-/// `post:<parent>` if the item has a parent.
+/// `post:<id>`, `archive:<kind>`, `group:<translation group>`, `term:<t>` for every
+/// term in `terms` and `post:<parent>` if the item has a parent.
 async fn emit_for(repos: &dyn Repos, item: &ContentItem, terms: &[Term]) -> Result<(), CoreError> {
-    let keys = [events::post_key(item.id), events::archive_key(&item.kind)]
-        .into_iter()
-        .chain(terms.iter().map(|t| events::term_key(t.id)))
-        .chain(item.parent_id.map(events::post_key));
+    let keys = [
+        events::post_key(item.id),
+        events::archive_key(&item.kind),
+        events::group_key(item.translation_group),
+    ]
+    .into_iter()
+    .chain(terms.iter().map(|t| events::term_key(t.id)))
+    .chain(item.parent_id.map(events::post_key));
     repos.events().append(&events::invalidate(keys)).await?;
     Ok(())
 }
@@ -604,6 +875,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             version: 1,
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         }
     }
 

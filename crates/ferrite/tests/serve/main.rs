@@ -10,5 +10,6 @@
 
 mod api;
 mod harness;
+mod single_locale;
 mod site;
 mod themes;

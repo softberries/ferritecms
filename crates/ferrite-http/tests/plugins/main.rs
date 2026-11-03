@@ -9,10 +9,16 @@ mod common;
 mod contact_form;
 mod egress;
 mod install;
+mod link_check;
 mod mail;
+mod registry;
+mod registry_fetch;
+#[path = "../support/registry_fixture.rs"]
+mod registry_fixture;
 mod reload;
 mod seo;
 mod settings;
+mod webhook_send;
 
 use common::{HOUR, SITE_URL, Site};
 use ferrite_core::{
@@ -41,7 +47,11 @@ async fn head(site: &Site, item: Option<&PageItem>, req: &PluginRequest) -> (Str
         &site.host,
         site.store.as_ref(),
         SITE,
-        HeadPage { item, path },
+        HeadPage {
+            item,
+            path,
+            alternates: &[],
+        },
         req,
         &mut trace,
     )
@@ -855,6 +865,7 @@ async fn render_budget_bounds_the_head(site: Site) -> Site {
         HeadPage {
             item: Some(&item),
             path: &item.url,
+            alternates: &[],
         },
         &req,
         &mut trace,

@@ -41,6 +41,8 @@ pub struct PluginRequest {
     /// filters of the whole page share it. `None`: no budget (each call still has its
     /// deadline).
     until: Option<Instant>,
+    /// A link or whole-site preview (M6-3, D12): plugin writes are refused.
+    read_only: bool,
 }
 
 impl PluginRequest {
@@ -55,7 +57,16 @@ impl PluginRequest {
             },
             preview: None,
             until: None,
+            read_only: false,
         }
+    }
+
+    /// Refuses plugin writes (`meta.set`, `kv.set`, `kv.delete`, `notify-admins`) for
+    /// this request: a link or whole-site preview (D12). On SQLite a write would also
+    /// wait for the writer the preview's sandbox holds.
+    pub fn read_only(mut self, on: bool) -> Self {
+        self.read_only = on;
+        self
     }
 
     /// The page's render budget ends at `until` (`HttpConfig::render_budget` after the
@@ -88,6 +99,7 @@ impl PluginRequest {
 /// plugins run (see the module docs of `plugins`).
 pub(crate) struct Scope {
     pub(crate) preview: Option<Arc<Previewed>>,
+    read_only: bool,
     deps: Arc<Mutex<DepKeys>>,
     /// Set when a service swallowed a store error during the call.
     degraded: Arc<AtomicBool>,
@@ -109,6 +121,11 @@ pub(crate) fn scoped_preview(id: ContentId) -> Option<Arc<Previewed>> {
         .ok()
         .flatten()
         .filter(|p| p.item().item.id == id)
+}
+
+/// Whether the current scope refuses plugin writes (a preview, D12).
+pub(crate) fn read_only_scope() -> bool {
+    SCOPE.try_with(|s| s.read_only).unwrap_or(false)
 }
 
 /// Record keys reported by a read into the current scope, if any.
@@ -139,6 +156,7 @@ pub async fn run_filter(
     let degraded = Arc::new(AtomicBool::new(false));
     let scope = Scope {
         preview: req.preview.clone(),
+        read_only: req.read_only,
         deps: Arc::clone(&deps),
         degraded: Arc::clone(&degraded),
     };

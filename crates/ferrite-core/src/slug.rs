@@ -21,6 +21,11 @@ pub const RESERVED: &[&str] = &[
     "healthz",
     "readyz",
     "metrics",
+    // M5's MCP endpoint and OAuth server, and the well-known documents (review fix).
+    "mcp",
+    "oauth",
+    ".well-known",
+    "favicon.ico",
 ];
 
 /// Router words a top-level item may not take (ruling R13): `/author/{login}/`,
@@ -161,7 +166,20 @@ mod tests {
     #[test]
     fn handler_prefixes_are_reserved() {
         for w in [
-            "_media", "_theme", "_preview", "_p", "api", "healthz", "readyz",
+            "_media",
+            "_theme",
+            "_preview",
+            "_p",
+            "api",
+            "healthz",
+            "readyz",
+            "admin",
+            "feed",
+            "metrics",
+            "mcp",
+            "oauth",
+            ".well-known",
+            "favicon.ico",
         ] {
             assert!(is_reserved(w), "{w}");
         }

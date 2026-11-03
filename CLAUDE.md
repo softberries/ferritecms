@@ -105,13 +105,92 @@ contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub
 (`.github/workflows/pages.yml`, `site/export-static.sh` + `site/rewrite-static.py`). What is
 still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. M5 (AI
 assistants over MCP) is done and released in `v0.2.0` (2026-11-02; `m5-exit.md`; the current release; `v0.1.0` was the first): every site
-serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) with 56 tools,
-2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
+serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless; 56 tools and
+4 prompts in `v0.2.0`, 70 tools, 2 resources, 1 resource template and 5 prompts after M6), a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
-card; migration `0013_oauth`; design 12, roadmap "M5". Work top-down in
+card; migration `0013_oauth`; design 12, roadmap "M5". M6 (the editorial platform) is done
+(`m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
+the parts' exits are `m6-1-exit.md` … `m6-6-exit.md`; designs 13–18; migrations
+`0014`–`0019`; not released yet). Its six parts:
+M6-6 (outgoing webhooks) is done
+(`m6-6-exit.md`): `ferrite_core::webhooks` (catalogue, Standard Webhooks signing, sealed
+rotating secrets, `WebhookService`, `emit` from the content, media, comment, user and import
+writes in their `Tx`), the `webhook.deliver` (one job per attempt, 8-step schedule,
+auto-disable at 5 days + 10 failures or a `410`, mail to admins) and hourly `webhooks.prune`
+jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[webhooks]
+local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
+OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
+`0016_webhooks`; design 18.
+M6-4 (accessibility and content health, design 16, `m6-4-exit.md`) is done:
+`ferrite_core::quality` (the rule catalogue `RULES`, iterative capped document checks,
+media facts, `gate::check` the per-type publish gate (`content_types.quality_gate`
+`off`|`errors`; ruling P4: M6-3 releases call it per item), `QualityService` (check,
+suppressions with a reason, the health summary and findings, "Run now"), `HealthRunner`
+(items, internal links, orphans, redirects, stale, opt-in external links with the
+`link_checks` cache), `robots`), decorative images (`decorative: true` renders `alt=""`),
+`ferrite_http::quality_probe::SiteProbe` (paths through the router and the page lookup, no
+render, cache, counters or plugins) and `link_check::LinkChecker` (SSRF-checked, robots.txt,
+default ports), the `content.health` job (`crates/ferrite/src/jobs/health.rs`, daily 04:00
+UTC, lock `content.health`), the REST `POST /content/{type}/check`,
+`/content/{type}/{id}/suppressions`, `/health/summary|findings|runs` and `422
+content-quality`, MCP `content_check` and `health_report`, the settings
+`health.external_links` and `health.stale_days`, the webhook event `health.completed`, the
+admin's editor checks (marks, the panel's Checks, the publish dialog, the Decorative image
+switch), Content health screen (`g h`), dashboard card, type gate switch and Settings →
+Content health; migration `0019_content_health`. Try it: `POST /api/v1/content/post/check`
+with `{"body": {...}}`; `POST /api/v1/health/runs` then `GET /api/v1/health/findings`
+(`serve` runs the job).
+M6-5 (AI change sets) is done
+(`m6-5-exit.md`): `ferrite_core::changes` (`Actor.agent` set only by the MCP guard, typed
+canonical snapshots, zstd images, `Capture` in every public write path the MCP write tools
+use, `ChangeSetService` with list, detail, images and revert as the person), the
+`mcp.change_sets_days` setting and the `change_sets.prune` job, `/api/v1/change-sets`
+(revert session only), MCP `changes_list`, the admin's AI activity screens
+(`/admin/ai-activity`); migration `0018_change_sets`; design 17. A revert runs every check
+a person's own write gets (the release lock, workflow approval and staging, the publish
+gate), and an assistant's `release_schedule` is a `release` entry whose revert unschedules
+it (final review, ruling P8a).
+M6-3 (editing, design 15) is done (`m6-3-exit.md`): `ferrite_core::release` (`ReleaseService`:
+staged changes as JSON snapshots, item locks, apply in one transaction through `ApplyTx`
+with one merged `invalidate` event, check and whole-site preview in a rolled-back sandbox
+(`SandboxStore`), scheduled apply as the scheduler with `release.apply` + the 30 s
+`release.apply_due`, failures with a report; P4: `quality::gate::check` per published
+entry), `ferrite_core::workflow` (`WorkflowService`, the publish gate, `ReviewService` with
+steps, assignees and `editorial.notify` mail; P7: approvers edit live items in place with
+audit `review.bypassed`), `ferrite_core::preview_link` (`ferp_` tokens, 1–168 h, daily
+`preview_links.prune`), `ferrite-http` `app/preview.rs` (`/_preview/link/<token>`, the
+preview cookie, `/_preview/exit`, the core preview bar, `AppState::preview_view`),
+`/api/v1/releases`, `/preview-links`, `/workflows` (with `/workflows/{type}/approvers` for
+the reviewer pickers), `/reviews`, MCP release tools, the
+admin's live preview pane, Releases (`g r`), Reviews (`g v`) and the Workflow section of
+a content type; migration `0017_releases_workflows`. Try it: `POST /api/v1/releases`,
+`POST /api/v1/releases/{id}/items` (`If-Match`), then `POST …/preview-links` and open
+the `url`.
+M6-2 (plugin trust, design 14,
+`m6-2-exit.md`) is done: minisign-signed plugins (`ferrite-plugin.minisig`,
+`ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the
+signer), plugin data bound to its publisher (`plugin_owners`), the signed static registry
+(`[plugins] registry|registry_key|signatures|registry_check`, off-by-default daily check per
+ruling P5), publisher keys and revocation, `ferrite plugin search|install NAME|update|digest|keys|unbind`,
+doctor `plugins.trust`, the admin's Registry tab and Publisher keys; migration
+`0015_plugin_publishers`; the real signing keys are the user's to create (09 §7 "Plugin keys";
+`crates/ferrite/registry.pub` is a placeholder).
+M6-1 (multilingual content) is done
+(`m6-1-exit.md`; design 13; migration `0014_locales`): `site.locales` (`{tag, label}`, the
+default first, settled at startup), a locale and a translation group on content items, terms
+and menus, `/de/…` prefixes in permalinks and the router, locale-scoped site reads,
+`hreflang`/`x-default`, sitemap alternates, a feed per locale, theme helpers
+`translations()`, `locale_links()`, `t()` with `[strings.<tag>]` and a switcher in the three
+starter themes, `seed demo --profile multilingual`, the API (`locale`, `translation_of`,
+`POST /content/{type}/{id}/translations`, `POST /terms/{id}/translations`, `?locale=`, `/meta`
+locales), MCP `content_translate` and the `translate` prompt, the
+admin's Settings → Languages, list filter and column and editor Translations, the
+WordPress (Polylang/WPML shapes) and Markdown (`locale`, `translation_of`, `--locale`)
+imports. Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`, M6:
+`m6.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
 M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
@@ -119,7 +198,10 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
-`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
+`doctor/` (`ferrite doctor`'s checks); M6-2: `registry` (the configured registry and the
+embedded `registry.pub`), `jobs/registry.rs` (`plugins.registry_check`), `doctor/plugins.rs`;
+M6: `jobs/{editorial,health,webhooks}.rs` (release apply, editorial mail and preview-link
+prune; `content.health`; `webhook.deliver`, `webhooks.prune`), `doctor/webhooks.rs`) -> `ferrite-http` (public site, router, head,
 previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
 plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
 `extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
@@ -128,8 +210,13 @@ source), `import_blobs` (import reports over the media store), `metrics` (the re
 OpenAPI snapshot `openapi.json`; M5: `mcp/` (the MCP endpoint: `auth` guard, `server`,
 `tools/` one file per area, `resources`, `prompts`, `results`), `oauth.rs` (the OAuth
 endpoints and the off-switch gate), `oauth_fetch.rs` (the SSRF-checked Client ID Metadata
-Document fetch), `api/oauth.rs` (the consent API)) -> `ferrite-import-wp` (the WordPress importer: WXR
-parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
+Document fetch), `api/oauth.rs` (the consent API); M6-2: `registry_fetch` (the SSRF-checked
+registry fetcher, file registries), `extensions/{trust,registry}.rs`, `api/plugin_registry.rs`;
+M6: `app/preview.rs` (preview links, the preview cookie and bar), `quality_probe` and
+`link_check` (content health), `webhook_send` (`WebhookClient`), `api/{releases,reviews,
+quality,change_sets,webhooks}.rs`, `mcp/tools/{releases,quality,changes}.rs`) -> `ferrite-import-wp` (the WordPress importer: WXR
+parser, IR, conversion, passes, report, `ZipSource`; M6-1: `lang` (Polylang/WPML); ->
+`ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter (M5: `markdown_to_body`, used by the MCP
 content tools), `run` over `ImportService`; ->
@@ -144,7 +231,12 @@ renderer; M4-3b: `page_tree`), `ferrite-core` (services, permalinks, `SiteReader
 `blocks/markdown.rs` (blocks to Markdown), `UserService`, content types, settings allowlist,
 roles + token scopes, `import` (`ImportService`/`ImportBatch`: the import's write path; the
 import jobs, run reads and report artifacts), `seed` (`DemoBatch`: `seed demo` in one
-transaction)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
+transaction); M6: `locales` and `content/translate.rs` (M6-1), `release/` (`ReleaseService`,
+`ApplyTx`, `SandboxStore`), `workflow/` (`WorkflowService`, `gate`, `ReviewService`),
+`preview_link` (M6-3), `quality/` (rules, checks, `gate`, `QualityService`, `HealthRunner`;
+M6-4), `changes/` (`Capture`, snapshots, `ChangeSetService`, `restore`; M6-5), `webhooks/`
+(catalogue, signing, secrets, `emit`, `WebhookService`, delivery; M6-6),
+`extensions/trust.rs` (M6-2)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
 marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in
@@ -197,13 +289,19 @@ Claude.ai/Desktop connectors and ChatGPT connect from the vendor's cloud and nee
 public HTTPS. Probe it with curl: `POST /mcp` with `Authorization: Bearer …`, `Content-Type:
 application/json`, `Accept: application/json, text/event-stream` and a JSON-RPC body
 (`tools/list`, `tools/call`); a missing token answers `401` with the `resource_metadata`
-challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`). `cargo run -p ferrite -- migrate status
+challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`).
+Webhooks (M6-6): admin → Webhooks (`/admin/webhooks`) or `POST /api/v1/webhooks` with `{name,
+url, events: ["content.*"]}` (the `201` shows the `whsec_` secret once); deliveries need
+`serve` running (the job runner sends them). To try them against a local receiver, start
+`serve` with `FERRITE_WEBHOOKS__LOCAL_TARGETS=true` (allows `http` and loopback; otherwise
+only public `https` targets) and point a webhook at e.g. `http://127.0.0.1:9000/`; guide
+`site/content/02-guides/09-webhooks.md`. `cargo run -p ferrite -- migrate status
 --data /tmp/site` exits 0 ok, 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`
 and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…`, exit 1 lists
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
@@ -216,7 +314,15 @@ the admin's Appearance and Plugins screens. The example plugins: unpack the rele
 inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
-Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
+Signed plugins and the registry (M6-2, design 14): a folder may hold `ferrite-plugin.minisig`
+(`ferrite plugin digest --dir DIR` prints the payload to sign with `minisign -S`) and
+`ferrite-plugin.pub`; the API takes them as the multipart parts `signature` and `publisher_key`.
+`ferrite plugin search|install NAME[@VERSION]|update [--check]` use `[plugins] registry` (+
+`registry_key`; `file:///abs/index.json` works for local tests) and fetch it first;
+`ferrite plugin keys list|trust|revoke`, `ferrite plugin unbind NAME` (operator only). API:
+`/api/v1/plugins/registry` (+ `/refresh`, `/inspect`, `/install`), `/api/v1/plugins/publishers`
+(+ `/{key_id}/revoke`).
+Check a site: `ferrite doctor --data DIR [--offline]` (27 checks that write nothing locally,
 S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
 runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
 3 schema incompatible; 09 §8).
@@ -237,9 +343,13 @@ next `serve`). With `serve` running, import from the admin's Import screen
 wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
 `GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
 `import:read` to read; `409` while another import is queued or running).
+Add a language locally: Settings → Languages in the admin, or `PATCH /api/v1/settings` with
+`{"site.locales": [{"tag": "en"}, {"tag": "de", "label": "Deutsch"}]}` (the default first;
+removing a locale that holds content is `409`); `seed demo --profile multilingual` writes a
+German translation of part of the demo (`/de/`). Guide: `site/content/02-guides/10-multilingual.md`.
 Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
 markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
-[--source NAME] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
+[--source NAME] [--locale TAG] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
 folder's page; with SQLite `serve` must be stopped; prints the counts and one
 `<kind>  <file>  <detail>` line per problem; exit 0 done, 2 skipped files, missing or
 refused images or broken links, 3 another import running (`--takeover` takes over one with

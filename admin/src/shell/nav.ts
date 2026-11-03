@@ -2,19 +2,23 @@
 // shows only when `me.capabilities` holds what its API needs; the server still
 // enforces every call, the SPA only hides (constraints: capabilities in core).
 // Screens beyond the content lists (Media, Comments, Structure, and M2b-3's
-// Administration: Users, Appearance, Plugins, Import, Settings, System) each register a
+// Administration: Users, Appearance, Plugins, Webhooks, Import, Settings, System) each register a
 // `ScreenEntry` in `SCREEN_ENTRIES` when their route exists (ruling F-A); who sees an
 // entry, its section and its chord are fixed here in `SCREENS`.
 
 import {
+  HeartPulseIcon,
   BlocksIcon,
+  ClipboardCheckIcon,
   FileTextIcon,
   FilesIcon,
+  HistoryIcon,
   ImageIcon,
   ImportIcon,
   LayoutDashboardIcon,
   ListTreeIcon,
   MessageSquareIcon,
+  PackageIcon,
   PaletteIcon,
   PlugIcon,
   ServerCogIcon,
@@ -23,6 +27,7 @@ import {
   SignpostIcon,
   TagsIcon,
   UsersIcon,
+  WebhookIcon,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
@@ -63,6 +68,12 @@ const SCREENS = {
     show: (can: Can) => can("moderate_comments"),
     shortcut: "g c",
   },
+  // Releases and the review queue (M6-3, design 15 §11.3–11.4): every role that writes
+  // content; the server lists what each may see.
+  releases: { section: "content", show: (can: Can) => can("edit_own"), shortcut: "g r" },
+  reviews: { section: "content", show: (can: Can) => can("edit_own"), shortcut: "g v" },
+  // Content health (M6-4, design 16 §11.2): editors and admins; `g h` is free in 11 §6.
+  health: { section: "content", show: (can: Can) => can("edit_others"), shortcut: "g h" },
   types: { section: "structure", show: (can: Can) => can("manage_settings") },
   // `manage_terms` alone manages terms, not the taxonomies themselves (the screen decides).
   taxonomies: {
@@ -77,6 +88,10 @@ const SCREENS = {
   appearance: { section: "admin", show: (can: Can) => can("manage_themes"), shortcut: "g a" },
   // Not `g p`: that is Posts (11 §6).
   plugins: { section: "admin", show: (can: Can) => can("manage_plugins"), shortcut: "g l" },
+  // Outgoing webhooks (M6-6, design 18 §10.1), after Plugins; `g w` is free in 11 §6.
+  webhooks: { section: "admin", show: (can: Can) => can("manage_webhooks"), shortcut: "g w" },
+  // What AI assistants changed (M6-5, design 17 §11): every role with the admin sees its own.
+  activity: { section: "admin", show: (can: Can) => can("read_admin") },
   // The WordPress import (M3-2 P32); `g i` is free in 11 §6.
   import: { section: "admin", show: (can: Can) => can("import"), shortcut: "g i" },
   settings: { section: "admin", show: (can: Can) => can("manage_settings"), shortcut: "g s" },
@@ -106,6 +121,9 @@ export interface ScreenEntry {
 export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "comments", to: "/comments", label: "nav.comments", icon: MessageSquareIcon },
+  { screen: "releases", to: "/releases", label: "nav.releases", icon: PackageIcon },
+  { screen: "reviews", to: "/reviews", label: "nav.reviews", icon: ClipboardCheckIcon },
+  { screen: "health", to: "/health", label: "nav.health", icon: HeartPulseIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },
@@ -118,6 +136,8 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
   { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
   { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: PlugIcon },
+  { screen: "webhooks", to: "/webhooks", label: "nav.webhooks", icon: WebhookIcon },
+  { screen: "activity", to: "/ai-activity", label: "nav.aiActivity", icon: HistoryIcon },
   { screen: "import", to: "/import", label: "nav.import", icon: ImportIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
   { screen: "system", to: "/system", label: "nav.system", icon: ServerCogIcon },

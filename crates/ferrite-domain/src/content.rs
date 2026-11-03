@@ -42,6 +42,22 @@ impl MediaKind {
     }
 }
 
+string_enum!(
+    /// A type's publish gate (design 16 §5, column `content_types.quality_gate`): `off`
+    /// only reports; `errors` refuses publishing while accessibility errors remain.
+    QualityGate {
+        Off => "off",
+        Errors => "errors",
+    }
+);
+
+impl QualityGate {
+    /// The gate of a type that never set one.
+    pub fn off() -> Self {
+        Self::Off
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContentType {
     pub name: String,
@@ -52,6 +68,9 @@ pub struct ContentType {
     pub fields: Value,
     pub built_in: bool,
     pub created_at: Timestamp,
+    /// The publish gate (M6-4); `off` when absent.
+    #[serde(default = "QualityGate::off")]
+    pub quality_gate: QualityGate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,6 +97,10 @@ pub struct ContentItem {
     pub updated_at: Timestamp,
     /// Optimistic-lock counter.
     pub version: i64,
+    /// The item's locale (a BCP 47 tag of the site's list; 13 §2.3).
+    pub locale: String,
+    /// The id of the translation group's original; the item's own id when it is alone.
+    pub translation_group: ContentId,
 }
 
 /// Insert input: a [`ContentItem`] without storage-managed columns.
@@ -101,6 +124,10 @@ pub struct NewContent {
     pub created_at: Option<Timestamp>,
     /// `None` = now.
     pub updated_at: Option<Timestamp>,
+    /// The item's locale.
+    pub locale: String,
+    /// The translation group to join; `None` = the item's own id (a new group).
+    pub translation_group: Option<ContentId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -199,6 +226,9 @@ pub struct ContentQuery {
     /// `media` row never match); `Invalid` together with a [`ContentQuery::kind`] or a
     /// [`ContentQuery::kinds`] entry other than `media`.
     pub media_kind: Option<MediaKind>,
+    /// Only items in this locale; `None`: any. Media items are never filtered by it
+    /// (they are shared across locales, 13 §2.3).
+    pub locale: Option<String>,
     pub order: ContentOrder,
     /// Capped at [`crate::MAX_PAGE`] by the stores.
     pub limit: u32,
@@ -220,6 +250,7 @@ impl Default for ContentQuery {
             published_after: None,
             published_before: None,
             media_kind: None,
+            locale: None,
             order: ContentOrder::default(),
             limit: 20,
             cursor: None,

@@ -1,0 +1,90 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Guide – My Site</title>
+<meta name="description" content="The guide section.">
+<meta property="og:title" content="Guide">
+<meta property="og:description" content="The guide section.">
+<meta property="og:url" content="http://127.0.0.1:8080/guide/">
+<meta property="og:type" content="article">
+<link rel="canonical" href="http://127.0.0.1:8080/guide/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+<script src="&#x2f;_theme&#x2f;<hash>&#x2f;docs.js" defer></script>
+
+<style>:root{--accent:#2563eb}</style>
+</head>
+<body class="is-page">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="site-title" href="/" rel="home">My Site</a>
+    <form class="search-form search-form--compact" role="search" aria-label="Site" method="get" action="/">
+  <label class="search-form__label visually-hidden" for="search">Search the documentation</label>
+  <div class="search-form__row">
+    <input type="search" id="search" name="s" value="" placeholder="Search" autocomplete="off" required>
+    <button type="submit">Search</button>
+  </div>
+</form>
+  </div>
+</header>
+<div class="docs-layout">
+
+<div class="docs-sidebar">
+<details class="docs-pages-toggle"><summary aria-controls="nav">Pages</summary></details>
+<nav class="docs-nav" id="nav" aria-label="Pages">
+<ul class="tree" role="list">
+<li class="tree__item tree__item--parent is-open">
+<a class="tree__link" href="&#x2f;guide&#x2f;" aria-current="page">Guide</a>
+<details class="tree__section" open><summary class="tree__toggle"><span class="visually-hidden">Pages in Guide</span></summary>
+<ul class="tree" role="list">
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;guide&#x2f;first&#x2f;">First steps</a>
+</li>
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;guide&#x2f;second&#x2f;">Second steps</a>
+</li>
+</ul>
+</details>
+</li>
+<li class="tree__item">
+<a class="tree__link" href="&#x2f;">Introduction</a>
+</li>
+</ul>
+</nav>
+</div>
+<main id="content" class="docs-main" tabindex="-1">
+
+
+<article class="docs-article">
+  
+  <h1 class="docs-title">Guide</h1>
+  <div class="prose">
+    <p>The guide has two pages.</p>
+  </div>
+  <p class="docs-updated">Updated <time datetime="<date>"><date></time></p>
+  
+<nav class="docs-pager" aria-label="Previous and next page">
+  <a class="docs-pager__link docs-pager__link--next" rel="next" href="&#x2f;guide&#x2f;first&#x2f;">
+    <span class="docs-pager__label">Next</span>
+    <span class="docs-pager__title">First steps</span>
+  </a>
+</nav>
+</article>
+
+</main>
+
+</div>
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <p class="site-credit">My Site. Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

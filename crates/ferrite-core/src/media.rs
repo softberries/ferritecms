@@ -27,6 +27,8 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::Value;
 
+use crate::changes::{Capture, ObjectRef, Op};
+use crate::webhooks::{self, NewWebhookEvent};
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, Permalinks,
     actor::{Area, Capability, Scope, Scopes, can, can_read, require, require_read, require_scope},
@@ -174,15 +176,26 @@ impl MediaService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::MediaUpload, &[]).await?;
             let item = self
                 .content
-                .create_in(tx.as_ref(), rules.as_ref(), &writer, draft)
+                .create_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    &writer,
+                    draft,
+                    crate::content::Placement::default(),
+                )
                 .await?;
             // Uploads are published at once (P5); the lifecycle's keys include
             // `post:<id>`, which covers the media row written next (R11).
             let item =
                 ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?;
             let media = record_upload_in(tx.as_ref(), item.id, &checked, &upload).await?;
+            let ev = NewWebhookEvent::media("media.uploaded", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
+            cap.created(ObjectRef::Media(item.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -279,6 +292,7 @@ impl MediaService {
                         readable_by,
                         limit: query.limit,
                         cursor: query.cursor.clone(),
+                        locale: None,
                     })
                     .await?;
                 // An empty id set short-circuits (M1c-1 R3).
@@ -353,6 +367,8 @@ impl MediaService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(tx.as_ref(), actor, Op::MediaUpdate, &[ObjectRef::Media(id)])
+                .await?;
             let current = tx
                 .content()
                 .get(id)
@@ -405,6 +421,9 @@ impl MediaService {
                 media.alt = alt;
                 tx.media().update(&media).await?;
             }
+            let ev = NewWebhookEvent::media("media.updated", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -429,6 +448,8 @@ impl MediaService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::MediaTrash, &[ObjectRef::Media(id)]).await?;
             let current = tx
                 .content()
                 .get(id)
@@ -451,6 +472,11 @@ impl MediaService {
             tx.meta()
                 .set(id, TRASHED_FROM_META, &Value::from(from.as_str()))
                 .await?;
+            if let Some(media) = tx.media().get(id).await? {
+                let ev = NewWebhookEvent::media("media.trashed", &item, &media, Some(actor.user));
+                webhooks::emit(tx.as_ref(), ev).await?;
+            }
+            cap.finish(tx.as_ref()).await?;
             Ok(item)
         }
         .await;
@@ -483,6 +509,13 @@ impl MediaService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::MediaRestore,
+                &[ObjectRef::Media(id)],
+            )
+            .await?;
             let kind = tx.content().get(id).await?.map(|i| i.kind);
             if kind.as_deref() != Some(MEDIA_KIND) {
                 return Err(CoreError::NotFound);
@@ -504,6 +537,9 @@ impl MediaService {
                 ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?
             };
             let media = tx.media().get(id).await?.ok_or(CoreError::NotFound)?;
+            let ev = NewWebhookEvent::media("media.restored", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -707,7 +743,7 @@ pub fn check_file_name(raw: &str) -> Result<String, CoreError> {
 /// names, where a bidi override disguises the extension (`report\u{202E}fdp.zip` shows
 /// as `reportpiz.pdf`). Not refused in titles or alt text, where joiners (U+200D in
 /// emoji sequences) are legitimate.
-fn is_format(c: char) -> bool {
+pub(crate) fn is_format(c: char) -> bool {
     matches!(
         u32::from(c),
         0x00AD

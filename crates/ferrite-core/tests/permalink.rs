@@ -71,6 +71,8 @@ async fn term(store: &dyn Store, taxonomy: &str, slug: &str) -> TermId {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -457,6 +459,8 @@ pub async fn descendant_walk_is_capped(db: &TestDb) {
                 scheduled_at: None,
                 created_at: None,
                 updated_at: None,
+                locale: "en".into(),
+                translation_group: None,
             })
             .await
             .unwrap();

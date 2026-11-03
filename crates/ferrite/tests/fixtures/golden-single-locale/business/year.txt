@@ -1,0 +1,108 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Larkspur Studio</title>
+<meta name="description" content="Garden design, planting and aftercare for small city spaces.">
+<meta property="og:title" content="Larkspur Studio">
+<meta property="og:description" content="Garden design, planting and aftercare for small city spaces.">
+<meta property="og:url" content="http://127.0.0.1:8080/2026/">
+<meta property="og:type" content="website">
+<link rel="canonical" href="http://127.0.0.1:8080/2026/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+
+<style>:root{--accent:#0f766e}</style>
+
+</head>
+<body class="is-archive">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <a class="site-title" href="/" rel="home">Larkspur Studio</a>
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="menu" role="list">
+  <li class="menu__item">
+    <a href="&#x2f;">Home</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;post&#x2f;">News</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+</ul>
+    </nav>
+    
+<a class="button site-header__cta" href="&#x2f;contact&#x2f;">Get in touch</a>
+  </div>
+</header>
+<main id="content" class="site-main" tabindex="-1">
+
+<div class="wrap">
+  <header class="page-header">
+    <h1 class="page-title">2026</h1>
+  </header>
+  
+<ul class="card-grid" role="list">
+  <li><article class="card">
+  <div class="card__body">
+    <p class="card__date"><time datetime="<date>"><date></time></p>
+    <h2 class="card__title"><a href="&#x2f;spring-consultation-dates&#x2f;">Spring consultation dates are open</a></h2>
+    <p class="card__excerpt">We have twelve consultation slots in March and April. Book early if your garden needs planting before summer.</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__body">
+    <p class="card__date"><time datetime="<date>"><date></time></p>
+    <h2 class="card__title"><a href="&#x2f;planting-for-shade&#x2f;">Planting for shade in north-facing courtyards</a></h2>
+    <p class="card__excerpt">Ferns, hellebores and Japanese forest grass do well where the sun never reaches. Here is what we plant and why.</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__body">
+    <p class="card__date"><time datetime="<date>"><date></time></p>
+    <h2 class="card__title"><a href="&#x2f;what-a-roof-terrace-can-carry&#x2f;">What a roof terrace can carry</a></h2>
+    <p class="card__excerpt">Wet soil is heavy. Before we plan a roof garden we ask a structural engineer, and so should you.</p>
+  </div>
+</article></li>
+</ul>
+
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">Larkspur Studio</p>
+      <p class="site-footer__description">Garden design, planting and aftercare for small city spaces.</p>
+    </div>
+    <nav class="footer-nav" aria-label="Footer">
+      <ul class="menu" role="list">
+  <li class="menu__item">
+    <a href="&#x2f;home&#x2f;garden-design&#x2f;">Garden design</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;feed&#x2f;">RSS feed</a>
+  </li>
+</ul>
+    </nav>
+    <p class="site-credit">Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

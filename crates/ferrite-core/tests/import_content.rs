@@ -86,6 +86,8 @@ async fn term(store: &dyn Store, slug: &str) -> TermId {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -114,6 +116,8 @@ fn item(wp_id: i64, slug: &str, author: UserId) -> ImportContent {
         terms: Vec::new(),
         seo: None,
         meta: Vec::new(),
+        locale: None,
+        translation_group: None,
     }
 }
 
@@ -142,6 +146,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             readable_by: None,
             limit: 50,
             cursor: None,
+            locale: None,
         })
         .await
         .unwrap()

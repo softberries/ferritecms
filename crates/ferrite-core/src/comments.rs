@@ -54,6 +54,7 @@ use ferrite_store::{Repos, Store, StoreError};
 use html_escape::encode_text;
 use serde_json::Value;
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, AuthService, CoreError,
     actor::{Area, Capability, Scope, can, require, require_read, require_reader, require_scope},
@@ -603,6 +604,12 @@ impl CommentService {
         };
         let tx = self.store.begin().await?;
         let done = async {
+            // A signed-in commenter acting through an assistant (MCP comment_reply) is
+            // recorded (design 17 §3.3); anonymous comments never are.
+            let mut cap = match user {
+                Some(actor) => Capture::begin(tx.as_ref(), &actor, Op::CommentCreate, &[]).await?,
+                None => Capture::inert(),
+            };
             tx.comments()
                 .insert(&comment)
                 .await
@@ -612,6 +619,11 @@ impl CommentService {
                     .append(&events::invalidate([post_key(comment.item_id)]))
                     .await?;
             }
+            let by = user.map(|a| a.user);
+            crate::webhooks::emit_comment(tx.as_ref(), "comment.created", &comment, None, by)
+                .await?;
+            cap.created(ObjectRef::Comment(comment.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;
@@ -762,11 +774,25 @@ impl CommentService {
         require(actor, Capability::ModerateComments)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::CommentModerate,
+                &[ObjectRef::Comment(id)],
+            )
+            .await?;
+            let previous = tx.comments().get(id).await?.map(|c| c.status);
             let comment = tx
                 .comments()
                 .set_status(id, status)
                 .await?
                 .ok_or(CoreError::NotFound)?;
+            if let Some(previous) = previous.filter(|p| *p != comment.status) {
+                let by = Some(actor.user);
+                let kind = "comment.moderated";
+                crate::webhooks::emit_comment(tx.as_ref(), kind, &comment, Some(previous), by)
+                    .await?;
+            }
             tx.events()
                 .append(&events::invalidate([post_key(comment.item_id)]))
                 .await?;
@@ -774,7 +800,9 @@ impl CommentService {
             let items = self
                 .items_of(tx.as_ref(), actor, std::slice::from_ref(&comment))
                 .await?;
-            queued(comment, &items)
+            let out = queued(comment, &items)?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(out)
         }
         .await;
         finish(tx, done).await
@@ -798,6 +826,9 @@ impl CommentService {
             if !tx.comments().delete(id).await? {
                 return Err(CoreError::NotFound);
             }
+            let by = Some(actor.user);
+            crate::webhooks::emit_comment(tx.as_ref(), "comment.deleted", &comment, None, by)
+                .await?;
             tx.events()
                 .append(&events::invalidate([post_key(comment.item_id)]))
                 .await?;

@@ -16,6 +16,8 @@ fn term(tax: &str, slug: &str, name: &str, parent: Option<TermId>) -> Term {
         name: name.into(),
         description: format!("about {slug}"),
         parent_id: parent,
+        locale: "en".into(),
+        translation_group: TermId::new(),
     }
 }
 
@@ -79,6 +81,7 @@ pub async fn type_and_taxonomy_insert(db: &TestDb) {
         fields: serde_json::json!({"fields": []}),
         built_in: false,
         created_at: Timestamp::from_micros(1_700_000_000_000_000).unwrap(),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
     store.read().types().insert(&ty).await.unwrap();
     assert_eq!(
@@ -210,18 +213,24 @@ pub async fn terms_crud_and_hierarchy(db: &TestDb) {
     assert!(terms.get(TermId::new()).await.unwrap().is_none());
     assert_eq!(
         terms
-            .get_by_slug("category", "local")
+            .get_by_slug("category", None, "local")
             .await
             .unwrap()
             .unwrap(),
         child
     );
-    assert!(terms.get_by_slug("tag", "local").await.unwrap().is_none());
+    assert!(
+        terms
+            .get_by_slug("tag", None, "local")
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Ordered by name, byte order: "Local" < "News" < "art".
-    let listed = terms.list("category").await.unwrap();
+    let listed = terms.list("category", None).await.unwrap();
     assert_eq!(listed, [child.clone(), parent.clone(), other.clone()]);
-    assert!(terms.list("tag").await.unwrap().is_empty());
+    assert!(terms.list("tag", None).await.unwrap().is_empty());
 
     // Slug is unique per taxonomy, but may repeat across taxonomies.
     let dup = term("category", "news", "Dup", None);

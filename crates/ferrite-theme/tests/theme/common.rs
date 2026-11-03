@@ -59,6 +59,8 @@ pub fn site() -> SiteInfo {
         locale: "en".into(),
         timezone: "UTC".into(),
         settings: Default::default(),
+        locales: Vec::new(),
+        default_locale: String::new(),
     }
 }
 
@@ -84,6 +86,8 @@ pub fn item(kind: &str, title: &str) -> PageItem {
             menu_order: 0,
             parent_id: None,
             fields: serde_json::json!({"color": "blue"}),
+            locale: "en".into(),
+            translation_group: id,
         },
         url: "/hello/".into(),
         html: "<p>Body <em>html</em></p>".into(),

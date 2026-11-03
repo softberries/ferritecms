@@ -88,6 +88,8 @@ fn post(wp_id: i64, slug: &str, status: ContentStatus, author: UserId) -> Import
         terms: Vec::new(),
         seo: None,
         meta: Vec::new(),
+        locale: None,
+        translation_group: None,
     }
 }
 
@@ -669,6 +671,8 @@ pub async fn menu_put_in_batch(db: &TestDb) {
         name: "main".into(),
         label: "Main".into(),
         items: vec![parent, child],
+        locale: "en".into(),
+        translation_of: None,
     };
     let seq = store.read().events().max_seq().await.unwrap();
     in_batch(db, &admin, async |b| {
@@ -885,7 +889,7 @@ pub async fn redirects_refused_come_in_input_order(db: &TestDb) {
         let id = store
             .read()
             .content()
-            .get_by_slug("post", None, "live-post")
+            .get_by_slug("post", None, None, "live-post")
             .await
             .unwrap()
             .unwrap();

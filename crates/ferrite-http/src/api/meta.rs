@@ -22,6 +22,20 @@ pub struct MetaDto {
     pub version: String,
     /// `site.url`.
     pub site_url: String,
+    /// The default locale's tag (M6-1).
+    pub default_locale: String,
+    /// Every locale of the site, the default first (public: the `hreflang` links show
+    /// them anyway, design 13 D19).
+    pub locales: Vec<MetaLocaleDto>,
+}
+
+/// One of the site's locales.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MetaLocaleDto {
+    pub tag: String,
+    pub label: String,
+    /// The URL prefix (`de` for `/de/`); `null` for the default locale.
+    pub prefix: Option<String>,
 }
 
 #[utoipa::path(
@@ -31,12 +45,22 @@ pub struct MetaDto {
     operation_id = "get_meta",
     responses((status = 200, description = "API and site", body = MetaDto)),
 )]
-pub async fn meta(State(api): State<Arc<ApiState>>) -> Json<MetaDto> {
-    Json(MetaDto {
+pub async fn meta(State(api): State<Arc<ApiState>>) -> Result<Json<MetaDto>, Problem> {
+    let locales = ferrite_core::locales::read(api.store.read()).await?;
+    Ok(Json(MetaDto {
         api: "v1".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         site_url: api.site_url.clone(),
-    })
+        default_locale: locales.default.tag.clone(),
+        locales: locales
+            .all()
+            .map(|d| MetaLocaleDto {
+                tag: d.tag.clone(),
+                label: d.label.clone(),
+                prefix: locales.prefix_of(&d.tag),
+            })
+            .collect(),
+    }))
 }
 
 /// The OpenAPI document as served (request extension set by [`router`](super::router)).

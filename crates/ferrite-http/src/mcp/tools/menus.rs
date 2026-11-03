@@ -18,7 +18,10 @@ use uuid::Uuid;
 
 use crate::{
     api::{
-        dto::site::{MenuItemKindDto, MenuLocationDto, MenuSummary},
+        dto::{
+            content::nullable,
+            site::{MenuItemKindDto, MenuLocationDto, MenuSummary},
+        },
         menus::menu_list,
     },
     mcp::{Caller, FerriteMcp, results},
@@ -93,6 +96,16 @@ pub struct SetInput {
     /// The complete new tree, in display order, at most 500 entries in all. It replaces
     /// every entry the menu has now: `[]` empties the menu.
     pub items: Vec<ItemIn>,
+    /// The menu's locale (a tag site_overview lists, e.g. `de`). Leave out to keep the
+    /// current one (a new menu: the site's default locale).
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The name of the default-locale menu this one translates (for example `primary`
+    /// for a German `primary-de`): pages in this menu's locale then show it wherever the
+    /// theme shows that menu. Leave out to keep the current value; `null` removes it.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub translation_of: Option<Option<String>>,
 }
 
 // ---- outputs -----------------------------------------------------------------------------
@@ -121,6 +134,10 @@ pub struct ItemOut {
 pub struct MenuOut {
     pub name: String,
     pub label: String,
+    /// The menu's locale.
+    pub locale: String,
+    /// The default-locale menu this one translates.
+    pub translation_of: Option<String>,
     pub items: Vec<ItemOut>,
 }
 
@@ -157,7 +174,8 @@ impl FerriteMcp {
 
     /// Returns one menu with its entries as a nested tree: each entry has its `id`,
     /// `kind` (`item`, `term` or `url`), `label`, `target_id` or `url`, and `children`,
-    /// in display order. Read it before changing it with menu_set.
+    /// in display order, with the menu's `locale` and `translation_of` (the
+    /// default-locale menu it translates). Read it before changing it with menu_set.
     #[tool(annotations(title = "Get menu", read_only_hint = true, open_world_hint = false))]
     pub async fn menu_get(
         &self,
@@ -178,8 +196,11 @@ impl FerriteMcp {
     /// new). Everything the menu has now is replaced, so call menu_get first and send
     /// the complete new tree, keeping the `id` of entries you keep. Entries link to a
     /// content item or term by id, or to an address; the theme shows the menu named like
-    /// one of its locations. The live site changes at once, so confirm the new structure
-    /// with the user. Returns the saved menu.
+    /// one of its locations. On a multilingual site a menu for another language is a
+    /// menu with that `locale` whose `translation_of` names the default-locale menu (for
+    /// example `primary-de` translating `primary`); link it to items and terms in its
+    /// language. The live site changes at once, so confirm the new structure with the
+    /// user. Returns the saved menu.
     #[tool(annotations(
         title = "Set menu",
         read_only_hint = false,
@@ -193,16 +214,18 @@ impl FerriteMcp {
         Parameters(input): Parameters<SetInput>,
     ) -> CallToolResult {
         let actor = caller.actor();
+        // What is left out is kept; a menu that is new or cannot be read has nothing.
+        let current = self.api.menus.get_for(actor, &input.name).await.ok();
         let label = match input.label {
             Some(l) => l,
-            // Keep the current label; a menu that is new or cannot be read has none.
-            None => self
-                .api
-                .menus
-                .get_for(actor, &input.name)
-                .await
-                .map(|m| m.label)
+            None => current
+                .as_ref()
+                .map(|m| m.label.clone())
                 .unwrap_or_default(),
+        };
+        let translation_of = match input.translation_of {
+            Some(of) => of,
+            None => current.as_ref().and_then(|m| m.translation_of.clone()),
         };
         let mut items = Vec::new();
         flatten(input.items, None, &mut items);
@@ -213,6 +236,9 @@ impl FerriteMcp {
             name: input.name,
             label,
             items,
+            // Empty: the stored menu's locale (a new menu: the default).
+            locale: input.locale.unwrap_or_default(),
+            translation_of,
         };
         if let Err(e) = self.api.menus.put(actor, &menu).await {
             return results::from_core(e);
@@ -268,12 +294,20 @@ fn flatten(items: Vec<ItemIn>, parent: Option<MenuItemId>, out: &mut Vec<MenuIte
 /// `menu` with its entries nested. Entries whose parent is not in the menu are left out
 /// (core does not store such a menu).
 fn menu_out(menu: Menu) -> MenuOut {
-    let Menu { name, label, items } = menu;
+    let Menu {
+        name,
+        label,
+        items,
+        locale,
+        translation_of,
+    } = menu;
     let mut sorted: Vec<&MenuItem> = items.iter().collect();
     sorted.sort_by_key(|i| (i.position, i.id.as_uuid()));
     MenuOut {
         name,
         label,
+        locale,
+        translation_of,
         items: nest(&sorted, None, 0),
     }
 }

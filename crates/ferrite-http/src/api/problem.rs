@@ -19,6 +19,12 @@
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)`, `Unavailable(what)` | 503 | `busy` + `Retry-After: 5` |
+//! | `Locked { release }` | 409 | `release-locked` (`errors[0] = { field: "release", detail: <id> }`) |
+//! | `ReleaseConflict(entries)` | 409 | `release-conflict` (+ `entries`) |
+//! | `ReleaseNotReady(check)` | 409 | `release-not-ready` (+ `entries`) |
+//! | `ApprovalRequired { step }` | 409 | `approval-required` |
+//! | `StagingRequired` | 409 | `staging-required` |
+//! | `QualityBlocked(findings)` | 422 | `content-quality` (`findings`: the blocking `FindingDto`s, M6-4) |
 //! | `Random`, `Hashing`, `Internal(what)`, any other `Store` | 500 | `internal` |
 //!
 //! Problems built by the API layer itself, not mapped from a core error:
@@ -129,13 +135,24 @@ pub struct Problem {
     /// The current resource (412 only). Boxed: keeps `Result<_, Problem>` small (clippy
     /// `result_large_err`).
     pub current: Option<Box<serde_json::Value>>,
-    /// The permission report of the upload (an approval mismatch of `POST /plugins`
-    /// only). Boxed like `current`.
-    pub report: Option<Box<serde_json::Value>>,
+    /// The permission report of an upload or the findings of a refused publish. Boxed
+    /// like `current`.
+    pub attached: Option<Box<Attached>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
     /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
     pub challenge: Option<Challenge>,
+}
+
+/// What a few problems carry besides `errors` ([`Problem::attached`]).
+#[derive(Debug, Clone, Default)]
+pub struct Attached {
+    /// The permission report of the upload (an approval mismatch of `POST /plugins`).
+    pub report: Option<serde_json::Value>,
+    /// The blocking findings (`content-quality`, M6-4).
+    pub findings: Option<serde_json::Value>,
+    /// Per-entry release problems (`release-conflict`, `release-not-ready`, M6-3).
+    pub entries: Option<serde_json::Value>,
 }
 
 /// The `WWW-Authenticate` challenge of a 401 (RFC 6750 §3).
@@ -179,6 +196,15 @@ pub struct ProblemDocument {
     /// admin can review what this upload asks for and approve it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<serde_json::Value>,
+    /// One `{item, outcome, …}` per release entry (`EntryCheckDto`); only on
+    /// `release-conflict` and `release-not-ready` (409).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries: Option<serde_json::Value>,
+    /// The blocking findings (`FindingDto`); only on `content-quality` (422), when the
+    /// type's publish gate refuses the item (M6-4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<crate::api::dto::quality::FindingDto>>)]
+    pub findings: Option<serde_json::Value>,
 }
 
 impl Problem {
@@ -195,10 +221,16 @@ impl Problem {
             detail: detail.into(),
             errors: Vec::new(),
             current: None,
-            report: None,
+            attached: None,
             retry_after: None,
             challenge: None,
         }
+    }
+
+    /// Sets `entries` (a release's per-entry problems).
+    pub fn with_entries(mut self, entries: serde_json::Value) -> Self {
+        self.attached.get_or_insert_with(Default::default).entries = Some(entries);
+        self
     }
 
     /// Adds one `errors` entry.
@@ -218,7 +250,7 @@ impl Problem {
 
     /// Sets `report` (a plugin upload's permission report).
     pub fn with_report(mut self, report: serde_json::Value) -> Self {
-        self.report = Some(Box::new(report));
+        self.attached.get_or_insert_with(Default::default).report = Some(report);
         self
     }
 
@@ -297,6 +329,23 @@ impl Problem {
         )
     }
 
+    /// `422 content-quality`: the type's publish gate refuses the item (design 16 §5);
+    /// `findings` lists the blocking findings.
+    pub fn content_quality(findings: &[ferrite_core::quality::Finding]) -> Self {
+        let mut p = Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content-quality",
+            "This item has accessibility errors",
+            format!(
+                "{} accessibility error(s) block publishing this item",
+                findings.len()
+            ),
+        );
+        p.attached.get_or_insert_with(Default::default).findings =
+            Some(super::dto::quality::findings_json(findings));
+        p
+    }
+
     /// `500 internal`; the cause is logged by the caller, never sent.
     pub fn internal() -> Self {
         Self::new(
@@ -326,7 +375,9 @@ impl Problem {
             detail: self.detail.clone(),
             errors: self.errors.clone(),
             current: self.current.as_deref().cloned(),
-            report: self.report.as_deref().cloned(),
+            report: self.attached.as_ref().and_then(|a| a.report.clone()),
+            findings: self.attached.as_ref().and_then(|a| a.findings.clone()),
+            entries: self.attached.as_ref().and_then(|a| a.entries.clone()),
         }
     }
 }
@@ -413,6 +464,44 @@ impl From<CoreError> for Problem {
                 Self::internal()
             }
             CoreError::Store(s) => Self::from(s),
+            CoreError::InUse(what) => Self::new(StatusCode::CONFLICT, "conflict", "Conflict", what),
+            CoreError::Locked { release } => Self::new(
+                StatusCode::CONFLICT,
+                "release-locked",
+                "Locked by a scheduled release",
+                format!("the item is in scheduled release {release}; unschedule it first"),
+            )
+            .with_error(Some("release"), release.to_string()),
+            CoreError::ReleaseConflict(entries) => Self::new(
+                StatusCode::CONFLICT,
+                "release-conflict",
+                "The release cannot be applied",
+                "some entries cannot be applied; nothing was written",
+            )
+            .with_entries(serde_json::to_value(entries).unwrap_or_default()),
+            CoreError::ReleaseNotReady(check) => Self::new(
+                StatusCode::CONFLICT,
+                "release-not-ready",
+                "The release is not ready",
+                "the check found problems; fix them before scheduling",
+            )
+            .with_entries(serde_json::to_value(check.entries).unwrap_or_default()),
+            CoreError::ApprovalRequired { step } => Self::new(
+                StatusCode::CONFLICT,
+                "approval-required",
+                "Approval required",
+                match step {
+                    Some(s) => format!("the content type needs approval; waiting for: {s}"),
+                    None => "the content type needs approval; submit it for review".to_owned(),
+                },
+            ),
+            CoreError::StagingRequired => Self::new(
+                StatusCode::CONFLICT,
+                "staging-required",
+                "Staging required",
+                "a public item of this type changes through a release",
+            ),
+            CoreError::QualityBlocked(findings) => Self::content_quality(&findings),
         }
     }
 }
@@ -712,6 +801,46 @@ mod tests {
                 422,
                 "validation",
                 Some("too long"),
+                None,
+            ),
+            // M6-3.
+            (
+                CoreError::Locked {
+                    release: ferrite_domain::ReleaseId::new(),
+                },
+                409,
+                "release-locked",
+                None,
+                None,
+            ),
+            (
+                CoreError::ReleaseConflict(vec![]),
+                409,
+                "release-conflict",
+                None,
+                None,
+            ),
+            (
+                CoreError::ReleaseNotReady(Default::default()),
+                409,
+                "release-not-ready",
+                None,
+                None,
+            ),
+            (
+                CoreError::ApprovalRequired {
+                    step: Some("Legal".into()),
+                },
+                409,
+                "approval-required",
+                Some("the content type needs approval; waiting for: Legal"),
+                None,
+            ),
+            (
+                CoreError::StagingRequired,
+                409,
+                "staging-required",
+                None,
                 None,
             ),
         ];

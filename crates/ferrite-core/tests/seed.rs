@@ -60,6 +60,8 @@ async fn write_all(batch: &DemoBatch) {
                 url: Some("/".into()),
                 label: "Home".into(),
             }],
+            locale: "en".into(),
+            translation_of: None,
         })
         .await
         .unwrap();
@@ -91,7 +93,7 @@ pub async fn rollback_leaves_nothing(db: &TestDb) {
     assert!(read.users().get_by_login("admin").await.unwrap().is_none());
     assert!(
         read.terms()
-            .get_by_slug("category", "news")
+            .get_by_slug("category", None, "news")
             .await
             .unwrap()
             .is_none()
@@ -124,7 +126,7 @@ pub async fn commit_writes_rows_and_events(db: &TestDb) {
     assert!(read.users().get_by_login("admin").await.unwrap().is_some());
     assert!(
         read.terms()
-            .get_by_slug("category", "news")
+            .get_by_slug("category", None, "news")
             .await
             .unwrap()
             .is_some()

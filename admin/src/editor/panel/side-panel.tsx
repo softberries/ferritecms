@@ -18,6 +18,7 @@ import { settingsQuery } from "@/api/settings";
 import { typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { KbdCombo } from "@/components/kit/kbd-combo";
+import { useSiteLocales } from "@/lib/locales";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -36,8 +37,11 @@ import { useTypeTaxonomies } from "./panel-state";
 import { ParentField } from "./parent-field";
 import { SeoSection } from "./seo-section";
 import { SlugField } from "./slug-field";
+import { ReviewSection } from "@/reviews/review-section";
 import { StatusSection } from "./status-section";
 import { TermsSection } from "./terms-section";
+import { QualitySection, type QualitySectionProps } from "./quality-section";
+import { TranslationsSection } from "./translations-section";
 
 /** The id of the panel's region (the toggle's `aria-controls`). */
 export const PANEL_ID = "editor-panel";
@@ -56,6 +60,8 @@ export interface SidePanelProps {
   onRevisions?: () => void;
   /** The custom fields go in the panel (else nowhere, or a card under the body). */
   fieldsHere: boolean;
+  /** The checks (M6-4); without it there is no "Checks" section. */
+  quality?: QualitySectionProps;
 }
 
 export function SidePanel({
@@ -68,6 +74,7 @@ export function SidePanel({
   onPublish,
   onRevisions,
   fieldsHere,
+  quality,
 }: SidePanelProps) {
   const { t } = useTranslation("editor");
   if (wide) {
@@ -101,6 +108,7 @@ export function SidePanel({
             onPublish={onPublish}
             fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
+            {...(quality ? { quality } : {})}
           />
         </div>
       </aside>
@@ -127,6 +135,7 @@ export function SidePanel({
             onPublish={onPublish}
             fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
+            {...(quality ? { quality } : {})}
           />
         </div>
       </SheetContent>
@@ -140,18 +149,21 @@ function PanelBody({
   onPublish,
   onRevisions,
   fieldsHere,
+  quality,
 }: {
   doc: EditorDocument;
   type: string;
   onPublish: (mode: "now" | "schedule") => void;
   onRevisions?: () => void;
   fieldsHere: boolean;
+  quality?: QualitySectionProps;
 }) {
   const { t } = useTranslation("editor");
   const me = useMe();
   const site = useQuery(metaQuery);
   const types = useQuery(typesQuery);
   const taxonomies = useTypeTaxonomies(type);
+  const locales = useSiteLocales();
   const hierarchical = types.data?.find((ty) => ty.name === type)?.hierarchical === true;
   const disabled = doc.readOnly !== null || doc.restoring;
   const canCreate = me?.capabilities.includes("manage_terms") === true;
@@ -163,8 +175,16 @@ function PanelBody({
   return (
     <div data-slot="panel-body" className="flex flex-col gap-5 px-5 pt-1 pb-8">
       <StatusSection doc={doc} onPublish={onPublish} />
+      <ReviewSection doc={doc} type={type} />
       {onRevisions && doc.item?.allowed.edit ? (
         <RevisionsEntry type={type} id={doc.item.id} onOpen={onRevisions} />
+      ) : null}
+      <TranslationsPart doc={doc} type={type} />
+      {quality ? (
+        <>
+          <Separator />
+          <QualitySection {...quality} />
+        </>
       ) : null}
       <Separator />
       <section aria-labelledby="panel-url" className="flex flex-col gap-4">
@@ -187,6 +207,7 @@ function PanelBody({
               onChange={(terms) => doc.setMeta({ terms })}
               canCreate={canCreate}
               disabled={disabled}
+              locale={locales.multilingual ? doc.item?.locale : undefined}
             />
           ))}
         </>
@@ -217,6 +238,18 @@ function PanelBody({
         </>
       ) : null}
     </div>
+  );
+}
+
+/** The Translations section with its separator, on a multilingual site only. */
+function TranslationsPart({ doc, type }: { doc: EditorDocument; type: string }) {
+  const locales = useSiteLocales();
+  if (!locales.multilingual || !doc.item) return null;
+  return (
+    <>
+      <Separator />
+      <TranslationsSection doc={doc} type={type} />
+    </>
   );
 }
 

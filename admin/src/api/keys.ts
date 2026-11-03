@@ -1,5 +1,11 @@
 import type { operations } from "./schema";
 
+/** The filters of the health report (`api/quality.ts`). */
+type HealthFilters = Omit<
+  NonNullable<operations["health_findings"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /** The filters of a media list (every query member but the page cursor and size). */
 export type MediaListFilters = Omit<
   NonNullable<operations["list_media"]["parameters"]["query"]>,
@@ -139,9 +145,41 @@ export const qk = {
   pluginSettings: (name: string) => ["plugins", name, "settings"] as const,
   /** Deleted plugins whose data is kept (its own root, apart from per-plugin keys). */
   pluginsRetained: ["pluginsRetained"] as const,
+  /** The cached plugin registry, per search (M6-2; its own root). */
+  pluginRegistry: (q: string) => ["pluginRegistry", q] as const,
+  pluginRegistryAll: ["pluginRegistry"] as const,
+  /** The publisher keys (M6-2). */
+  pluginPublishers: ["pluginPublishers"] as const,
   import: {
     /** The runs table's pages (`useInfiniteQuery` over `next_cursor`). */
     runs: ["import", "runs"] as const,
     job: (id: string) => ["import", "job", id] as const,
+  },
+  /** Outgoing webhooks (M6-6). `all` covers the list, every endpoint and its log. */
+  webhooks: {
+    all: ["webhooks"] as const,
+    list: ["webhooks", "list"] as const,
+    events: ["webhooks", "events"] as const,
+    item: (id: string) => ["webhooks", "item", id] as const,
+    deliveries: (id: string, status: string) =>
+      ["webhooks", "item", id, "deliveries", status] as const,
+    delivery: (id: string, delivery: string) =>
+      ["webhooks", "item", id, "delivery", delivery] as const,
+  },
+  /** AI change sets (M6-5). `all` covers the lists, every set and its changes. */
+  changeSets: {
+    all: ["changeSets"] as const,
+    list: (filter: { user?: string; agent?: string; open?: boolean }) =>
+      ["changeSets", "list", filter] as const,
+    item: (id: string) => ["changeSets", "item", id] as const,
+    change: (id: string, seq: number) => ["changeSets", "item", id, "change", seq] as const,
+    /** The dashboard's count of the last 24 hours. */
+    recent: ["changeSets", "recent"] as const,
+  },
+  /** The content health report (M6-4). `all` covers the summary and every page. */
+  health: {
+    all: ["health"] as const,
+    summary: ["health", "summary"] as const,
+    findings: (filters: HealthFilters) => ["health", "findings", filters] as const,
   },
 } as const;

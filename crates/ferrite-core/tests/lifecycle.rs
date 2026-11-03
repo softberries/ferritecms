@@ -73,6 +73,8 @@ async fn term(store: &dyn Store, slug: &str) -> TermId {
             name: slug.into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: id,
         })
         .await
         .unwrap();
@@ -90,6 +92,7 @@ async fn search(store: &dyn Store, q: &str) -> Vec<ContentId> {
             readable_by: None,
             limit: 50,
             cursor: None,
+            locale: None,
         })
         .await
         .unwrap()
@@ -109,7 +112,13 @@ async fn last_event_keys(store: &dyn Store) -> Vec<String> {
     let events = store.read().events().since(seq - 1, 10).await.unwrap();
     let last = events.last().unwrap();
     assert_eq!(last.kind, "invalidate");
-    let mut keys = last.keys.clone();
+    // Without the translation group key (M6-1; checked in `content_locales.rs`).
+    let mut keys: Vec<String> = last
+        .keys
+        .iter()
+        .filter(|k| !k.starts_with("group:"))
+        .cloned()
+        .collect();
     keys.sort();
     keys
 }

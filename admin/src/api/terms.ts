@@ -20,6 +20,13 @@ export function patchTerm(id: string, body: SchemaTermPatch): Promise<SchemaTerm
   return unwrap(api.PATCH("/api/v1/terms/{id}", { params: { path: { id } }, body }));
 }
 
+/** `POST /terms/{id}/translations`: the term in `locale`, same name and slug (M6-1). */
+export function translateTerm(id: string, locale: string): Promise<SchemaTermDto> {
+  return unwrap(
+    api.POST("/api/v1/terms/{id}/translations", { params: { path: { id } }, body: { locale } }),
+  );
+}
+
 export async function deleteTerm(id: string): Promise<void> {
   await unwrap(api.DELETE("/api/v1/terms/{id}", { params: { path: { id } } }));
 }

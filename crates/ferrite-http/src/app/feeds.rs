@@ -35,13 +35,13 @@ use ferrite_cache::CachedPage;
 use ferrite_core::{
     CoreError, DepKeys, FeedSource,
     events::option_key,
-    permalink::{encode_segment, term_path},
+    permalink::{encode_segment, term_path_in},
 };
-use ferrite_domain::{MEDIA_KIND, Timestamp};
+use ferrite_domain::{MEDIA_KIND, Timestamp, locale::bcp47_loose};
 
 use super::{
     AppState,
-    pipeline::{RenderError, cached_page},
+    pipeline::{Localized, RenderError, cached_page},
 };
 use crate::route::SitemapPart;
 
@@ -51,26 +51,41 @@ const RSS: &str = "application/rss+xml; charset=utf-8";
 const XML: &str = "application/xml; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 /// The RSS feed of `source`; `None` for an unknown or empty term.
+///
+/// Under a locale (`l.tag` on a multilingual site) the feed lists that locale's items,
+/// its links carry the prefix, `<language>` is the locale and the channel title comes
+/// from `site.locale_texts` (13 §5).
 pub(crate) async fn feed(
     state: &AppState,
+    l: &Localized,
     source: &FeedSource,
 ) -> Result<Option<CachedPage>, RenderError> {
     let mut deps = DepKeys::default();
-    let read = state.reader.feed(source).await?;
+    let read = l.reader.feed(source).await?;
     deps.extend(read.deps);
     let Some(items) = read.value else {
         return Ok(None);
     };
-    let site = state.site_texts(&mut deps).await?;
+    let mut site = state.site_texts(&mut deps).await?;
+    if let Some(tag) = &l.tag {
+        let localized = state
+            .site_info_texts(tag, &mut deps)
+            .await
+            .map_err(RenderError::from)?;
+        site.title = localized.0.unwrap_or(site.title);
+        site.description = localized.1.unwrap_or(site.description);
+        site.locale = tag.clone();
+    }
     let base = &state.config.site_url;
+    let root = l.root();
     let (channel_title, channel_link, self_link) = match source {
         FeedSource::Kind(_) => (
             site.title.clone(),
-            format!("{base}/"),
-            format!("{base}/feed/"),
+            format!("{base}{root}"),
+            format!("{base}{root}feed/"),
         ),
         FeedSource::Term { taxonomy, slug } => {
-            let path = term_path(taxonomy, slug);
+            let path = term_path_in(l.prefix.as_deref(), taxonomy, slug);
             let name = items
                 .iter()
                 .flat_map(|i| &i.terms)
@@ -95,7 +110,7 @@ pub(crate) async fn feed(
         escape(&self_link)
     );
     tag(&mut out, "description", &site.description);
-    tag(&mut out, "language", &site.locale);
+    tag(&mut out, "language", &bcp47_loose(&site.locale));
     if let Some(latest) = items.iter().map(|i| i.item.updated_at).max() {
         tag(&mut out, "lastBuildDate", &rfc2822(latest));
     }
@@ -170,14 +185,41 @@ pub(crate) async fn sitemap(
             if read.value.entries.is_empty() {
                 return Ok(None);
             }
-            let mut out = String::from(
+            // A multilingual site's alternates (13 §5); a one-locale sitemap is as it was.
+            let table = state.routes.load();
+            let multilingual = table.is_multilingual();
+            let mut out = String::from(if multilingual {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
-            );
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" \
+                 xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">"
+            } else {
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
+            });
             for entry in &read.value.entries {
                 out.push_str("<url>");
                 tag(&mut out, "loc", &format!("{base}{}", entry.url));
                 tag(&mut out, "lastmod", &w3c(entry.lastmod));
+                let mut links: Vec<(&str, &str)> = entry
+                    .alternates
+                    .iter()
+                    .map(|(t, p)| (t.as_str(), p.as_str()))
+                    .collect();
+                if let Some((_, p)) = entry
+                    .alternates
+                    .iter()
+                    .find(|(t, _)| t == table.default_locale())
+                {
+                    links.push(("x-default", p));
+                }
+                for (hreflang, path) in links {
+                    let _ = write!(
+                        out,
+                        "<xhtml:link rel=\"alternate\" hreflang=\"{}\" href=\"{}\"/>",
+                        escape(hreflang),
+                        escape(&format!("{base}{path}"))
+                    );
+                }
                 out.push_str("</url>");
             }
             out.push_str("</urlset>\n");

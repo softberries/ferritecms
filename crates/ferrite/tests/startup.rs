@@ -36,7 +36,7 @@ async fn auto_migrates_an_old_schema() {
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
     s.migrate_down(1, true).await.expect("down");
-    startup_check(&s, &bin, &dbconf(true), dir.path())
+    startup_check(&s, &bin, &dbconf(true), dir.path(), "en")
         .await
         .expect("check");
     let st = s.migration_status(&bin).await.expect("status");
@@ -50,7 +50,7 @@ async fn refuses_old_schema_without_auto_migrate() {
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
     s.migrate_down(1, true).await.expect("down");
-    let e = startup_check(&s, &bin, &dbconf(false), dir.path())
+    let e = startup_check(&s, &bin, &dbconf(false), dir.path(), "en")
         .await
         .unwrap_err();
     assert!(format!("{e:#}").contains("ferrite migrate up"));
@@ -64,9 +64,54 @@ async fn up_to_date_is_ok() {
     let s = store(&dir).await;
     let bin = binary_version().expect("version");
     s.migrate_up(None).await.expect("up");
-    startup_check(&s, &bin, &dbconf(false), dir.path())
+    startup_check(&s, &bin, &dbconf(false), dir.path(), "en")
         .await
         .expect("check");
+}
+
+/// A database migrated by 0014 whose `site.locale` is unset (the backfill guessed `en`)
+/// takes the config's locale at the first start, once (design 13 §2.2).
+#[tokio::test]
+async fn startup_settles_from_config_when_option_unset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let s = store(&dir).await;
+    let bin = binary_version().expect("version");
+    s.migrate_up(None).await.expect("up");
+    // A row as the backfill left it: the guess `en`.
+    let author = ferrite_store_tests::fixtures::fixture_user(&s).await;
+    let post = ferrite_store_tests::fixtures::new_post(&author, "old");
+    s.read().content().insert(&post).await.expect("insert");
+    startup_check(&s, &bin, &dbconf(true), dir.path(), "de")
+        .await
+        .expect("check");
+    let locales = s
+        .read()
+        .options()
+        .get("site.locales")
+        .await
+        .expect("read")
+        .expect("site.locales written");
+    assert_eq!(locales.value, serde_json::json!([{"tag": "de"}]));
+    let item = s
+        .read()
+        .content()
+        .get(post.id)
+        .await
+        .expect("get")
+        .expect("item");
+    assert_eq!(item.locale, "de");
+    // A second start with another config changes nothing.
+    startup_check(&s, &bin, &dbconf(true), dir.path(), "fr")
+        .await
+        .expect("check");
+    let item = s
+        .read()
+        .content()
+        .get(post.id)
+        .await
+        .expect("get")
+        .expect("item");
+    assert_eq!(item.locale, "de");
 }
 
 /// 02 §7, 04 §7: a node starting while `ferrite migrate` (or another node) holds the
@@ -87,7 +132,7 @@ async fn startup_check_serialises_on_migrate_lock(db: Arc<TestDb>) {
         let bin = bin.clone();
         tokio::spawn(async move {
             let data = tempfile::tempdir().expect("tempdir");
-            startup_check(store.as_ref(), &bin, &dbconf(true), data.path()).await
+            startup_check(store.as_ref(), &bin, &dbconf(true), data.path(), "en").await
         })
     };
     tokio::time::sleep(Duration::from_millis(500)).await;

@@ -1075,6 +1075,8 @@ mod tests {
             created_at: at,
             updated_at: at,
             version: 1,
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         }
     }
 

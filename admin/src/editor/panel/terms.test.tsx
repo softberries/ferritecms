@@ -43,6 +43,8 @@ const term = (
   parent_id: string | null = null,
 ): TermDto => ({
   id,
+  locale: "en",
+  translation_group: id,
   name,
   taxonomy,
   parent_id,

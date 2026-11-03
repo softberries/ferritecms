@@ -332,6 +332,8 @@ async fn build(
         name: name.to_owned(),
         label: label(&term.name),
         items: out,
+        locale: String::new(),
+        translation_of: None,
     })
 }
 

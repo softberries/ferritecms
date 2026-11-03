@@ -81,6 +81,43 @@ where
     }
 }
 
+/// An optional JSON body (M6-3: `submit`, `publish`, `schedule` extras): no body (empty,
+/// whatever the media type) is `T::default()`; a body follows the rules of [`ApiJson`].
+#[derive(Debug, Clone)]
+pub struct OptionalJson<T>(pub T);
+
+impl<T, S> FromRequest<S> for OptionalJson<T>
+where
+    T: DeserializeOwned + Default,
+    S: Send + Sync,
+{
+    type Rejection = Problem;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Problem> {
+        let json = is_json(req.headers());
+        let bytes = Bytes::from_request(req, state).await.map_err(|r| {
+            Problem::new(
+                StatusCode::BAD_REQUEST,
+                "malformed-body",
+                "Malformed request body",
+                r.body_text(),
+            )
+        })?;
+        if bytes.is_empty() {
+            return Ok(Self(T::default()));
+        }
+        if !json {
+            return Err(Problem::new(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported-media-type",
+                "Unsupported media type",
+                "the body must be application/json",
+            ));
+        }
+        parse_json(&bytes).map(Self)
+    }
+}
+
 /// `bytes` as `T` with the rules of [`ApiJson`] (after the media type and size checks).
 pub fn parse_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Problem> {
     let malformed = |field: String, detail: String| {

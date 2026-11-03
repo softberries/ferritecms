@@ -25,3 +25,10 @@ cta_label    = { type = "text", default = "Get in touch", label = "Call-to-actio
 cta_url      = { type = "text", default = "/contact/", label = "Call-to-action link (a path such as /contact/, or a full URL)" }
 show_news    = { type = "bool", default = true, label = "Show the latest news on the front page" }
 contact_form = { type = "bool", default = false, label = "Show the contact-form plugin's form on the page with the slug contact (install and enable the plugin first)" }
+
+# The theme's own texts in German (M6-1, `t()`); a text without an entry prints as written.
+[strings.de]
+"Skip to content" = "Zum Inhalt springen"
+"Preview: this content is not published." = "Vorschau: Dieser Inhalt ist nicht veröffentlicht."
+"Powered by FerriteCMS" = "Betrieben mit FerriteCMS"
+"Languages" = "Sprachen"

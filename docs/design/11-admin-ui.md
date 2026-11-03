@@ -361,7 +361,8 @@ The Structure screens have no chord. M2b-3's Administration section (`SCREENS` i
 Settings and `g y` System; each binds once its screen registers its entry (all five do,
 Tasks 7–11). The M2b-3 plan named `g p` for Plugins, which is Posts here; Plugins takes
 `g l`. M3-2's Import screen (P32) takes `g i`, free until then; it registers with the
-screen, between Plugins and Settings. The `?` sheet lists whatever is registered at the
+screen, between Plugins and Settings. M6-6's Webhooks screen takes `g w` (after Plugins,
+`manage_webhooks`). The `?` sheet lists whatever is registered at the
 moment it opens.
 
 As built in M2b-3: a pending sequence keeps the keys pressed so far and looks its candidates
@@ -388,6 +389,7 @@ of the manual Safari pass.
 | Anywhere | `g a` | Appearance: themes (M2b-3) |
 | Anywhere | `g l` | Plugins (M2b-3; not `g p`, which is Posts) |
 | Anywhere | `g i` | Import (M3-2) |
+| Anywhere | `g h` | Content health (M6-4) |
 | Anywhere | `g s` | Settings (M2b-3) |
 | Anywhere | `g y` | System (M2b-3) |
 | Anywhere | `c p` / `c g` | New post / new page |

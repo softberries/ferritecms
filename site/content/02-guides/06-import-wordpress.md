@@ -20,7 +20,10 @@ WordPress plugins and themes do not run here.
 - Yoast and Rank Math SEO titles, descriptions, canonical URLs and robots settings;
 - featured images, and ACF fields on custom post types;
 - **301 redirects** from the old address of each published item, category and tag (and
-  each attachment page) whose address changed.
+  each attachment page) whose address changed;
+- each item's language from Polylang or WPML's "Export and Import" add-on, with its
+  translations linked, for the languages the site lists (see
+  [Multilingual sites](10-multilingual.md#import)).
 
 Gutenberg blocks, the classic editor's HTML and the common shortcodes (`[caption]`,
 `[gallery]`, `[embed]`, `[video]`, `[audio]`) are converted to the editor's blocks.
@@ -97,3 +100,10 @@ http(s) URL". If you edit that value, the import treats the file as a different 
 site you imported from such a file before would get its posts, pages, media, comments
 and menus a second time. Delete what the first import made, or import into a fresh site,
 or keep the first import and do not run it again.
+
+## Imports and scheduled releases
+
+An import does not wait for the locks of a scheduled release: if it changes an item a
+scheduled release holds, that release fails at its time with a conflict instead of
+overwriting the imported text ([Releases and reviews](12-releases-and-reviews.md)).
+

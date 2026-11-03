@@ -7,7 +7,8 @@
 // (`users.rs`, `auth/reset.rs`), `session.revoke`, `token.*`, `totp.*`
 // (`auth/service.rs`), `settings.update` (`options.rs`), `mail.test`, `job.retry`
 // (`system.rs`), `plugin.*` and `theme.*` (`extensions/admin.rs`), `type.*` and
-// `taxonomy.*` (`types.rs` `announce`).
+// `taxonomy.*` (`types.rs` `announce`), `webhook.*` (`webhooks/service.rs`,
+// `webhooks/deliver.rs`).
 
 import type { TFunction } from "i18next";
 
@@ -41,6 +42,15 @@ export const AUDIT_ACTIONS = [
   "taxonomy.create",
   "taxonomy.update",
   "taxonomy.delete",
+  "webhook.create",
+  "webhook.update",
+  "webhook.enable",
+  "webhook.disable",
+  "webhook.delete",
+  "webhook.rotate_secret",
+  "webhook.test",
+  "webhook.redeliver",
+  "webhook.auto_disabled",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
@@ -57,6 +67,7 @@ export const AUDIT_AREAS = [
   "theme",
   "type",
   "taxonomy",
+  "webhook",
 ] as const;
 export type AuditArea = (typeof AUDIT_AREAS)[number];
 
@@ -70,6 +81,7 @@ export const TARGET_KINDS = [
   "theme",
   "type",
   "taxonomy",
+  "webhook",
 ] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
 

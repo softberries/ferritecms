@@ -15,10 +15,11 @@ use ferrite_core::{
     comments::CommentService, events::option_key,
 };
 use ferrite_domain::MEDIA_KIND;
+use ferrite_domain::locale::bcp47_loose;
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::{Store, StoreError};
-use ferrite_theme::{Renderer, SiteInfo, Theme};
+use ferrite_theme::{LocaleLink, Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
@@ -34,6 +35,9 @@ pub const SHORT_TTL: Duration = Duration::from_secs(60);
 pub const RENDER_WAIT: Duration = Duration::from_secs(5);
 /// Default [`HttpConfig::render_budget`] (`plugins.render_budget_ms`, P22).
 pub const RENDER_BUDGET: Duration = Duration::from_millis(1000);
+
+/// The throwaway page cache of a preview view (its shared 404/410 pages only).
+const PREVIEW_CACHE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Option holding the site title; falls back to [`HttpConfig::site_title`].
 pub const TITLE_OPTION: &str = "site.title";
@@ -210,6 +214,14 @@ pub struct AppState {
     /// [`HttpConfig::media_origin`]) and the fixed security headers.
     pub(crate) admin_headers: AdminHeaders,
     renders: AtomicU64,
+    /// Releases and preview links (M6-3): the link and whole-site previews. `None`:
+    /// both answer the 404 page.
+    pub(crate) editorial: Option<Arc<super::preview::Editorial>>,
+    /// The release title a whole-site preview view shows (`request.preview_release`);
+    /// `None` on the live state.
+    pub(crate) preview_release: Option<String>,
+    /// Plugin writes are refused (a link or whole-site preview view, D12).
+    pub(crate) read_only_plugins: bool,
 }
 
 impl AppState {
@@ -238,6 +250,9 @@ impl AppState {
                     .min(Semaphore::MAX_PERMITS),
             )),
             renders: AtomicU64::new(0),
+            editorial: None,
+            preview_release: None,
+            read_only_plugins: false,
             origin: crate::api::origin_of(&parts.config.site_url)
                 .ok()
                 .map(|(origin, _)| origin),
@@ -289,6 +304,62 @@ impl AppState {
         self.metrics.as_ref()
     }
 
+    /// Link and whole-site previews (M6-3) use `releases` and `links`; at most
+    /// one (SQLite) or two (Postgres) release previews render at once
+    /// on this node.
+    pub fn with_editorial(
+        mut self,
+        releases: Arc<ferrite_core::release::ReleaseService>,
+        links: Arc<ferrite_core::preview_link::PreviewLinkService>,
+    ) -> Self {
+        self.editorial = Some(Arc::new(super::preview::Editorial::new(
+            releases,
+            links,
+            self.store.backend(),
+        )));
+        self
+    }
+
+    /// A view of this state reading through `store` (a preview's sandbox or the live
+    /// store) for one preview request (design 15 §9.4): the same theme, routes, plugins
+    /// and config; no cache writes, no counters, plugin writes refused.
+    pub(crate) fn preview_view(
+        &self,
+        store: Arc<dyn Store>,
+        release_title: Option<String>,
+    ) -> AppState {
+        AppState {
+            reader: Arc::new(self.reader.with_store(store.clone())),
+            redirects: Arc::new(RedirectService::new(store.clone())),
+            store,
+            plugins: self.plugins.clone(),
+            media: self.media.clone(),
+            theme: ArcSwap::new(self.theme.load_full()),
+            previous_theme: ArcSwapOption::empty(),
+            // Never the live cache: an error page rendered through the sandbox must not
+            // reach visitors (review finding 1).
+            cache: Arc::new(PageCache::new(PREVIEW_CACHE_BYTES)),
+            routes: ArcSwap::new(self.routes.load_full()),
+            config: self.config.clone(),
+            migrations_ok: self.migrations_ok,
+            auth: self.auth.clone(),
+            renderer: self.renderer.clone(),
+            render_slots: self.render_slots.clone(),
+            origin: self.origin.clone(),
+            cookie_secure: self.cookie_secure,
+            served: None,
+            hits: None,
+            metrics: None,
+            comments: self.comments.clone(),
+            admin: self.admin.clone(),
+            admin_headers: self.admin_headers.clone(),
+            renders: AtomicU64::new(0),
+            editorial: None,
+            preview_release: release_title,
+            read_only_plugins: true,
+        }
+    }
+
     /// Theme-form comments (`POST /_comment`) go to `comments`, the node's one
     /// service (shared with the API's submit, P12).
     pub fn with_comments(mut self, comments: Arc<CommentService>) -> Self {
@@ -334,12 +405,59 @@ impl AppState {
     /// a string) and the theme's settings, read per render (cache misses only) and
     /// recorded as `option:<key>`. The renderer records the `site.*` keys itself; the
     /// settings key is recorded here.
+    ///
+    /// `locale` is the request's locale on a multilingual site (`None` on a one-locale
+    /// site, where `site` is exactly as before M6-1): `site.locale` is then that tag,
+    /// `site.title` / `site.description` come from `site.locale_texts` when set, and
+    /// `site.locales` lists every locale with its root (13 §5).
     pub(crate) async fn site_info(
         &self,
         theme: &Theme,
+        locale: Option<&str>,
         deps: &mut DepKeys,
     ) -> Result<SiteInfo, CoreError> {
-        let texts = self.site_texts(deps).await?;
+        let mut texts = self.site_texts(deps).await?;
+        let (site_locale, locales, default_locale) = match locale {
+            None => {
+                let tag = bcp47_loose(&texts.locale);
+                let link = LocaleLink {
+                    label: ferrite_domain::locale::native_name(&tag)
+                        .map_or_else(|| tag.clone(), str::to_owned),
+                    tag: tag.clone(),
+                    url: "/".to_owned(),
+                    current: true,
+                };
+                (tag.clone(), vec![link], tag)
+            }
+            Some(tag) => {
+                let repos = self.store.read();
+                deps.insert(option_key(ferrite_domain::locale::LOCALES_OPTION));
+                deps.insert(option_key(ferrite_domain::locale::LOCALE_TEXTS_OPTION));
+                let site_locales = ferrite_core::locales::read(repos).await?;
+                if tag != site_locales.default.tag
+                    && let Some(t) = ferrite_core::locales::texts(repos, tag).await?
+                {
+                    if let Some(title) = t.title {
+                        texts.title = title;
+                    }
+                    if let Some(description) = t.description {
+                        texts.description = description;
+                    }
+                }
+                let links = site_locales
+                    .all()
+                    .map(|d| LocaleLink {
+                        tag: d.tag.clone(),
+                        label: d.label.clone(),
+                        url: site_locales
+                            .prefix_of(&d.tag)
+                            .map_or_else(|| "/".to_owned(), |p| format!("/{p}/")),
+                        current: d.tag == tag,
+                    })
+                    .collect();
+                (tag.to_owned(), links, site_locales.default.tag.clone())
+            }
+        };
         let options = self.store.read().options();
         let key = theme_settings_option(theme.name());
         deps.insert(option_key(&key));
@@ -352,9 +470,11 @@ impl AppState {
             title: texts.title,
             url: self.config.site_url.clone(),
             description: texts.description,
-            locale: bcp47(&texts.locale),
+            locale: site_locale,
             timezone: self.config.timezone.clone(),
             settings: theme.manifest().settings_values(&stored),
+            locales,
+            default_locale,
         })
     }
 
@@ -377,36 +497,33 @@ impl AppState {
         })
     }
 
+    /// The site title and tagline of locale `tag` from `site.locale_texts` (each `None`
+    /// when not set; none for the default locale), recording the option.
+    pub(crate) async fn site_info_texts(
+        &self,
+        tag: &str,
+        deps: &mut DepKeys,
+    ) -> Result<(Option<String>, Option<String>), CoreError> {
+        deps.insert(option_key(ferrite_domain::locale::LOCALE_TEXTS_OPTION));
+        Ok(ferrite_core::locales::texts(self.store.read(), tag)
+            .await?
+            .map_or((None, None), |t| (t.title, t.description)))
+    }
+
     /// `site` from the config defaults alone, for error pages when the store fails.
     pub(crate) fn fallback_site(&self, theme: &Theme) -> SiteInfo {
         SiteInfo {
             title: self.config.site_title.clone(),
             url: self.config.site_url.clone(),
             description: self.config.site_description.clone(),
-            locale: bcp47(&self.config.locale),
+            locale: bcp47_loose(&self.config.locale),
             timezone: self.config.timezone.clone(),
             settings: theme
                 .manifest()
                 .settings_values(&serde_json::Map::default()),
+            locales: Vec::new(),
+            default_locale: bcp47_loose(&self.config.locale),
         }
-    }
-}
-
-/// `locale` as a BCP 47 tag for `<html lang>`: a POSIX-style `en_GB.UTF-8@euro`
-/// becomes `en-GB`; any character outside `[A-Za-z0-9-]` is dropped, and an empty
-/// result is `en`.
-pub(crate) fn bcp47(locale: &str) -> String {
-    let base = locale.split(['.', '@']).next().unwrap_or_default();
-    let tag: String = base
-        .chars()
-        .map(|c| if c == '_' { '-' } else { c })
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-        .collect();
-    let tag = tag.trim_matches('-');
-    if tag.is_empty() {
-        "en".to_owned()
-    } else {
-        tag.to_owned()
     }
 }
 
@@ -437,25 +554,4 @@ pub async fn load_route_table(
         .map(|t| t.name)
         .collect();
     Ok(RouteTable::new(rules, &types, &taxonomies))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::bcp47;
-
-    #[test]
-    fn locales_become_bcp47() {
-        for (raw, tag) in [
-            ("en", "en"),
-            ("en_GB", "en-GB"),
-            ("pl_PL.UTF-8", "pl-PL"),
-            ("de_DE@euro", "de-DE"),
-            ("pt-BR", "pt-BR"),
-            ("\"><x", "x"),
-            ("", "en"),
-            ("_", "en"),
-        ] {
-            assert_eq!(bcp47(raw), tag, "{raw:?}");
-        }
-    }
 }

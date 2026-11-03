@@ -15,6 +15,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::content::{nullable, present};
+use super::quality::QualityGateDto;
 
 /// The kind of a custom field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -146,6 +147,8 @@ pub struct ContentTypeDto {
     /// (plus `featured_image`). `null`: the type has no schema and its items take any
     /// `fields` object (the built-in types until one is set).
     pub fields: Option<Vec<FieldDefDto>>,
+    /// The publish gate (M6-4, design 16 §5).
+    pub quality_gate: QualityGateDto,
 }
 
 impl From<ContentType> for ContentTypeDto {
@@ -165,6 +168,7 @@ impl From<ContentType> for ContentTypeDto {
             has_archive: t.has_archive,
             built_in: t.built_in,
             fields: fields.map(|f| f.into_iter().map(FieldDefDto::from).collect()),
+            quality_gate: t.quality_gate.into(),
         }
     }
 }
@@ -194,6 +198,9 @@ pub struct ContentTypeInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<Vec<FieldDefDto>>, required = false)]
     pub fields: Option<Option<Vec<FieldDefDto>>>,
+    /// The publish gate (M6-4): `off` (default) or `errors`.
+    #[serde(default)]
+    pub quality_gate: Option<QualityGateDto>,
 }
 
 impl ContentTypeInput {
@@ -207,6 +214,9 @@ impl ContentTypeInput {
                 None => Some(Vec::new()),
                 Some(f) => f.map(defs),
             },
+            quality_gate: self
+                .quality_gate
+                .map_or(ferrite_domain::QualityGate::Off, Into::into),
         }
     }
 }
@@ -225,6 +235,11 @@ pub struct ContentTypePatch {
     #[serde(default, deserialize_with = "nullable")]
     #[schema(value_type = Option<Vec<FieldDefDto>>, required = false)]
     pub fields: Option<Option<Vec<FieldDefDto>>>,
+    /// The publish gate (M6-4): `errors` refuses publishing while accessibility errors
+    /// remain; the `media` type refuses it (`422`, field `quality_gate`).
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = QualityGateDto, required = false)]
+    pub quality_gate: Option<QualityGateDto>,
 }
 
 impl ContentTypePatch {
@@ -233,6 +248,7 @@ impl ContentTypePatch {
             label: self.label,
             has_archive: self.has_archive,
             fields: self.fields.map(|f| f.map(defs)),
+            quality_gate: self.quality_gate.map(Into::into),
         }
     }
 }
@@ -317,11 +333,17 @@ pub struct TermDto {
     pub name: String,
     pub description: String,
     pub parent_id: Option<Uuid>,
+    /// The term's locale.
+    pub locale: String,
+    /// The id of the term translation group's original.
+    pub translation_group: Uuid,
 }
 
 impl From<Term> for TermDto {
     fn from(t: Term) -> Self {
         Self {
+            locale: t.locale.clone(),
+            translation_group: t.translation_group.as_uuid(),
             id: t.id.as_uuid(),
             taxonomy: t.taxonomy,
             slug: t.slug,
@@ -353,6 +375,12 @@ pub struct TermInput {
     pub parent_id: Option<Uuid>,
     #[serde(default)]
     pub description: String,
+    /// One of the site's locales; absent: the default.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// A term of the same taxonomy whose translation group the new term joins.
+    #[serde(default)]
+    pub translation_of: Option<Uuid>,
 }
 
 /// `PATCH /terms/{id}`: merged into the current term.

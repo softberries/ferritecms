@@ -107,6 +107,8 @@ async fn insert(store: &dyn Store, author: &User, rows: Vec<Row<'_>>) -> Vec<Con
                 scheduled_at: None,
                 created_at: None,
                 updated_at: None,
+                locale: "en".into(),
+                translation_group: None,
             })
             .await
             .unwrap();
@@ -339,6 +341,7 @@ pub async fn tree_of_media_or_unknown_is_none(db: &TestDb) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();
@@ -476,6 +479,7 @@ pub async fn query_menu_order(db: &TestDb) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();
@@ -520,6 +524,8 @@ pub async fn query_menu_order(db: &TestDb) {
             name: "News".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: news,
         })
         .await
         .unwrap();

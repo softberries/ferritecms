@@ -8,7 +8,14 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
-import { ArrowDownUpIcon, PlusIcon, SearchIcon, UserRoundIcon, XIcon } from "lucide-react";
+import {
+  ArrowDownUpIcon,
+  LanguagesIcon,
+  PlusIcon,
+  SearchIcon,
+  UserRoundIcon,
+  XIcon,
+} from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -45,6 +52,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollFade } from "@/components/kit/scroll-fade";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { type SiteLocales, useSiteLocales } from "@/lib/locales";
 import { useShortcut } from "@/lib/shortcuts";
 import {
   LIST_ORDERS,
@@ -73,6 +81,7 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
   const { t } = useTranslation("content");
   const disabled = searchDisables(search);
   const why = t("filters.disabledBySearch");
+  const locales = useSiteLocales();
   return (
     <div role="search" className="flex flex-col gap-3 md:flex-row md:items-center">
       <SearchField
@@ -102,6 +111,13 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
               onSelect={(term) => onChange({ term })}
             />
           ))}
+          {locales.multilingual ? (
+            <LocaleMenu
+              locales={locales}
+              locale={search.locale}
+              onChange={(locale) => onChange({ locale })}
+            />
+          ) : null}
           <OrderMenu
             order={search.order ?? "updated"}
             disabledReason={disabled ? t("filters.orderBySearch") : undefined}
@@ -111,7 +127,9 @@ export function ListFilters({ label, search, taxonomies, onChange }: ListFilters
             <Button
               variant="ghost"
               className="text-muted-foreground max-md:order-first"
-              onClick={() => onChange({ q: undefined, mine: undefined, term: undefined })}
+              onClick={() =>
+                onChange({ q: undefined, mine: undefined, term: undefined, locale: undefined })
+              }
             >
               {t("filters.clear")}
             </Button>
@@ -369,6 +387,46 @@ function TermPicker({
         </Chip>
       ) : null}
     </div>
+  );
+}
+
+/** The locale filter (M6-1): every locale, or one; shown only on a multilingual site. */
+function LocaleMenu({
+  locales,
+  locale,
+  onChange,
+}: {
+  locales: SiteLocales;
+  locale: string | undefined;
+  onChange: (locale: string | undefined) => void;
+}) {
+  const { t } = useTranslation("content");
+  const ALL = "*";
+  const current = locale ? locales.label(locale) : t("locale.all");
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Chip pressed={locale !== undefined} aria-label={t("locale.label", { locale: current })}>
+          <LanguagesIcon data-icon="inline-start" />
+          <span className="text-foreground">{current}</span>
+        </Chip>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuLabel>{t("locale.title")}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={locale ?? ALL}
+          onValueChange={(v) => onChange(v === ALL ? undefined : v)}
+        >
+          <DropdownMenuRadioItem value={ALL}>{t("locale.all")}</DropdownMenuRadioItem>
+          {locales.all.map((l) => (
+            <DropdownMenuRadioItem key={l.tag} value={l.tag}>
+              {l.label}
+              <span className="ml-auto font-mono text-xs text-muted-foreground">{l.tag}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

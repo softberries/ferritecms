@@ -224,7 +224,13 @@ pub async fn batch_emits_one_event(db: &TestDb) {
     batch.commit().await.unwrap();
     assert!(invalidations_since(store, seq).await.is_empty());
     assert_eq!(
-        store.read().terms().list("category").await.unwrap().len(),
+        store
+            .read()
+            .terms()
+            .list("category", None)
+            .await
+            .unwrap()
+            .len(),
         3
     );
 }
@@ -333,6 +339,8 @@ pub async fn term_keeps_slug_and_parent(db: &TestDb) {
         name: "Site news".into(),
         description: "kept".into(),
         parent_id: None,
+        locale: "en".into(),
+        translation_group: TermId::new(),
     };
     let tx = store.begin().await.unwrap();
     tx.terms().insert(&existing).await.unwrap();
@@ -366,7 +374,7 @@ pub async fn term_keeps_slug_and_parent(db: &TestDb) {
     assert_eq!(child.name, "Name Local-News");
     assert_eq!(terms.get(parent).await.unwrap().unwrap().slug, "world");
     assert_eq!(terms.get(existing.id).await.unwrap().unwrap(), existing);
-    assert_eq!(terms.list("category").await.unwrap().len(), 3);
+    assert_eq!(terms.list("category", None).await.unwrap().len(), 3);
 }
 
 /// A map row whose term now sits in another taxonomy than the WP term's is not used:
@@ -405,7 +413,13 @@ pub async fn rolled_back_batch_writes_nothing(db: &TestDb) {
     let svc = service(db);
     let run = svc.start(&admin, SOURCE, false, false, None).await.unwrap();
     let seq = store.read().events().max_seq().await.unwrap();
-    let before = store.read().terms().list("category").await.unwrap().len();
+    let before = store
+        .read()
+        .terms()
+        .list("category", None)
+        .await
+        .unwrap()
+        .len();
 
     let mut batch = run.batch(&svc).await.unwrap();
     batch.term(term(20, "dropped", None)).await.unwrap();
@@ -415,7 +429,13 @@ pub async fn rolled_back_batch_writes_nothing(db: &TestDb) {
     batch.rollback().await.unwrap();
 
     assert_eq!(
-        store.read().terms().list("category").await.unwrap().len(),
+        store
+            .read()
+            .terms()
+            .list("category", None)
+            .await
+            .unwrap()
+            .len(),
         before
     );
     let imports = store.read().imports();
@@ -524,6 +544,7 @@ pub async fn schema_batch_registers_types_and_taxonomies(db: &TestDb) {
         hierarchical: false,
         has_archive: true,
         fields: Some(fields),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
 
     let mut plain = run.batch(&svc).await.unwrap();

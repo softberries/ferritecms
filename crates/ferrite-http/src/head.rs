@@ -53,6 +53,18 @@ pub struct HeadPage<'a> {
     pub item: Option<&'a PageItem>,
     /// Canonical path of the page (`/about/`, `/category/news/page/2/`).
     pub path: &'a str,
+    /// The page in every locale it exists in, `x-default` included (13 §5); empty on a
+    /// one-locale site and for a page without translations.
+    pub alternates: &'a [Alternate],
+}
+
+/// One `<link rel="alternate" hreflang=… href=…>` of a page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alternate {
+    /// A locale tag or `x-default`.
+    pub hreflang: String,
+    /// A site path (made absolute in the head).
+    pub href: String,
 }
 
 /// Core head, plugin filter and rendering for one page. Reads the item's SEO meta
@@ -150,15 +162,22 @@ pub fn core_head(site: HeadSite<'_>, page: HeadPage<'_>, seo: &Seo) -> Head {
     if let Some(image) = item.and_then(|i| i.featured.as_ref()) {
         metas.push(og("og:image", &absolute(site.url, &image.url)));
     }
+    let mut links = vec![LinkTag {
+        rel: "canonical".to_owned(),
+        href: canonical,
+        hreflang: None,
+        kind: None,
+    }];
+    links.extend(page.alternates.iter().map(|a| LinkTag {
+        rel: "alternate".to_owned(),
+        href: absolute(site.url, &a.href),
+        hreflang: Some(a.hreflang.clone()),
+        kind: None,
+    }));
     Head {
         title: Some(title),
         metas,
-        links: vec![LinkTag {
-            rel: "canonical".to_owned(),
-            href: canonical,
-            hreflang: None,
-            kind: None,
-        }],
+        links,
         scripts: Vec::new(),
     }
 }

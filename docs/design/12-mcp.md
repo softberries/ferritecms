@@ -227,7 +227,9 @@ deletes expired requests, codes, grants and OAuth access tokens.
   Forbidden says which capability or scope is missing.
 - **Audit**: every successful write tool appends an audit row `mcp.<tool>` with the
   target and `{ "client": <name> }` (the grant's client, or "API token <name>").
-  Content and media changes also keep their revisions and events as usual.
+  Content and media changes also keep their revisions and events as usual. From M6-5
+  every write is also recorded as a change with before/after images in the write's own
+  transaction, grouped in change sets a person reviews and reverts (design 17).
 - **Rate limit**: 120 tool calls per user per minute (`mcp:user:<id>`), on top of the
   per-IP bad-token limit.
 
@@ -236,10 +238,10 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Area | Tools |
 |---|---|
 | Site | `site_overview` (title, URL, version, active theme, content types, taxonomies, menus, counts, the caller's role and scopes), `site_search` (full-text over content) |
-| Content | `content_list`, `content_get`, `content_create`, `content_update`, `content_publish`, `content_unpublish`, `content_schedule`, `content_submit_for_review`, `content_trash`, `content_restore`, `content_revisions`, `content_restore_revision`, `content_preview_link` |
+| Content | `content_list`, `content_get`, `content_create`, `content_update`, `content_publish`, `content_unpublish`, `content_schedule`, `content_submit_for_review`, `content_trash`, `content_restore`, `content_revisions`, `content_restore_revision`, `content_preview_link`, `content_translate` (M6-1) |
 | Media | `media_list`, `media_get`, `media_upload` (from an `https` URL fetched with the SSRF-checked client, or base64 data up to 6 MiB), `media_update` (title, alt), `media_trash`, `media_restore` |
-| Taxonomies | `taxonomies_list`, `terms_list`, `term_create`, `term_update`, `term_delete` |
-| Menus | `menus_list`, `menu_get`, `menu_set` (replace the item tree) |
+| Taxonomies | `taxonomies_list`, `terms_list`, `term_create`, `term_update`, `term_delete` (M6-1: `locale` on `terms_list` and `term_create`, `translation_of` on `term_create`) |
+| Menus | `menus_list`, `menu_get`, `menu_set` (replace the item tree; M6-1: `locale`, `translation_of`) |
 | Content types | `content_types_list`, `content_type_get`, `content_type_create`, `content_type_update` |
 | Redirects | `redirects_list`, `redirect_create`, `redirect_update`, `redirect_delete` |
 | Comments | `comments_list`, `comment_moderate` (approve, spam, trash), `comment_reply` |
@@ -248,6 +250,13 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Plugins | `plugins_list`, `plugin_enable`, `plugin_disable`, `plugin_settings_get`, `plugin_settings_update` (secrets write-only, as in the API) |
 | Users | `users_list`, `user_get` (no tokens, sessions or TOTP data) |
 | System | `system_status`, `jobs_list`, `audit_list` |
+| Changes (M6-5) | `changes_list` (read-only, the connection's own change sets; no revert tool, design 17 §10) |
+| Content quality (M6-4) | `content_check` (an item or a draft: findings with rule, severity, WCAG criteria, a sentence, a fix, and the type's gate), `health_report` (the newest content health run and a page of its findings; `edit_others`); both read-only, no tool suppresses or starts a run (design 16 §10, D16) |
+| Releases and reviews (M6-3, design 15 §12) | `releases_list`, `release_get`, `release_create`, `release_stage`, `release_unstage`, `release_check`, `release_schedule`, `release_apply`, `release_preview_link`, `reviews_list`; `content_submit_for_review` takes `reviewers` and `note`, `content_preview_link` returns a signed link (`expires_in_hours`) |
+
+After M6 (2026-11-03) the server lists **70 tools** (38 that write, 32 read-only by their
+`readOnlyHint`), 2 resources, 1 resource template and 5 prompts; the test
+`mcp_reference::catalogue_counts_are_pinned` pins these numbers.
 
 ### 5.3 Markdown out
 
@@ -264,7 +273,8 @@ to the given title it is dropped; different, the tool asks the model to move it.
 No tool installs, uninstalls or purges plugins or themes (installation needs a person to
 read the permission report and approve its fingerprint), creates, deletes or changes users,
 roles or passwords, manages tokens, sessions, TOTP or OAuth grants, changes `mcp.enabled`,
-runs imports, backups or restores, or retries jobs. The assistant can point the user to the
+runs imports, backups or restores, or retries jobs; nor does one approve or reject reviews,
+override approvals or configure workflows (M6-3). The assistant can point the user to the
 admin screen for these (`site_overview` returns the admin URL).
 
 ### 5.5 Resources and prompts
@@ -274,7 +284,8 @@ admin screen for these (`site_overview` returns the admin URL).
   (the site's writing conventions: the theme's supported blocks, image sizes, SEO fields).
 - Prompts: `write_post` (topic, tone → a draft for review), `review_seo` (an item → title,
   description and heading suggestions), `site_health` (status, failing jobs, plugin
-  failures → a summary), `tidy_media` (find images without alt text).
+  failures → a summary), `tidy_media` (find images without alt text); M6-1: `translate` (an item and a locale →
+  `content_translate`, a translated draft for review).
 
 ## 6. HTTP wiring
 

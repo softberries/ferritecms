@@ -14,13 +14,28 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("artifacts.hash", "artifacts_pkey"),
     ("audit_log.id", "audit_log_pkey"),
     ("autosaves.item_id, autosaves.user_id", "autosaves_pkey"),
+    (
+        "change_set_changes.set_id, change_set_changes.seq",
+        "change_set_changes_pkey",
+    ),
+    ("change_sets.id", "change_sets_pkey"),
+    ("change_sets.open_key", "change_sets_open_key_uq"),
     ("comments.id", "comments_pkey"),
     ("content_items.id", "content_items_pkey"),
+    (
+        "content_items.translation_group, content_items.locale",
+        "content_items_translation_uq",
+    ),
     (
         "content_meta.item_id, content_meta.key",
         "content_meta_pkey",
     ),
     ("content_types.name", "content_types_pkey"),
+    (
+        "health_findings.run_id, health_findings.seq",
+        "health_findings_pkey",
+    ),
+    ("health_runs.id", "health_runs_pkey"),
     (
         "idempotency_keys.user_id, idempotency_keys.key_hash",
         "idempotency_keys_pkey",
@@ -33,6 +48,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     // The partial unique index "at most one running run" (its column is `state`).
     ("import_runs.state", "import_runs_running_uq"),
     ("jobs.id", "jobs_pkey"),
+    ("link_checks.url_hash", "link_checks_pkey"),
     ("jobs.unique_key", "jobs_unique_key_uq"),
     ("media.item_id", "media_pkey"),
     (
@@ -41,6 +57,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("menu_items.id", "menu_items_pkey"),
     ("menus.name", "menus_pkey"),
+    ("menus.translation_of, menus.locale", "menus_translation_uq"),
     (
         "node_metrics.node_id, node_metrics.minute",
         "node_metrics_pkey",
@@ -57,7 +74,18 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "plugin_failures_pkey",
     ),
     ("plugin_kv.plugin, plugin_kv.key", "plugin_kv_pkey"),
+    ("plugin_owners.plugin", "plugin_owners_pkey"),
+    ("plugin_publishers.key_id", "plugin_publishers_pkey"),
+    (
+        "plugin_publishers.public_key",
+        "plugin_publishers_public_key_uq",
+    ),
+    ("plugin_registry.url", "plugin_registry_pkey"),
     ("plugins.name", "plugins_pkey"),
+    (
+        "quality_suppressions.item_id, quality_suppressions.rule, quality_suppressions.key",
+        "quality_suppressions_pkey",
+    ),
     ("rate_limits.bucket", "rate_limits_pkey"),
     ("redirects.id", "redirects_pkey"),
     ("redirects.source_path", "redirects_source_path_uq"),
@@ -70,12 +98,50 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("term_links.item_id, term_links.term_id", "term_links_pkey"),
     ("terms.id", "terms_pkey"),
     ("terms.taxonomy, terms.slug", "terms_taxonomy_slug_uq"),
+    // 0014: widened by the locale.
+    (
+        "terms.taxonomy, terms.locale, terms.slug",
+        "terms_taxonomy_slug_uq",
+    ),
+    (
+        "terms.translation_group, terms.locale",
+        "terms_translation_uq",
+    ),
     ("themes.active", "themes_one_active_uq"),
     ("themes.name", "themes_pkey"),
     ("user_meta.user_id, user_meta.key", "user_meta_pkey"),
     ("users.email_key", "users_email_uq"),
     ("users.id", "users_pkey"),
     ("users.login", "users_login_uq"),
+    (
+        "webhook_attempts.delivery_id, webhook_attempts.attempt",
+        "webhook_attempts_pkey",
+    ),
+    ("webhook_deliveries.id", "webhook_deliveries_pkey"),
+    ("webhook_endpoints.id", "webhook_endpoints_pkey"),
+    ("webhook_events.id", "webhook_events_pkey"),
+    // 0017_releases_workflows.
+    ("releases.id", "releases_pkey"),
+    (
+        "release_items.release_id, release_items.item_id",
+        "release_items_pkey",
+    ),
+    ("release_locks.item_id", "release_locks_pkey"),
+    ("workflows.type", "workflows_pkey"),
+    ("reviews.id", "reviews_pkey"),
+    // The partial unique index "at most one open review per target".
+    ("reviews.target", "reviews_open_target_uq"),
+    ("review_decisions.id", "review_decisions_pkey"),
+    (
+        "review_decisions.review_id, review_decisions.step, review_decisions.user_id",
+        "review_decisions_step_user_uq",
+    ),
+    (
+        "review_assignees.review_id, review_assignees.step, review_assignees.user_id",
+        "review_assignees_pkey",
+    ),
+    ("preview_links.id", "preview_links_pkey"),
+    ("preview_links.token_hash", "preview_links_token_hash_uq"),
 ];
 
 /// The neutral name for the text after `UNIQUE constraint failed: `.

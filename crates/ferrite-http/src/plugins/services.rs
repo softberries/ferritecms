@@ -18,7 +18,10 @@ use ferrite_plugin_host::{
 };
 use ferrite_store::Store;
 
-use super::apply::{mark_degraded, record, scoped_preview};
+use super::apply::{mark_degraded, read_only_scope, record, scoped_preview};
+
+/// What a plugin write gets inside a preview (D12).
+const PREVIEW_READ_ONLY: &str = "not available in a preview";
 use super::egress::Egress;
 
 /// Most value bytes one plugin may keep in `kv` (design 05 §6).
@@ -292,6 +295,9 @@ impl HostServices for StoreHostServices {
     }
 
     async fn meta_set(&self, post: &str, key: &str, value: &str) -> Result<(), String> {
+        if read_only_scope() {
+            return Err(PREVIEW_READ_ONLY.to_owned());
+        }
         let id: ContentId = post.parse().map_err(|_| "invalid post id".to_owned())?;
         let value: serde_json::Value =
             serde_json::from_str(value).map_err(|_| "value is not valid JSON".to_owned())?;
@@ -352,6 +358,9 @@ impl HostServices for StoreHostServices {
     }
 
     async fn kv_set(&self, plugin: &str, key: &str, value: Vec<u8>) -> Result<(), String> {
+        if read_only_scope() {
+            return Err(PREVIEW_READ_ONLY.to_owned());
+        }
         let kv = self.store.read().plugin_kv();
         match kv
             .set_with_quota(plugin, key, &value, KV_MAX_BYTES, KV_MAX_KEYS)
@@ -370,6 +379,9 @@ impl HostServices for StoreHostServices {
     }
 
     async fn kv_delete(&self, plugin: &str, key: &str) {
+        if read_only_scope() {
+            return;
+        }
         if let Err(e) = self.store.read().plugin_kv().delete(plugin, key).await {
             tracing::warn!(plugin, error = %e, "plugin kv delete failed");
             mark_degraded();
@@ -443,6 +455,9 @@ impl HostServices for StoreHostServices {
     }
 
     async fn notify_admins(&self, plugin: &str, subject: &str, text: &str) -> Result<(), String> {
+        if read_only_scope() {
+            return Err(PREVIEW_READ_ONLY.to_owned());
+        }
         let Some(queue) = &self.mail else {
             return Err(ferrite_plugin_host::MAIL_NOT_CONFIGURED.to_owned());
         };

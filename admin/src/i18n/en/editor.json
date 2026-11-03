@@ -18,7 +18,8 @@
     "forbidden": "You can read this item but not edit it.",
     "trash": "This item is in the trash. Restore it to edit it.",
     "showJson": "Show stored JSON",
-    "noText": "This item has no text that can be shown."
+    "noText": "This item has no text that can be shown.",
+    "locked": "Locked by the scheduled release “{{title}}”. Unschedule it to change this item."
   },
   "save": {
     "button": "Save",
@@ -44,7 +45,8 @@
     "panel": "Toggle the side panel",
     "publish": "Publish…",
     "panelClose": "Close the side panel",
-    "revisions": "Version history"
+    "revisions": "Version history",
+    "preview": "Toggle the live preview"
   },
   "bubble": {
     "label": "Format",
@@ -137,7 +139,8 @@
     "insert": "Insert image",
     "alt": "Alt text",
     "altLabel": "Alternative text",
-    "altHint": "Describe what the image shows for people who cannot see it. Leave it empty if the image is only decorative.",
+    "altHint": "Describe what the image shows for people who cannot see it. If it only decorates, turn on Decorative image.",
+    "decorativeSwitch": "Decorative image",
     "altDone": "Done",
     "decorative": "Decorative",
     "altEdit": "Edit the alt text",
@@ -191,7 +194,9 @@
       "goesLive": "Goes live",
       "published": "Published",
       "author": "Author",
-      "waiting": "Waiting for review. An editor will publish it; you can still make changes."
+      "waiting": "Waiting for review. An editor will publish it; you can still make changes.",
+      "inReview": "In review: {{step}} ({{n}} of {{steps}})",
+      "approved": "Approved: it can be published."
     },
     "actions": {
       "publish": "Publish…",
@@ -205,7 +210,11 @@
       "saving": "Saving…",
       "unpublish": "Unpublish",
       "unschedule": "Unschedule",
-      "preview": "Preview"
+      "preview": "Preview",
+      "saveChange": "Save as change…",
+      "saveStaged": "Save change",
+      "release": "Add to release…",
+      "share": "Share preview…"
     },
     "toast": {
       "submit": "Submitted for review",
@@ -243,7 +252,9 @@
       "published": "Published",
       "scheduled": "Scheduled for {{when}}",
       "view": "View"
-    }
+    },
+    "needsApproval": "This item still waits for approval: its workflow has not approved what is saved now.",
+    "overrideCheck": "Publish without the missing approvals"
   },
   "schedule": {
     "time": "Time",
@@ -581,5 +592,41 @@
     "cancel": "Cancel",
     "empty": "No video URL yet",
     "shownAsLink": "The site shows this URL as a link."
+  },
+  "translations": {
+    "heading": "Translations",
+    "language": "Language: {{locale}} ({{tag}})",
+    "untitled": "Untitled",
+    "translate": "Translate into {{locale}}",
+    "making": "Making the draft…",
+    "made": "Draft in {{locale}} made. Translate it, then publish it.",
+    "failed": "The translation could not be made.",
+    "saveFirst": "Save your changes first: a translation starts from the saved version.",
+    "notes": {
+      "parentUntranslated": "Its parent page has no translation in that language yet, so it has no parent.",
+      "termUntranslated": "Some terms have no translation in that language and were left off.",
+      "other": "Some details could not be carried over."
+    }
+  },
+  "preview": {
+    "label": "Live preview",
+    "heading": "Preview",
+    "toggle": "Live preview",
+    "write": "Write",
+    "show": "Preview",
+    "view": "Writing or preview",
+    "device": "Device width",
+    "devices": {
+      "desktop": "Desktop",
+      "tablet": "Tablet",
+      "phone": "Phone"
+    },
+    "frameTitle": "Preview of {{title}}",
+    "updated": "Updated {{time}}",
+    "saved": "Showing the saved version",
+    "saveFirst": "Save once to preview",
+    "failed": "The preview could not be loaded.",
+    "retry": "Try again",
+    "resize": "Resize the preview"
   }
 }

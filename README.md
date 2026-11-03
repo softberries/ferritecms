@@ -19,7 +19,7 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
 - **Run it from your AI assistant**: every site serves an MCP endpoint. Connect Claude,
   ChatGPT, Claude Code, Cursor or VS Code and ask it to write, publish, organise and check
   your site, as you, with your permissions; changes are recorded in the audit log under
-  the app's name.
+  the app's name and as change sets you review and undo in the admin.
 - **Single binary, single folder**: web server, admin, themes, plugin runtime and SQLite
   are compiled in (Postgres and S3 are optional, for several nodes). Back up or move a site
   by copying one folder.
@@ -30,6 +30,9 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
   types, roles.
 - **Brings your WordPress content**: posts, pages, media, taxonomies, users, comments,
   menus and 301 redirects from a WXR export.
+- **Multilingual**: up to 20 languages, each translation its own item, `/de/` style
+  addresses, hreflang links, per-language menus and feeds, and a language switcher in the
+  built-in themes.
 
 **Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)** · Built by [SOFTBERRIES](https://softberries.dev)
 
@@ -56,11 +59,11 @@ The two quickest ways to connect:
   with OAuth (ChatGPT), then sign in and approve.
 
 Cursor, VS Code and any other MCP client work too; a personal API token in an
-`Authorization` header replaces the sign-in for scripts. 56 tools cover posts and pages,
+`Authorization` header replaces the sign-in for scripts. 58 tools cover posts and pages,
 media, terms, menus, content types, redirects, comments, settings, themes, plugins and the
 site's health. The assistant acts as you: through your site's own sign-in and consent
 screen, with your role narrowed to the areas you approve, and its changes are recorded in
-the audit log under the app's name. Installing plugins, managing users and tokens, imports
+the audit log under the app's name and in AI activity, where you review and undo them. Installing plugins, managing users and tokens, imports
 and backups stay with people.
 [Guide](https://softberries.github.io/ferritecms/guides/ai-assistants/) ·
 [Every tool](https://softberries.github.io/ferritecms/reference/mcp-tools/)

@@ -726,6 +726,7 @@ async fn ssrf_render_head_never_breaks_the_page(site: Site) -> Site {
         HeadPage {
             item: Some(&item),
             path: &item.url,
+            alternates: &[],
         },
         &req,
         &mut trace,

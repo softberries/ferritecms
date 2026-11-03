@@ -19,6 +19,7 @@ api_tests!(
     comment_tools_are_scoped,
     settings_update_validates,
     mcp_enabled_not_writable_via_mcp,
+    mcp_settings_not_writable_via_mcp,
     theme_activate_and_settings,
     plugin_secret_settings_are_write_only,
     plugin_enable_disable,
@@ -75,7 +76,7 @@ async fn option(api: &Api, key: &str) -> Option<Value> {
 }
 
 /// Installs and enables plugin `name` through the REST API (the MCP tools cannot).
-async fn install_plugin(api: &Api, name: &str) {
+pub(crate) async fn install_plugin(api: &Api, name: &str) {
     let mut c = api.logged_in("ada").await;
     let manifest = plugin_manifest(name);
     let wasm = plugin_wasm(name);
@@ -1244,5 +1245,35 @@ async fn admin_writes_are_audited(api: Api) -> Api {
         assert_eq!(row.actor_id, Some(ada.id), "{row:?}");
         assert_eq!(row.details["client"], "API token test", "{row:?}");
     }
+    api
+}
+
+/// M6-5 (design 17 §10, §12): no `mcp.*` key is writable over MCP, so an assistant
+/// cannot shorten the retention of its own change record.
+async fn mcp_settings_not_writable_via_mcp(api: Api) -> Api {
+    let (_, t) = admin(&api).await;
+    let r = tool(
+        &api,
+        &t.0,
+        "settings_update",
+        json!({"changes": {"mcp.change_sets_days": 1}}),
+    )
+    .await;
+    let p = problem(&r);
+    assert_eq!(p["errors"][0]["field"], "mcp.change_sets_days", "{r}");
+    assert_eq!(option(&api, "mcp.change_sets_days").await, None);
+    // A person can, over REST.
+    let mut c = api.logged_in("ada").await;
+    let r = c
+        .send(
+            &api,
+            axum::http::Method::PATCH,
+            "/api/v1/settings",
+            Some(&json!({"mcp.change_sets_days": 30})),
+            None,
+        )
+        .await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{r:?}");
+    assert_eq!(option(&api, "mcp.change_sets_days").await, Some(json!(30)));
     api
 }

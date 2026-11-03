@@ -1,0 +1,142 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>FerriteCMS Demo</title>
+<meta name="description" content="A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.">
+<meta property="og:title" content="FerriteCMS Demo">
+<meta property="og:description" content="A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.">
+<meta property="og:url" content="http://127.0.0.1:8080/category/guides/">
+<meta property="og:type" content="website">
+<link rel="canonical" href="http://127.0.0.1:8080/category/guides/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+
+<style>:root{--accent:#c2410c}</style>
+
+</head>
+<body class="is-archive is-taxonomy">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <div class="site-brand">
+      <a class="site-title" href="/" rel="home">FerriteCMS Demo</a>
+      <p class="site-description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
+    
+    
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;">Home</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;category&#x2f;news&#x2f;">News</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+</ul>
+    </nav>
+    
+  </div>
+</header>
+
+<main id="content" class="site-main" tabindex="-1">
+
+<div class="wrap">
+  <header class="page-header">
+    
+<p class="page-eyebrow">Category</p>
+<h1 class="page-title">Guides</h1>
+
+  </header>
+  
+<ul class="card-grid" role="list">
+  <li><article class="card">
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;writing-your-first-plugin&#x2f;">Writing your first plugin</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">Plugins are WebAssembly components. They get only the capabilities their manifest declares. What you get A single binary and a single data folder Plugins in a…</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+  </div>
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;themes-without-code&#x2f;">Themes without code</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">A theme is a folder of templates and assets. Templates get data and a fixed set of safe helpers. What you get A single binary and a single data folder Plugins…</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;importing-from-wordpress&#x2f;">Importing from WordPress</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">Posts, pages, terms and media come over from a WXR export; PHP plugins and themes do not. What you get A single binary and a single data folder Plugins in a…</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+  </div>
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;solo-or-cluster&#x2f;">Solo or cluster</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">SQLite and a local folder for one node, or Postgres and S3 for many: the same binary runs both. What you get A single binary and a single data folder Plugins in…</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;permalinks-the-wordpress-way&#x2f;">Permalinks the WordPress way</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">Structures such as &#x2f;%year%&#x2f;%month%&#x2f;%slug%&#x2f; work as you know them, with redirects when slugs change. What you get A single binary and a single data folder…</p>
+  </div>
+</article></li>
+  <li><article class="card">
+  <div class="card__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+  </div>
+  <div class="card__body">
+    <h2 class="card__title"><a href="&#x2f;media-and-image-variants&#x2f;">Media and image variants</a></h2>
+    <p class="card__meta"><time datetime="<date>"><date></time></p>
+    <p class="card__excerpt">Uploads are stored by content hash, and every image gets resized variants for themes to use. What you get A single binary and a single data folder Plugins in a…</p>
+  </div>
+</article></li>
+</ul>
+
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    
+    
+    <nav class="footer-nav" aria-label="Footer">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;team&#x2f;">Team</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;">Contact</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;feed&#x2f;">RSS feed</a>
+  </li>
+</ul>
+    </nav>
+    
+    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

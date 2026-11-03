@@ -389,6 +389,125 @@ pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
         .map_or(at, Timestamp::from)
 }
 
+/// Makes one delivery attempt of a webhook (design 18 §4.2); payload [`WebhookDeliver`].
+/// Enqueued by `webhooks::emit` in the write's `Tx` (attempt 1) and by the handler for
+/// each retry, one job per attempt.
+pub const WEBHOOK_DELIVER_KIND: &str = "webhook.deliver";
+
+/// Current version of the [`WebhookDeliver`] payload.
+pub const WEBHOOK_DELIVER_VERSION: u32 = 1;
+
+/// Runner attempts of a [`WEBHOOK_DELIVER_KIND`] job: retries of infrastructure
+/// failures (a store error), not delivery attempts.
+pub const WEBHOOK_DELIVER_ATTEMPTS: i32 = 3;
+
+/// Priority of delivery jobs: below the core jobs, like plugin actions.
+pub const WEBHOOK_DELIVER_PRIORITY: i32 = -1;
+
+/// Priority of a test delivery (`webhook.ping`): ahead of the queue, someone is waiting.
+pub const WEBHOOK_TEST_PRIORITY: i32 = 10;
+
+/// Payload of a [`WEBHOOK_DELIVER_KIND`] job: `{"v":1,"delivery":"<uuid>","attempt":n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookDeliver {
+    pub v: u32,
+    pub delivery: ferrite_domain::DeliveryId,
+    pub attempt: u32,
+}
+
+/// The job for attempt `attempt` of `delivery`: unique key
+/// `webhook.deliver:<delivery>:<attempt>` (a re-run cannot double it),
+/// [`WEBHOOK_DELIVER_ATTEMPTS`] runner attempts, due at `run_at` (`None`: now).
+pub fn webhook_deliver_job(
+    delivery: ferrite_domain::DeliveryId,
+    attempt: u32,
+    run_at: Option<Timestamp>,
+    priority: i32,
+) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(WEBHOOK_DELIVER_VERSION));
+    payload.insert("delivery".into(), Value::String(delivery.to_string()));
+    payload.insert("attempt".into(), Value::from(attempt));
+    let mut job = NewJob::new(WEBHOOK_DELIVER_KIND, Value::Object(payload));
+    job.unique_key = Some(format!("{WEBHOOK_DELIVER_KIND}:{delivery}:{attempt}"));
+    job.run_at = run_at;
+    job.priority = priority;
+    job.max_attempts = WEBHOOK_DELIVER_ATTEMPTS;
+    job
+}
+
+/// Deletes delivery-log events older than the retention (design 18 §4.6), hourly.
+pub const WEBHOOKS_PRUNE_KIND: &str = "webhooks.prune";
+
+/// Applies one scheduled release at its time (M6-3, design 15 §4.6); payload
+/// [`ReleaseApply`].
+pub const RELEASE_APPLY_KIND: &str = "release.apply";
+/// Periodic safety net (every 30 s): applies every due scheduled release.
+pub const RELEASE_APPLY_DUE_KIND: &str = "release.apply_due";
+/// Current version of the [`ReleaseApply`] payload.
+pub const RELEASE_APPLY_VERSION: u32 = 1;
+
+/// Payload of a [`RELEASE_APPLY_KIND`] job: `{"v":1,"id":"<uuid>","at":"<RFC 3339>"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseApply {
+    pub v: u32,
+    pub id: ferrite_domain::ReleaseId,
+    pub at: Timestamp,
+}
+
+/// The job scheduling release `id` for `at` enqueues: due at `at`, unique key
+/// `release:<id>:<at unix micros>` (as [`publish_scheduled_job`]).
+pub fn release_apply_job(id: ferrite_domain::ReleaseId, at: Timestamp) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(RELEASE_APPLY_VERSION));
+    payload.insert("id".into(), Value::String(id.to_string()));
+    payload.insert("at".into(), Value::String(rfc3339(at)));
+    let mut job = NewJob::new(RELEASE_APPLY_KIND, Value::Object(payload));
+    job.unique_key = Some(format!("release:{id}:{}", at.as_micros()));
+    job.run_at = Some(at);
+    job
+}
+
+/// Sends the editorial mail of one review or release event (design 15 §6.6); payload
+/// [`EditorialNotify`].
+pub const EDITORIAL_NOTIFY_KIND: &str = "editorial.notify";
+/// Current version of the [`EditorialNotify`] payload.
+pub const EDITORIAL_NOTIFY_VERSION: u32 = 1;
+
+/// Payload of an [`EDITORIAL_NOTIFY_KIND`] job:
+/// `{"v":1,"event":"review.submitted"|…,"review"?,"release"?,"comment"?}`; recipients and
+/// texts are computed when it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorialNotify {
+    pub v: u32,
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ferrite_domain::ReviewId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ferrite_domain::ReleaseId>,
+}
+
+/// The [`EDITORIAL_NOTIFY_KIND`] job of `event` about a review or a release.
+pub fn editorial_notify_job(
+    event: &str,
+    review: Option<ferrite_domain::ReviewId>,
+    release: Option<ferrite_domain::ReleaseId>,
+) -> NewJob {
+    let payload = EditorialNotify {
+        v: EDITORIAL_NOTIFY_VERSION,
+        event: event.to_owned(),
+        review,
+        release,
+    };
+    NewJob::new(
+        EDITORIAL_NOTIFY_KIND,
+        serde_json::to_value(payload).unwrap_or_default(),
+    )
+}
+
+/// Deletes expired preview links (M6-3, design 15 §7), daily.
+pub const PREVIEW_LINKS_PRUNE_KIND: &str = "preview_links.prune";
+
 /// Same form as `Timestamp`'s serde (chrono's RFC 3339 with `Z`).
 fn rfc3339(at: Timestamp) -> String {
     at.as_datetime()
@@ -536,4 +655,60 @@ mod tests {
         let back: PluginPurge = serde_json::from_value(job.payload).unwrap();
         assert_eq!(back, typed);
     }
+}
+
+/// One content health run (M6-4, design 16 §6.1); payload [`ContentHealth`]. Periodic
+/// daily at [`CONTENT_HEALTH_OFFSET`], or enqueued by
+/// [`QualityService::request_run`](crate::quality::QualityService::request_run).
+pub const CONTENT_HEALTH_KIND: &str = "content.health";
+
+/// Current version of the [`ContentHealth`] payload.
+pub const CONTENT_HEALTH_VERSION: u32 = 1;
+
+/// How often the periodic run is due.
+pub const CONTENT_HEALTH_EVERY: Duration = Duration::from_secs(86_400);
+
+/// When in the (UTC) day it is due: 04:00, after `artifacts.gc` at 03:00.
+pub const CONTENT_HEALTH_OFFSET: Duration = Duration::from_secs(4 * 3_600);
+
+/// The longest run.
+pub const CONTENT_HEALTH_TIMEOUT: Duration = Duration::from_secs(3_600);
+
+/// Payload of a [`CONTENT_HEALTH_KIND`] job: `{"v":1,"trigger":"schedule"|"manual",
+/// "user":"<uuid>"|null}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentHealth {
+    pub v: u32,
+    pub trigger: ferrite_domain::HealthTrigger,
+    #[serde(default)]
+    pub user: Option<UserId>,
+}
+
+/// A run requested by `user` now: unique key `content.health:manual:<uuid v7>`.
+pub fn content_health_job(trigger: ferrite_domain::HealthTrigger, user: Option<UserId>) -> NewJob {
+    let payload = ContentHealth {
+        v: CONTENT_HEALTH_VERSION,
+        trigger,
+        user,
+    };
+    let mut job = NewJob::new(
+        CONTENT_HEALTH_KIND,
+        serde_json::to_value(payload).unwrap_or(Value::Null),
+    );
+    job.unique_key = Some(format!(
+        "{CONTENT_HEALTH_KIND}:{}:{}",
+        trigger.as_str(),
+        uuid::Uuid::now_v7()
+    ));
+    job
+}
+
+/// The next periodic run after `now` (the next [`CONTENT_HEALTH_OFFSET`] of a UTC day).
+pub fn next_content_health(now: Timestamp) -> Timestamp {
+    let day = 86_400_000_000i64;
+    let offset = i64::try_from(CONTENT_HEALTH_OFFSET.as_micros()).unwrap_or(0);
+    let t = now.as_micros();
+    let base = t.div_euclid(day) * day + offset;
+    let next = if base > t { base } else { base + day };
+    Timestamp::from_micros(next).unwrap_or(now)
 }

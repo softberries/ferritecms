@@ -1,0 +1,137 @@
+{
+  "title": "Reviews",
+  "description": "Items and staged changes waiting for approval before they go live.",
+  "tabs": {
+    "label": "Review queues",
+    "assigned": "Assigned to me",
+    "open": "All open",
+    "mine": "Submitted by me"
+  },
+  "list": "Reviews",
+  "columns": {
+    "item": "Item",
+    "step": "Step",
+    "status": "Status",
+    "submitted": "Submitted"
+  },
+  "entryOf": "Change in a release",
+  "untitled": "(untitled)",
+  "status": {
+    "in_review": "In review",
+    "approved": "Approved",
+    "changes_requested": "Changes requested",
+    "withdrawn": "Withdrawn",
+    "stale": "Outdated"
+  },
+  "empty": {
+    "assigned": "Nothing waits for you.",
+    "open": "No open reviews.",
+    "mine": "You have not submitted anything for review.",
+    "body": "Items appear here when they are submitted in a content type with an approval workflow."
+  },
+  "section": {
+    "heading": "Review",
+    "none": "Not submitted for review yet. Publishing this type needs an approval.",
+    "stale": "Changed since it was approved: submit it again.",
+    "submit": "Submit for review…",
+    "resubmit": "Resubmit…",
+    "approve": "Approve…",
+    "requestChanges": "Request changes…",
+    "withdraw": "Withdraw",
+    "withdrawn": "Review withdrawn",
+    "assign": "Assign…",
+    "assigned_one": "{{count}} assigned",
+    "assigned_other": "{{count}} assigned",
+    "step": {
+      "done": "Approved",
+      "current": "Waiting",
+      "waiting": "Later"
+    },
+    "approvals": "{{count}} of {{required}} approvals",
+    "decisions": "Decisions",
+    "decidedBy": {
+      "you": "You",
+      "someone": "An approver"
+    },
+    "approved": "approved",
+    "requested": "asked for changes",
+    "note": "Note from the submitter",
+    "failed": "That did not work: {{detail}}",
+    "decided": "Decision recorded"
+  },
+  "submit": {
+    "title": "Submit for review",
+    "description": "The approvers of the first step are notified by e-mail.",
+    "reviewers": "Reviewers",
+    "reviewersHint": "Who should look at it first (optional). Everyone who may approve can still decide.",
+    "reviewersUnavailable": "Every approver of the first step is notified.",
+    "note": "Note",
+    "notePlaceholder": "What should the reviewers look at?",
+    "confirm": "Submit for review",
+    "submitting": "Submitting…",
+    "cancel": "Cancel",
+    "done": "Submitted for review"
+  },
+  "decision": {
+    "approveTitle": "Approve “{{title}}”?",
+    "changesTitle": "Request changes to “{{title}}”?",
+    "approveBody": "Your approval counts for the current step.",
+    "changesBody": "The review ends and the item goes back to its author as a draft.",
+    "comment": "Comment",
+    "commentHint": "Optional. The submitter sees it.",
+    "approve": "Approve",
+    "requestChanges": "Request changes",
+    "cancel": "Cancel"
+  },
+  "assignDialog": {
+    "title": "Assign reviewers",
+    "description": "Who should be asked first for this step (at most {{max}}). Only notifications use this.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "none": "No eligible approvers."
+  },
+  "card": {
+    "title": "Waiting for your review",
+    "count_one": "{{count}} review waits for you",
+    "count_other": "{{count}} reviews wait for you",
+    "empty": "Nothing waits for your review.",
+    "all": "Open reviews"
+  },
+  "workflow": {
+    "title": "Workflow",
+    "description": "Approval steps every item of this type goes through before it can be published.",
+    "none": "No workflow: anyone who may publish publishes at once.",
+    "preset": "One editor approves",
+    "presetLabel": "Editor approval",
+    "addStep": "Add step",
+    "newStep": "Review",
+    "steps": "Steps",
+    "label": "Label",
+    "roles": "Approvers by role",
+    "editor": "Editors",
+    "admin": "Admins",
+    "users": "Approvers by name",
+    "usersHint": "Active editors and admins.",
+    "required": "Approvals needed",
+    "remove": "Remove step {{label}}",
+    "save": "Save workflow",
+    "saving": "Saving…",
+    "saved": "Workflow saved",
+    "delete": "Remove workflow",
+    "deleteTitle": "Remove the workflow?",
+    "deleteBody": "Open reviews of this type are withdrawn, and items can be published without approval again.",
+    "deleteConfirm": "Remove workflow",
+    "deleted": "Workflow removed",
+    "cancel": "Cancel",
+    "failed": "Not saved: {{detail}}",
+    "issues": {
+      "none": "Add at least one step.",
+      "tooMany": "At most 5 steps.",
+      "label": "Give the step a label (at most 80 characters).",
+      "key": "Two steps have the same name.",
+      "required": "1 to 5 approvals.",
+      "approvers": "Choose at least one role or person.",
+      "tooManyUsers": "At most 20 people."
+    }
+  }
+}

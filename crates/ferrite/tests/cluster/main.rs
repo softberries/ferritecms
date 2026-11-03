@@ -13,11 +13,13 @@
 
 mod comments;
 mod harness;
+mod health;
 mod invalidation;
 mod jobs;
 mod reload;
 mod rolling;
 mod routes;
+mod webhooks;
 
 #[path = "../../../ferrite-plugin-host/src/test_support.rs"]
 mod test_support;

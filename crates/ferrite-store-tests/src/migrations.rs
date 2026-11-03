@@ -15,15 +15,47 @@ use crate::{
     fixtures::{fixture_user, new_post},
 };
 
-fn binary() -> Version {
+pub(crate) fn binary() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("crate version is semver")
+}
+
+/// The migration versions this binary has, ascending (from the SQLite directory; both
+/// backends have the same ones). Derived, so a new migration (or one landing out of order
+/// from a parallel branch) needs no edit in the lists below.
+pub(crate) fn versions() -> Vec<i64> {
+    let mut v: Vec<i64> = crate::migration_files(&crate::migration_dirs()[0])
+        .iter()
+        .filter_map(|f| f.strip_suffix(".up.sql"))
+        .map(|f| f.split('_').next().unwrap().parse().unwrap())
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The newest migration version.
+pub(crate) fn latest() -> i64 {
+    *versions().last().unwrap()
+}
+
+/// The versions above `target`, newest first (what `migrate_down(target)` reverts).
+pub(crate) fn down_from(target: i64) -> Vec<i64> {
+    versions()
+        .into_iter()
+        .rev()
+        .filter(|v| *v > target)
+        .collect()
+}
+
+/// The versions above `target`, oldest first (what `migrate_up` then applies).
+pub(crate) fn up_from(target: i64) -> Vec<i64> {
+    versions().into_iter().filter(|v| *v > target).collect()
 }
 
 pub async fn fresh_db_is_up_to_date(db: &TestDb) {
     let store = db.store();
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::UpToDate);
-    assert_eq!((s.db_version, s.binary_version), (13, 13));
+    assert_eq!((s.db_version, s.binary_version), (latest(), latest()));
     assert!(s.pending.is_empty() && s.unknown_applied.is_empty());
     assert_eq!(s.min_binary, None);
 
@@ -79,40 +111,28 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     // 0005's sessions and the audit log): refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(0, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        13
+        latest()
     );
     // 0005 goes down and up again (the SQLite `DROP COLUMN` included).
-    assert_eq!(
-        store.migrate_down(4, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7, 6, 5]
-    );
+    assert_eq!(store.migrate_down(4, true).await.unwrap(), down_from(4));
     assert!(
         !db.user_objects()
             .await
             .iter()
             .any(|o| o.contains("sessions") || o.contains("audit_log")),
     );
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![5, 6, 7, 8, 9, 10, 11, 12, 13]
-    );
-    assert_eq!(
-        store.migrate_down(0, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(4));
+    assert_eq!(store.migrate_down(0, true).await.unwrap(), down_from(0));
     assert_eq!(db.user_objects().await, Vec::<String>::new());
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!((s.db_version, s.verdict), (0, Compat::NeedsUp));
 
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(0));
     assert_eq!(
         store.migrate_up(None).await.unwrap().applied,
         Vec::<i64>::new()
@@ -132,17 +152,14 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
 
 pub async fn verdict_after_partial_down(db: &TestDb) {
     let store = db.store();
-    assert_eq!(
-        store.migrate_down(1, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
-    );
+    assert_eq!(store.migrate_down(1, true).await.unwrap(), down_from(1));
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(s.verdict, Compat::NeedsUp);
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        up_from(1)
     );
-    assert_eq!((s.db_version, s.binary_version), (1, 13));
+    assert_eq!((s.db_version, s.binary_version), (1, latest()));
     let objects = db.user_objects().await;
     assert!(objects.iter().any(|o| o.ends_with(":content_items")));
     assert!(!objects.iter().any(|o| o.contains("search")), "{objects:?}");
@@ -167,10 +184,7 @@ pub async fn verdict_after_partial_down(db: &TestDb) {
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::NeedsUp
     );
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(2));
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().verdict,
         Compat::UpToDate
@@ -217,12 +231,9 @@ pub async fn min_binary_survives_older_binary(db: &TestDb) {
 /// Pending migrations carry their description and parsed directives.
 pub async fn status_reports_pending_directives(db: &TestDb) {
     let store = db.store();
-    assert_eq!(
-        store.migrate_down(2, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]
-    );
+    assert_eq!(store.migrate_down(2, true).await.unwrap(), down_from(2));
     let s = store.migration_status(&binary()).await.unwrap();
-    assert_eq!(s.pending.len(), 11);
+    assert_eq!(s.pending.len(), up_from(2).len());
     let pending = &s.pending[0];
     assert_eq!(pending.version, 3);
     assert!(!pending.description.is_empty());
@@ -291,6 +302,368 @@ pub async fn status_reports_pending_directives(db: &TestDb) {
     assert_eq!(oauth.directives.phase, Phase::Expand);
     assert_eq!(oauth.directives.min_binary, None);
     assert!(!oauth.directives.lossy_down);
+    let locales = &s.pending[11];
+    assert_eq!(
+        (locales.version, locales.description.as_str()),
+        (14, "locales")
+    );
+    assert_eq!(locales.directives.phase, Phase::Expand);
+    assert!(locales.directives.lossy_down);
+}
+
+/// The column names of `table` in the live schema.
+async fn columns_of(db: &TestDb, table: &str) -> Vec<String> {
+    db.live_tables()
+        .await
+        .into_iter()
+        .find(|t| t.name == table)
+        .map(|t| t.columns.into_iter().map(|(n, _)| n).collect())
+        .unwrap_or_default()
+}
+
+/// A SQL literal of `id` for raw statements on `db`'s backend.
+fn id_sql(db: &TestDb, id: uuid::Uuid) -> String {
+    if db.is_sqlite() {
+        format!("x'{}'", id.simple())
+    } else {
+        format!("'{id}'")
+    }
+}
+
+/// `(slug, locale, whether translation_group = id)` of every content item, by slug.
+async fn item_locales(db: &TestDb) -> Vec<(String, String, bool)> {
+    let rows = db
+        .query_text(
+            "SELECT slug || '|' || locale || '|' || \
+             CASE WHEN translation_group = id THEN 'own' \
+                  WHEN translation_group IS NULL THEN 'null' ELSE 'other' END \
+             FROM content_items ORDER BY slug",
+        )
+        .await;
+    rows.into_iter()
+        .flatten()
+        .map(|r| {
+            let mut p = r.split('|');
+            let slug = p.next().unwrap_or_default().to_owned();
+            let locale = p.next().unwrap_or_default().to_owned();
+            (slug, locale, p.next() == Some("own"))
+        })
+        .collect()
+}
+
+async fn insert_post(store: &dyn ferrite_store::Store, user: &ferrite_domain::User, slug: &str) {
+    let tx = store.begin().await.unwrap();
+    tx.content().insert(&new_post(user, slug)).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// `0014_locales` (M6-1): the new columns and indexes exist; the down (lossy) drops
+/// them; up again restores them, the rows backfilled.
+pub async fn migration_0014_roundtrip(db: &TestDb) {
+    let store = db.store();
+    let has =
+        |objects: &[String], name: &str| objects.iter().any(|o| o.ends_with(&format!(":{name}")));
+    for (table, cols) in [
+        ("content_items", &["locale", "translation_group"][..]),
+        ("terms", &["locale", "translation_group"][..]),
+        ("menus", &["locale", "translation_of"][..]),
+    ] {
+        let live = columns_of(db, table).await;
+        for c in cols {
+            assert!(live.iter().any(|l| l == c), "{table}.{c}: {live:?}");
+        }
+    }
+    let objects = db.user_objects().await;
+    for name in [
+        "content_items_translation_uq",
+        "content_items_locale_list_idx",
+        "terms_translation_uq",
+        "menus_translation_uq",
+        "terms_taxonomy_slug_uq",
+    ] {
+        assert!(has(&objects, name), "{name}: {objects:?}");
+    }
+    let user = fixture_user(store).await;
+    insert_post(store, &user, "kept").await;
+
+    // The versions above 0014 go first (0015 is lossy too).
+    store.migrate_down(14, true).await.unwrap();
+    let err = store.migrate_down(13, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 14 has a lossy down")),
+        "{err:?}"
+    );
+    assert_eq!(store.migrate_down(13, true).await.unwrap(), vec![14]);
+    assert!(
+        !columns_of(db, "content_items")
+            .await
+            .iter()
+            .any(|c| c == "locale")
+    );
+    assert!(
+        !columns_of(db, "menus")
+            .await
+            .iter()
+            .any(|c| c == "translation_of")
+    );
+    let objects = db.user_objects().await;
+    assert!(
+        !has(&objects, "content_items_translation_uq"),
+        "{objects:?}"
+    );
+    assert!(has(&objects, "terms_taxonomy_slug_uq"), "{objects:?}");
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(13));
+    assert_eq!(
+        item_locales(db).await,
+        vec![("kept".to_owned(), "en".to_owned(), true)]
+    );
+    assert_eq!(
+        store.migration_status(&binary()).await.unwrap().verdict,
+        Compat::UpToDate
+    );
+}
+
+/// The backfill takes the locale from a `site.locale` option (`pt_BR.UTF-8` → `pt-BR`),
+/// else `en`, and sets every group to the row's own id.
+pub async fn backfill_uses_site_locale_option(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    insert_post(store, &user, "a").await;
+    store.migrate_down(13, true).await.unwrap();
+    store.migrate_up(None).await.unwrap();
+    assert_eq!(
+        item_locales(db).await,
+        vec![("a".into(), "en".into(), true)]
+    );
+
+    store.migrate_down(13, true).await.unwrap();
+    store
+        .read()
+        .options()
+        .set("site.locale", &serde_json::json!("pt_BR.UTF-8"), true)
+        .await
+        .unwrap();
+    store.migrate_up(None).await.unwrap();
+    assert_eq!(
+        item_locales(db).await,
+        vec![("a".into(), "pt-BR".into(), true)]
+    );
+    let terms = db.query_text("SELECT locale FROM terms").await;
+    assert!(
+        terms.iter().all(|l| l.as_deref() == Some("pt-BR")),
+        "{terms:?}"
+    );
+    let menus = db.query_text("SELECT locale FROM menus").await;
+    assert!(
+        menus.iter().all(|l| l.as_deref() == Some("pt-BR")),
+        "{menus:?}"
+    );
+
+    store.migrate_down(13, true).await.unwrap();
+    store
+        .read()
+        .options()
+        .set("site.locale", &serde_json::json!(7), true)
+        .await
+        .unwrap();
+    store.migrate_up(None).await.unwrap();
+    assert_eq!(
+        item_locales(db).await,
+        vec![("a".into(), "en".into(), true)]
+    );
+}
+
+/// An INSERT listing only the 0013 columns (what a v0.2.0 binary writes) succeeds: the
+/// locale is `''`, the group `NULL`; two such rows may share nothing but still pass the
+/// group index (NULLs are distinct).
+pub async fn old_style_insert_without_new_columns_works(db: &TestDb) {
+    let user = fixture_user(db.store()).await;
+    let author = id_sql(db, user.id.as_uuid());
+    let (now, body) = if db.is_sqlite() {
+        ("0", "'[]'")
+    } else {
+        ("now()", "'[]'::jsonb")
+    };
+    for slug in ["old-a", "old-b"] {
+        let id = id_sql(db, uuid::Uuid::now_v7());
+        db.exec_raw(&format!(
+            "INSERT INTO content_items (id, type, status, slug, parent_id, author_id, title, \
+             excerpt, body, body_html, fields, menu_order, published_at, scheduled_at, \
+             created_at, updated_at, version) VALUES ({id}, 'post', 'draft', '{slug}', NULL, \
+             {author}, 't', '', {body}, NULL, {body}, 0, NULL, NULL, {now}, {now}, 1)"
+        ))
+        .await;
+    }
+    let rows = db
+        .query_text(
+            "SELECT locale || '|' || CASE WHEN translation_group IS NULL THEN 'null' ELSE 'set' END \
+             FROM content_items ORDER BY slug",
+        )
+        .await;
+    assert_eq!(
+        rows,
+        vec![Some("|null".to_owned()), Some("|null".to_owned())]
+    );
+}
+
+/// Slugs are unique per (type, locale, parent): the same slug in two locales passes, a
+/// second one in the same locale is refused.
+pub async fn slug_unique_per_locale(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    insert_post(store, &user, "about").await;
+    insert_post(store, &user, "about-2").await;
+    db.exec_raw("UPDATE content_items SET locale = 'de', slug = 'about' WHERE slug = 'about-2'")
+        .await;
+    insert_post(store, &user, "about-3").await;
+    let err = db
+        .try_exec_raw("UPDATE content_items SET slug = 'about' WHERE slug = 'about-3'")
+        .await;
+    assert!(err.is_err(), "same slug, same locale");
+    // Terms: unique per (taxonomy, locale, slug).
+    let t = |id: uuid::Uuid, locale: &str| {
+        format!(
+            "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id, locale, \
+             translation_group) VALUES ({0}, 'category', 'news', 'News', '', NULL, '{locale}', {0})",
+            id_sql(db, id)
+        )
+    };
+    db.exec_raw(&t(uuid::Uuid::now_v7(), "en")).await;
+    db.exec_raw(&t(uuid::Uuid::now_v7(), "de")).await;
+    assert!(
+        db.try_exec_raw(&t(uuid::Uuid::now_v7(), "de"))
+            .await
+            .is_err()
+    );
+}
+
+/// A translation group holds at most one item per locale.
+pub async fn translation_unique_per_group(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    let original = new_post(&user, "orig");
+    let group = id_sql(db, original.id.as_uuid());
+    let tx = store.begin().await.unwrap();
+    tx.content().insert(&original).await.unwrap();
+    tx.content().insert(&new_post(&user, "de")).await.unwrap();
+    tx.content().insert(&new_post(&user, "de-2")).await.unwrap();
+    tx.commit().await.unwrap();
+    db.exec_raw(&format!(
+        "UPDATE content_items SET locale = 'de', translation_group = {group} WHERE slug = 'de'"
+    ))
+    .await;
+    let second = db
+        .try_exec_raw(&format!(
+            "UPDATE content_items SET locale = 'de', translation_group = {group} WHERE slug = 'de-2'"
+        ))
+        .await;
+    assert!(second.is_err(), "two members in one locale");
+    db.exec_raw(&format!(
+        "UPDATE content_items SET locale = 'fr', translation_group = {group} WHERE slug = 'de-2'"
+    ))
+    .await;
+    // Menus: one translation per (translation_of, locale).
+    db.exec_raw(
+        "INSERT INTO menus (name, label, locale, translation_of) VALUES ('primary', 'P', 'en', NULL); \
+         INSERT INTO menus (name, label, locale, translation_of) VALUES ('primary-de', 'P', 'de', 'primary')",
+    )
+    .await;
+    assert!(
+        db.try_exec_raw(
+            "INSERT INTO menus (name, label, locale, translation_of) VALUES ('primary-de2', 'P', 'de', 'primary')"
+        )
+        .await
+        .is_err()
+    );
+}
+
+/// The lossy down deletes the rows whose locale is not the first tag of
+/// `site.locales` (a blank locale counts as the default), detaching surviving children,
+/// and restores the narrower unique indexes.
+pub async fn down_deletes_non_default_rows_and_restores_indexes(db: &TestDb) {
+    let store = db.store();
+    let user = fixture_user(store).await;
+    store
+        .read()
+        .options()
+        .set(
+            "site.locales",
+            &serde_json::json!([{"tag": "en"}, {"tag": "de"}]),
+            true,
+        )
+        .await
+        .unwrap();
+    store
+        .read()
+        .options()
+        .set(
+            "site.locale_texts",
+            &serde_json::json!({"de": {"title": "T"}}),
+            true,
+        )
+        .await
+        .unwrap();
+    for slug in ["en-post", "de-post", "blank-post"] {
+        insert_post(store, &user, slug).await;
+    }
+    db.exec_raw("UPDATE content_items SET locale = 'en' WHERE slug = 'en-post'")
+        .await;
+    db.exec_raw("UPDATE content_items SET locale = 'de' WHERE slug = 'de-post'")
+        .await;
+    db.exec_raw("UPDATE content_items SET locale = '' WHERE slug = 'blank-post'")
+        .await;
+    // A default-locale child of the German item (not possible through core) survives.
+    db.exec_raw(
+        "UPDATE content_items SET parent_id = (SELECT id FROM content_items WHERE slug = 'de-post') \
+         WHERE slug = 'en-post'",
+    )
+    .await;
+    db.exec_raw("UPDATE menus SET locale = 'en'").await;
+    db.exec_raw(
+        "INSERT INTO menus (name, label, locale, translation_of) VALUES ('m-de', 'M', 'de', 'm')",
+    )
+    .await;
+
+    store.migrate_down(13, true).await.unwrap();
+    let slugs = db
+        .query_text("SELECT slug FROM content_items ORDER BY slug")
+        .await;
+    assert_eq!(
+        slugs,
+        vec![Some("blank-post".to_owned()), Some("en-post".to_owned())]
+    );
+    let parents = db
+        .query_text("SELECT slug FROM content_items WHERE parent_id IS NOT NULL")
+        .await;
+    assert!(parents.is_empty(), "{parents:?}");
+    assert!(
+        store
+            .read()
+            .options()
+            .get("site.locales")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .read()
+            .options()
+            .get("site.locale_texts")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let menus = db
+        .query_text("SELECT name FROM menus WHERE name = 'm-de'")
+        .await;
+    assert!(menus.is_empty());
+    // The narrow slug index is back: the same slug twice at top level is refused.
+    let dup = db
+        .try_exec_raw("UPDATE content_items SET slug = 'en-post' WHERE slug = 'blank-post'")
+        .await;
+    assert!(dup.is_err(), "same type, both top level, same slug");
+    store.migrate_up(None).await.unwrap();
 }
 
 /// `0013_oauth` (M5): the four OAuth tables and `api_tokens.oauth_grant_id` exist; the
@@ -358,7 +731,8 @@ pub async fn migration_0013_roundtrip(db: &TestDb) {
     let personal = token("personal", None);
     tokens.insert(&personal).await.unwrap();
 
-    // Not lossy: no allow_lossy needed.
+    // Not lossy: no allow_lossy needed once the lossy 0015 above it is reverted.
+    store.migrate_down(13, true).await.unwrap();
     assert_eq!(store.migrate_down(12, false).await.unwrap(), vec![13]);
     let objects = db.user_objects().await;
     for name in TABLES {
@@ -370,7 +744,7 @@ pub async fn migration_0013_roundtrip(db: &TestDb) {
     assert!(has(&objects, "api_tokens_hash_uq"), "{objects:?}");
     assert!(has(&objects, "api_tokens_user_idx"), "{objects:?}");
 
-    assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![13]);
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(12));
     // The OAuth access token went with the down (it must not turn into a personal one);
     // the personal token stayed.
     let tokens = store.read().api_tokens();
@@ -420,10 +794,12 @@ pub async fn migration_0012_roundtrip(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!(requests().await, 7);
-    // Not lossy (nor is 0013 above it): no allow_lossy needed.
-    assert_eq!(store.migrate_down(11, false).await.unwrap(), vec![13, 12]);
+    // Not lossy: no allow_lossy needed once the versions above it are reverted (0015 is
+    // lossy; 0013's own test checks it is not).
+    store.migrate_down(12, true).await.unwrap();
+    assert_eq!(store.migrate_down(11, false).await.unwrap(), vec![12]);
     assert!(!has(&db.user_objects().await, "node_metrics"));
-    assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![12, 13]);
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(11));
     // The down dropped the row: the table is empty again and takes new rows.
     assert_eq!(requests().await, 0, "the down drops the rows");
     store
@@ -521,17 +897,14 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     // 0007 and 0008 sit above it and are lossy too; refused first, nothing reverted.
     let err = store.migrate_down(5, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        13
+        latest()
     );
-    assert_eq!(
-        store.migrate_down(5, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7, 6]
-    );
+    assert_eq!(store.migrate_down(5, true).await.unwrap(), down_from(5));
     let objects = db.user_objects().await;
     for name in OBJECTS {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -539,15 +912,12 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [6, 7, 8, 9, 10, 11, 12, 13]
+        up_from(5)
     );
     assert!(s.pending[0].directives.lossy_down);
 
     // Up again re-adds the column (so the down really dropped it) at its default.
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![6, 7, 8, 9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(5));
     let got = store.read().media().get(item.id).await.unwrap().unwrap();
     assert_eq!(
         got,
@@ -597,14 +967,11 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(6, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "autosaves"));
-    assert_eq!(
-        store.migrate_down(6, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8, 7]
-    );
+    assert_eq!(store.migrate_down(6, true).await.unwrap(), down_from(6));
     let objects = db.user_objects().await;
     for name in OBJECTS {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -612,15 +979,12 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [7, 8, 9, 10, 11, 12, 13]
+        up_from(6)
     );
     assert!(s.pending[0].directives.lossy_down);
     assert_eq!(s.pending[0].directives.phase, Phase::Expand);
 
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![7, 8, 9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(6));
     // The row did not survive; the table takes it again.
     let repos = store.read();
     assert_eq!(
@@ -656,21 +1020,18 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(7, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
         store.migration_status(&binary()).await.unwrap().db_version,
-        13
+        latest()
     );
-    assert_eq!(
-        store.migrate_down(7, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9, 8]
-    );
+    assert_eq!(store.migrate_down(7, true).await.unwrap(), down_from(7));
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [8, 9, 10, 11, 12, 13]
+        up_from(7)
     );
     assert_eq!(
         (
@@ -681,10 +1042,7 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
     );
     assert!(s.pending[0].directives.lossy_down);
 
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![8, 9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(7));
     // The slot survived without its SEO member.
     let repos = store.read();
     assert_eq!(
@@ -732,14 +1090,11 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(8, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "import_runs"));
-    assert_eq!(
-        store.migrate_down(8, true).await.unwrap(),
-        vec![13, 12, 11, 10, 9]
-    );
+    assert_eq!(store.migrate_down(8, true).await.unwrap(), down_from(8));
     let objects = db.user_objects().await;
     for name in OBJECTS {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -747,7 +1102,7 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [9, 10, 11, 12, 13]
+        up_from(8)
     );
     assert_eq!(
         (
@@ -758,10 +1113,7 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
     );
     assert!(s.pending[0].directives.lossy_down);
 
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![9, 10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(8));
     // The rows did not survive; the tables take them again.
     let repos = store.read();
     assert_eq!(repos.imports().get_run(run.id).await.unwrap(), None);
@@ -825,18 +1177,15 @@ pub async fn migration_0010_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(9, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
-    assert_eq!(
-        store.migrate_down(9, true).await.unwrap(),
-        vec![13, 12, 11, 10]
-    );
+    assert_eq!(store.migrate_down(9, true).await.unwrap(), down_from(9));
     assert!(!has(&db.user_objects().await, "import_runs_job_idx"));
     let s = store.migration_status(&binary()).await.unwrap();
     assert_eq!(
         s.pending.iter().map(|p| p.version).collect::<Vec<_>>(),
-        [10, 11, 12, 13]
+        up_from(9)
     );
     assert_eq!(
         (
@@ -846,10 +1195,7 @@ pub async fn migration_0010_roundtrip(db: &TestDb) {
         ("import jobs", phase_0010(db))
     );
     assert!(s.pending[0].directives.lossy_down);
-    assert_eq!(
-        store.migrate_up(None).await.unwrap().applied,
-        vec![10, 11, 12, 13]
-    );
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(9));
     // The import artifact went with the down; the media artifact and its row stayed.
     // (Read after the up: the artifact queries need 0011's column.)
     let artifacts = store.read().artifacts();
@@ -907,12 +1253,15 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
         .await
         .unwrap()
         .binary_version;
+    let v = versions();
+    let (prev, before) = (v[v.len() - 2], v[v.len() - 3]);
+    assert_eq!(l, latest());
     assert_eq!(
-        store.migrate_down(l - 2, true).await.unwrap(),
-        vec![l, l - 1]
+        store.migrate_down(before, true).await.unwrap(),
+        vec![l, prev]
     );
     let report = store.migrate_up(None).await.unwrap();
-    assert_eq!(report.applied, vec![l - 1, l]);
+    assert_eq!(report.applied, vec![prev, l]);
     match store.backend() {
         Backend::Sqlite => {
             let snap = report
@@ -921,7 +1270,7 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
             assert!(snap.is_file(), "{}", snap.display());
             let name = snap.file_name().unwrap().to_string_lossy().into_owned();
             assert!(
-                name.starts_with(&format!("pre-{}-to-{l}-", l - 2)) && name.ends_with(".db"),
+                name.starts_with(&format!("pre-{before}-to-{l}-")) && name.ends_with(".db"),
                 "{name}"
             );
         }
@@ -930,5 +1279,73 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
     assert_eq!(
         meta.get(SCHEMA_META_LAST_BINARY).await.unwrap().as_deref(),
         Some("0.0.1")
+    );
+}
+
+/// `0015_plugin_publishers` (M6-2): the three trust tables exist, go with the down (lossy,
+/// M6-2 review: the bindings and revocations go; plugin rows and data stay) and come back
+/// empty.
+pub async fn migration_0015_roundtrip(db: &TestDb) {
+    use ferrite_domain::plugin_trust::KeyId;
+    const TABLES: [&str; 3] = ["plugin_publishers", "plugin_owners", "plugin_registry"];
+    let store = db.store();
+    let has =
+        |objects: &[String], name: &str| objects.iter().any(|o| o.ends_with(&format!(":{name}")));
+    let objects = db.user_objects().await;
+    for name in TABLES {
+        assert!(has(&objects, name), "{name}: {objects:?}");
+    }
+    assert!(has(&objects, "plugin_owners_signer_idx"), "{objects:?}");
+    assert!(
+        has(&objects, "plugin_publishers_public_key_uq"),
+        "{objects:?}"
+    );
+    let now = Timestamp::now();
+    let trust = store.read().plugin_trust();
+    trust
+        .put_owner(&crate::plugin_trust::owner("seo", Some(1), now))
+        .await
+        .unwrap();
+    store
+        .read()
+        .options()
+        .set("plugin.seo.settings.x", &serde_json::json!(1), false)
+        .await
+        .unwrap();
+
+    // Lossy: refused without allow_lossy, nothing reverted (newer lossy migrations are
+    // reverted first, so the refusal names 15).
+    store.migrate_down(15, true).await.unwrap();
+    let err = store.migrate_down(14, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 15 has a lossy down")),
+        "{err:?}"
+    );
+    assert!(has(&db.user_objects().await, "plugin_owners"));
+    assert_eq!(store.migrate_down(14, true).await.unwrap(), vec![15]);
+    let objects = db.user_objects().await;
+    for name in TABLES {
+        assert!(!has(&objects, name), "{name} left: {objects:?}");
+    }
+    assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(14));
+    let trust = store.read().plugin_trust();
+    assert_eq!(trust.get_owner("seo").await.unwrap(), None);
+    assert!(trust.list_keys().await.unwrap().is_empty());
+    assert!(
+        trust
+            .owners_signed_by(&KeyId::parse("0000000000000001").unwrap())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The plugin's data was never touched.
+    assert!(
+        store
+            .read()
+            .options()
+            .get("plugin.seo.settings.x")
+            .await
+            .unwrap()
+            .is_some()
     );
 }

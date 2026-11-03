@@ -45,7 +45,14 @@ async fn max_seq(store: &dyn Store) -> i64 {
 async fn last_event(store: &dyn Store) -> (String, Vec<String>) {
     let events = store.read().events().since(0, 1000).await.unwrap();
     let last = events.last().unwrap();
-    (last.kind.clone(), last.keys.clone())
+    // Without the translation group keys (M6-1; checked in `taxonomy_locales.rs`).
+    let keys = last
+        .keys
+        .iter()
+        .filter(|k| !k.starts_with("tgroup:") && !k.starts_with("group:"))
+        .cloned()
+        .collect();
+    (last.kind.clone(), keys)
 }
 
 fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -160,10 +167,10 @@ pub async fn term_crud_and_events(db: &TestDb) {
         Err(CoreError::NotFound)
     ));
 
-    let listed = svc.list_terms("category").await.unwrap();
+    let listed = svc.list_terms("category", None).await.unwrap();
     assert_eq!(listed.len(), 3);
     assert!(matches!(
-        svc.list_terms("nope").await,
+        svc.list_terms("nope", None).await,
         Err(CoreError::NotFound)
     ));
 
@@ -206,7 +213,10 @@ pub async fn term_permissions(db: &TestDb) {
         ));
         assert_eq!(max_seq(store).await, seq);
     }
-    assert_eq!(store.read().terms().list("tag").await.unwrap().len(), 1);
+    assert_eq!(
+        store.read().terms().list("tag", None).await.unwrap().len(),
+        1
+    );
     svc.delete_term(&admin, term.id).await.unwrap();
 }
 
@@ -300,6 +310,8 @@ pub async fn term_parent_rules(db: &TestDb) {
                 name: format!("deep-{i}"),
                 description: String::new(),
                 parent_id: parent,
+                locale: "en".into(),
+                translation_group: leaf,
             })
             .await
             .unwrap();
@@ -401,6 +413,8 @@ pub async fn term_slug_retry(db: Arc<TestDb>) {
             name: "race".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: TermId::new(),
         })
         .await
         .unwrap();
@@ -460,6 +474,8 @@ fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
         name: name.into(),
         label: "Main".into(),
         items,
+        locale: "en".into(),
+        translation_of: None,
     }
 }
 
@@ -485,6 +501,8 @@ pub async fn menu_roundtrip_and_events(db: &TestDb) {
             name: "t".into(),
             description: String::new(),
             parent_id: None,
+            locale: "en".into(),
+            translation_group: term,
         })
         .await
         .unwrap();
@@ -511,7 +529,12 @@ pub async fn menu_roundtrip_and_events(db: &TestDb) {
     assert_eq!(got.items.len(), 4);
     assert_eq!(got.label, "Main");
     assert_eq!(
-        svc.list().await.unwrap(),
+        svc.list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.name, m.label))
+            .collect::<Vec<_>>(),
         [("main".to_owned(), "Main".to_owned())]
     );
 

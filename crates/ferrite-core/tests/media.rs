@@ -898,6 +898,35 @@ impl Repos for FailingTx {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.inner.locales()
+    }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.plugin_trust()
+    }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.inner.releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.inner.workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.inner.reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.inner.preview_links()
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.quality()
+    }
 }
 
 #[async_trait]

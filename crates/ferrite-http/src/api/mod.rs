@@ -27,6 +27,7 @@
 //! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
 pub mod cookie;
@@ -42,9 +43,13 @@ pub mod meta;
 pub mod multipart;
 pub mod oauth;
 pub mod openapi;
+pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
+pub mod quality;
 pub mod redirects;
+pub mod releases;
+pub mod reviews;
 pub mod settings;
 mod state;
 pub mod system;
@@ -52,6 +57,7 @@ pub mod taxonomies;
 pub mod themes;
 pub mod types;
 pub mod users;
+pub mod webhooks;
 
 use std::sync::Arc;
 
@@ -112,6 +118,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(content::submit_content))
         .routes(routes!(content::restore_content))
         .routes(routes!(content::schedule_content))
+        .routes(routes!(content::translate_content))
         .routes(routes!(content::list_revisions))
         .routes(routes!(content::get_revision))
         .routes(routes!(content::restore_revision))
@@ -146,6 +153,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             taxonomies::delete_taxonomy
         ))
         .routes(routes!(taxonomies::list_terms, taxonomies::create_term))
+        .routes(routes!(taxonomies::translate_term))
         .routes(routes!(
             taxonomies::get_term,
             taxonomies::update_term,
@@ -199,6 +207,12 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         ))
         .routes(routes!(plugins::list_retained_plugins))
         .routes(routes!(plugins::purge_plugin))
+        .routes(routes!(plugin_registry::get_registry))
+        .routes(routes!(plugin_registry::refresh_registry))
+        .routes(routes!(plugin_registry::inspect_registry_plugin))
+        .routes(routes!(plugin_registry::install_registry_plugin))
+        .routes(routes!(plugin_registry::list_publishers))
+        .routes(routes!(plugin_registry::revoke_publisher))
         .routes(routes!(plugins::get_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::enable_plugin))
         .routes(routes!(plugins::disable_plugin))
@@ -253,6 +267,71 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             routes!(oauth::delete_oauth_grant),
             oauth::MAX_OAUTH_BODY,
         ))
+        .routes(routes!(webhooks::list_webhooks, webhooks::create_webhook))
+        .routes(routes!(webhooks::list_webhook_events))
+        .routes(routes!(
+            webhooks::get_webhook,
+            webhooks::update_webhook,
+            webhooks::delete_webhook
+        ))
+        .routes(routes!(webhooks::rotate_webhook_secret))
+        .routes(routes!(webhooks::test_webhook))
+        .routes(routes!(webhooks::list_webhook_deliveries))
+        .routes(routes!(webhooks::get_webhook_delivery))
+        .routes(routes!(webhooks::redeliver_webhook_delivery))
+        .routes(routes!(webhooks::redeliver_webhook))
+        .routes(routes!(change_sets::list_change_sets))
+        .routes(routes!(change_sets::get_change_set))
+        .routes(routes!(change_sets::get_change_set_change))
+        .routes(routes!(change_sets::revert_change_set))
+        .routes(routes!(quality::check_content))
+        .routes(routes!(
+            quality::list_suppressions,
+            quality::create_suppression
+        ))
+        .routes(routes!(quality::delete_suppression))
+        .routes(routes!(quality::health_summary))
+        .routes(routes!(quality::health_findings))
+        .routes(routes!(quality::start_health_run))
+        // M6-3: releases, preview links, workflows and reviews.
+        .routes(routes!(releases::list_releases, releases::create_release))
+        .routes(routes!(
+            releases::get_release,
+            releases::update_release,
+            releases::delete_release
+        ))
+        .routes(routes!(releases::add_release_item))
+        .routes(routes!(
+            releases::put_release_item,
+            releases::delete_release_item
+        ))
+        .routes(routes!(releases::rebase_release_item))
+        .routes(routes!(releases::submit_release_item))
+        .routes(routes!(releases::check_release))
+        .routes(routes!(releases::schedule_release))
+        .routes(routes!(releases::unschedule_release))
+        .routes(routes!(releases::apply_release))
+        .routes(routes!(
+            releases::list_release_preview_links,
+            releases::create_release_preview_link
+        ))
+        .routes(routes!(
+            releases::list_content_preview_links,
+            releases::create_content_preview_link
+        ))
+        .routes(routes!(releases::revoke_preview_link))
+        .routes(routes!(reviews::list_workflows))
+        .routes(routes!(
+            reviews::get_workflow,
+            reviews::put_workflow,
+            reviews::delete_workflow
+        ))
+        .routes(routes!(reviews::list_workflow_approvers))
+        .routes(routes!(reviews::list_reviews))
+        .routes(routes!(reviews::get_review))
+        .routes(routes!(reviews::decide_review))
+        .routes(routes!(reviews::assign_review))
+        .routes(routes!(reviews::withdraw_review))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

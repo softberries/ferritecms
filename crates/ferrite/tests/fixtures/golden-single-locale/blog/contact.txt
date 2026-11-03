@@ -1,0 +1,88 @@
+200 text/html; charset=utf-8
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Contact – FerriteCMS Demo</title>
+<meta name="description" content="Get in touch: this demo site has no contact form, so this page is just text. Contact Pages are hierarchical: their addresses follow their parents.">
+<meta property="og:title" content="Contact">
+<meta property="og:description" content="Get in touch: this demo site has no contact form, so this page is just text. Contact Pages are hierarchical: their addresses follow their parents.">
+<meta property="og:url" content="http://127.0.0.1:8080/contact/">
+<meta property="og:type" content="article">
+<link rel="canonical" href="http://127.0.0.1:8080/contact/">
+
+<link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
+
+<style>:root{--accent:#c2410c}</style>
+
+</head>
+<body class="is-page">
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="wrap site-header__inner">
+    <div class="site-brand">
+      <a class="site-title" href="/" rel="home">FerriteCMS Demo</a>
+      <p class="site-description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
+    
+    
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;">Home</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;">About</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;category&#x2f;news&#x2f;">News</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;" aria-current="page">Contact</a>
+  </li>
+</ul>
+    </nav>
+    
+  </div>
+</header>
+
+<main id="content" class="site-main" tabindex="-1">
+
+<article class="entry entry--page">
+  <header class="entry-header wrap wrap--prose">
+    <h1 class="entry-title">Contact</h1>
+  </header>
+  
+  <div class="entry-content prose wrap wrap--prose">
+    <p>Get in touch: this demo site has no contact form, so this page is just text.</p><h2 id="contact">Contact</h2><p>Pages are hierarchical: their addresses follow their parents.</p>
+  </div>
+</article>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap site-footer__inner">
+    
+    
+    <nav class="footer-nav" aria-label="Footer">
+      <ul class="menu">
+  <li class="menu__item">
+    <a href="&#x2f;about&#x2f;team&#x2f;">Team</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;contact&#x2f;" aria-current="page">Contact</a>
+  </li>
+  <li class="menu__item">
+    <a href="&#x2f;feed&#x2f;">RSS feed</a>
+  </li>
+</ul>
+    </nav>
+    
+    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+  </div>
+</footer>
+
+</body>
+</html>

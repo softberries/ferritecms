@@ -76,3 +76,12 @@ scoped re-review, and a last hardening commit.
   Settings → Social preview.
 - **Hosted clients:** once a site runs on public HTTPS, try Claude's custom connector and
   ChatGPT's developer mode against it and tell us what the menus say.
+
+## Release
+
+`v0.2.0` (tag on main `abd819fd`, release run 41454631662) carries M5. Checked from the
+published files: the minisign signature and checksums, the macOS arm64 binary (`ferrite
+0.2.0`, a fresh site serving `/mcp` with the `401` challenge and the OAuth metadata),
+`self-update` from the published 0.1.0 binary to 0.2.0, and the GHCR image tags `0.2.0`,
+`0.2` and `latest` for amd64 and arm64.
+

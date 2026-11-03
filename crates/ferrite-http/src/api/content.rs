@@ -46,7 +46,7 @@ use axum::{
 };
 
 use ferrite_core::{
-    Actor, AdminQuery, CoreError, MAX_REVISIONS_LISTED,
+    Actor, AdminQuery, CoreError, MAX_REVISIONS_LISTED, Relocation, TranslateNote,
     content::{AuthorRef, allowed_actions},
 };
 use ferrite_domain::{
@@ -62,11 +62,13 @@ use super::{
     dto::content::{
         AutosaveDto, AutosaveInput, ContentCountsDto, ContentDto, ContentInput, ContentList,
         ContentPatch, ContentRefList, ContentSummaryDto, RevisionDto, RevisionList,
-        RevisionSummaryDto, ScheduleRequest,
+        RevisionSummaryDto, ScheduleRequest, TranslateInput, TranslationCreated, TranslationRefDto,
+        TranslationStatusDto,
     },
+    dto::editorial::{OverrideInput, SubmitInput},
     extract::{
-        ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, created, etag,
-        invalid_cursor, invalid_param,
+        ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, OptionalJson, check_limit, created,
+        etag, invalid_cursor, invalid_param,
     },
     list,
     problem::{Problem, ProblemDocument},
@@ -120,6 +122,39 @@ pub struct ContentListParams {
     pub limit: Option<u32>,
     /// `next_cursor` of the previous page of the same query.
     pub cursor: Option<String>,
+    /// Only items in this locale (one of `GET /meta`'s; another is `400 invalid-locale`).
+    pub locale: Option<String>,
+}
+
+/// `?locale=` of a list: one of the site's locales, else `400` `invalid-locale`.
+pub(crate) async fn checked_locale(
+    api: &ApiState,
+    locale: Option<String>,
+) -> Result<Option<String>, Problem> {
+    let Some(l) = locale else {
+        return Ok(None);
+    };
+    let locales = ferrite_core::locales::read(api.store.read())
+        .await
+        .map_err(Problem::from)?;
+    if locales.contains(&l) {
+        Ok(Some(l))
+    } else {
+        Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "invalid-locale",
+            "Unknown locale",
+            format!("{l:?} is not one of the site's locales"),
+        ))
+    }
+}
+
+/// The query of `GET /content/{type}/counts`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ContentCountParams {
+    /// Only items in this locale (`400 invalid-locale` for another).
+    pub locale: Option<String>,
 }
 
 impl ContentListParams {
@@ -217,10 +252,30 @@ pub(crate) async fn dto(
     let (terms, seo) = api.content.extras_for(actor, &item).await?;
     let permalink = api.content.permalink(item.id).await?;
     let author = author_of(api, actor, item.author_id).await?;
-    let allowed = allowed_actions(actor, &item);
-    Ok(ContentDto::new(
-        item, terms, permalink, author, allowed, seo,
-    ))
+    let wf = api.content.workflow_state(actor, &item).await?;
+    let allowed = allowed_actions(actor, &item, &wf);
+    let refs = api
+        .content
+        .translations(actor, std::slice::from_ref(&item))
+        .await?
+        .remove(&item.id)
+        .unwrap_or_default();
+    let mut translations = Vec::with_capacity(refs.len());
+    for r in refs {
+        translations.push(TranslationRefDto {
+            permalink: api.content.permalink(r.id).await?,
+            id: r.id.as_uuid(),
+            locale: r.locale,
+            status: r.status.as_str().to_owned(),
+            title: r.title,
+        });
+    }
+    let releases = api.editorial.releases.releases_of(actor, item.id).await?;
+    let mut dto = ContentDto::new(item, terms, permalink, author, allowed, seo);
+    dto.translations = translations;
+    dto.review = wf.review.map(Into::into);
+    dto.releases = releases.into_iter().map(Into::into).collect();
+    Ok(dto)
 }
 
 /// The authors of `ids` (one lookup), keyed by id.
@@ -323,13 +378,28 @@ pub async fn list_content(
 ) -> Result<Json<ContentList>, Problem> {
     served(&kind)?;
     api.types.get(&who.actor, &kind).await?;
-    let query = params.into_query(&kind)?;
+    let locale = checked_locale(&api, params.locale.clone()).await?;
+    let mut query = params.into_query(&kind)?;
+    query.locale = locale;
     let page = api.content.list(&who.actor, &query).await?;
     let map = authors(&api, &who.actor, page.items.iter().map(|i| i.author_id)).await?;
+    let mut translations = api.content.translations(&who.actor, &page.items).await?;
+    let states = api.content.workflow_states(&who.actor, &page.items).await?;
     let (items, next_cursor) = list::items(page, |item| {
         let author = pick(&map, item.author_id)?;
-        let allowed = allowed_actions(&who.actor, &item);
-        Ok::<_, Problem>(ContentSummaryDto::new(item, author, allowed))
+        let wf = states.get(&item.id).cloned().unwrap_or_default();
+        let allowed = allowed_actions(&who.actor, &item, &wf);
+        let refs = translations.remove(&item.id).unwrap_or_default();
+        let mut dto = ContentSummaryDto::new(item, author, allowed);
+        dto.translations = refs
+            .into_iter()
+            .map(|r| TranslationStatusDto {
+                id: r.id.as_uuid(),
+                locale: r.locale,
+                status: r.status.as_str().to_owned(),
+            })
+            .collect();
+        Ok::<_, Problem>(dto)
     });
     let items = items.into_iter().collect::<Result<_, _>>()?;
     Ok(Json(ContentList { items, next_cursor }))
@@ -383,9 +453,10 @@ pub async fn content_refs(
     tag = "content",
     operation_id = "count_content",
     security(("session" = []), ("bearer" = [])),
-    params(("type" = String, Path, description = "Content type")),
+    params(("type" = String, Path, description = "Content type"), ContentCountParams),
     responses(
         (status = 200, description = "Items per status that the caller may read (others' items that are not publicly visible only with `edit_others`)", body = ContentCountsDto),
+        (status = 400, description = "`invalid-locale`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (needs `content:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: no such type", body = ProblemDocument, content_type = "application/problem+json"),
@@ -395,9 +466,14 @@ pub async fn count_content(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     ApiPath(kind): ApiPath<String>,
+    ApiQuery(params): ApiQuery<ContentCountParams>,
 ) -> Result<Json<ContentCountsDto>, Problem> {
     served(&kind)?;
-    let counts = api.content.counts(&who.actor, &kind).await?;
+    let locale = checked_locale(&api, params.locale).await?;
+    let counts = api
+        .content
+        .counts(&who.actor, &kind, locale.as_deref())
+        .await?;
     Ok(Json(counts.into()))
 }
 
@@ -427,10 +503,20 @@ pub async fn create_content(
 ) -> Result<Response, Problem> {
     served(&kind)?;
     api.types.get(&who.actor, &kind).await?;
-    let item = api
-        .content
-        .create(&who.actor, input.into_draft(&kind))
-        .await?;
+    let (locale, translation_of) = (input.locale.clone(), input.translation_of);
+    let draft = input.into_draft(&kind);
+    let item = if locale.is_some() || translation_of.is_some() {
+        api.content
+            .create_localized(
+                &who.actor,
+                draft,
+                locale,
+                translation_of.map(ContentId::from_uuid),
+            )
+            .await?
+    } else {
+        api.content.create(&who.actor, draft).await?
+    };
     let location = format!("{BASE}/content/{kind}/{}", item.id);
     let tag = etag(item.version);
     let body = dto(&api, &who.actor, item).await?;
@@ -474,7 +560,7 @@ pub async fn get_content(
         (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the slug was taken concurrently", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 412, description = "`precondition-failed`: stale version (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`; `content-quality` (`findings`): an edit of a live item of a gated type adds accessibility errors", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`: no `If-Match`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -495,9 +581,54 @@ pub async fn update_content(
     // client named, `update` refuses it in its transaction (after its permission check)
     // with a `Conflict`, so a merge onto another version is never written.
     let terms = api.content.terms_of(actor, id).await?;
+    let relocation = Relocation {
+        locale: patch.locale.clone(),
+        translation_of: patch.translation_of.map(|t| t.map(ContentId::from_uuid)),
+    };
     let draft = patch.apply(&current, terms);
-    let result = api.content.update(actor, id, version, draft).await;
+    // The locale and group move after the field update, in the same transaction (13 §7).
+    let result = api
+        .content
+        .update_and_relocate(actor, id, version, draft, relocation)
+        .await;
     written(&api, actor, id, result).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/content/{type}/{id}/translations",
+    tag = "content",
+    operation_id = "translate_content",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path), ("id" = Uuid, Path)),
+    request_body = TranslateInput,
+    responses(
+        (status = 201, description = "The new draft translation (`Location`) and its notes", body = TranslationCreated),
+        (status = 404, description = "`not-found`: no such item the caller may read", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: the locale has a translation already (`detail` names its id)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation` (`locale`)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (needs `edit_own`, `content:write`) or `csrf`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn translate_content(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath((kind, id)): ApiPath<(String, Uuid)>,
+    ApiJson(input): ApiJson<TranslateInput>,
+) -> Result<Response, Problem> {
+    let source = load(&api, &who.actor, &kind, id).await?;
+    let done = api
+        .content
+        .translate(&who.actor, source.id, &input.locale)
+        .await?;
+    let location = format!("{BASE}/content/{kind}/{}", done.item.id);
+    let tag = etag(done.item.version);
+    let item = dto(&api, &who.actor, done.item).await?;
+    let notes = done.notes.iter().map(TranslateNote::code).collect();
+    let (status, headers) = created(&location, tag);
+    Ok((status, headers, Json(TranslationCreated { item, notes })).into_response())
 }
 
 #[utoipa::path(
@@ -543,7 +674,6 @@ pub async fn delete_content(
 pub(crate) enum Transition {
     Publish,
     Unpublish,
-    Submit,
     Restore,
 }
 
@@ -560,7 +690,6 @@ pub(crate) async fn apply_transition(
     match t {
         Transition::Publish => svc.publish(actor, id, version).await,
         Transition::Unpublish => svc.unpublish(actor, id, version).await,
-        Transition::Submit => svc.submit(actor, id, version).await,
         Transition::Restore => svc.restore(actor, id, version).await,
     }
 }
@@ -586,11 +715,12 @@ async fn transition(
     operation_id = "publish_content",
     security(("session" = []), ("bearer" = [])),
     params(("type" = String, Path), ("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
+    request_body(content = Option<OverrideInput>, description = "Optional; `override_reason` (admins) publishes a workflow type's item without its approval"),
     responses(
         (status = 200, description = "Published (from draft, pending or scheduled; `ETag`)", body = ContentDto),
         (status = 403, description = "`forbidden` (`publish_own`, `publish_others`, `content:write`) or `csrf`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item's accessibility errors", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: no such type, or no such item of this type that you may read", body = ProblemDocument, content_type = "application/problem+json"),
@@ -602,8 +732,18 @@ pub async fn publish_content(
     who: Authed,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
     IfMatch(version): IfMatch,
+    OptionalJson(input): OptionalJson<OverrideInput>,
 ) -> Result<Response, Problem> {
-    transition(&api, &who, &kind, id, version, Transition::Publish).await
+    let Some(reason) = input.override_reason else {
+        return transition(&api, &who, &kind, id, version, Transition::Publish).await;
+    };
+    let actor = &who.0.actor;
+    let id = load(&api, actor, &kind, id).await?.id;
+    let result = api
+        .content
+        .publish_with_override(actor, id, version, Some(reason))
+        .await;
+    written(&api, actor, id, result).await
 }
 
 #[utoipa::path(
@@ -640,6 +780,7 @@ pub async fn unpublish_content(
     operation_id = "submit_content",
     security(("session" = []), ("bearer" = [])),
     params(("type" = String, Path), ("id" = Uuid, Path), ("If-Match" = String, Header, description = "`\"<version>\"`")),
+    request_body(content = Option<SubmitInput>, description = "Optional; in a type with a workflow, the first step's reviewers and a note"),
     responses(
         (status = 200, description = "Submitted for review (draft to pending; `ETag`)", body = ContentDto),
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
@@ -656,8 +797,15 @@ pub async fn submit_content(
     who: Authed,
     ApiPath((kind, id)): ApiPath<(String, Uuid)>,
     IfMatch(version): IfMatch,
+    OptionalJson(input): OptionalJson<SubmitInput>,
 ) -> Result<Response, Problem> {
-    transition(&api, &who, &kind, id, version, Transition::Submit).await
+    let actor = &who.0.actor;
+    let id = load(&api, actor, &kind, id).await?.id;
+    let result = api
+        .content
+        .submit_with(actor, id, version, input.into())
+        .await;
+    written(&api, actor, id, result).await
 }
 
 #[utoipa::path(
@@ -698,7 +846,7 @@ pub async fn restore_content(
     responses(
         (status = 200, description = "Scheduled (from draft or pending; `ETag`)", body = ContentDto),
         (status = 412, description = "`precondition-failed` (`current`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation`: `at` not in the future, or illegal transition", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation`: `at` not in the future, or illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 428, description = "`precondition-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
@@ -716,7 +864,10 @@ pub async fn schedule_content(
     let actor = &who.actor;
     let id = load(&api, actor, &kind, id).await?.id;
     let at = Timestamp::from(req.at);
-    let result = api.content.schedule(actor, id, version, at).await;
+    let result = api
+        .content
+        .schedule_with_override(actor, id, version, at, req.override_reason)
+        .await;
     written(&api, actor, id, result).await
 }
 

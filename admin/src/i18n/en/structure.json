@@ -67,7 +67,9 @@
       "stay": "Stay",
       "leave": "Leave"
     },
-    "notFound": "This content type does not exist (any more)."
+    "notFound": "This content type does not exist (any more).",
+    "qualityGate": "Block publishing on accessibility errors",
+    "qualityGateHint": "Off: the checks only report. On: an item with an accessibility error, such as an image without alt text, cannot be published until it is fixed or an editor suppresses it."
   },
   "builder": {
     "title": "Fields",
@@ -492,6 +494,9 @@
       "url": "Address",
       "apply": "Apply",
       "cancel": "Cancel"
+    },
+    "locales": {
+      "default": "the default menu"
     }
   },
   "redirects": {
@@ -622,5 +627,17 @@
       "submit_other": "Import {{count}} redirects",
       "importing": "Importing…"
     }
+  },
+  "locales": {
+    "pick": "Language",
+    "translations": "Translations",
+    "language": "Language: {{locale}} ({{tag}})",
+    "translate": "Translate into {{locale}}",
+    "making": "Making…",
+    "termMade": "{{name}} made in {{locale}}.",
+    "failed": "The translation could not be made.",
+    "menuLocale": "{{locale}}",
+    "menuTranslates": "translates {{menu}}",
+    "menuMade": "{{name}} made for {{locale}}, with a copy of the entries."
   }
 }

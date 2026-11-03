@@ -10,16 +10,16 @@
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
-<a class="skip-link" href="#content">Skip to content</a>
+<a class="skip-link" href="#content">{{ t("Skip to content") }}</a>
 <header class="site-header">
   <div class="wrap site-header__inner">
-    <a class="site-title" href="/" rel="home">{{ site.title or "Home" }}</a>
+    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home">{{ site.title or "Home" }}</a>
     {%- set primary = menu("primary") %}
     {%- if primary and primary.items %}
     <nav class="site-nav" aria-label="Primary">
       {% with items = primary.items %}{% include "partials/menu.html" %}{% endwith %}
     </nav>
-    {%- endif %}
+    {%- endif %}{% if site.locales | length > 1 %}{% include "partials/languages.html" %}{% endif %}
     {#- Hidden on the page it links to; only on 200 pages, so the shared 404 body
         never depends on the path. #}
     {%- if not (request.status == 200 and request.path and request.path == site.settings.cta_url) %}
@@ -28,7 +28,7 @@
   </div>
 </header>
 {%- if request.preview %}
-<p class="preview-notice" role="status"><span class="wrap">Preview: this content is not published.</span></p>
+<p class="preview-notice" role="status"><span class="wrap">{{ t("Preview: this content is not published.") }}{% if request.preview_release %} ({{ request.preview_release }}){% endif %}</span></p>
 {%- endif %}
 <main id="content" class="site-main" tabindex="-1">
 {% block content %}{% endblock %}
@@ -47,7 +47,7 @@
       {% with items = footer_menu.items %}{% include "partials/menu.html" %}{% endwith %}
     </nav>
     {%- endif %}
-    <p class="site-credit">Powered by FerriteCMS</p>
+    <p class="site-credit">{{ t("Powered by FerriteCMS") }}</p>
   </div>
 </footer>
 {{ footer() }}

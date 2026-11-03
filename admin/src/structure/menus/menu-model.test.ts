@@ -22,6 +22,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const DTO: MenuDto = {
   name: "primary",
   label: "Primary",
+  locale: "en",
   items: [
     { id: "a", kind: "url", url: "/", label: "Home", parent_id: null, position: 0 },
     { id: "b", kind: "item", target_id: "t-about", label: "", parent_id: null, position: 1 },
@@ -90,13 +91,16 @@ describe("menu_model_test", () => {
       },
     ]);
     // Reading what was sent gives the same tree.
-    expect(fromDto({ name: "primary", label: "Primary", items: input.items ?? [] })).toEqual(nodes);
+    expect(
+      fromDto({ name: "primary", label: "Primary", locale: "en", items: input.items ?? [] }),
+    ).toEqual(nodes);
   });
 
   it("siblings_follow_position_whatever_the_array_order", () => {
     const nodes = fromDto({
       name: "m",
       label: "",
+      locale: "en",
       items: [
         { id: "z", kind: "url", url: "/z", label: "Z", position: 2 },
         { id: "y", kind: "url", url: "/y", label: "Y", position: 0 },
@@ -111,6 +115,7 @@ describe("menu_model_test", () => {
     const nodes = fromDto({
       name: "m",
       label: "",
+      locale: "en",
       items: [
         { id: "p", kind: "url", url: "/p", label: "P", position: 5 },
         { id: "q", kind: "url", url: "/q", label: "Q", position: 9 },

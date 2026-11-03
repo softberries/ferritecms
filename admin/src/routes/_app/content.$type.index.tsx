@@ -73,6 +73,7 @@ import {
 import { RowActions } from "@/content/row-actions";
 import { StatusTabs } from "@/content/status-tabs";
 import { uiLocale } from "@/lib/locale";
+import { useSiteLocales } from "@/lib/locales";
 import { useShortcut } from "@/lib/shortcuts";
 
 /** Types listed elsewhere (the media library, M2b-2). */
@@ -218,7 +219,8 @@ function ContentList() {
     run: () => run("trash", selected),
   });
 
-  const columns = useListColumns({ type, hierarchical, parents });
+  const locales = useSiteLocales();
+  const columns = useListColumns({ type, hierarchical, parents, locales });
   const setSearch = (patch: Partial<Record<keyof ListSearch, unknown>>) => {
     void navigate({
       to: "/content/$type",

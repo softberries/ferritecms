@@ -143,7 +143,10 @@ test("styleguide_touch_targets", async ({ browser, siteKey, site, guard }) => {
     // so a finger hits 44 × 44 inside the field (the content list's clear button).
     await page.goto("/admin/content/post");
     await page.getByRole("searchbox").fill("zz");
-    const clear = page.getByRole("button", { name: "Clear search" });
+    // The field's own button: the empty result also offers a "Clear search" button.
+    const clear = page
+      .locator("[data-slot=input-group]")
+      .getByRole("button", { name: "Clear search" });
     await expect(clear).toBeVisible();
     const probe = await clear.evaluate((el) => {
       const r = el.getBoundingClientRect();

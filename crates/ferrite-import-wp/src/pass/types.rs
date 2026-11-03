@@ -75,7 +75,9 @@ pub fn taxonomy_name(taxonomy: &str) -> Option<String> {
     if let Some((_, core)) = BUILT_IN_TAXONOMIES.iter().find(|(wp, _)| *wp == taxonomy) {
         return Some((*core).to_owned());
     }
-    let internal = NOT_TAXONOMIES.contains(&taxonomy) || taxonomy.starts_with("wp_");
+    let internal = NOT_TAXONOMIES.contains(&taxonomy)
+        || crate::lang::LANG_TAXONOMIES.contains(&taxonomy)
+        || taxonomy.starts_with("wp_");
     (!internal).then(|| schema_name(taxonomy))
 }
 
@@ -146,6 +148,7 @@ pub(crate) fn plan(
             hierarchical: *has_parent,
             has_archive: true,
             fields,
+            quality_gate: ferrite_domain::QualityGate::Off,
         });
     }
     let registered: BTreeSet<&str> = schema

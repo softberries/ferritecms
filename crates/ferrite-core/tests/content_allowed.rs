@@ -117,6 +117,7 @@ fn expected(role: Role, own: bool, status: ContentStatus) -> AllowedActions {
             restore: status == Trash,
             delete: status == Trash,
             trash_undoable: status != Trash,
+            ..AllowedActions::default()
         };
     }
     if role == Role::Contributor && own {
@@ -186,7 +187,7 @@ pub async fn allowed_actions_matrix(db: &TestDb) {
             for status in STATUSES {
                 let cell = format!("{role:?} own={own} {status:?}");
                 let probe = item(db, &svc, owner, status).await;
-                let got = allowed_actions(&me, &probe);
+                let got = allowed_actions(&me, &probe, &Default::default());
                 assert_eq!(got, expected(role, own, status), "{cell}");
                 for (name, allowed) in flags(got) {
                     // A fresh item per action: each run changes it.
@@ -213,7 +214,10 @@ pub async fn allowed_actions_follow_token_scopes(db: &TestDb) {
     let reader =
         admin.with_scopes(ferrite_core::Scopes::from_strs(&["content:read".to_owned()]).unwrap());
     let it = item(db, &svc, &admin, ContentStatus::Draft).await;
-    assert_eq!(allowed_actions(&reader, &it), AllowedActions::default());
+    assert_eq!(
+        allowed_actions(&reader, &it, &Default::default()),
+        AllowedActions::default()
+    );
     assert!(matches!(
         svc.publish(&reader, it.id, it.version).await,
         Err(CoreError::Forbidden(_))
@@ -246,7 +250,7 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     store.read().content().update(&future).await.unwrap();
 
     assert_eq!(
-        svc.counts(&author, "post").await.unwrap(),
+        svc.counts(&author, "post", None).await.unwrap(),
         StatusCounts {
             draft: 2,
             pending: 0,
@@ -257,7 +261,7 @@ pub async fn counts_respect_can_read(db: &TestDb) {
         }
     );
     assert_eq!(
-        svc.counts(&editor, "post").await.unwrap(),
+        svc.counts(&editor, "post", None).await.unwrap(),
         StatusCounts {
             draft: 5,
             pending: 1,
@@ -269,24 +273,24 @@ pub async fn counts_respect_can_read(db: &TestDb) {
     );
     // A contributor with nothing of its own sees only the publicly visible item.
     assert_eq!(
-        svc.counts(&contributor, "post").await.unwrap(),
+        svc.counts(&contributor, "post", None).await.unwrap(),
         StatusCounts {
             published: 1,
             ..StatusCounts::default()
         }
     );
     assert_eq!(
-        svc.counts(&editor, "page").await.unwrap(),
+        svc.counts(&editor, "page", None).await.unwrap(),
         StatusCounts::default()
     );
     assert!(matches!(
-        svc.counts(&editor, "nope").await,
+        svc.counts(&editor, "nope", None).await,
         Err(CoreError::NotFound)
     ));
     let no_scope =
         editor.with_scopes(ferrite_core::Scopes::from_strs(&["users:read".to_owned()]).unwrap());
     assert!(matches!(
-        svc.counts(&no_scope, "post").await,
+        svc.counts(&no_scope, "post", None).await,
         Err(CoreError::Forbidden(_))
     ));
 }

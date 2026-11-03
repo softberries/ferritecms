@@ -59,6 +59,8 @@ description = "How to install the binary."
 | `draft` | `true` imports the page as a draft |
 | `date` | the publish date (RFC 3339 with an offset, in the years 1 to 9999); a date in the future schedules the page |
 | `description` | the excerpt and the SEO description (line breaks and runs of spaces become one space; cut to 500 characters, reported as `description-cut`) |
+| `locale` | the page's language, one of the site's (Settings → Languages), as `"de"`; a language the site does not list skips the file, reported as `locale` |
+| `translation_of` | the page this one translates, a path relative to this file (`"../en/about.md"`); it must be part of the same import, else it is reported as `translation-of` and the page stands alone |
 
 Any other key, invalid TOML, or a YAML block between `---` lines makes the file skipped
 and reported. Convert YAML front matter to TOML first.
@@ -123,4 +125,7 @@ levels, is skipped and reported.
 
 Other options: `--type` imports into another content type (default `page`; it must be
 hierarchical when the folder has subfolders, and `--front-page` works only with `page`),
-and `--as LOGIN` names the admin the import runs as (default: the first active admin).
+`--as LOGIN` names the admin the import runs as (default: the first active admin), and
+`--locale TAG` sets the language of the files whose front matter names none (default:
+the site's default language). A re-run never moves an imported page to another language;
+change it in the editor.

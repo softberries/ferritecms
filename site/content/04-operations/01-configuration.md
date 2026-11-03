@@ -15,7 +15,7 @@ touching the database or the media:
 ferrite config check --data ./mysite
 ```
 
-It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…` and
+It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…` and
 exits 0, or lists every problem and exits 1.
 
 ## Values
@@ -153,6 +153,14 @@ With `backend = "s3"`:
 | `disable_after_failures` | `20` | failures within `failure_window` that disable a plugin |
 | `failure_window` | `"10m"` | |
 | `volatile_ttl` | `"60s"` | how long a page whose plugin calls failed or were marked volatile stays cached, 1 s to 1 h |
+| `signatures` | `"any"` | which plugins installs and updates accept: `any` (unsigned too), `signed`, or `trusted` (keys from the registry or `ferrite plugin keys trust` only) |
+| `registry` | the official registry URL | the plugin registry index, `https://…` or `file:///absolute/path/index.json`; `""` turns it off |
+| `registry_key` | none | the registry's minisign public key; required for any registry other than the official one |
+| `registry_check` | `"off"` | `"daily"` checks the registry for updates and revoked keys once a day; otherwise only on demand |
+
+Cluster nodes must use the same `signatures` and `registry` values. The official registry
+needs a key built into the binary; a build without one has it off until `registry_key` is
+set.
 
 ## [auth]
 
@@ -184,3 +192,12 @@ Scheduled backups while `serve` runs ([Backups and moves](02-backups.md)).
 | `to` | required unless off | a folder outside the data folder (`"../backups"`) or `s3://bucket[/prefix]` |
 | `keep` | `7` | snapshots (or, on Postgres, export archives) kept, 1 to 1000 |
 | `with_media` | `true` | include the media files |
+
+## [webhooks]
+
+Outgoing webhooks ([Webhooks](../02-guides/09-webhooks.md)). Retries, timeouts and the
+log's retention are fixed; there is one switch, for development.
+
+| Key | Default | |
+|---|---|---|
+| `local_targets` | `false` | allow `http` URLs and loopback and private addresses (link-local and cloud metadata addresses stay refused); `config check` prints `webhooks=local` and `ferrite doctor` warns |

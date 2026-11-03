@@ -15,6 +15,7 @@ export function useActionRunner(doc: EditorDocument) {
   const label = (action: PanelAction): string => {
     switch (action) {
       case "save":
+        if (doc.changeMode) return t("panel.actions.saveStaged");
         if (doc.item === null || status === "draft") return t("panel.actions.saveDraft");
         if (status === "pending") return t("panel.actions.saveChanges");
         return t("panel.actions.update");

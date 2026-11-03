@@ -27,15 +27,18 @@
 // opens the panel and puts the cursor on the first field that says why.
 
 import "@/styles/editor.css";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Selection } from "@tiptap/pm/state";
 import { EditorContent, type Editor } from "@tiptap/react";
 import {
   ArrowLeftIcon,
   ImagePlusIcon,
   MaximizeIcon,
+  EyeIcon,
   MinimizeIcon,
+  PackageIcon,
   PanelRightIcon,
+  PenLineIcon,
   ShieldAlertIcon,
 } from "lucide-react";
 import { cn } from "cn";
@@ -58,6 +61,16 @@ import { qk } from "@/api/keys";
 import { typesQuery } from "@/api/types";
 import type { MeDto } from "@/auth/session";
 import { ApiError, isProblem } from "@/api/problem";
+import {
+  type ReleaseDetail,
+  type ReleaseEntry,
+  releaseEditable,
+  releaseKeys,
+  stagedChangeOf,
+} from "@/api/releases";
+import { AddToReleaseDialog } from "@/releases/add-to-release-dialog";
+import { changeSaver } from "@/releases/change-mode";
+import { ShareDialog } from "@/releases/share-dialog";
 import { KbdCombo } from "@/components/kit/kbd-combo";
 import { SaveState } from "@/components/kit/save-state";
 import { StatusBadge } from "@/components/kit/status-badge";
@@ -68,7 +81,7 @@ import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
 import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { useShellChrome } from "@/shell/chrome-context";
-import { type Draft, newDraftKey, pendingDrafts } from "./autosave";
+import { type Draft, PREVIEW_DEBOUNCE_MS, newDraftKey, pendingDrafts } from "./autosave";
 import { EditorBubbleMenu } from "./bubble-menu";
 import { onPreconditionFailed } from "./conflict";
 import { ConflictDialog, type OpenConflict } from "./conflict-dialog";
@@ -92,10 +105,16 @@ import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
 import { RestoreConfirmDialog, RevisionsDrawer } from "./revisions/revisions-drawer";
 import { undoTarget, whenOf } from "./revisions/revision-model";
-import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
+import { useSplit, useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
 import { PublishBar } from "./panel/publish-bar";
+import { EditorActionsContext } from "./panel/editor-actions";
+import { seoOfDraft } from "./editor-state";
 import { PANEL_ID, SidePanel } from "./panel/side-panel";
+import { useEditorQuality } from "./quality/editor-quality";
+import { PreviewPane, SplitDivider } from "./preview/preview-pane";
+import { storeSplit, storedSplit } from "./preview/preview-prefs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { blockText } from "./text";
 import { WordStats } from "./word-stats";
 
@@ -183,6 +202,11 @@ export interface EditorScreenProps {
    * screen's remounts.
    */
   uploads: UploadQueue;
+  /**
+   * Change mode (design 15 §11.2, `?release=<id>`): the screen edits this entry's staged
+   * change (`item` is the item as the change makes it) and saves through the release.
+   */
+  change?: { release: ReleaseDetail; entry: ReleaseEntry } | null;
 }
 
 export function EditorScreen({
@@ -198,9 +222,23 @@ export function EditorScreen({
   revision,
   discarded,
   uploads,
+  change,
 }: EditorScreenProps) {
   const { t } = useTranslation("editor");
+  const { t: tr } = useTranslation("releases");
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  // The release dialogs (M6-3): Add to release, Save as change, Share preview.
+  const [releaseDialog, setReleaseDialog] = useState<"add" | "change" | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [saveChange] = useState(() =>
+    change
+      ? changeSaver(change.release, change.entry, (next) => {
+          queryClient.setQueryData(releaseKeys.item(next.id), next);
+          toast.success(tr("editor.changeSaved", { title: next.title }), { id: "editor-save" });
+        })
+      : undefined,
+  );
   const [conflict, setConflict] = useState<OpenConflict | null>(null);
   // A hand-over from `/new` whose publish dialog was asked for opens with it.
   // Only when the account may publish or schedule it (else nothing would show).
@@ -215,9 +253,20 @@ export function EditorScreen({
   const fieldDefs = typeDto ? fieldsFor(typeDto) : null;
   const { focusMode, setFocusMode } = useShellChrome();
 
+  // The live preview (design 15 §3.3): beside the text from 1280 px (a split view, the
+  // side panel then a sheet), else in place of it ("Write | Preview"). Focus mode hides it.
+  const screenWide = useWide();
+  const split = useSplit();
+  const [previewOn, setPreviewOn] = useState(false);
+  const previewShown = previewOn && !focusMode;
+  const splitView = previewShown && split;
+  const [splitAt, setSplitAt] = useState(storedSplit);
+  const splitBox = useRef<HTMLDivElement>(null);
+
   // The side panel: beside the text from 1024 px (open unless closed before), else a
-  // sheet (closed until asked for). Focus mode hides it.
-  const wide = useWide();
+  // sheet (closed until asked for). Focus mode hides it; so does the split preview (the
+  // panel is a sheet then).
+  const wide = screenWide && !splitView;
   const [wideOpen, setWideOpen] = useState(storedEditorPanelOpen);
   const [sheetOpen, setSheetOpen] = useState(false);
   const panelOpen = wide ? wideOpen && !focusMode : sheetOpen;
@@ -268,6 +317,8 @@ export function EditorScreen({
     bodyLabel: t("body.label"),
     fieldDefs,
     onInvalid: showInvalid,
+    onStageRequired: () => setReleaseDialog("change"),
+    ...(saveChange ? { saveChange } : {}),
     ...(onCreated
       ? {
           onCreated: (created: ContentDto, h: Handoff) =>
@@ -337,6 +388,32 @@ export function EditorScreen({
   });
   const group = t("shortcuts.group");
 
+  // The preview reloads after each completed autosave (2 s idle while it shows) and each
+  // save (a new item version).
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [previewAt, setPreviewAt] = useState<Date | null>(null);
+  const { onAutosaved } = doc;
+  useEffect(
+    () =>
+      onAutosaved(() => {
+        setPreviewAt(new Date());
+        setRefreshKey((k) => k + 1);
+      }),
+    [onAutosaved],
+  );
+  const shownVersion = doc.item?.version;
+  const firstVersion = useRef(shownVersion);
+  useEffect(() => {
+    if (shownVersion === undefined || shownVersion === firstVersion.current) return;
+    firstVersion.current = shownVersion;
+    setPreviewAt(null);
+    setRefreshKey((k) => k + 1);
+  }, [shownVersion]);
+  const { setAutosaveDebounce } = doc;
+  useEffect(() => {
+    setAutosaveDebounce(previewShown ? PREVIEW_DEBOUNCE_MS : null);
+  }, [previewShown, setAutosaveDebounce]);
+
   const me = queryClient.getQueryData<MeDto>(qk.me);
   const canUploadMedia = me?.capabilities.includes("upload_media") === true;
   const drops = useImageDrops(doc.editor, {
@@ -350,7 +427,7 @@ export function EditorScreen({
   const canPublish =
     doc.readOnly === null &&
     doc.item !== null &&
-    (doc.item.allowed.publish || doc.item.allowed.schedule);
+    (doc.item.allowed.publish || doc.item.allowed.schedule || doc.item.allowed.override);
   const taxonomies = useTypeTaxonomies(type, publishMode !== null);
   const terms = useTermsById(publishMode !== null ? taxonomies : []);
   const site = useQuery({ ...metaQuery, enabled: publishMode !== null });
@@ -418,6 +495,17 @@ export function EditorScreen({
     },
   });
   useShortcut({
+    id: "editor.preview",
+    keys: "mod+alt+p",
+    label: t("shortcuts.preview"),
+    group,
+    allowInInput: true,
+    run: () => {
+      if (focusMode) setFocusMode(false);
+      setPreviewOn(!previewShown);
+    },
+  });
+  useShortcut({
     id: "editor.focus",
     keys: "mod+shift+f",
     label: t("shortcuts.focus"),
@@ -440,7 +528,7 @@ export function EditorScreen({
 
   // Revisions: only for an item the server lets this account edit (R26; the API
   // answers 404 otherwise).
-  const canRevisions = doc.item !== null && doc.item.allowed.edit;
+  const canRevisions = doc.item !== null && doc.item.allowed.edit && !doc.changeMode;
   const [restoring, setRestoring] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<RestoreTarget | null>(null);
   useShortcut({
@@ -771,6 +859,59 @@ export function EditorScreen({
       />
     ) : null;
 
+  /** The working draft as a staged change (a full snapshot, design 15 §4.2). */
+  const stagedNow = () =>
+    stagedChangeOf({
+      title: doc.title,
+      body: doc.editor.getJSON(),
+      excerpt: doc.meta.excerpt,
+      slug: doc.meta.slug,
+      parent_id: doc.meta.parent_id,
+      menu_order: doc.meta.menu_order,
+      terms: doc.meta.terms,
+      fields: doc.meta.fields,
+      seo: seoOfDraft(doc.meta.seo),
+    });
+
+  /** After Add to release: the staged draft leaves the item's slot; change mode opens. */
+  const afterAdded = async (next: ReleaseDetail, included: boolean) => {
+    const item = doc.item;
+    toast.success(tr("add.added", { title: next.title }), {
+      id: "editor-release",
+      action: {
+        label: tr("add.open"),
+        onClick: () => void navigate({ to: "/releases/$id", params: { id: next.id } }),
+      },
+    });
+    if (!included || !item) return;
+    try {
+      await doc.discard();
+    } catch {
+      // The slot stays; the next visit offers it back. The change is in the release.
+    }
+    void navigate({
+      to: "/content/$type/$id",
+      params: { type, id: item.id },
+      search: { release: next.id },
+    });
+  };
+
+  const releaseBanner = change ? (
+    <ChangeModeBanner type={type} itemId={change.entry.item_id} release={change.release} />
+  ) : doc.item && doc.readOnly === null ? (
+    <StagedBanner type={type} itemId={doc.item.id} releases={doc.item.releases ?? []} />
+  ) : null;
+
+  // M6-4: the accessibility and link checks (marks, the panel's Checks, the publish
+  // dialog), checked again when the publish dialog opens.
+  const quality = useEditorQuality(doc, type, () => setPanelOpen(true));
+  const checkNow = quality.state.checkNow;
+  useEffect(() => {
+    if (publishMode !== null) void checkNow();
+    // Only when the dialog opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishMode]);
+
   const takeTheirs = async (open: OpenConflict) => {
     // Mine goes to the slot first: Take theirs never loses it (Restore brings it back).
     await doc.keepInSlot(open.mine);
@@ -779,177 +920,340 @@ export function EditorScreen({
   };
 
   return (
-    <div
-      data-slot="editor-screen"
-      data-focus-mode={focusMode || undefined}
-      className="editor-screen -mx-page -mt-6 -mb-12 flex min-h-[calc(100svh-var(--sticky-top))] flex-1 flex-col"
+    <EditorActionsContext.Provider
+      value={{
+        release: (asChange) => {
+          if (!wide) setSheetOpen(false);
+          setReleaseDialog(asChange ? "change" : "add");
+        },
+        share: () => {
+          if (!wide) setSheetOpen(false);
+          setShareOpen(true);
+        },
+      }}
     >
-      <EditorBar
-        type={type}
-        typeLabel={typeLabel}
-        doc={doc}
-        focusMode={focusMode}
-        onFocusMode={setFocusMode}
-        panelOpen={panelOpen}
-        onPanel={() => setPanelOpen(!panelOpen)}
-        toggleRef={toggleRef}
-        wide={wide}
-      />
-      <div className="flex flex-1 items-start">
-        <div className="min-w-0 flex-1 px-page">
-          <WritingSurface
-            doc={doc}
-            typeLabel={typeLabel}
-            focusMode={focusMode}
-            banner={
-              banner || backupBanner ? (
-                <>
-                  {banner}
-                  {backupBanner}
-                </>
-              ) : null
-            }
-            fieldsCard={placement === "card" && !focusMode}
-          />
+      <div
+        data-slot="editor-screen"
+        data-focus-mode={focusMode || undefined}
+        className="editor-screen -mx-page -mt-6 -mb-12 flex min-h-[calc(100svh-var(--sticky-top))] flex-1 flex-col"
+      >
+        <EditorBar
+          type={type}
+          typeLabel={typeLabel}
+          doc={doc}
+          focusMode={focusMode}
+          onFocusMode={setFocusMode}
+          panelOpen={panelOpen}
+          onPanel={() => setPanelOpen(!panelOpen)}
+          toggleRef={toggleRef}
+          wide={screenWide}
+          split={split}
+          previewOn={previewShown}
+          onPreview={(on) => {
+            if (on && focusMode) setFocusMode(false);
+            setPreviewOn(on);
+          }}
+        />
+        <div ref={splitBox} className="flex flex-1 items-start">
+          <div
+            data-slot="writing-column"
+            hidden={previewShown && !split}
+            style={splitView ? { width: `${splitAt}%` } : undefined}
+            className={cn("min-w-0 px-page", splitView ? "shrink-0" : "flex-1")}
+          >
+            <WritingSurface
+              doc={doc}
+              typeLabel={typeLabel}
+              focusMode={focusMode}
+              banner={
+                banner || backupBanner || releaseBanner ? (
+                  <>
+                    {releaseBanner}
+                    {banner}
+                    {backupBanner}
+                  </>
+                ) : null
+              }
+              fieldsCard={placement === "card" && !focusMode}
+            />
+          </div>
+          {previewShown ? (
+            <>
+              {splitView ? (
+                <SplitDivider
+                  value={splitAt}
+                  container={splitBox}
+                  onChange={(n) => {
+                    setSplitAt(n);
+                    storeSplit(n);
+                  }}
+                />
+              ) : null}
+              <PreviewPane
+                type={type}
+                itemId={doc.item?.id ?? null}
+                title={doc.title}
+                refreshKey={refreshKey}
+                updatedAt={previewAt}
+                releaseId={change?.release.id ?? null}
+                onSave={() => {
+                  void doc.save();
+                }}
+                className={cn(
+                  "sticky top-[calc(var(--sticky-top)+3rem)] h-[calc(100svh-var(--sticky-top)-5.5rem)] flex-1",
+                  !split && "max-lg:h-[calc(100svh-var(--sticky-top)-6.5rem)]",
+                )}
+              />
+            </>
+          ) : null}
+          {focusMode && wide ? null : (
+            <SidePanel
+              doc={doc}
+              type={type}
+              typeLabel={typeLabel}
+              open={panelOpen}
+              onOpenChange={setPanelOpen}
+              wide={wide}
+              fieldsHere={placement === "panel"}
+              quality={quality.panel}
+              onPublish={(mode) => {
+                if (!wide) setSheetOpen(false);
+                setPublishMode(mode);
+              }}
+              {...(canRevisions
+                ? {
+                    onRevisions: () => {
+                      if (!wide) setSheetOpen(false);
+                      setRevisionsOpen(true);
+                    },
+                  }
+                : {})}
+            />
+          )}
         </div>
-        {focusMode && wide ? null : (
-          <SidePanel
-            doc={doc}
+        <ConflictDialog
+          type={type}
+          conflict={conflict}
+          onKeepMine={async () => {
+            const open = conflict;
+            if (!open) return;
+            const next = await doc.keepMine(open.theirs);
+            // Closed unless the save met yet another newer version (a new conflict).
+            setConflict((c) => (c === open ? null : c));
+            if (next) {
+              toast.success(open.then ? t("conflict.keptThen") : t("conflict.kept"), {
+                id: "editor-save",
+              });
+            }
+          }}
+          onTakeTheirs={async () => {
+            if (conflict) await takeTheirs(conflict);
+          }}
+          onCopyMine={async () => {
+            if (!conflict) return;
+            await navigator.clipboard.writeText(blockText(conflict.mine.body));
+            toast.success(t("conflict.copied"), { id: "editor-copy" });
+            await takeTheirs(conflict);
+          }}
+        />
+        <LeaveDialog
+          open={guard.blocked}
+          isNew={doc.item === null}
+          autosaved={!doc.unprotected}
+          kept={doc.kept !== null && !doc.keptUnstored}
+          keptOnlyHere={doc.keptUnstored}
+          uploading={uploading}
+          changes={(doc.dirty && doc.readOnly === null) || doc.keptUnstored}
+          error={leaveError}
+          onStay={() => {
+            setLeaveError(null);
+            guard.stay();
+          }}
+          onSave={async () => {
+            setLeaveError(null);
+            const saved = await doc.save();
+            if (!saved || doc.isDirtyNow()) {
+              guard.stay();
+              return;
+            }
+            // A kept copy only on this page goes to the slot before leaving, or nobody leaves.
+            if (!(await doc.storeKept())) {
+              setLeaveError(t("leave.keptFailed"));
+              return;
+            }
+            guard.leave();
+          }}
+          onDiscard={async () => {
+            setLeaveError(null);
+            // Discard drops the new edits, never the kept copy: it is stored first.
+            if (!(await doc.storeKept())) {
+              setLeaveError(t("leave.keptFailed"));
+              return;
+            }
+            try {
+              await doc.discard();
+            } catch {
+              // The slot stays: the next visit offers it back, nothing is lost.
+            }
+            guard.leave();
+          }}
+        />
+        {doc.item && canRevisions ? (
+          <RevisionsDrawer
+            open={revisionsOpen}
+            onOpenChange={setRevisionsOpen}
             type={type}
-            typeLabel={typeLabel}
-            open={panelOpen}
-            onOpenChange={setPanelOpen}
-            wide={wide}
-            fieldsHere={placement === "panel"}
-            onPublish={(mode) => {
-              if (!wide) setSheetOpen(false);
-              setPublishMode(mode);
+            item={doc.item}
+            restoring={restoring}
+            onRestore={(r) => requestRestore({ rid: r.id, at: r.created_at, undo: false })}
+            onFocusFallback={() => {
+              // Opened from the phone's settings sheet (gone now): its button, else the body.
+              const toggle = document.querySelector<HTMLElement>("[data-slot=panel-toggle]");
+              if (toggle) toggle.focus();
+              else if (!doc.editor.isDestroyed) doc.editor.view.dom.focus();
             }}
-            {...(canRevisions
-              ? {
-                  onRevisions: () => {
-                    if (!wide) setSheetOpen(false);
-                    setRevisionsOpen(true);
-                  },
-                }
-              : {})}
+          />
+        ) : null}
+        <RestoreConfirmDialog
+          open={confirmRestore !== null}
+          onCancel={() => setConfirmRestore(null)}
+          onConfirm={() => {
+            const target = confirmRestore;
+            setConfirmRestore(null);
+            if (target) void runRestore(target);
+          }}
+        />
+        <PublishDialog
+          doc={doc}
+          mode={canPublish ? publishMode : null}
+          onClose={() => setPublishMode(null)}
+          siteUrl={site.data?.site_url ?? null}
+          taxonomies={taxonomies}
+          terms={terms}
+          quality={quality.state.report}
+        />
+        {doc.item ? (
+          <AddToReleaseDialog
+            open={releaseDialog !== null}
+            onOpenChange={(o) => {
+              if (!o) setReleaseDialog(null);
+            }}
+            item={doc.item}
+            staged={stagedNow}
+            dirty={doc.dirty}
+            asChange={releaseDialog === "change"}
+            onAdded={(next, included) => void afterAdded(next, included)}
+          />
+        ) : null}
+        {doc.item ? (
+          <ShareDialog
+            target={{ kind: "item", type, id: doc.item.id }}
+            open={shareOpen}
+            onOpenChange={setShareOpen}
+          />
+        ) : null}
+        {wide || focusMode ? (
+          <EditorFooter
+            editor={doc.editor}
+            {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
+          />
+        ) : (
+          <PublishBar
+            doc={doc}
+            onSettings={() => setSheetOpen(true)}
+            settingsOpen={sheetOpen}
+            onPublish={setPublishMode}
+            {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
           />
         )}
       </div>
-      <ConflictDialog
-        type={type}
-        conflict={conflict}
-        onKeepMine={async () => {
-          const open = conflict;
-          if (!open) return;
-          const next = await doc.keepMine(open.theirs);
-          // Closed unless the save met yet another newer version (a new conflict).
-          setConflict((c) => (c === open ? null : c));
-          if (next) {
-            toast.success(open.then ? t("conflict.keptThen") : t("conflict.kept"), {
-              id: "editor-save",
-            });
-          }
-        }}
-        onTakeTheirs={async () => {
-          if (conflict) await takeTheirs(conflict);
-        }}
-        onCopyMine={async () => {
-          if (!conflict) return;
-          await navigator.clipboard.writeText(blockText(conflict.mine.body));
-          toast.success(t("conflict.copied"), { id: "editor-copy" });
-          await takeTheirs(conflict);
-        }}
-      />
-      <LeaveDialog
-        open={guard.blocked}
-        isNew={doc.item === null}
-        autosaved={!doc.unprotected}
-        kept={doc.kept !== null && !doc.keptUnstored}
-        keptOnlyHere={doc.keptUnstored}
-        uploading={uploading}
-        changes={(doc.dirty && doc.readOnly === null) || doc.keptUnstored}
-        error={leaveError}
-        onStay={() => {
-          setLeaveError(null);
-          guard.stay();
-        }}
-        onSave={async () => {
-          setLeaveError(null);
-          const saved = await doc.save();
-          if (!saved || doc.isDirtyNow()) {
-            guard.stay();
-            return;
-          }
-          // A kept copy only on this page goes to the slot before leaving, or nobody leaves.
-          if (!(await doc.storeKept())) {
-            setLeaveError(t("leave.keptFailed"));
-            return;
-          }
-          guard.leave();
-        }}
-        onDiscard={async () => {
-          setLeaveError(null);
-          // Discard drops the new edits, never the kept copy: it is stored first.
-          if (!(await doc.storeKept())) {
-            setLeaveError(t("leave.keptFailed"));
-            return;
-          }
-          try {
-            await doc.discard();
-          } catch {
-            // The slot stays: the next visit offers it back, nothing is lost.
-          }
-          guard.leave();
-        }}
-      />
-      {doc.item && canRevisions ? (
-        <RevisionsDrawer
-          open={revisionsOpen}
-          onOpenChange={setRevisionsOpen}
-          type={type}
-          item={doc.item}
-          restoring={restoring}
-          onRestore={(r) => requestRestore({ rid: r.id, at: r.created_at, undo: false })}
-          onFocusFallback={() => {
-            // Opened from the phone's settings sheet (gone now): its button, else the body.
-            const toggle = document.querySelector<HTMLElement>("[data-slot=panel-toggle]");
-            if (toggle) toggle.focus();
-            else if (!doc.editor.isDestroyed) doc.editor.view.dom.focus();
-          }}
-        />
-      ) : null}
-      <RestoreConfirmDialog
-        open={confirmRestore !== null}
-        onCancel={() => setConfirmRestore(null)}
-        onConfirm={() => {
-          const target = confirmRestore;
-          setConfirmRestore(null);
-          if (target) void runRestore(target);
-        }}
-      />
-      <PublishDialog
-        doc={doc}
-        mode={canPublish ? publishMode : null}
-        onClose={() => setPublishMode(null)}
-        siteUrl={site.data?.site_url ?? null}
-        taxonomies={taxonomies}
-        terms={terms}
-      />
-      {wide || focusMode ? (
-        <EditorFooter
-          editor={doc.editor}
-          {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
-        />
-      ) : (
-        <PublishBar
-          doc={doc}
-          onSettings={() => setSheetOpen(true)}
-          settingsOpen={sheetOpen}
-          onPublish={setPublishMode}
-          {...(doc.readOnly?.kind === "invalid" ? { fixedText: blockText(doc.storedBody) } : {})}
-        />
-      )}
+    </EditorActionsContext.Provider>
+  );
+}
+
+/** "Staged in “Spring launch” — Open the change", per open release holding the item. */
+function StagedBanner({
+  type,
+  itemId,
+  releases,
+}: {
+  type: string;
+  itemId: string;
+  releases: { id: string; title: string; status: string }[];
+}) {
+  const { t } = useTranslation("releases");
+  const open = releases.filter((r) => r.status === "open" || r.status === "failed");
+  if (open.length === 0) return null;
+  return (
+    <div data-slot="staged-banner" className="mt-6 flex flex-col gap-1.5">
+      {open.map((r) => (
+        <p
+          key={r.id}
+          role="note"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-foreground"
+        >
+          <PackageIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <span>{t("editor.staged", { title: r.title })}</span>
+          <span aria-hidden="true" className="text-muted-foreground">
+            —
+          </span>
+          <Link
+            to="/content/$type/$id"
+            params={{ type, id: itemId }}
+            search={{ release: r.id }}
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            {t("editor.openChange")}
+          </Link>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** Change mode's banner: what is edited here, and the ways out. */
+function ChangeModeBanner({
+  type,
+  itemId,
+  release,
+}: {
+  type: string;
+  itemId: string;
+  release: ReleaseDetail;
+}) {
+  const { t } = useTranslation("releases");
+  const editable = releaseEditable(release);
+  return (
+    <div
+      data-slot="change-mode-banner"
+      role="note"
+      className="mt-6 flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/6 px-4 py-3 text-sm text-foreground"
+    >
+      <p className="flex items-center gap-2 font-medium">
+        <PackageIcon aria-hidden="true" className="size-4 shrink-0 text-primary" />
+        {t("editor.changeMode", { title: release.title })}
+      </p>
+      <p className="text-muted-foreground">
+        {editable
+          ? t("editor.changeModeHint")
+          : t("editor.changeLocked", { status: t(`status.${release.status as "open"}`) })}
+      </p>
+      <p className="flex flex-wrap gap-x-4 gap-y-1">
+        <Link
+          to="/content/$type/$id"
+          params={{ type, id: itemId }}
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
+          {t("editor.backToItem")}
+        </Link>
+        <Link
+          to="/releases/$id"
+          params={{ id: release.id }}
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
+          {t("editor.openRelease")}
+        </Link>
+      </p>
     </div>
   );
 }
@@ -964,6 +1268,9 @@ function EditorBar({
   onPanel,
   toggleRef,
   wide,
+  split,
+  previewOn,
+  onPreview,
 }: {
   type: string;
   typeLabel: string;
@@ -975,6 +1282,10 @@ function EditorBar({
   toggleRef: RefObject<HTMLButtonElement | null>;
   /** Below 1024 px the status and the settings button live in the publish bar. */
   wide: boolean;
+  /** From 1280 px the preview sits beside the text (a toggle); below, Write | Preview. */
+  split: boolean;
+  previewOn: boolean;
+  onPreview: (on: boolean) => void;
 }) {
   const { t } = useTranslation("editor");
   const status = doc.item?.status;
@@ -1031,6 +1342,61 @@ function EditorBar({
             <TooltipContent side="bottom">{t("image.insert")}</TooltipContent>
           </Tooltip>
         ) : null}
+        {split ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-pressed={previewOn}
+                aria-label={t("preview.toggle")}
+                aria-keyshortcuts="Meta+Alt+P Control+Alt+P"
+                data-slot="preview-toggle"
+                onClick={() => onPreview(!previewOn)}
+                className={cn("text-muted-foreground", previewOn && "bg-muted text-foreground")}
+              >
+                <EyeIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="flex items-center gap-2">
+              {t("preview.toggle")}
+              <KbdCombo keys="mod+alt+p" />
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <ToggleGroup
+            type="single"
+            spacing={0}
+            value={previewOn ? "preview" : "write"}
+            aria-label={t("preview.view")}
+            data-slot="preview-switch"
+            onValueChange={(v) => {
+              if (v === "write" || v === "preview") onPreview(v === "preview");
+            }}
+            className="rounded-lg bg-muted p-0.5"
+          >
+            {(["write", "preview"] as const).map((v) => (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                aria-label={v === "write" ? t("preview.write") : t("preview.show")}
+                aria-keyshortcuts="Meta+Alt+P Control+Alt+P"
+                className="h-7 rounded-md! border-0 px-2.5 text-xs text-muted-foreground pointer-coarse:h-11 pointer-coarse:min-w-11 max-sm:px-2 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-(--shadow-1)"
+              >
+                {/* Phones: icons only (the bar has no room for the words). */}
+                {v === "write" ? (
+                  <PenLineIcon aria-hidden="true" className="size-4 sm:hidden" />
+                ) : (
+                  <EyeIcon aria-hidden="true" className="size-4 sm:hidden" />
+                )}
+                <span className="max-sm:hidden">
+                  {v === "write" ? t("preview.write") : t("preview.show")}
+                </span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -1115,6 +1481,8 @@ function ReadOnlyBanner({ reason }: { reason: ReadOnlyReason }) {
             types: new Intl.ListFormat(uiLocale(), { type: "conjunction" }).format(reason.unknown),
           })
         : t("readOnly.invalid");
+  } else if (reason.kind === "locked") {
+    text = t("readOnly.locked", { title: reason.release.title });
   } else {
     text = t(`readOnly.${reason.kind}`);
   }

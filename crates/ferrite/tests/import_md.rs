@@ -215,6 +215,11 @@ both!(
     a_kept_front_page_is_not_reported_as_set,
     unimported_links_and_protocol_relative_images_are_reported,
     a_date_out_of_range_skips_the_file,
+    front_matter_locale_and_translation_of,
+    cli_locale_default,
+    unknown_locale_is_problem_exit_2,
+    translation_of_outside_import_is_problem,
+    rerun_keeps_groups,
 );
 
 /// A 2×2 PNG.
@@ -1033,6 +1038,12 @@ fn count_files(dir: &Path) -> usize {
 
 async fn dry_run_writes_nothing(site: Site) {
     let (_root, dir) = tree();
+    // As every command's start does once (M6-1): the dry run itself then writes nothing.
+    let store = site.store().await;
+    ferrite_core::locales::settle(store.as_ref(), "en")
+        .await
+        .unwrap();
+    store.close().await;
     let before = snapshot(&site).await;
     let out = site.import(&dir, &["--dry-run", "--front-page"]).await;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
@@ -1468,4 +1479,162 @@ async fn a_future_date_schedules_the_page(site: Site) {
         pages(&site).await["configure"].status,
         ContentStatus::Scheduled
     );
+}
+
+// ---- M6-1 Task 18: locales -------------------------------------------------------------
+
+/// Makes the site bilingual: English (default) and German.
+async fn bilingual(site: &Site) {
+    let store = site.store().await;
+    store
+        .read()
+        .options()
+        .set(
+            "site.locales",
+            &json!([{"tag": "en", "label": "English"}, {"tag": "de", "label": "Deutsch"}]),
+            true,
+        )
+        .await
+        .unwrap();
+    store.close().await;
+}
+
+/// A folder with an English page and its German translation, linked from the German
+/// file to the English one (`translation_of`), the German file sorted first.
+fn bilingual_tree() -> (tempfile::TempDir, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("site");
+    write(&dir, "a-ueber.md", b"+++\nlocale = \"de\"\ntranslation_of = \"guide/about.md\"\nslug = \"about\"\n+++\n# Ueber uns\n\nHallo.\n");
+    write(&dir, "guide/about.md", b"# About\n\nHello.\n");
+    write(
+        &dir,
+        "guide/more.md",
+        b"+++\nlocale = \"de\"\ntranslation_of = \"../a-ueber.md\"\n+++\n# Mehr\n",
+    );
+    (root, dir)
+}
+
+async fn all_pages(site: &Site) -> Vec<ContentItem> {
+    let store = site.store().await;
+    let items = store
+        .read()
+        .content()
+        .list(&ContentQuery {
+            kind: Some("page".into()),
+            limit: 100,
+            ..ContentQuery::default()
+        })
+        .await
+        .unwrap()
+        .items;
+    store.close().await;
+    items
+}
+
+async fn front_matter_locale_and_translation_of(site: Site) {
+    bilingual(&site).await;
+    let (_root, dir) = bilingual_tree();
+    let out = site.import(&dir, &[]).await;
+    // `guide/more.md` is a second German page for the same group: reported, kept apart.
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(o.contains("translation-of  guide/more.md  "), "{o}");
+    let items = all_pages(&site).await;
+    let by = |title: &str| items.iter().find(|i| i.title == title).unwrap().clone();
+    let (en, de, more) = (by("About"), by("Ueber uns"), by("Mehr"));
+    assert_eq!(en.locale, "en");
+    assert_eq!(de.locale, "de");
+    // The same slug in another locale is not a clash.
+    assert_eq!(de.slug, "about");
+    assert_eq!(de.translation_group, en.translation_group);
+    assert_eq!(more.locale, "de");
+    assert_ne!(more.translation_group, en.translation_group);
+}
+
+async fn cli_locale_default(site: Site) {
+    bilingual(&site).await;
+    let (_root, dir) = tree();
+    let out = site.import(&dir, &["--locale", "de"]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let items = all_pages(&site).await;
+    assert!(!items.is_empty());
+    assert!(items.iter().all(|i| i.locale == "de"), "{items:?}");
+}
+
+async fn unknown_locale_is_problem_exit_2(site: Site) {
+    let (_root, dir) = tree();
+    write(&dir, "fr.md", b"+++\nlocale = \"fr\"\n+++\n# Bonjour\n");
+    write(
+        &dir,
+        "bad-tag.md",
+        b"+++\nlocale = \"not a tag\"\n+++\n# Bad\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(
+        o.contains("locale  fr.md  skipped, fr is not one of the site's locales"),
+        "{o}"
+    );
+    assert!(
+        o.contains("bad-front-matter  bad-tag.md  line 2: skipped, "),
+        "{o}"
+    );
+    assert!(o.contains("created 7, "), "{o}");
+    let p = pages(&site).await;
+    assert!(!p.contains_key("fr") && !p.contains_key("bad-tag"));
+}
+
+async fn translation_of_outside_import_is_problem(site: Site) {
+    bilingual(&site).await;
+    let (_root, dir) = tree();
+    write(
+        &dir,
+        "de.md",
+        b"+++\nlocale = \"de\"\ntranslation_of = \"../elsewhere.md\"\n+++\n# Deutsch\n",
+    );
+    write(
+        &dir,
+        "loop-a.md",
+        b"+++\nlocale = \"de\"\ntranslation_of = \"loop-b.md\"\n+++\n# A\n",
+    );
+    write(
+        &dir,
+        "loop-b.md",
+        b"+++\ntranslation_of = \"loop-a.md\"\n+++\n# B\n",
+    );
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let o = stdout(&out);
+    assert!(
+        o.contains("translation-of  de.md  translation_of not applied: ../elsewhere.md is not a page of this import"),
+        "{o}"
+    );
+    assert!(o.contains("translation-of  loop-a.md  "), "{o}");
+    assert!(o.contains("cycle"), "{o}");
+    let p = pages(&site).await;
+    assert_eq!(p["de"].locale, "de");
+    assert_eq!(p["de"].translation_group, p["de"].id);
+}
+
+async fn rerun_keeps_groups(site: Site) {
+    bilingual(&site).await;
+    let (_root, dir) = bilingual_tree();
+    std::fs::remove_file(dir.join("guide/more.md")).unwrap();
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let first = all_pages(&site).await;
+    let out = site.import(&dir, &[]).await;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(stdout(&out).contains("unchanged 3"), "{}", stdout(&out));
+    let again = all_pages(&site).await;
+    for item in &first {
+        let now = again.iter().find(|i| i.id == item.id).unwrap();
+        assert_eq!(
+            now.translation_group, item.translation_group,
+            "{}",
+            item.title
+        );
+        assert_eq!(now.version, item.version, "{}", item.title);
+    }
 }

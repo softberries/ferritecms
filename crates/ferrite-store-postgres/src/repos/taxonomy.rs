@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use ferrite_domain::{ContentId, Taxonomy, Term, TermId};
 use ferrite_store::{
-    StoreError, TaxonomyRepo, TermRepo, check_id_list, validate_json, validate_text,
+    StoreError, TaxonomyRepo, TermRepo, check_groups, check_id_list, validate_json, validate_text,
 };
 use sqlx::{PgConnection, Postgres, QueryBuilder, Row, types::Json};
 use uuid::Uuid;
@@ -139,8 +139,8 @@ impl TermRepo for PgRepos {
         validate_text("term name", &term.name)?;
         validate_text("term description", &term.description)?;
         run!(&self.exec, |e| sqlx::query(
-            "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id) \
-             VALUES ($1, $2, $3, $4, $5, $6)"
+            "INSERT INTO terms (id, taxonomy, slug, name, description, parent_id, locale, \
+             translation_group) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
         )
         .bind(term.id.as_uuid())
         .bind(&term.taxonomy)
@@ -148,6 +148,8 @@ impl TermRepo for PgRepos {
         .bind(&term.name)
         .bind(&term.description)
         .bind(term.parent_id.map(|p| p.as_uuid()))
+        .bind(&term.locale)
+        .bind(term.translation_group.as_uuid())
         .execute(e))
         .map(|_| ())
     }
@@ -159,7 +161,7 @@ impl TermRepo for PgRepos {
         validate_text("term description", &term.description)?;
         let done = run!(&self.exec, |e| sqlx::query(
             "UPDATE terms SET taxonomy = $1, slug = $2, name = $3, description = $4, \
-             parent_id = $5 WHERE id = $6"
+             parent_id = $5, locale = $7, translation_group = $8 WHERE id = $6"
         )
         .bind(&term.taxonomy)
         .bind(&term.slug)
@@ -167,6 +169,8 @@ impl TermRepo for PgRepos {
         .bind(&term.description)
         .bind(term.parent_id.map(|p| p.as_uuid()))
         .bind(term.id.as_uuid())
+        .bind(&term.locale)
+        .bind(term.translation_group.as_uuid())
         .execute(e))?;
         if done.rows_affected() == 0 {
             return Err(StoreError::NotFound);
@@ -183,25 +187,56 @@ impl TermRepo for PgRepos {
         row.as_ref().map(codec::term).transpose()
     }
 
-    async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError> {
+    async fn get_by_slug(
+        &self,
+        tax: &str,
+        locale: Option<&str>,
+        slug: &str,
+    ) -> Result<Option<Term>, StoreError> {
         validate_text("term taxonomy", tax)?;
         validate_text("term slug", slug)?;
+        if let Some(l) = locale {
+            validate_text("term locale", l)?;
+        }
         let row = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = $1 AND t.slug = $2"
+            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = $1 AND t.slug = $2 \
+             AND ($3::text IS NULL OR t.locale = $3) ORDER BY t.id LIMIT 1"
         )))
         .bind(tax)
         .bind(slug)
+        .bind(locale)
         .fetch_optional(e))?;
         row.as_ref().map(codec::term).transpose()
     }
 
-    async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError> {
+    async fn list(&self, tax: &str, locale: Option<&str>) -> Result<Vec<Term>, StoreError> {
         validate_text("term taxonomy", tax)?;
+        if let Some(l) = locale {
+            validate_text("term locale", l)?;
+        }
         let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {TERM_COLUMNS} FROM terms t WHERE t.taxonomy = $1 \
+             AND ($2::text IS NULL OR t.locale = $2) \
              ORDER BY t.name COLLATE \"C\", t.id"
         )))
         .bind(tax)
+        .bind(locale)
+        .fetch_all(e))?;
+        rows.iter().map(codec::term).collect()
+    }
+
+    async fn group_members(&self, groups: &[TermId]) -> Result<Vec<Term>, StoreError> {
+        check_groups(groups.len())?;
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = groups.iter().map(|g| g.as_uuid()).collect();
+        let rows = run!(&self.exec, |e| sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {TERM_COLUMNS} FROM terms t WHERE t.translation_group = ANY($1) \
+             OR (t.translation_group IS NULL AND t.id = ANY($1)) \
+             ORDER BY coalesce(t.translation_group, t.id), t.locale, t.id"
+        )))
+        .bind(&ids)
         .fetch_all(e))?;
         rows.iter().map(codec::term).collect()
     }

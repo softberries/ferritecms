@@ -71,6 +71,17 @@ describe("list_search_test", () => {
   });
 });
 
+describe("locale_filter", () => {
+  test("locale_filter_is_kept_and_sent", () => {
+    const parsed = parseListSearch(parseSearch("?locale=de-AT&status=draft"));
+    expect(parsed).toEqual({ status: "draft", locale: "de-AT" });
+    expect(listQuery(parsed, "me").locale).toBe("de-AT");
+    expect(hasFilters({ locale: "de" })).toBe(true);
+    // A malformed tag is dropped, never an error.
+    expect(parseListSearch(parseSearch("?locale=not%20a%20tag"))).toEqual({});
+  });
+});
+
 describe("free_text_search", () => {
   test("numeric_looking_searches_stay_strings", () => {
     for (const q of ["2024", "531038e6", "1e3"]) {

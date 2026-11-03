@@ -1,19 +1,25 @@
 //! Pure domain types shared by every FerriteCMS storage backend.
 
 mod auth;
+mod change_set;
 mod comment;
 mod content;
+mod editorial;
 mod event;
 mod hex;
 pub mod html;
 mod ids;
 mod import;
 mod job;
+pub mod locale;
 mod menu;
 mod metrics;
 mod node;
 mod page;
 mod plugin;
+pub mod plugin_registry;
+pub mod plugin_trust;
+mod quality;
 mod search;
 mod secret;
 mod setting;
@@ -22,6 +28,7 @@ mod taxonomy;
 mod time;
 mod url;
 mod user;
+mod webhook;
 
 pub use auth::{
     ApiToken, AuditEntry, AuditQuery, ClientKind, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE,
@@ -29,17 +36,30 @@ pub use auth::{
     OAuthPruned, OAuthRequest, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
     Session,
 };
+pub use change_set::{
+    AgentKind, CHANGE_SET_CURSOR_TAG, CHANGE_SETS_DAYS_OPTION, Change, ChangeSet, ChangeSetQuery,
+    ChangeSummary, Image, ImageState, NewChange, NewChangeSet,
+};
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
     Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MEDIA_KIND,
-    MediaKind, NewContent, ParentFilter, ReadableBy, Revision,
+    MediaKind, NewContent, ParentFilter, QualityGate, ReadableBy, Revision,
+};
+pub use editorial::{
+    Approvers, Decision, EntryTransition, MAX_RELEASE_ENTRIES, PreviewLink, PreviewTarget,
+    PreviewTargetKind, Release, ReleaseEntry, ReleaseQuery, ReleaseStatus, Review, ReviewDecision,
+    ReviewQuery, ReviewStatus, ReviewTarget, StagedChange, Workflow, WorkflowStep,
 };
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
+pub use ids::ChangeSetId;
+pub use ids::HealthRunId;
 pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, ImportRunId, JobId, MenuItemId,
     NodeId, OAuthGrantId, OAuthRequestId, RedirectId, RevisionId, TermId, UserId,
 };
+pub use ids::{DeliveryId, WebhookEventId, WebhookId};
+pub use ids::{PreviewLinkId, ReleaseId, ReviewId};
 pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
@@ -53,6 +73,10 @@ pub use plugin::{
     Artifact, ArtifactKind, FailureBucket, InstalledPlugin, InstalledTheme, MAX_PLUGIN_NAME, Media,
     valid_plugin_name,
 };
+pub use quality::{
+    FindingQuery, HealthCounters, HealthRun, HealthRunStatus, HealthTrigger, LinkCheck, LinkStatus,
+    NewFinding, StoredFinding, Suppression,
+};
 pub use search::SearchQuery;
 pub use secret::Secret;
 pub use setting::{
@@ -64,6 +88,10 @@ pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
 pub use url::{MAX_WEB_URL, is_web_url};
 pub use user::{NewUser, Role, User, UserQuery, UserStatus};
+pub use webhook::{
+    Attempt, Delivery, DeliveryCounts, DeliveryListed, DeliveryQuery, DeliveryStatus,
+    DeliveryUpdate, DisabledReason, WebhookEndpoint, WebhookEventRow,
+};
 
 /// Maximum page size accepted by list queries.
 pub const MAX_PAGE: u32 = 200;

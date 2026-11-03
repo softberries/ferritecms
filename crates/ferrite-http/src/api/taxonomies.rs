@@ -15,17 +15,20 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ferrite_core::{Actor, CoreError};
+use ferrite_core::{Actor, CoreError, NewTermInput, TermPlacement};
 use ferrite_domain::{Term, TermId};
+use serde::Deserialize;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::{
     ApiState, Authed, BASE,
+    content::checked_locale,
     dto::types::{
         TaxonomyDto, TaxonomyInput, TaxonomyList, TaxonomyPatch, TermDto, TermInput, TermList,
         TermPatch,
     },
-    extract::{ApiJson, ApiPath, created_at},
+    extract::{ApiJson, ApiPath, ApiQuery, created_at},
     problem::{Problem, ProblemDocument},
 };
 
@@ -165,9 +168,10 @@ pub async fn delete_taxonomy(
     tag = "taxonomies",
     operation_id = "list_terms",
     security(("session" = []), ("bearer" = [])),
-    params(("taxonomy" = String, Path, description = "Taxonomy")),
+    params(("taxonomy" = String, Path, description = "Taxonomy"), TermListParams),
     responses(
-        (status = 200, description = "Every term of the taxonomy", body = TermList),
+        (status = 200, description = "Every term of the taxonomy (in `locale` when given)", body = TermList),
+        (status = 400, description = "`invalid-locale`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 403, description = "`forbidden` (needs `terms:read`) or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: no such taxonomy", body = ProblemDocument, content_type = "application/problem+json"),
@@ -177,8 +181,13 @@ pub async fn list_terms(
     State(api): State<Arc<ApiState>>,
     Authed(who): Authed,
     ApiPath(taxonomy): ApiPath<String>,
+    ApiQuery(params): ApiQuery<TermListParams>,
 ) -> Result<Json<TermList>, Problem> {
-    let terms = api.taxonomy.list_terms_for(&who.actor, &taxonomy).await?;
+    let locale = checked_locale(&api, params.locale).await?;
+    let terms = api
+        .taxonomy
+        .list_terms_for(&who.actor, &taxonomy, locale.as_deref())
+        .await?;
     Ok(Json(TermList {
         items: terms.into_iter().map(TermDto::from).collect(),
         next_cursor: None,
@@ -200,7 +209,7 @@ pub async fn list_terms(
         (status = 403, description = "`forbidden` (`manage_terms`, `terms:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 404, description = "`not-found`: no such taxonomy", body = ProblemDocument, content_type = "application/problem+json"),
         (status = 409, description = "`conflict`: the slug was taken by concurrent saves (`errors[0].field` = `slug`)", body = ProblemDocument, content_type = "application/problem+json"),
-        (status = 422, description = "`validation` (name, slug, parent)", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation` (name, slug, parent, `locale`, `translation_of`: another taxonomy or a locale its group has already)", body = ProblemDocument, content_type = "application/problem+json"),
     ),
 )]
 pub async fn create_term(
@@ -211,14 +220,68 @@ pub async fn create_term(
 ) -> Result<Response, Problem> {
     let term = api
         .taxonomy
-        .create_term(
+        .create_localized_term(
             &who.actor,
-            &taxonomy,
-            &input.name,
-            input.slug,
-            input.parent_id.map(TermId::from_uuid),
-            &input.description,
+            NewTermInput {
+                taxonomy,
+                name: input.name,
+                slug: input.slug,
+                parent: input.parent_id.map(TermId::from_uuid),
+                description: input.description,
+            },
+            TermPlacement {
+                locale: input.locale,
+                translation_of: input.translation_of.map(TermId::from_uuid),
+            },
         )
+        .await?;
+    let (status, headers) = created_at(&format!("{BASE}/terms/{}", term.id));
+    Ok((status, headers, Json(TermDto::from(term))).into_response())
+}
+
+/// The query of `GET /taxonomies/{taxonomy}/terms`.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct TermListParams {
+    /// Only terms in this locale (`400 invalid-locale` for another).
+    pub locale: Option<String>,
+}
+
+/// The body of `POST /terms/{id}/translations`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TermTranslateInput {
+    /// One of the site's locales the term's group has no member in yet.
+    pub locale: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/terms/{id}/translations",
+    tag = "taxonomies",
+    operation_id = "translate_term",
+    security(("session" = []), ("bearer" = [])),
+    params(("id" = Uuid, Path)),
+    request_body = TermTranslateInput,
+    responses(
+        (status = 201, description = "The new term in `locale`, same name and slug, in the term's translation group (`Location`)", body = TermDto),
+        (status = 400, description = "`malformed-json`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = "`forbidden` (`manage_terms`, `terms:write`), `csrf` or `password-reset-required`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 409, description = "`conflict`: the group has a term in that locale already", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation` (`locale`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn translate_term(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(input): ApiJson<TermTranslateInput>,
+) -> Result<Response, Problem> {
+    let term = api
+        .taxonomy
+        .translate_term(&who.actor, TermId::from_uuid(id), &input.locale)
         .await?;
     let (status, headers) = created_at(&format!("{BASE}/terms/{}", term.id));
     Ok((status, headers, Json(TermDto::from(term))).into_response())

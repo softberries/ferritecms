@@ -178,6 +178,35 @@ impl Repos for FailingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.store.read().oauth()
     }
+    fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
+        self.store.read().locales()
+    }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.store.read().webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.store.read().plugin_trust()
+    }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.store.read().releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.store.read().workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.store.read().reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.store.read().preview_links()
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.store.read().change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.store.read().quality()
+    }
 }
 
 #[async_trait]

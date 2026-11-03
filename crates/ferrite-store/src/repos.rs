@@ -199,6 +199,87 @@ pub trait Repos: Send + Sync {
     fn imports(&self) -> &dyn ImportRepo;
     fn node_metrics(&self) -> &dyn NodeMetricsRepo;
     fn oauth(&self) -> &dyn OAuthRepo;
+    fn locales(&self) -> &dyn LocaleRepo;
+    fn webhooks(&self) -> &dyn crate::WebhookRepo;
+    /// Plugin trust (M6-2): publisher keys, owners, the registry cache.
+    fn plugin_trust(&self) -> &dyn crate::PluginTrustRepo;
+    /// Releases, entries and locks (M6-3).
+    fn releases(&self) -> &dyn crate::ReleaseRepo;
+    /// Approval workflows (M6-3).
+    fn workflows(&self) -> &dyn crate::WorkflowRepo;
+    /// Reviews, decisions and assignees (M6-3).
+    fn reviews(&self) -> &dyn crate::ReviewRepo;
+    /// Preview links (M6-3).
+    fn preview_links(&self) -> &dyn crate::PreviewLinkRepo;
+    /// AI change sets (M6-5, design 17).
+    fn change_sets(&self) -> &dyn crate::ChangeSetRepo;
+    /// Content quality (M6-4): suppressions, health runs and findings, the link cache.
+    fn quality(&self) -> &dyn crate::QualityRepo;
+}
+
+/// Most translation groups one `group_members` call takes.
+pub const MAX_GROUPS: usize = 200;
+
+/// One member of a content translation group (13 §3): enough to link to it and show its
+/// status, without the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranslationRef {
+    pub id: ContentId,
+    pub group: ContentId,
+    pub kind: String,
+    pub locale: String,
+    pub status: ferrite_domain::ContentStatus,
+    pub slug: String,
+    pub parent_id: Option<ContentId>,
+    pub published_at: Option<Timestamp>,
+    pub title: String,
+    pub author_id: ferrite_domain::UserId,
+}
+
+/// A menu without its items (`MenuRepo::list`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuSummary {
+    pub name: String,
+    pub label: String,
+    pub locale: String,
+    pub translation_of: Option<String>,
+}
+
+/// Rows in one locale (`LocaleRepo::usage`) or rows changed by a relabel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocaleUsage {
+    /// Content items, media items not counted.
+    pub items: u64,
+    pub terms: u64,
+    pub menus: u64,
+}
+
+impl LocaleUsage {
+    /// Whether no row is counted.
+    pub fn is_empty(&self) -> bool {
+        self.items == 0 && self.terms == 0 && self.menus == 0
+    }
+}
+
+/// Site-wide locale bookkeeping (13 §2.2): counts per locale and the relabels `settle`
+/// and a locale rename run.
+#[async_trait]
+pub trait LocaleRepo: Send + Sync {
+    /// The content items (not media), terms and menus in `locale`.
+    async fn usage(&self, locale: &str) -> Result<LocaleUsage, StoreError>;
+    /// Sets every content item, term and menu whose locale is not `to` to `to`; returns
+    /// the rows changed.
+    async fn relabel_all(&self, to: &str) -> Result<LocaleUsage, StoreError>;
+    /// Sets every content item, term and menu with the blank locale (written by an older
+    /// binary) to `to`; returns the rows changed.
+    async fn relabel_blank(&self, to: &str) -> Result<LocaleUsage, StoreError>;
+    /// Sets every media item whose locale is not `to` to `to` (a new default locale:
+    /// media is shared by every locale and carries the default); returns the rows
+    /// changed.
+    async fn relabel_media(&self, to: &str) -> Result<u64, StoreError>;
+    /// Sets `translation_group = id` on content items and terms without a group; returns
+    /// the rows changed.
+    async fn fill_groups(&self) -> Result<u64, StoreError>;
 }
 
 /// Per-node minute metrics (`node_metrics`, M4-2 P35).
@@ -253,13 +334,31 @@ pub trait ContentRepo: Send + Sync {
     async fn insert(&self, item: &NewContent) -> Result<ContentItem, StoreError>;
     /// Fetches an item by id.
     async fn get(&self, id: ContentId) -> Result<Option<ContentItem>, StoreError>;
-    /// Fetches an item by kind, parent and slug.
+    /// Fetches an item by kind, locale (`None`: any; with several matches the first by
+    /// id), parent and slug.
     async fn get_by_slug(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         slug: &str,
     ) -> Result<Option<ContentItem>, StoreError>;
+    /// The members of up to [`MAX_GROUPS`] translation groups (more is `Invalid`), in
+    /// one query, ordered by group then locale. A row without a stored group (written by
+    /// an older binary) is the group of its own id.
+    async fn group_members(&self, groups: &[ContentId]) -> Result<Vec<TranslationRef>, StoreError>;
+    /// Moves item `id` to `locale` and `group` with `slug`, where its version is
+    /// `expected_version` (bumping `version` and `updated_at`); like `update`, no row gives
+    /// `Conflict { current_version }` or `NotFound`. A taken slug or locale in the group
+    /// is `UniqueViolation`.
+    async fn relocate(
+        &self,
+        id: ContentId,
+        locale: &str,
+        group: ContentId,
+        slug: &str,
+        expected_version: i64,
+    ) -> Result<ContentItem, StoreError>;
     /// Updates WHERE id AND version = item.version, bumping version and updated_at; no row gives `Conflict{current_version}` or `NotFound`.
     async fn update(&self, item: &ContentItem) -> Result<ContentItem, StoreError>;
     /// Sets `updated_at` of item `id` to `at`, leaving `version` and everything else as
@@ -297,9 +396,11 @@ pub trait ContentRepo: Send + Sync {
     /// (case-sensitive, binary order, at most [`MAX_SLUG_PREFIX_RESULTS`](crate::MAX_SLUG_PREFIX_RESULTS)).
     /// Matches like `hello-world` are included too, so callers that allocate numeric
     /// suffixes (`hello-2`) must filter the result themselves.
+    /// `locale` `None`: in any locale.
     async fn slugs_with_prefix(
         &self,
         kind: &str,
+        locale: Option<&str>,
         parent: Option<ContentId>,
         prefix: &str,
     ) -> Result<Vec<String>, StoreError>;
@@ -383,10 +484,19 @@ pub trait TermRepo: Send + Sync {
     async fn update(&self, term: &Term) -> Result<(), StoreError>;
     /// Fetches a term by id.
     async fn get(&self, id: TermId) -> Result<Option<Term>, StoreError>;
-    /// Fetches a term by taxonomy and slug.
-    async fn get_by_slug(&self, tax: &str, slug: &str) -> Result<Option<Term>, StoreError>;
-    /// Lists all terms of a taxonomy.
-    async fn list(&self, tax: &str) -> Result<Vec<Term>, StoreError>;
+    /// Fetches a term by taxonomy, locale (`None`: any; with several matches the first by
+    /// id) and slug.
+    async fn get_by_slug(
+        &self,
+        tax: &str,
+        locale: Option<&str>,
+        slug: &str,
+    ) -> Result<Option<Term>, StoreError>;
+    /// Lists all terms of a taxonomy, in one locale or (`None`) in every locale.
+    async fn list(&self, tax: &str, locale: Option<&str>) -> Result<Vec<Term>, StoreError>;
+    /// The terms of up to [`MAX_GROUPS`] term translation groups (more is `Invalid`),
+    /// ordered by group then locale.
+    async fn group_members(&self, groups: &[TermId]) -> Result<Vec<Term>, StoreError>;
     /// Deletes a term (missing: no-op). A term with child terms is `ForeignKey`.
     async fn delete(&self, id: TermId) -> Result<(), StoreError>;
     /// Replaces an item's terms, storing the given order as `position`.
@@ -407,10 +517,14 @@ pub trait TermRepo: Send + Sync {
 pub trait MenuRepo: Send + Sync {
     /// Fetches a menu with its item tree by name.
     async fn get(&self, name: &str) -> Result<Option<Menu>, StoreError>;
-    /// Replaces the whole menu tree in one statement batch.
+    /// The menu that translates `name` into `locale` (`translation_of = name`), if any.
+    async fn get_translation(&self, name: &str, locale: &str) -> Result<Option<Menu>, StoreError>;
+    /// Replaces the whole menu tree in one statement batch (label, locale and
+    /// `translation_of` included). A second translation of one menu into one locale is
+    /// `UniqueViolation { constraint: "menus_translation_uq" }`.
     async fn put(&self, menu: &Menu) -> Result<(), StoreError>;
-    /// Lists menus as (name, label) pairs.
-    async fn list(&self) -> Result<Vec<(String, String)>, StoreError>;
+    /// Lists every menu, by name.
+    async fn list(&self) -> Result<Vec<MenuSummary>, StoreError>;
     /// Deletes a menu and its items (missing: no-op).
     async fn delete(&self, name: &str) -> Result<(), StoreError>;
 }
