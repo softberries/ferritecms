@@ -317,11 +317,17 @@ pub struct TermDto {
     pub name: String,
     pub description: String,
     pub parent_id: Option<Uuid>,
+    /// The term's locale.
+    pub locale: String,
+    /// The id of the term translation group's original.
+    pub translation_group: Uuid,
 }
 
 impl From<Term> for TermDto {
     fn from(t: Term) -> Self {
         Self {
+            locale: t.locale.clone(),
+            translation_group: t.translation_group.as_uuid(),
             id: t.id.as_uuid(),
             taxonomy: t.taxonomy,
             slug: t.slug,
@@ -353,6 +359,12 @@ pub struct TermInput {
     pub parent_id: Option<Uuid>,
     #[serde(default)]
     pub description: String,
+    /// One of the site's locales; absent: the default.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// A term of the same taxonomy whose translation group the new term joins.
+    #[serde(default)]
+    pub translation_of: Option<Uuid>,
 }
 
 /// `PATCH /terms/{id}`: merged into the current term.

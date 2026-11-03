@@ -100,7 +100,13 @@ async fn meta_reports_the_site(api: Api) -> Api {
     assert_eq!(r.header("x-frame-options"), Some("SAMEORIGIN"));
     assert_eq!(
         r.json(),
-        json!({"api": "v1", "version": env!("CARGO_PKG_VERSION"), "site_url": SITE_URL})
+        json!({
+            "api": "v1",
+            "version": env!("CARGO_PKG_VERSION"),
+            "site_url": SITE_URL,
+            "default_locale": "en",
+            "locales": [{"tag": "en", "label": "English", "prefix": null}],
+        })
     );
     let head = api.send(request(Method::HEAD, "/api/v1/meta")).await;
     assert_eq!(head.status, StatusCode::OK);

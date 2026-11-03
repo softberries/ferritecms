@@ -29,6 +29,18 @@ pub struct ReviewSeoArgs {
     pub item: String,
 }
 
+/// The arguments of `translate`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TranslateArgs {
+    /// The item's content type (`post`, `page`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The item's id.
+    pub id: String,
+    /// The target locale, a tag site_overview lists (e.g. `de`).
+    pub locale: String,
+}
+
 fn user(text: String) -> Vec<PromptMessage> {
     vec![PromptMessage::new_text(Role::User, text)]
 }
@@ -55,6 +67,30 @@ impl FerriteMcp {
              body_markdown, seo). Do not publish it.\n\
              5. Show me the draft with content_preview_link and wait for my review.",
             topic = args.topic.trim(),
+        ))
+    }
+
+    /// Translate one item into another of the site's locales, as a draft for review.
+    #[prompt(name = "translate")]
+    pub async fn translate(
+        &self,
+        Parameters(args): Parameters<TranslateArgs>,
+    ) -> Vec<PromptMessage> {
+        user(format!(
+            "Translate the {kind} {id} into the locale {locale}.\n\n\
+             1. Call site_overview to check that {locale} is one of the site's locales.\n\
+             2. Call content_translate (type {kind}, id {id}, locale {locale}): it makes a \
+             draft copy in that locale and returns its body_markdown and notes.\n\
+             3. Translate the title, the excerpt, the SEO title and description and the \
+             body_markdown. Keep every ```ferrite-block fence and every \
+             `ferrite:media/<id>` image as they are; translate only alt texts and text.\n\
+             4. Save the translation with content_update (send its version). Do not \
+             publish it.\n\
+             5. Tell me what the notes said (an untranslated parent or term) and show me \
+             the draft with content_preview_link.",
+            kind = args.kind.trim(),
+            id = args.id.trim(),
+            locale = args.locale.trim(),
         ))
     }
 

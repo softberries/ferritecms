@@ -45,7 +45,7 @@ use crate::{
         },
         dto::content::{
             AllowedActionsDto, AuthorRefDto, ContentSummaryDto, RevisionSummaryDto, SeoDto,
-            nullable,
+            TranslationRefDto, nullable,
         },
         problem::Problem,
     },
@@ -119,6 +119,22 @@ pub struct ListInput {
     /// `next_cursor` of the previous page of the same query, to get the next page.
     #[serde(default)]
     pub cursor: Option<String>,
+    /// Only items in this locale (a tag site_overview lists, e.g. `de`).
+    #[serde(default)]
+    pub locale: Option<String>,
+}
+
+/// The input of `content_translate`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TranslateInput {
+    /// The item's content type (`post`, `page`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The item to translate.
+    pub id: Uuid,
+    /// The target locale (a tag site_overview lists, not the item's own).
+    pub locale: String,
 }
 
 /// An item named by type and id (`content_get`, `content_preview_link`).
@@ -304,6 +320,12 @@ pub struct CreateInput {
     /// SEO title, description, canonical URL and robots directives.
     #[serde(default)]
     pub seo: Option<SeoInput>,
+    /// The item's locale (a tag site_overview lists); default the site's default.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// An item of the same type this one translates (joins its translation group).
+    #[serde(default)]
+    pub translation_of: Option<Uuid>,
 }
 
 /// The input of `content_update`.
@@ -358,6 +380,13 @@ pub struct UpdateInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Uuid>")]
     pub featured_image: Option<Option<Uuid>>,
+    /// Moves the item to another locale (a published item's old address redirects).
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// Joins the translation group of this item; `null` leaves the item's group.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<Uuid>")]
+    pub translation_of: Option<Option<Uuid>>,
     /// SEO changes, member by member.
     #[serde(default)]
     pub seo: Option<SeoInput>,
@@ -403,6 +432,10 @@ pub struct ItemOut {
     /// What the Markdown converter changed or dropped, one sentence each.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// The item's locale.
+    pub locale: String,
+    /// The item's other translations you may read: id, locale, status, title, permalink.
+    pub translations: Vec<TranslationRefDto>,
 }
 
 /// An item in a list: no body.
@@ -425,6 +458,7 @@ pub struct SummaryOut {
     pub url: Option<String>,
     pub public: bool,
     pub admin_url: String,
+    pub locale: String,
 }
 
 /// One page of `content_list`.
@@ -561,6 +595,67 @@ impl FerriteMcp {
                     &out.notes,
                 );
                 results::ok(out.value, summary)
+            }
+            Err(p) => results::from_problem(p),
+        }
+    }
+
+    /// Copies an item as a new draft in another locale (the site's locales are in
+    /// site_overview) and returns it with `body_markdown`: translate the title, body and
+    /// excerpt yourself, then save them with content_update (send its `version`). The
+    /// draft keeps the source's slug, fields and SEO meta; its parent and terms are their
+    /// translations, and `notes` says which had none. Fails when the item already has a
+    /// translation in that locale (the error names it).
+    #[tool(annotations(
+        title = "Translate content",
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
+    pub async fn content_translate(
+        &self,
+        caller: Caller,
+        Parameters(input): Parameters<TranslateInput>,
+    ) -> CallToolResult {
+        let api = &self.api;
+        let actor = caller.actor();
+        let done = async {
+            let source = crate::api::content::load(api, actor, &input.kind, input.id).await?;
+            let t = api
+                .content
+                .translate(actor, source.id, &input.locale)
+                .await?;
+            let notes: Vec<String> = t
+                .notes
+                .iter()
+                .map(ferrite_core::TranslateNote::code)
+                .collect();
+            self.audit(
+                &caller,
+                "content_translate",
+                "content",
+                Some(t.item.id.to_string()),
+                json!({"type": t.item.kind, "source": input.id, "locale": input.locale}),
+            )
+            .await;
+            let out = self.item_out(actor, t.item, notes).await?;
+            Ok::<_, Problem>(out)
+        }
+        .await;
+        match done {
+            Ok(out) => {
+                let summary = with_notes(
+                    format!(
+                        "Created the {} draft {:?} (id {}, version {}); translate it, then save it with content_update.",
+                        out.locale, out.title, out.id, out.version
+                    ),
+                    &out.notes,
+                );
+                match serde_json::to_value(&out) {
+                    Ok(v) => results::ok(v, summary),
+                    Err(_) => results::from_problem(Problem::internal()),
+                }
             }
             Err(p) => results::from_problem(p),
         }
@@ -1061,6 +1156,8 @@ impl FerriteMcp {
             url,
             public: is_public,
             notes,
+            locale: d.locale,
+            translations: d.translations,
         })
     }
 
@@ -1212,8 +1309,10 @@ impl FerriteMcp {
             order: input.order.map(Into::into),
             limit: Some(limit),
             cursor: input.cursor,
+            locale: None,
         };
-        let query = params.into_query(&input.kind)?;
+        let mut query = params.into_query(&input.kind)?;
+        query.locale = crate::api::content::checked_locale(api, input.locale).await?;
         let page = api.content.list(actor, &query).await?;
         let map = authors(api, actor, page.items.iter().map(|i| i.author_id)).await?;
         let ids: Vec<ContentId> = page.items.iter().map(|i| i.id).collect();
@@ -1242,6 +1341,7 @@ impl FerriteMcp {
                 scheduled_at: d.scheduled_at,
                 url,
                 public: is_public,
+                locale: d.locale,
             });
         }
         let out = ListOut {
@@ -1299,7 +1399,18 @@ impl FerriteMcp {
                 .collect(),
             seo: input.seo.map(Into::into),
         };
-        let item = api.content.create(actor, draft).await?;
+        let item = if input.locale.is_some() || input.translation_of.is_some() {
+            api.content
+                .create_localized(
+                    actor,
+                    draft,
+                    input.locale,
+                    input.translation_of.map(ContentId::from_uuid),
+                )
+                .await?
+        } else {
+            api.content.create(actor, draft).await?
+        };
         self.audit(
             caller,
             "content_create",
@@ -1372,11 +1483,26 @@ impl FerriteMcp {
             menu_order: None,
             terms: input.terms,
             seo: None,
+            locale: None,
+            translation_of: None,
         };
         let terms = api.content.terms_of(actor, id).await?;
         let mut draft = patch.apply(&current, terms);
         draft.seo = input.seo.map(Into::into);
-        match api.content.update(actor, id, input.version, draft).await {
+        let relocation = ferrite_core::Relocation {
+            locale: input.locale,
+            translation_of: input.translation_of.map(|t| t.map(ContentId::from_uuid)),
+        };
+        let mut result = api.content.update(actor, id, input.version, draft).await;
+        if relocation != ferrite_core::Relocation::default()
+            && let Ok(saved) = &result
+        {
+            result = api
+                .content
+                .relocate(actor, id, saved.version, relocation)
+                .await;
+        }
+        match result {
             Ok(item) => {
                 self.audit(
                     caller,

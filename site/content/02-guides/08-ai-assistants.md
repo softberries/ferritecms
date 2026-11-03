@@ -202,7 +202,7 @@ assistant cannot be used anywhere else.
 
 ## What an assistant can do
 
-56 tools cover what an editor or administrator does in the admin:
+57 tools cover what an editor or administrator does in the admin:
 
 - **Content**: list, search, read, write, publish, schedule, submit for review, trash
   and restore posts, pages and custom types, with revisions and preview links. Bodies are
@@ -218,7 +218,7 @@ assistant cannot be used anywhere else.
 
 The server also offers **resources** the assistant can read (the site overview, any item as
 Markdown, the site's writing guide) and **prompts** for common jobs (`write_post`,
-`review_seo`, `site_health`, `tidy_media`). The [MCP tools](../05-reference/02-mcp-tools.md)
+`review_seo`, `site_health`, `tidy_media`, `translate`). The [MCP tools](../05-reference/02-mcp-tools.md)
 reference lists everything.
 
 Changes are live as soon as a tool returns. The server tells the assistant to create

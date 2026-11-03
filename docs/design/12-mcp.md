@@ -236,7 +236,7 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Area | Tools |
 |---|---|
 | Site | `site_overview` (title, URL, version, active theme, content types, taxonomies, menus, counts, the caller's role and scopes), `site_search` (full-text over content) |
-| Content | `content_list`, `content_get`, `content_create`, `content_update`, `content_publish`, `content_unpublish`, `content_schedule`, `content_submit_for_review`, `content_trash`, `content_restore`, `content_revisions`, `content_restore_revision`, `content_preview_link` |
+| Content | `content_list`, `content_get`, `content_create`, `content_update`, `content_publish`, `content_unpublish`, `content_schedule`, `content_submit_for_review`, `content_trash`, `content_restore`, `content_revisions`, `content_restore_revision`, `content_preview_link`, `content_translate` (M6-1) |
 | Media | `media_list`, `media_get`, `media_upload` (from an `https` URL fetched with the SSRF-checked client, or base64 data up to 6 MiB), `media_update` (title, alt), `media_trash`, `media_restore` |
 | Taxonomies | `taxonomies_list`, `terms_list`, `term_create`, `term_update`, `term_delete` |
 | Menus | `menus_list`, `menu_get`, `menu_set` (replace the item tree) |
@@ -274,7 +274,8 @@ admin screen for these (`site_overview` returns the admin URL).
   (the site's writing conventions: the theme's supported blocks, image sizes, SEO fields).
 - Prompts: `write_post` (topic, tone → a draft for review), `review_seo` (an item → title,
   description and heading suggestions), `site_health` (status, failing jobs, plugin
-  failures → a summary), `tidy_media` (find images without alt text).
+  failures → a summary), `tidy_media` (find images without alt text); M6-1: `translate` (an item and a locale →
+  `content_translate`, a translated draft for review).
 
 ## 6. HTTP wiring
 

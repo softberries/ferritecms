@@ -6,7 +6,7 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 # MCP tools
 
 These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
-56 of them, in 13 areas. To connect an assistant, see
+57 of them, in 13 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 How to read the tables:
@@ -36,7 +36,7 @@ offered: they stay with a person in the admin.
 
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
-| `site_overview` | Describes the site and the caller: URLs, version, active theme, content types with counts, taxonomies, menus, role and scopes. | none (each section needs its own read scope) | read |
+| `site_overview` | Describes the site and the caller: URLs, version, active theme, the site's languages, content types with counts, taxonomies, menus, role and scopes. | none (each section needs its own read scope) | read |
 | `site_search` | Full-text search over the content the caller may read. | `content:read` | read |
 
 ## Content
@@ -56,6 +56,7 @@ offered: they stay with a person in the admin.
 | `content_revisions` | Lists an item's saved revisions. | `content:read` | read |
 | `content_restore_revision` | Brings an earlier revision back as a new version of the item. | `content:write` | write |
 | `content_preview_link` | Returns the preview link of an item, for a signed-in browser. | `content:read` | read |
+| `content_translate` | Makes a draft copy of an item in another of the site's languages, linked to it as its translation, and returns it with notes on what it could not carry over. | `content:write` | write |
 
 ## Media
 
@@ -172,4 +173,6 @@ commands):
   suggestions;
 - `site_health`: sums up the site's status, dead jobs and queued ones with a last error,
   and plugin failures;
-- `tidy_media`: finds images without alt text and proposes some.
+- `tidy_media`: finds images without alt text and proposes some;
+- `translate` (`type`, `id`, `locale`): translates one item into another of the site's
+  languages as a draft for you to review.

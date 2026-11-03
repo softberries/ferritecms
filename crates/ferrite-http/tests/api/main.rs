@@ -16,6 +16,7 @@ mod foundation;
 mod idempotency;
 mod import;
 mod jobs;
+mod locales;
 mod mcp;
 mod mcp_admin;
 mod mcp_content;

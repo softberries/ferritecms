@@ -58,6 +58,8 @@ pub(crate) async fn menu_list(api: &ApiState, actor: &Actor) -> Result<MenuList,
             .map(|m| MenuSummary {
                 name: m.name,
                 label: m.label,
+                locale: m.locale,
+                translation_of: m.translation_of,
             })
             .collect(),
         next_cursor: None,
@@ -117,8 +119,9 @@ pub async fn put_menu(
         name: name.clone(),
         label: input.label,
         items: input.items.into_iter().map(MenuItem::from).collect(),
-        locale: String::new(),
-        translation_of: None,
+        // Empty: the stored menu's locale, or the default for a new menu.
+        locale: input.locale.unwrap_or_default(),
+        translation_of: input.translation_of,
     };
     let actor = &who.actor;
     api.menus.put(actor, &menu).await?;

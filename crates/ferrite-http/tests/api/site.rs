@@ -98,7 +98,10 @@ async fn menus_put_get_delete(api: Api) -> Api {
     assert!(home.body.contains(">Elsewhere</a>"), "{}", home.body);
 
     let list = b.get(&api, MENUS).await.json();
-    assert_eq!(list["items"], json!([{"name": "primary", "label": "Main"}]));
+    assert_eq!(
+        list["items"],
+        json!([{"name": "primary", "label": "Main", "locale": "en", "translation_of": null}])
+    );
 
     // Validation: a bad URL, a parent outside the menu, a name that does not match.
     let bad = json!({"label": "x", "items": [

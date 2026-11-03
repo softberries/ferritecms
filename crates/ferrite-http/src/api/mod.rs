@@ -112,6 +112,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(content::submit_content))
         .routes(routes!(content::restore_content))
         .routes(routes!(content::schedule_content))
+        .routes(routes!(content::translate_content))
         .routes(routes!(content::list_revisions))
         .routes(routes!(content::get_revision))
         .routes(routes!(content::restore_revision))
@@ -146,6 +147,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             taxonomies::delete_taxonomy
         ))
         .routes(routes!(taxonomies::list_terms, taxonomies::create_term))
+        .routes(routes!(taxonomies::translate_term))
         .routes(routes!(
             taxonomies::get_term,
             taxonomies::update_term,

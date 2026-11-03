@@ -1290,6 +1290,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "description": "Only items in this locale (one of `GET /meta`'s; another is `400 invalid-locale`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1486,6 +1495,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "description": "Only items in this locale (`400 invalid-locale` for another).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1495,6 +1513,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ContentCountsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-locale`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
                 }
               }
             }
@@ -3112,6 +3140,123 @@
           },
           "428": {
             "description": "`precondition-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/content/{type}/{id}/translations": {
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "translate_content",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new draft translation (`Location`) and its notes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranslationCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (needs `edit_own`, `content:write`) or `csrf`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such item the caller may read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: the locale has a translation already (`detail` names its id)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`locale`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7753,15 +7898,34 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "description": "Only terms in this locale (`400 invalid-locale` for another).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Every term of the taxonomy",
+            "description": "Every term of the taxonomy (in `locale` when given)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TermList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid-locale`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
                 }
               }
             }
@@ -7894,7 +8058,7 @@
             }
           },
           "422": {
-            "description": "`validation` (name, slug, parent)",
+            "description": "`validation` (name, slug, parent, `locale`, `translation_of`: another taxonomy or a locale its group has already)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8151,6 +8315,115 @@
           },
           "422": {
             "description": "`validation` (name, slug, parent)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/terms/{id}/translations": {
+      "post": {
+        "tags": [
+          "taxonomies"
+        ],
+        "operationId": "translate_term",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermTranslateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new term in `locale`, same name and slug, in the term's translation group (`Location`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_terms`, `terms:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: the group has a term in that locale already",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`locale`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -10647,7 +10920,10 @@
           "permalink",
           "author",
           "allowed",
-          "seo"
+          "seo",
+          "locale",
+          "translation_group",
+          "translations"
         ],
         "properties": {
           "allowed": {
@@ -10678,6 +10954,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "locale": {
+            "type": "string",
+            "description": "The item's locale (a tag of `GET /meta`'s `locales`)."
           },
           "menu_order": {
             "type": "integer",
@@ -10730,6 +11010,18 @@
           "title": {
             "type": "string"
           },
+          "translation_group": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the translation group's original (the item's own id when alone)."
+          },
+          "translations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranslationRefDto"
+            },
+            "description": "The other members of the item's translation group the caller may read."
+          },
           "type": {
             "type": "string",
             "description": "The content type (`post`, `page`, …)."
@@ -10765,6 +11057,13 @@
           },
           "fields": {
             "type": "object"
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the site's locales (`GET /meta`); absent: the default."
           },
           "menu_order": {
             "type": "integer",
@@ -10806,6 +11105,14 @@
           },
           "title": {
             "type": "string"
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "An item of the same type whose translation group the new item joins (its locale\nmust be free there, else `409`)."
           }
         }
       },
@@ -10847,6 +11154,10 @@
           "fields": {
             "type": "object"
           },
+          "locale": {
+            "type": "string",
+            "description": "Moves the item to another of the site's locales (a published item's old path\nredirects; not for an item with children)."
+          },
           "menu_order": {
             "type": "integer",
             "format": "int32"
@@ -10876,6 +11187,14 @@
           },
           "title": {
             "type": "string"
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Joins the translation group of this item; `null` leaves the group."
           }
         }
       },
@@ -10946,7 +11265,9 @@
           "updated_at",
           "version",
           "author",
-          "allowed"
+          "allowed",
+          "locale",
+          "translations"
         ],
         "properties": {
           "allowed": {
@@ -10972,6 +11293,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "locale": {
+            "type": "string",
+            "description": "The item's locale."
           },
           "menu_order": {
             "type": "integer",
@@ -11006,6 +11331,13 @@
           },
           "title": {
             "type": "string"
+          },
+          "translations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranslationStatusDto"
+            },
+            "description": "The other members of its translation group the caller may read."
           },
           "type": {
             "type": "string"
@@ -12336,7 +12668,8 @@
         "required": [
           "name",
           "label",
-          "items"
+          "items",
+          "locale"
         ],
         "properties": {
           "items": {
@@ -12348,9 +12681,20 @@
           "label": {
             "type": "string"
           },
+          "locale": {
+            "type": "string",
+            "description": "The menu's locale."
+          },
           "name": {
             "type": "string",
             "description": "Lowercase, no whitespace or `/` (a theme's menu location, e.g. `primary`)."
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The default-locale menu this one translates (`primary` for `primary-de`)."
           }
         }
       },
@@ -12369,11 +12713,25 @@
             "type": "string",
             "description": "At most 200 characters."
           },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the site's locales; absent: the stored menu's (a new menu: the default)."
+          },
           "name": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name of the default-locale menu this one translates; absent or `null`: none."
           }
         }
       },
@@ -12488,17 +12846,28 @@
       },
       "MenuSummary": {
         "type": "object",
-        "description": "A menu's name and label.",
+        "description": "A menu's name, label and locale.",
         "required": [
           "name",
-          "label"
+          "label",
+          "locale"
         ],
         "properties": {
           "label": {
             "type": "string"
           },
+          "locale": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The default-locale menu this one translates."
           }
         }
       },
@@ -12508,12 +12877,25 @@
         "required": [
           "api",
           "version",
-          "site_url"
+          "site_url",
+          "default_locale",
+          "locales"
         ],
         "properties": {
           "api": {
             "type": "string",
             "description": "Always `v1` under `/api/v1`."
+          },
+          "default_locale": {
+            "type": "string",
+            "description": "The default locale's tag (M6-1)."
+          },
+          "locales": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetaLocaleDto"
+            },
+            "description": "Every locale of the site, the default first (public: the `hreflang` links show\nthem anyway, design 13 D19)."
           },
           "site_url": {
             "type": "string",
@@ -12522,6 +12904,29 @@
           "version": {
             "type": "string",
             "description": "The FerriteCMS version serving the request."
+          }
+        }
+      },
+      "MetaLocaleDto": {
+        "type": "object",
+        "description": "One of the site's locales.",
+        "required": [
+          "tag",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The URL prefix (`de` for `/de/`); `null` for the default locale."
+          },
+          "tag": {
+            "type": "string"
           }
         }
       },
@@ -14303,7 +14708,9 @@
           "taxonomy",
           "slug",
           "name",
-          "description"
+          "description",
+          "locale",
+          "translation_group"
         ],
         "properties": {
           "description": {
@@ -14312,6 +14719,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "locale": {
+            "type": "string",
+            "description": "The term's locale."
           },
           "name": {
             "type": "string"
@@ -14329,6 +14740,11 @@
           },
           "taxonomy": {
             "type": "string"
+          },
+          "translation_group": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the term translation group's original."
           }
         }
       },
@@ -14341,6 +14757,13 @@
         "properties": {
           "description": {
             "type": "string"
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the site's locales; absent: the default."
           },
           "name": {
             "type": "string",
@@ -14360,6 +14783,14 @@
               "null"
             ],
             "description": "Derived from the name when absent; a taken slug gets `-2`, `-3`, …."
+          },
+          "translation_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A term of the same taxonomy whose translation group the new term joins."
           }
         }
       },
@@ -14408,6 +14839,20 @@
             "description": "A taken slug gets `-2`, `-3`, …."
           }
         }
+      },
+      "TermTranslateInput": {
+        "type": "object",
+        "description": "The body of `POST /terms/{id}/translations`.",
+        "required": [
+          "locale"
+        ],
+        "properties": {
+          "locale": {
+            "type": "string",
+            "description": "One of the site's locales the term's group has no member in yet."
+          }
+        },
+        "additionalProperties": false
       },
       "ThemeBundle": {
         "type": "string",
@@ -14872,6 +15317,91 @@
             "type": "string"
           },
           "secret_base32": {
+            "type": "string"
+          }
+        }
+      },
+      "TranslateInput": {
+        "type": "object",
+        "description": "`POST /content/{type}/{id}/translations`.",
+        "required": [
+          "locale"
+        ],
+        "properties": {
+          "locale": {
+            "type": "string",
+            "description": "The target locale (one of the site's, not the item's)."
+          }
+        }
+      },
+      "TranslationCreated": {
+        "type": "object",
+        "description": "The new translation (`201`) and what it could not take over.",
+        "required": [
+          "item",
+          "notes"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ContentDto"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`parent_untranslated`, `term_untranslated:<term id>`."
+          }
+        }
+      },
+      "TranslationRefDto": {
+        "type": "object",
+        "description": "Another item of a translation group.",
+        "required": [
+          "id",
+          "locale",
+          "status",
+          "title",
+          "permalink"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "permalink": {
+            "type": "string",
+            "description": "The public path (whatever the status)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `pending`, `scheduled`, `published`, `private` or `trash`."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "TranslationStatusDto": {
+        "type": "object",
+        "description": "A list row's translation: its locale and status.",
+        "required": [
+          "id",
+          "locale",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         }

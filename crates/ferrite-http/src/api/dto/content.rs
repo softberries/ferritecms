@@ -52,6 +52,32 @@ pub struct ContentDto {
     pub allowed: AllowedActionsDto,
     /// The SEO title and description (`content_meta` `seo.title`, `seo.description`).
     pub seo: SeoDto,
+    /// The item's locale (a tag of `GET /meta`'s `locales`).
+    pub locale: String,
+    /// The id of the translation group's original (the item's own id when alone).
+    pub translation_group: Uuid,
+    /// The other members of the item's translation group the caller may read.
+    pub translations: Vec<TranslationRefDto>,
+}
+
+/// Another item of a translation group.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TranslationRefDto {
+    pub id: Uuid,
+    pub locale: String,
+    /// `draft`, `pending`, `scheduled`, `published`, `private` or `trash`.
+    pub status: String,
+    pub title: String,
+    /// The public path (whatever the status).
+    pub permalink: String,
+}
+
+/// A list row's translation: its locale and status.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TranslationStatusDto {
+    pub id: Uuid,
+    pub locale: String,
+    pub status: String,
 }
 
 impl ContentDto {
@@ -64,6 +90,9 @@ impl ContentDto {
         seo: Seo,
     ) -> Self {
         Self {
+            locale: item.locale.clone(),
+            translation_group: item.translation_group.as_uuid(),
+            translations: Vec::new(),
             id: item.id.as_uuid(),
             kind: item.kind,
             status: item.status.as_str().to_owned(),
@@ -210,11 +239,17 @@ pub struct ContentSummaryDto {
     pub author: AuthorRefDto,
     /// What the caller may do with it now.
     pub allowed: AllowedActionsDto,
+    /// The item's locale.
+    pub locale: String,
+    /// The other members of its translation group the caller may read.
+    pub translations: Vec<TranslationStatusDto>,
 }
 
 impl ContentSummaryDto {
     pub fn new(item: ContentItem, author: AuthorRef, allowed: AllowedActions) -> Self {
         Self {
+            locale: item.locale.clone(),
+            translations: Vec::new(),
             id: item.id.as_uuid(),
             kind: item.kind,
             status: item.status.as_str().to_owned(),
@@ -389,6 +424,13 @@ pub struct ContentInput {
     /// SEO title and description; absent or `null`: none.
     #[serde(default)]
     pub seo: Option<SeoPatchDto>,
+    /// One of the site's locales (`GET /meta`); absent: the default.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// An item of the same type whose translation group the new item joins (its locale
+    /// must be free there, else `409`).
+    #[serde(default)]
+    pub translation_of: Option<Uuid>,
 }
 
 impl ContentInput {
@@ -445,6 +487,30 @@ pub struct ContentPatch {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = SeoPatchDto, required = false)]
     pub seo: Option<SeoPatchDto>,
+    /// Moves the item to another of the site's locales (a published item's old path
+    /// redirects; not for an item with children).
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = String, required = false)]
+    pub locale: Option<String>,
+    /// Joins the translation group of this item; `null` leaves the group.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schema(value_type = Option<Uuid>, required = false)]
+    pub translation_of: Option<Option<Uuid>>,
+}
+
+/// `POST /content/{type}/{id}/translations`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TranslateInput {
+    /// The target locale (one of the site's, not the item's).
+    pub locale: String,
+}
+
+/// The new translation (`201`) and what it could not take over.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TranslationCreated {
+    pub item: ContentDto,
+    /// `parent_untranslated`, `term_untranslated:<term id>`.
+    pub notes: Vec<String>,
 }
 
 impl ContentPatch {

@@ -102,6 +102,10 @@ pub struct MenuDto {
     pub name: String,
     pub label: String,
     pub items: Vec<MenuItemDto>,
+    /// The menu's locale.
+    pub locale: String,
+    /// The default-locale menu this one translates (`primary` for `primary-de`).
+    pub translation_of: Option<String>,
 }
 
 impl From<Menu> for MenuDto {
@@ -110,6 +114,8 @@ impl From<Menu> for MenuDto {
             name: m.name,
             label: m.label,
             items: m.items.into_iter().map(MenuItemDto::from).collect(),
+            locale: m.locale,
+            translation_of: m.translation_of,
         }
     }
 }
@@ -126,13 +132,22 @@ pub struct MenuInput {
     /// At most 500 entries.
     #[serde(default)]
     pub items: Vec<MenuItemDto>,
+    /// One of the site's locales; absent: the stored menu's (a new menu: the default).
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The name of the default-locale menu this one translates; absent or `null`: none.
+    #[serde(default)]
+    pub translation_of: Option<String>,
 }
 
-/// A menu's name and label.
+/// A menu's name, label and locale.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MenuSummary {
     pub name: String,
     pub label: String,
+    pub locale: String,
+    /// The default-locale menu this one translates.
+    pub translation_of: Option<String>,
 }
 
 /// A menu location of the theme the answering node serves (its `[menus]` table).

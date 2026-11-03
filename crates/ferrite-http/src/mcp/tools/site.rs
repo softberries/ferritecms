@@ -36,6 +36,17 @@ pub struct SiteInfo {
     pub version: &'static str,
     /// The theme this node renders with.
     pub theme: String,
+    /// The default locale's tag.
+    pub default_locale: String,
+    /// Every locale of the site, the default first: `tag` and `label`.
+    pub locales: Vec<LocaleInfo>,
+}
+
+/// One of the site's locales.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocaleInfo {
+    pub tag: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +284,7 @@ impl FerriteMcp {
                     .collect()
             });
         let user = &caller.who.user;
+        let site_locales = ferrite_core::locales::read(api.store.read()).await?;
         Ok(Overview {
             site: SiteInfo {
                 title,
@@ -281,6 +293,14 @@ impl FerriteMcp {
                 mcp_url: format!("{}{}", api.site_url, crate::mcp::PATH),
                 version: env!("CARGO_PKG_VERSION"),
                 theme,
+                default_locale: site_locales.default.tag.clone(),
+                locales: site_locales
+                    .all()
+                    .map(|d| LocaleInfo {
+                        tag: d.tag.clone(),
+                        label: d.label.clone(),
+                    })
+                    .collect(),
             },
             caller: CallerInfo {
                 login: user.login.clone(),
