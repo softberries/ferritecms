@@ -17365,6 +17365,21 @@
             "format": "int64",
             "description": "1..=100 (default 50): top-level comment threads per public comment page\n(`?cpage=N`); each thread shows with all its approved replies."
           },
+          "health.external_links": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the content health run checks external links (default `false`; the\nserver then contacts every linked site, M6-4)."
+          },
+          "health.stale_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Days without an edit after which a published item is reported `stale` (30 to\n3650, default 365)."
+          },
           "mcp.enabled": {
             "type": [
               "boolean",

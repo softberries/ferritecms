@@ -4012,6 +4012,17 @@ export interface components {
              */
             "comments.per_page"?: number | null;
             /**
+             * @description Whether the content health run checks external links (default `false`; the
+             *     server then contacts every linked site, M6-4).
+             */
+            "health.external_links"?: boolean | null;
+            /**
+             * Format: int64
+             * @description Days without an edit after which a published item is reported `stale` (30 to
+             *     3650, default 365).
+             */
+            "health.stale_days"?: number | null;
+            /**
              * @description Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer
              *     (default `true`); when off they answer `404` and existing connections stay.
              */
