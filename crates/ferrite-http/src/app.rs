@@ -96,7 +96,7 @@ pub mod feeds;
 mod handler;
 pub mod hits;
 pub mod media;
-mod pipeline;
+pub(crate) mod pipeline;
 mod plugin_route;
 mod response;
 mod state;

@@ -358,7 +358,7 @@ impl Api {
                     store.clone(),
                     SITE_URL.into(),
                 )),
-                probe: None,
+                probe: Some(Arc::new(ferrite_http::SiteProbe::new(app.clone()))),
             })
             .expect("api state"),
         );

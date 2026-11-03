@@ -648,7 +648,7 @@ async fn boot(
                 store.clone(),
                 state.config.site_url.clone(),
             )),
-            probe: None,
+            probe: Some(Arc::new(ferrite_http::SiteProbe::new(state.clone()))),
         })
         .context("site.url")?,
     );

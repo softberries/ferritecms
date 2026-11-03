@@ -47,14 +47,14 @@ pub(crate) enum RenderError {
 pub(crate) struct NotFound;
 
 /// What a route shows.
-enum Shown {
+pub(crate) enum Shown {
     Item(Box<PageItem>, TemplateKey),
     Listing(Listing, TemplateKey, Box<ArchiveInfo>),
 }
 
 /// What [`load`] found: something to render, or the static front page's own permalink,
 /// answered with a 301 to `/` without rendering (M4-4 P67).
-enum Loaded {
+pub(crate) enum Loaded {
     Shown(Shown),
     FrontPermalink,
 }
@@ -539,7 +539,7 @@ fn pagination(route: &Route, l: &Listing) -> Pagination {
 
 /// Loads what `route` shows through [`SiteReader`], merging every read's keys into
 /// `deps`. `None`: nothing to show (404).
-async fn load(
+pub(crate) async fn load(
     l: &Localized,
     route: &Route,
     path: &str,

@@ -22,6 +22,7 @@ pub mod metrics;
 pub mod oauth;
 pub mod oauth_fetch;
 pub mod plugins;
+pub mod quality_probe;
 pub mod registry_fetch;
 pub mod route;
 pub mod tls;
@@ -38,4 +39,5 @@ pub use plugins::{
     SERVED_FLUSH_EVERY, SERVED_HOOK, ServedBuffer, ServedEvent, SharedFailures, StoreHostServices,
     UaClass, filter_footer, filter_item, run_filter, ua_class,
 };
+pub use quality_probe::SiteProbe;
 pub use route::{Candidate, NormalQuery, Route, RouteTable, SitemapPart, TypeInfo, resolve};
