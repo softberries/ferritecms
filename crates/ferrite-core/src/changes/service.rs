@@ -487,7 +487,7 @@ impl ChangeSetService {
             };
             if !state.contains_key(&key) {
                 let current = snapshot(tx, &object).await?;
-                state.insert(key.clone(), hash_snapshot(current.as_ref()));
+                state.insert(key.clone(), hash_snapshot(&object, current.as_ref()));
             }
             let current = state[&key].clone();
             let conflict = |reason| RevertConflict {

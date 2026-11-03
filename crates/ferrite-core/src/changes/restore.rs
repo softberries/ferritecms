@@ -14,7 +14,7 @@ use super::snapshot::{
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, TRASHED_FROM_META, TypePatch,
     actor::{Capability, require},
-    content::{Action, Edit, Robots, SeoPatch, transition_in},
+    content::{Action, Edit, Robots, SeoPatch, transition_in, webhook_type},
     events,
     permalink::Permalinks,
 };
@@ -147,7 +147,26 @@ async fn move_status(
     item: ContentItem,
     action: Action,
 ) -> Result<ContentItem, CoreError> {
-    transition_in(tx, rules, actor, item.id, item.version, action).await
+    let item = transition_in(tx, rules, actor, item.id, item.version, action).await?;
+    // The same webhook events as the public transitions (media items emit none here:
+    // `emit_content` skips them, and the media paths below emit `media.*`).
+    let kind = webhook_type(action);
+    crate::webhooks::emit_content(tx, rules, kind, &item, Some(actor.user)).await?;
+    Ok(item)
+}
+
+/// `media.trashed` / `media.restored` for a media item, as `MediaService` emits them.
+async fn media_event(
+    tx: &dyn Tx,
+    actor: &Actor,
+    kind: &'static str,
+    item: &ContentItem,
+) -> Result<(), CoreError> {
+    if let Some(media) = tx.media().get(item.id).await? {
+        let ev = crate::webhooks::NewWebhookEvent::media(kind, item, &media, Some(actor.user));
+        crate::webhooks::emit(tx, ev).await?;
+    }
+    Ok(())
 }
 
 async fn trash(
@@ -162,7 +181,9 @@ async fn trash(
     let was = item.status;
     let version = item.version;
     let item = ContentService::trash_in(tx, rules, actor, item, version).await?;
+    crate::webhooks::emit_content(tx, rules, "content.trashed", &item, Some(actor.user)).await?;
     if media {
+        media_event(tx, actor, "media.trashed", &item).await?;
         // As the media trash path: restore knows whether to publish again (P53).
         let from = from.map(str::to_owned).unwrap_or_else(|| {
             if was == ContentStatus::Published {
@@ -205,7 +226,10 @@ async fn content(
     let mut item = item;
     if item.status == ContentStatus::Trash && t.status != ContentStatus::Trash {
         item = ContentService::restore_in(tx, rules, actor, item.id, item.version).await?;
+        crate::webhooks::emit_content(tx, rules, "content.restored", &item, Some(actor.user))
+            .await?;
         if media {
+            media_event(tx, actor, "media.restored", &item).await?;
             tx.meta().delete(id, TRASHED_FROM_META).await?;
         }
     }
@@ -320,7 +344,9 @@ async fn status(
     notes: &mut Vec<(u32, String)>,
 ) -> Result<(), CoreError> {
     use ContentStatus::*;
-    if item.status == t.status {
+    let rescheduled =
+        item.status == Scheduled && t.status == Scheduled && item.scheduled_at != t.scheduled_at;
+    if item.status == t.status && !rescheduled {
         return Ok(());
     }
     if t.status == Trash {
@@ -510,10 +536,15 @@ async fn comment(
         None => ferrite_domain::CommentStatus::Trash,
         Some(v) => parse::<CommentSnap>(v)?.status,
     };
+    let previous = tx.comments().get(id).await?.map(|c| c.status);
     if let Some(c) = tx.comments().set_status(id, status).await? {
         tx.events()
             .append(&events::invalidate([events::post_key(c.item_id)]))
             .await?;
+        if let Some(previous) = previous.filter(|p| *p != c.status) {
+            let kind = "comment.moderated";
+            crate::webhooks::emit_comment(tx, kind, &c, Some(previous), Some(actor.user)).await?;
+        }
     }
     Ok(())
 }

@@ -92,12 +92,11 @@ impl Capture {
                 .or(before.as_ref())
                 .map(label_of)
                 .unwrap_or_default();
-            rows.push((
-                object,
-                label,
-                image(before.as_ref())?,
-                image(after.as_ref())?,
-            ));
+            let (before, after) = (
+                image(&object, before.as_ref())?,
+                image(&object, after.as_ref())?,
+            );
+            rows.push((object, label, before, after));
         }
         let n = u32::try_from(rows.len()).map_err(|_| CoreError::Internal("too many changes"))?;
         let now = Timestamp::now();

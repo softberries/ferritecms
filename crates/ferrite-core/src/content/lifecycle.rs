@@ -399,7 +399,7 @@ async fn transition_item(
 }
 
 /// The webhook event type of a transition (design 18 §3.1).
-fn webhook_type(action: Action) -> &'static str {
+pub(crate) fn webhook_type(action: Action) -> &'static str {
     match action {
         Action::Publish | Action::PublishDue => "content.published",
         Action::Unpublish => "content.unpublished",

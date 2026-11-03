@@ -321,13 +321,44 @@ pub(crate) fn hash_of(bytes: &[u8]) -> String {
     ferrite_domain::to_hex(&Sha256::digest(bytes))
 }
 
-/// The image of a snapshot: absent, present (zstd) or skipped above [`MAX_IMAGE`].
-pub(crate) fn image(snapshot: Option<&Value>) -> Result<Image, CoreError> {
+/// The members of a snapshot of `object` the hash leaves out: the links between terms
+/// and items (a term's `items`, an item's `terms`). A write to one side changes the
+/// other's links without a change of its own being recorded, so hashing them would make
+/// every later revert of the other object a false `changed_since`. They stay in the image,
+/// so a revert still restores them.
+fn link_members(object: &ObjectRef) -> &'static [&'static str] {
+    match object {
+        ObjectRef::Term(_) => &["items", "items_total"],
+        ObjectRef::Content(_) | ObjectRef::Media(_) => &["terms"],
+        _ => &[],
+    }
+}
+
+/// The hash of a snapshot of `object`: SHA-256 of the canonical bytes without its link
+/// members.
+fn hash_for(object: &ObjectRef, v: &Value) -> String {
+    let skip = link_members(object);
+    match v {
+        Value::Object(map) if !skip.is_empty() => {
+            let kept: serde_json::Map<String, Value> = map
+                .iter()
+                .filter(|(k, _)| !skip.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            hash_of(&canonical(&Value::Object(kept)))
+        }
+        _ => hash_of(&canonical(v)),
+    }
+}
+
+/// The image of a snapshot of `object`: absent, present (zstd) or skipped above
+/// [`MAX_IMAGE`].
+pub(crate) fn image(object: &ObjectRef, snapshot: Option<&Value>) -> Result<Image, CoreError> {
     let Some(v) = snapshot else {
         return Ok(Image::Absent);
     };
     let bytes = canonical(v);
-    let hash = hash_of(&bytes);
+    let hash = hash_for(object, v);
     if bytes.len() > MAX_IMAGE {
         return Ok(Image::Skipped { hash });
     }
@@ -339,9 +370,9 @@ pub(crate) fn image(snapshot: Option<&Value>) -> Result<Image, CoreError> {
     })
 }
 
-/// The hash a current snapshot would have (`None` when absent).
-pub(crate) fn hash_snapshot(snapshot: Option<&Value>) -> Option<String> {
-    snapshot.map(|v| hash_of(&canonical(v)))
+/// The hash a current snapshot of `object` would have (`None` when absent).
+pub(crate) fn hash_snapshot(object: &ObjectRef, snapshot: Option<&Value>) -> Option<String> {
+    snapshot.map(|v| hash_for(object, v))
 }
 
 /// Opens an image: `Ok(None)` when absent, `Unavailable` when skipped; decompression is
@@ -384,16 +415,22 @@ mod tests {
             String::from_utf8(canonical(&a)).unwrap(),
             r#"{"a":{"c":null,"z":[{"x":2,"y":1}]},"b":1}"#
         );
-        assert_eq!(hash_snapshot(Some(&a)), hash_snapshot(Some(&b)));
+        assert_eq!(
+            hash_snapshot(&ObjectRef::ActiveTheme, Some(&a)),
+            hash_snapshot(&ObjectRef::ActiveTheme, Some(&b))
+        );
     }
 
     #[test]
     fn image_roundtrips_and_hashes_the_canonical_bytes() {
         let v = json!({"title": "Hello", "body": {"t": "doc"}});
-        let img = image(Some(&v)).unwrap();
-        assert_eq!(img.hash(), hash_snapshot(Some(&v)).as_deref());
+        let img = image(&ObjectRef::ActiveTheme, Some(&v)).unwrap();
+        assert_eq!(
+            img.hash(),
+            hash_snapshot(&ObjectRef::ActiveTheme, Some(&v)).as_deref()
+        );
         assert_eq!(open_image(&img).unwrap(), Some(v.clone()));
-        assert_eq!(image(None).unwrap(), Image::Absent);
+        assert_eq!(image(&ObjectRef::ActiveTheme, None).unwrap(), Image::Absent);
         assert_eq!(open_image(&Image::Absent).unwrap(), None);
         assert_eq!(label_of(&v), "Hello");
         assert_eq!(label_of(&json!({"name": "x".repeat(300)})).len(), 200);
@@ -443,11 +480,45 @@ mod tests {
     }
 
     #[test]
+    fn link_members_stay_out_of_the_hash() {
+        let term = ObjectRef::Term(TermId::new());
+        let a = json!({"name": "News", "items": [], "items_total": 0});
+        let b = json!({"name": "News", "items": ["x"], "items_total": 1});
+        assert_eq!(
+            hash_snapshot(&term, Some(&a)),
+            hash_snapshot(&term, Some(&b))
+        );
+        assert_ne!(
+            hash_snapshot(&term, Some(&a)),
+            hash_snapshot(&term, Some(&json!({"name": "Other", "items": []})))
+        );
+        let item = ObjectRef::Content(ContentId::new());
+        let c = json!({"title": "A", "terms": []});
+        let d = json!({"title": "A", "terms": ["t"]});
+        assert_eq!(
+            hash_snapshot(&item, Some(&c)),
+            hash_snapshot(&item, Some(&d))
+        );
+        // A menu's `items` are its own content: hashed.
+        let menu = ObjectRef::Menu("main".into());
+        let e = json!({"label": "Main", "items": []});
+        let f = json!({"label": "Main", "items": [{"label": "Home"}]});
+        assert_ne!(
+            hash_snapshot(&menu, Some(&e)),
+            hash_snapshot(&menu, Some(&f))
+        );
+        assert_eq!(
+            image(&term, Some(&b)).unwrap().hash(),
+            hash_snapshot(&term, Some(&a)).as_deref()
+        );
+    }
+
+    #[test]
     fn oversize_image_is_skipped_with_hash() {
         let v = json!({"body": "x".repeat(MAX_IMAGE + 1)});
-        let img = image(Some(&v)).unwrap();
+        let img = image(&ObjectRef::ActiveTheme, Some(&v)).unwrap();
         assert!(
-            matches!(&img, Image::Skipped { hash } if *hash == hash_snapshot(Some(&v)).unwrap())
+            matches!(&img, Image::Skipped { hash } if *hash == hash_snapshot(&ObjectRef::ActiveTheme, Some(&v)).unwrap())
         );
         assert!(open_image(&img).is_err());
     }

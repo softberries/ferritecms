@@ -34,7 +34,7 @@ pub use admin::{
     StatusCounts,
 };
 pub use allowed::{AllowedActions, allowed_actions};
-pub(crate) use lifecycle::{Action, reclaim_path, transition_in};
+pub(crate) use lifecycle::{Action, reclaim_path, transition_in, webhook_type};
 pub use seo::{Robots, Seo, SeoPatch};
 pub use translate::{Relocation, TranslateNote, Translated};
 pub(crate) use translate::{

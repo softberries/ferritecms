@@ -70,6 +70,9 @@ backend_tests!(
     revert_plugin_settings_restores_sealed_secret,
     revert_theme_activation_requires_same_artifact,
     revert_plugin_disable_enables,
+    assistant_term_then_tagging_reverts_without_force,
+    revert_publish_emits_unpublished_webhook,
+    revert_reschedule_restores_scheduled_time,
 );
 
 async fn revert_create_trashes_the_item(db: &TestDb) {
@@ -1146,4 +1149,119 @@ async fn revert_plugin_disable_enables(db: &TestDb) {
     service(&s).revert(&s.admin, set, all()).await.unwrap();
     let row = s.store.read().plugins().get("seo").await.unwrap().unwrap();
     assert!(row.enabled);
+}
+
+/// Review fix 1: a term the assistant created and then linked to a post changes the
+/// term's links without a term change; the links stay out of the hash, so no false
+/// `changed_since`.
+async fn assistant_term_then_tagging_reverts_without_force(db: &TestDb) {
+    let s = site(db).await;
+    let tax = taxonomy(&s);
+    let item = s
+        .content
+        .create(&s.admin, draft("post", "Filed"))
+        .await
+        .unwrap();
+    let term = tax
+        .create_term(&s.agent, "category", "AI", None, None, "")
+        .await
+        .unwrap();
+    let mut d = draft("post", "Filed");
+    d.slug = Some(item.slug.clone());
+    d.terms = vec![term.id];
+    s.content
+        .update(&s.agent, item.id, item.version, d)
+        .await
+        .unwrap();
+    let set = only_set(&s).await;
+    let report = service(&s).revert(&s.admin, set, all()).await.unwrap();
+    assert_eq!(report.reverted, [2, 1]);
+    assert!(report.forced.is_empty());
+    assert!(s.store.read().terms().get(term.id).await.unwrap().is_none());
+    assert!(
+        s.store
+            .read()
+            .terms()
+            .for_item(item.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Review fix 2: a reverse status change emits the public transition's webhook event.
+async fn revert_publish_emits_unpublished_webhook(db: &TestDb) {
+    let s = site(db).await;
+    let hooks = ferrite_core::webhooks::WebhookService::new(
+        s.store.clone(),
+        SiteKey::from_hex(&"ab".repeat(32)).unwrap(),
+        ferrite_core::webhooks::UrlPolicy {
+            local_targets: false,
+            allow_ip: |_| true,
+        },
+    );
+    hooks
+        .create(
+            &s.admin,
+            ferrite_core::webhooks::WebhookInput {
+                name: "content".into(),
+                url: "https://hooks.example.com/x".into(),
+                events: vec!["content.unpublished".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let item = s
+        .content
+        .create(&s.admin, draft("post", "Live"))
+        .await
+        .unwrap();
+    s.content
+        .publish(&s.agent, item.id, item.version)
+        .await
+        .unwrap();
+    let set = only_set(&s).await;
+    service(&s).revert(&s.admin, set, all()).await.unwrap();
+    let w = s.store.read().webhooks();
+    let endpoint = &w.list_endpoints().await.unwrap()[0];
+    let page = w
+        .list_deliveries(endpoint.id, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].event_type, "content.unpublished");
+}
+
+/// Review fix 3: a reschedule (unpublish, schedule at another time) reverts to the
+/// original time, though the status is the same.
+async fn revert_reschedule_restores_scheduled_time(db: &TestDb) {
+    let s = site(db).await;
+    let hour = 3_600_000_000;
+    let t0 = Timestamp::from_micros(Timestamp::now().as_micros() + hour).unwrap();
+    let t1 = Timestamp::from_micros(Timestamp::now().as_micros() + 2 * hour).unwrap();
+    let item = s
+        .content
+        .create(&s.admin, draft("post", "Later"))
+        .await
+        .unwrap();
+    let item = s
+        .content
+        .schedule(&s.admin, item.id, item.version, t0)
+        .await
+        .unwrap();
+    let item = s
+        .content
+        .unpublish(&s.agent, item.id, item.version)
+        .await
+        .unwrap();
+    s.content
+        .schedule(&s.agent, item.id, item.version, t1)
+        .await
+        .unwrap();
+    let set = only_set(&s).await;
+    service(&s).revert(&s.admin, set, all()).await.unwrap();
+    let now = s.content.get(item.id).await.unwrap();
+    assert_eq!(now.status, ContentStatus::Scheduled);
+    assert_eq!(now.scheduled_at, Some(t0));
 }
