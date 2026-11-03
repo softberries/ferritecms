@@ -580,18 +580,34 @@ with OpenAPI and MCP cover headless use).
 
 ### M6-1 — Multilingual content
 
-- [ ] Site locales: a default locale and a list of locales in settings (BCP 47 tags); a
-  site with one locale behaves exactly as today.
-- [ ] A locale on every content item and a translation group linking an item's
+Done (2026-11-03, branch `m6-1-multilingual`; exit
+[`m6-1-exit.md`](superpowers/m6-1-exit.md), migration `0014_locales`, design 13).
+
+- [x] Site locales: a default locale and a list of locales in settings (BCP 47 tags); a
+  site with one locale behaves exactly as today. (`site.locales`; the golden test of the
+  one-locale output, `crates/ferrite/tests/serve/single_locale.rs`.)
+- [x] A locale on every content item and a translation group linking an item's
   translations (one group per original); terms and menus per locale.
-- [ ] Locale-prefixed permalinks for the non-default locales (`/de/…`), `hreflang` links in
+- [x] Locale-prefixed permalinks for the non-default locales (`/de/…`), `hreflang` links in
   the head, sitemap alternates, `<html lang>`, RSS per locale.
-- [ ] Theme helpers: the current locale, `translations()` of an item, a language switcher;
-  the starter themes use them.
-- [ ] Admin: a locale filter on lists, "Translate" (copies the item as a draft in the target
+- [x] Theme helpers: the current locale, `translations()` of an item, a language switcher;
+  the starter themes use them. (`site.locales`, `translations()`, `locale_links()`, `t()`
+  with `[strings.<tag>]`.)
+- [x] Admin: a locale filter on lists, "Translate" (copies the item as a draft in the target
   locale), side-by-side translation status; the API and the MCP content tools take `locale`.
-- [ ] WordPress import keeps an item's language where the WXR carries one (WPML / Polylang
-  data; what the export holds is checked first, not assumed).
+  (Settings → Languages; the taxonomy and menu screens are a follow-up below.)
+- [x] WordPress import keeps an item's language where the WXR carries one (WPML / Polylang
+  data; what the export holds is checked first, not assumed). (Checked against the
+  plugins' documented shapes with hand-written files only; no real export was available.)
+- Follow-ups:
+  - [ ] Admin: locales on the taxonomy and menu screens (translate a term, a menu per
+    locale; plan Task 16).
+  - [ ] MCP: `locale` on `terms_list`, `term_create`, `menu_get`, `menu_set`.
+  - [ ] WordPress import against a real Polylang export (and WPML's Export and Import if
+    a licence is available); `--default-locale`; the report's `languages` section; terms
+    in the locale of the items that use them.
+  - [ ] Per-locale status counts on the content list tabs.
+  - [ ] Screenshots of Settings → Languages and the Translations section for the guide.
 
 ### M6-2 — Plugin trust
 
@@ -661,7 +677,8 @@ here is code that can be written and tested locally.
 - WP database user import with legacy password-hash verification.
 - Managed hosting offering.
 - An atomic KV increment import (`kv.incr`) for counters such as the `counter` example's (whose read-modify-write can lose counts under at-least-once delivery): a WIT change, so it needs a new world version (M2a-2a ruling R19); the `analytics` example has the same caveat (M4 P44).
-- Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
+- Multilingual later list (design 13 §13): per-locale media text, translated type and taxonomy prefixes, locale-aware `date` names, a domain per locale, optional fallback listings, term language import from Polylang, a translation memory or glossary for assistants, side-by-side editing, `hreflang` on term archives.
+- Plugin world gaps the M4-3a examples met (M4 P42; each needs a new world version, 05 §11, and is named in the plugin's README): a modified date on `post` (for `article:modified_time` and JSON-LD `dateModified`), a `locale` on `post` (M6-1 P6; `request-info.locale` already carries the page's), the user's role in `route-request` (instead of the `viewers` id lists, P46), a Reply-To in `notify-admins` (the contact form puts the visitor's address in the body), a way for a plugin page to take a signed-in post (the contact form has no per-message delete: a sandboxed page posts with `Origin: null`, which only `cross_origin` routes take, and those are served anonymously, P45), admin pages for plugins (the stats and inbox pages are plugin routes), and a `kv.get` that tells a failed read from a missing key (the host answers `None` for both and an empty list for a failed `kv.list`, so the analytics example lists before writing a new day and a failure of both can overwrite one).
 - Docs and themes, later (M4-3b, left out on purpose): syntax highlighting in the `docs` theme (code blocks are plain, the language is only a `language-x` class), search snippets and section-scoped search, a static export (`ferrite site export --html`), versioned docs, admonitions, footnotes and task lists in Markdown import, YAML front matter (TOML only; the error says how to convert), per-menu-item attributes, and content types shipped by a theme.
 - SEO example, later (M4 P43): IndexNow pings, `robots.txt` and sitemap changes (core owns both), content analysis.
 - `ferrite doctor`, later (M4 P48, P53): `--json` output, a clock check against an HTTP `Date` header, detecting that it runs as another user than the service, and whether the binary's update path is writable for `self-update`.

@@ -574,3 +574,15 @@ Where the build differs from the sections above (the M6-1 exit lists each as an
 - **`site.locale`.** Deleting it on a one-locale site leaves `site.locales` as it is.
 - **Menus (§2.6).** A menu written with an empty `locale` keeps its stored locale (a new
   menu takes the default), so callers that do not know about locales keep working.
+- **WordPress import (§8.1).** Languages the site does not list are not added: their
+  items are skipped and reported (`locale_not_on_site`), so the site's language list stays
+  the admin's decision; `--default-locale` and the report's `languages` section are not
+  built. Groups are joined in the fix-up step (`ImportBatch::join_group`); terms and menus
+  stay in the default locale (no `term_locale_mismatch`). A locale change of an imported
+  item on a re-run is not applied.
+- **Markdown import (§8.2).** Groups are joined after the content pass, not by writing
+  files in dependency order; a page that cannot join is reported as `translation-of`.
+- **Admin.** The taxonomy and menu screens do not show locales yet (per-locale terms and
+  menus through the API); the content list's status counts are not per locale.
+- **MCP.** `terms_list`, `term_create`, `menu_get` and `menu_set` take no `locale`; the
+  terms and menus of other locales are reached through the REST API.

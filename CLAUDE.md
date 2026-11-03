@@ -109,9 +109,21 @@ serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) 
 2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
-card; migration `0013_oauth`; design 12, roadmap "M5". Work top-down in
+card; migration `0013_oauth`; design 12, roadmap "M5". M6-1 (multilingual content) is done
+(`m6-1-exit.md`; design 13; migration `0014_locales`): `site.locales` (`{tag, label}`, the
+default first, settled at startup), a locale and a translation group on content items, terms
+and menus, `/de/…` prefixes in permalinks and the router, locale-scoped site reads,
+`hreflang`/`x-default`, sitemap alternates, a feed per locale, theme helpers
+`translations()`, `locale_links()`, `t()` with `[strings.<tag>]` and a switcher in the three
+starter themes, `seed demo --profile multilingual`, the API (`locale`, `translation_of`,
+`POST /content/{type}/{id}/translations`, `POST /terms/{id}/translations`, `?locale=`, `/meta`
+locales), MCP `content_translate` and the `translate` prompt (57 tools, 5 prompts), the
+admin's Settings → Languages, list filter and column and editor Translations, the
+WordPress (Polylang/WPML shapes) and Markdown (`locale`, `translation_of`, `--locale`)
+imports. Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
-`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`).
+`m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`, M6:
+`m6.md`).
 
 Crate map (`crates/`): `ferrite` (bin: CLI, node wiring, hot-swap reloader, job handlers;
 M4-1: `archive` (the `tar.zst` format), `site_copy` + `export_cmd` (export, import-site, db
@@ -237,9 +249,13 @@ next `serve`). With `serve` running, import from the admin's Import screen
 wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it), then
 `GET /api/v1/import/runs/{id}/report.json` or `report.html` (`import:write` to start,
 `import:read` to read; `409` while another import is queued or running).
+Add a language locally: Settings → Languages in the admin, or `PATCH /api/v1/settings` with
+`{"site.locales": [{"tag": "en"}, {"tag": "de", "label": "Deutsch"}]}` (the default first;
+removing a locale that holds content is `409`); `seed demo --profile multilingual` writes a
+German translation of part of the demo (`/de/`). Guide: `site/content/02-guides/09-multilingual.md`.
 Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
 markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
-[--source NAME] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
+[--source NAME] [--locale TAG] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a
 folder's page; with SQLite `serve` must be stopped; prints the counts and one
 `<kind>  <file>  <detail>` line per problem; exit 0 done, 2 skipped files, missing or
 refused images or broken links, 3 another import running (`--takeover` takes over one with
