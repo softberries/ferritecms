@@ -610,3 +610,24 @@ throwaway keys only.
 | cli | The command list and the output formats | `ferrite plugin --help`, `ferrite plugin keys --help` run on the release build | Verified |
 | configuration | `registry` (default URL, `""` off, https or `file:///`), `registry_key` required for another registry, cluster nodes need the same values | `ferrite-config` `plugin_trust::*` tests; design 14 §13 for the cluster rule (not run on two nodes) | Verified (the cluster rule from the design only) |
 | mcp-tools | `plugins_list` carries the publisher and an offered update | `plugin_registry::mcp_plugins_list_includes_trust` | Verified |
+
+## AI change sets, M6-5 (2026-11-03)
+
+Checked on branch `m6-5-change-sets` against the tests named and a release build serving a
+fresh `seed demo` site on `127.0.0.1:8091` (the screenshot's run: a personal token named
+"Claude Code" made four MCP writes, then the admin opened the set).
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| ai-assistants, mcp-tools | 58 tools, in 14 areas on the reference page | `tests/api/mcp_changes.rs` `every_write_tool_records_a_change` (31 write tools); `mcp_reference` `reference_page_lists_every_tool` | Verified |
+| ai-assistants | Every MCP write is recorded, by the consent screen's apps and by personal tokens; REST calls are not | `every_write_tool_records_a_change`, `oauth_refresh_keeps_one_set`, `rest_write_with_same_token_records_nothing` | Verified |
+| ai-assistants | Changes no more than 30 minutes apart form one change set | `crates/ferrite-core/src/changes/capture.rs` (`IDLE_WINDOW_MICROS`, `thirty_minute_gap_opens_a_new_set`); contract `idle_set_is_not_extended` | Verified |
+| ai-assistants | AI activity is in the sidebar for every role; administrators tick Every user's; Activity next to apps and tokens | `admin/src/shell/nav.ts` (`activity`, `read_admin`); `nav.test.ts`; `activity-list.tsx`; `connected-apps-card.tsx` `ActivityLink`; e2e `ai-activity.spec.ts` | Verified |
+| ai-assistants | Statuses open, closed, reverted, partly reverted | `crates/ferrite-http/src/api/change_sets.rs` `status_of`; API `revert_force_and_dry_run` | Verified |
+| ai-assistants | The diff of posts and pages is the revisions drawer's; other objects show each changed field; a role that can no longer read the area sees only what was done | `content-change-diff.tsx`, `json-diff.tsx`; Vitest `detail_renders_content_diff_and_hidden_images`; core `images_hidden_without_area_read`; API `change_detail_shows_images_or_hidden` | Verified |
+| ai-assistants | A later edit is a conflict naming who and when (posts and pages); Overwrite later edits forces it; deleted objects and later unselected changes cannot be reverted | core `person_edit_between_is_changed_since_naming_the_revision_author`, `force_overwrites_and_marks_forced`, `later_change_in_same_set_refuses_single_revert`; e2e `ai_activity_review_and_revert` | Verified |
+| ai-assistants | A revert runs as you with your role; posts get the revision "Reverted an AI change"; created content goes to the trash | core `reverting_person_role_is_checked`, `revert_two_updates_newest_first_without_force`, `revert_create_trashes_the_item`, `media_upload_revert_trashes_media`, `comment_reply_revert_trashes_comment` | Verified |
+| ai-assistants | An assistant cannot revert; it has no revert tool | core `assistant_cannot_revert`; the tool list (`changes_list` read-only) | Verified |
+| ai-assistants | Kept 90 days by default, 1 to 365 in Settings → AI assistants, not changeable by an assistant | `crates/ferrite-core/src/settings.rs`; `crates/ferrite-cluster/tests/change_sets_prune.rs`; API `mcp_settings_not_writable_via_mcp` | Verified |
+| ai-assistants | The screenshot `admin-ai-activity.webp` shows what its alt text says | Looked at after it was taken (1440 × 900, scale 2) | Verified |
+| README | Changes are recorded as change sets you review and undo | As the rows above | Verified |

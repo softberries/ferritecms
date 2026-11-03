@@ -227,7 +227,9 @@ deletes expired requests, codes, grants and OAuth access tokens.
   Forbidden says which capability or scope is missing.
 - **Audit**: every successful write tool appends an audit row `mcp.<tool>` with the
   target and `{ "client": <name> }` (the grant's client, or "API token <name>").
-  Content and media changes also keep their revisions and events as usual.
+  Content and media changes also keep their revisions and events as usual. From M6-5
+  every write is also recorded as a change with before/after images in the write's own
+  transaction, grouped in change sets a person reviews and reverts (design 17).
 - **Rate limit**: 120 tool calls per user per minute (`mcp:user:<id>`), on top of the
   per-IP bad-token limit.
 
@@ -248,6 +250,7 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Plugins | `plugins_list`, `plugin_enable`, `plugin_disable`, `plugin_settings_get`, `plugin_settings_update` (secrets write-only, as in the API) |
 | Users | `users_list`, `user_get` (no tokens, sessions or TOTP data) |
 | System | `system_status`, `jobs_list`, `audit_list` |
+| Changes (M6-5) | `changes_list` (read-only, the connection's own change sets; no revert tool, design 17 §10) |
 
 ### 5.3 Markdown out
 
