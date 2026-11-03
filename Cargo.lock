@@ -1749,6 +1749,7 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+ "zstd 0.14.3",
 ]
 
 [[package]]
