@@ -27,6 +27,7 @@
 //! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
 pub mod cookie;
@@ -276,6 +277,10 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(webhooks::get_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook))
+        .routes(routes!(change_sets::list_change_sets))
+        .routes(routes!(change_sets::get_change_set))
+        .routes(routes!(change_sets::get_change_set_change))
+        .routes(routes!(change_sets::revert_change_set))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

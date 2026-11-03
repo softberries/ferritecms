@@ -65,6 +65,8 @@ pub struct ApiParts {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
 }
 
 /// The API's shared state (see [`ApiParts`] for the services).
@@ -112,6 +114,8 @@ pub struct ApiState {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
     /// browser sends as `Origin` for the site's own pages (P8).
     pub origin: String,
@@ -152,6 +156,7 @@ impl ApiState {
             site_url,
             site_title,
             webhooks,
+            change_sets,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
         Ok(Self {
@@ -180,6 +185,7 @@ impl ApiState {
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
             webhooks,
+            change_sets,
             origin,
             cookie_secure,
         })

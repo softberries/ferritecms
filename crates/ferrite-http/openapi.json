@@ -775,6 +775,376 @@
         ]
       }
     },
+    "/api/v1/change-sets": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "list_change_sets",
+        "parameters": [
+          {
+            "name": "user",
+            "in": "query",
+            "description": "Another user's sets (`manage_users`), or `all` for every user's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Only one connection's (a grant or token id).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "description": "Only open (`true`) or closed (`false`) sets.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Change sets, newest last change first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-query` or `invalid-cursor`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`; another user's or `all`: `manage_users`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`limit`, `user`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "get_change_set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The set and its changes, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found` (also another user's set without `manage_users`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}/changes/{seq}": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "get_change_set_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The change with its before and after images (`images: hidden` without your read right on the object's area; plugin secrets as `{\"secret\": \"set\"}`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}/revert": {
+      "post": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "revert_change_set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reverted (or, with `dry_run`, what would be)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` or `malformed-header` (`Idempotency-Key`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (a token, not a session; or a reverse write's missing capability, `report.change` naming the change), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`change-conflict` (`report.conflicts`), or an `Idempotency-Key` still in use",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`changes`: unknown seq or more than 500; or a reverse write's own error, `report.change` naming the change)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/comments": {
       "get": {
         "tags": [
@@ -11969,6 +12339,273 @@
           }
         }
       },
+      "ChangeDetailDto": {
+        "type": "object",
+        "description": "One change with its images.",
+        "required": [
+          "change",
+          "images"
+        ],
+        "properties": {
+          "after": {
+            "description": "The object after (`null`: deleted, hidden or too large)."
+          },
+          "before": {
+            "description": "The object before (`null`: it did not exist, or hidden, or too large)."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ChangeDto"
+          },
+          "images": {
+            "type": "string",
+            "description": "`shown`, or `hidden` when you may not read the object's area now.",
+            "example": "shown"
+          }
+        }
+      },
+      "ChangeDto": {
+        "type": "object",
+        "description": "One change.",
+        "required": [
+          "seq",
+          "at",
+          "op",
+          "object",
+          "created",
+          "deleted",
+          "revertable",
+          "forced"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "The write created the object."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "The write deleted the object."
+          },
+          "forced": {
+            "type": "boolean",
+            "description": "Reverted over a later edit."
+          },
+          "object": {
+            "$ref": "#/components/schemas/ChangeObjectDto"
+          },
+          "op": {
+            "type": "string",
+            "example": "content.update"
+          },
+          "revertable": {
+            "type": "boolean",
+            "description": "`false` when an image was too large to keep."
+          },
+          "reverted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reverted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ChangeObjectDto": {
+        "type": "object",
+        "description": "The object a change touched.",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "properties": {
+          "admin_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The admin screen of the object when it still exists (relative to `/admin`)."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`content`, `media`, `term`, `menu`, `type`, `redirect`, `comment`, `option`,\n`theme` or `plugin`."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its title or name at write time."
+          }
+        }
+      },
+      "ChangeSetAgentDto": {
+        "type": "object",
+        "description": "The connection that wrote.",
+        "required": [
+          "kind",
+          "id",
+          "client",
+          "connected"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The client's name when the set opened."
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "Whether the grant or token still exists."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The grant or token id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`oauth` (a connected app) or `token` (a personal API token).",
+            "example": "oauth"
+          }
+        }
+      },
+      "ChangeSetDetailDto": {
+        "type": "object",
+        "required": [
+          "set",
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeDto"
+            },
+            "description": "Newest first."
+          },
+          "set": {
+            "$ref": "#/components/schemas/ChangeSetDto"
+          }
+        }
+      },
+      "ChangeSetDto": {
+        "type": "object",
+        "description": "One change set.",
+        "required": [
+          "id",
+          "agent",
+          "started_at",
+          "last_at",
+          "open",
+          "changes",
+          "reverted",
+          "status"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/ChangeSetAgentDto"
+          },
+          "changes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "Whether the assistant's next write still lands here."
+          },
+          "reverted": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many changes are reverted.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`open`, `closed`, `reverted` or `partly_reverted`.",
+            "example": "open"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChangeSetUserDto",
+                "description": "`null` once the user is deleted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ChangeSetList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeSetDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChangeSetUserDto": {
+        "type": "object",
+        "description": "Who a set belongs to.",
+        "required": [
+          "id",
+          "login",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "login": {
+            "type": "string"
+          }
+        }
+      },
       "ClientKindDto": {
         "type": "string",
         "description": "How a client is known.",
@@ -16196,6 +16833,97 @@
           }
         }
       },
+      "RevertInput": {
+        "type": "object",
+        "description": "`POST /change-sets/{id}/revert`.",
+        "properties": {
+          "changes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "The seqs to revert (at most 500); omitted: every change not reverted yet."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Check and report only; nothing is written."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Overwrite later edits."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevertNoteDto": {
+        "type": "object",
+        "required": [
+          "seq",
+          "text"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "RevertReportDto": {
+        "type": "object",
+        "description": "What a revert did (or, with `dry_run`, would do).",
+        "required": [
+          "reverted",
+          "skipped",
+          "forced",
+          "notes",
+          "dry_run"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevertNoteDto"
+            }
+          },
+          "reverted": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Newest first."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        }
+      },
       "RevisionDto": {
         "type": "object",
         "description": "One revision: the saved title, excerpt, body and fields.",
@@ -16708,6 +17436,14 @@
             ],
             "format": "int64",
             "description": "1..=100 (default 50): top-level comment threads per public comment page\n(`?cpage=N`); each thread shows with all its approved replies."
+          },
+          "mcp.change_sets_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "1..=365 (default 90): how many days AI change sets are kept (M6-5). Not\nwritable over MCP."
           },
           "mcp.enabled": {
             "type": [
@@ -18309,6 +19045,10 @@
     {
       "name": "webhooks",
       "description": "Outgoing webhooks: endpoints, the event catalogue, test deliveries, secret rotation, the delivery log and redelivery (admins)"
+    },
+    {
+      "name": "change-sets",
+      "description": "What AI assistants changed over MCP, grouped in change sets: review with before/after images and revert (a signed-in session)"
     }
   ]
 }

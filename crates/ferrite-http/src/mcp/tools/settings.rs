@@ -78,11 +78,11 @@ impl FerriteMcp {
             let key = if key == MCP_ENABLED {
                 MCP_ENABLED
             } else {
-                "mcp"
+                ferrite_domain::CHANGE_SETS_DAYS_OPTION
             };
             return results::invalid(
                 Some(key),
-                "mcp.* settings cannot be changed through MCP: change them in the admin \
+                "mcp.* settings cannot be changed through MCP: change this in the admin \
                  (Settings, AI assistants)",
             );
         }

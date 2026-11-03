@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer};
 use zeroize::Zeroizing;
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
 pub mod extensions;

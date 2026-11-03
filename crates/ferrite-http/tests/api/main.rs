@@ -6,6 +6,7 @@ mod harness;
 
 mod auth;
 mod autosave;
+mod change_sets;
 mod comments;
 mod comments_admin;
 mod content;
