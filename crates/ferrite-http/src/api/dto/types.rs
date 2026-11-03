@@ -207,6 +207,7 @@ impl ContentTypeInput {
                 None => Some(Vec::new()),
                 Some(f) => f.map(defs),
             },
+            quality_gate: ferrite_domain::QualityGate::Off,
         }
     }
 }
@@ -233,6 +234,7 @@ impl ContentTypePatch {
             label: self.label,
             has_archive: self.has_archive,
             fields: self.fields.map(|f| f.map(defs)),
+            quality_gate: None,
         }
     }
 }

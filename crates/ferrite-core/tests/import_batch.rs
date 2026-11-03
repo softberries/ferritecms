@@ -544,6 +544,7 @@ pub async fn schema_batch_registers_types_and_taxonomies(db: &TestDb) {
         hierarchical: false,
         has_archive: true,
         fields: Some(fields),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
 
     let mut plain = run.batch(&svc).await.unwrap();

@@ -63,6 +63,10 @@ pub enum CoreError {
     /// and names the existing row's id or the counts (M6-1).
     #[error("in use: {0}")]
     InUse(String),
+    /// The type's publish gate refuses the item: these unsuppressed accessibility
+    /// errors remain (at most 50; M6-4, design 16 §5). `422 content-quality`.
+    #[error("accessibility errors block publishing")]
+    QualityBlocked(Box<Vec<crate::quality::Finding>>),
 }
 
 /// One invalid row of a batch ([`CoreError::InvalidRows`]).

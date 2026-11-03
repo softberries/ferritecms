@@ -442,6 +442,7 @@ impl ContentService {
             )
             .await?
         };
+        live_edit_gate(tx, &types, &current, &next).await?;
         let saved = save_with_free_slug(tx, Row::Existing(next), &base, own, &root).await?;
 
         set_terms(tx, id, &terms).await?;
@@ -474,6 +475,52 @@ impl ContentService {
         tx.autosaves().delete(id, actor.user).await?;
         Ok(saved)
     }
+}
+
+/// The publish gate on an edit of a live item (design 16 §5, D5): for a published or
+/// scheduled item of a gated type, refused when `next` has more unsuppressed
+/// accessibility errors than `current` (an edit that fixes or keeps old errors passes).
+async fn live_edit_gate(
+    repos: &dyn Repos,
+    types: &[ContentType],
+    current: &ContentItem,
+    next: &ContentItem,
+) -> Result<(), CoreError> {
+    use crate::quality::gate;
+    if !matches!(
+        current.status,
+        ContentStatus::Published | ContentStatus::Scheduled
+    ) {
+        return Ok(());
+    }
+    let Some(ty) = types
+        .iter()
+        .find(|t| t.name == current.kind)
+        .filter(|t| t.quality_gate == ferrite_domain::QualityGate::Errors)
+    else {
+        return Ok(());
+    };
+    let before = gate::error_count(
+        repos,
+        (&current.title, &current.body, &current.fields),
+        ty,
+        &current.locale,
+        Some(current.id),
+    )
+    .await?;
+    let mut after = gate::blocking(
+        repos,
+        (&next.title, &next.body, &next.fields),
+        ty,
+        &next.locale,
+        Some(next.id),
+    )
+    .await?;
+    if after.len() > before {
+        after.truncate(gate::MAX_BLOCKING_LISTED);
+        return Err(CoreError::QualityBlocked(Box::new(after)));
+    }
+    Ok(())
 }
 
 /// The redirects of an update of `current` (its terms then were `old_term_rows`) to

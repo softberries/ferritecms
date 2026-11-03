@@ -315,19 +315,37 @@ impl ContentService {
         {
             // Here, not in `transition_item`: `seed demo` and uploads publish through
             // that and emit nothing (design 18 §3.4).
-            Ok(saved) => crate::webhooks::emit_content(
-                tx.as_ref(),
-                rules.as_ref(),
-                webhook_type(action),
-                &saved,
-                Some(actor.user),
-            )
-            .await
-            .map(|_| saved),
+            Ok(saved) => match gate(tx.as_ref(), action, &saved).await {
+                Err(e) => Err(e),
+                Ok(()) => crate::webhooks::emit_content(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    webhook_type(action),
+                    &saved,
+                    Some(actor.user),
+                )
+                .await
+                .map(|_| saved),
+            },
             Err(e) => Err(e),
         };
         finish(tx, done).await
     }
+}
+
+/// The publish gate (design 16 §5) of a person's publish or schedule, after the
+/// transition's own rights and version checks: the type's gate refuses an item with
+/// unsuppressed accessibility errors ([`quality::gate::check`](crate::quality::gate::check)).
+/// The scheduler's due-time publish, `publish_in` (seed, uploads) and imports are never
+/// gated (D6, D7).
+async fn gate(repos: &dyn Repos, action: Action, item: &ContentItem) -> Result<(), CoreError> {
+    if !matches!(action, Action::Publish | Action::Schedule(_)) {
+        return Ok(());
+    }
+    let Some(ty) = repos.types().get(&item.kind).await? else {
+        return Ok(());
+    };
+    crate::quality::gate::check(repos, item, &ty).await
 }
 
 async fn transition_in(

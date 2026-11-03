@@ -19,6 +19,7 @@
 //! | `Store(UniqueViolation)` | 409 | `conflict` (a known constraint adds an `errors` entry for its field, see [`UNIQUE_FIELDS`]; the constraint name is never sent) |
 //! | `Store(ForeignKey)` | 409 | `conflict` ("a related record changed; retry", F15) |
 //! | `Store(Busy)`, `Unavailable(what)` | 503 | `busy` + `Retry-After: 5` |
+//! | `QualityBlocked(findings)` | 422 | `content-quality` (`findings`: the blocking `FindingDto`s, M6-4) |
 //! | `Random`, `Hashing`, `Internal(what)`, any other `Store` | 500 | `internal` |
 //!
 //! Problems built by the API layer itself, not mapped from a core error:
@@ -132,6 +133,8 @@ pub struct Problem {
     /// The permission report of the upload (an approval mismatch of `POST /plugins`
     /// only). Boxed like `current`.
     pub report: Option<Box<serde_json::Value>>,
+    /// The blocking findings (`content-quality` only). Boxed like `current`.
+    pub findings: Option<Box<serde_json::Value>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
     /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
@@ -179,6 +182,11 @@ pub struct ProblemDocument {
     /// admin can review what this upload asks for and approve it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<serde_json::Value>,
+    /// The blocking findings (`FindingDto`); only on `content-quality` (422), when the
+    /// type's publish gate refuses the item (M6-4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<crate::api::dto::quality::FindingDto>>)]
+    pub findings: Option<serde_json::Value>,
 }
 
 impl Problem {
@@ -196,6 +204,7 @@ impl Problem {
             errors: Vec::new(),
             current: None,
             report: None,
+            findings: None,
             retry_after: None,
             challenge: None,
         }
@@ -297,6 +306,22 @@ impl Problem {
         )
     }
 
+    /// `422 content-quality`: the type's publish gate refuses the item (design 16 §5);
+    /// `findings` lists the blocking findings.
+    pub fn content_quality(findings: &[ferrite_core::quality::Finding]) -> Self {
+        let mut p = Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "content-quality",
+            "This item has accessibility errors",
+            format!(
+                "{} accessibility error(s) block publishing this item",
+                findings.len()
+            ),
+        );
+        p.findings = Some(Box::new(super::dto::quality::findings_json(findings)));
+        p
+    }
+
     /// `500 internal`; the cause is logged by the caller, never sent.
     pub fn internal() -> Self {
         Self::new(
@@ -327,6 +352,7 @@ impl Problem {
             errors: self.errors.clone(),
             current: self.current.as_deref().cloned(),
             report: self.report.as_deref().cloned(),
+            findings: self.findings.as_deref().cloned(),
         }
     }
 }
@@ -414,6 +440,7 @@ impl From<CoreError> for Problem {
             }
             CoreError::Store(s) => Self::from(s),
             CoreError::InUse(what) => Self::new(StatusCode::CONFLICT, "conflict", "Conflict", what),
+            CoreError::QualityBlocked(findings) => Self::content_quality(&findings),
         }
     }
 }

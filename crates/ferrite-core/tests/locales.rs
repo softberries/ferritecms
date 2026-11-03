@@ -227,6 +227,7 @@ async fn add_locale_with_clashing_prefix_refused(db: &TestDb) {
                 hierarchical: false,
                 has_archive: true,
                 fields: None,
+                quality_gate: ferrite_domain::QualityGate::Off,
             },
         )
         .await
@@ -276,6 +277,7 @@ async fn add_locale_with_clashing_prefix_refused(db: &TestDb) {
                 hierarchical: false,
                 has_archive: false,
                 fields: None,
+                quality_gate: ferrite_domain::QualityGate::Off,
             },
         )
         .await

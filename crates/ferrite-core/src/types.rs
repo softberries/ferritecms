@@ -33,7 +33,9 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ferrite_domain::{ContentQuery, ContentType, NewAudit, Timestamp, UserId};
+use ferrite_domain::{
+    ContentQuery, ContentType, MEDIA_KIND, NewAudit, QualityGate, Timestamp, UserId,
+};
 use ferrite_store::{LOCK_TYPES, LockGuard, Repos, Store, StoreError, Tx, lock};
 use serde_json::{Value, json};
 
@@ -68,6 +70,8 @@ pub struct NewType {
     /// The schema items are validated against; `None` registers the type without one
     /// (any `fields` object, like the built-in types).
     pub fields: Option<Vec<FieldDef>>,
+    /// The publish gate (M6-4, design 16 §5).
+    pub quality_gate: QualityGate,
 }
 
 /// A change to a content type; `None` keeps the stored value. The name and
@@ -80,6 +84,8 @@ pub struct TypePatch {
     /// `Some(None)` removes it (any object). Stored items are not re-validated; each is
     /// checked on its next save.
     pub fields: Option<Option<Vec<FieldDef>>>,
+    /// The publish gate (M6-4); the `media` type refuses `errors`.
+    pub quality_gate: Option<QualityGate>,
 }
 
 /// Registers and manages content types (see the module docs).
@@ -239,7 +245,7 @@ pub(crate) fn check_new_type(new: &NewType) -> Result<ContentType, CoreError> {
         fields: stored_schema(new.fields.as_deref()),
         built_in: false,
         created_at: Timestamp::now(),
-        quality_gate: ferrite_domain::QualityGate::Off,
+        quality_gate: new.quality_gate,
     })
 }
 
@@ -286,6 +292,15 @@ pub(crate) async fn update_in(
     if let Some(has_archive) = patch.has_archive {
         ty.has_archive = has_archive;
     }
+    if let Some(gate) = patch.quality_gate {
+        if ty.name == MEDIA_KIND && gate == QualityGate::Errors {
+            return Err(CoreError::invalid_field(
+                "quality_gate",
+                "media has no body to check",
+            ));
+        }
+        ty.quality_gate = gate;
+    }
     if let Some(defs) = &patch.fields {
         if let Some(defs) = defs {
             check_targets(repos, defs, None).await?;
@@ -298,6 +313,7 @@ pub(crate) async fn update_in(
         "label": patch.label.is_some(),
         "has_archive": patch.has_archive,
         "fields": patch.fields.as_ref().map(|f| f.as_ref().map(Vec::len)),
+        "quality_gate": patch.quality_gate.map(|g| g.as_str()),
     });
     announce_in(repos, actor, Change::Type, "update", &ty.name, details).await?;
     Ok(ty)

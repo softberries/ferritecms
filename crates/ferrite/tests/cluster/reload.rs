@@ -256,6 +256,7 @@ async fn type_registration_reaches_every_node() {
                 hierarchical: false,
                 has_archive: true,
                 fields: Some(Vec::new()),
+                quality_gate: ferrite_domain::QualityGate::Off,
             },
         )
         .await

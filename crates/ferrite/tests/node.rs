@@ -979,6 +979,7 @@ async fn new_type_is_routable_without_restart(db: Arc<TestDb>) {
                 hierarchical: false,
                 has_archive: true,
                 fields: Some(Vec::new()),
+                quality_gate: ferrite_domain::QualityGate::Off,
             },
         )
         .await

@@ -10,7 +10,10 @@
 //! found (`context`) and a rule-specific `detail`; the admin and the MCP layer word it.
 
 mod check;
+pub mod facts;
+pub mod gate;
 pub mod rules;
+mod service;
 mod vague;
 mod walk;
 
@@ -21,6 +24,10 @@ use crate::fields::FieldDef;
 
 pub use check::check_document;
 pub use rules::{Category, RULES, Rule, RuleScope, Severity, rule};
+pub use service::{
+    CheckDraft, CheckReport, CheckedFinding, Counts, GateState, MAX_CHECK_PATHS, MAX_REASON,
+    QualityService,
+};
 pub use vague::is_vague;
 
 /// Most findings of one item; past it the walk stops with `check-truncated` (§4.3).
@@ -118,6 +125,35 @@ pub struct MediaRef {
     /// The finding key: the image's `src`, or `featured_image`.
     pub key: String,
     pub featured: bool,
+}
+
+/// What a path on this site answers (design 16 §6.2), as [`PathProbe`] finds it without
+/// rendering anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathStatus {
+    /// Something is there (`item`: the content item it shows, if one).
+    Ok {
+        item: Option<ContentId>,
+    },
+    /// A stored redirect or a canonical `301` leads to `to` (the final path).
+    Redirected {
+        to: String,
+        item: Option<ContentId>,
+    },
+    NotFound,
+    Gone,
+    /// A stored redirect leads off the site.
+    External(String),
+    /// Outside the public router (plugin routes, the admin, the API, MCP, OAuth).
+    Unchecked,
+}
+
+/// Resolves a path on this site without rendering, caching, counting or calling a
+/// plugin (`ferrite-http`'s `SiteProbe`; D9).
+#[async_trait::async_trait]
+pub trait PathProbe: Send + Sync {
+    /// `path_and_query`: a local path, starting with `/`.
+    async fn probe(&self, path_and_query: &str) -> PathStatus;
 }
 
 /// The first `max` characters of `s`.
