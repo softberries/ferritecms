@@ -1,6 +1,6 @@
 [plugin]
 name        = "contact-form"
-version     = "0.2.0"
+version     = "0.3.0"
 publisher   = "ferritecms.dev"
 description = "A contact form: messages are mailed to the site's admins and kept in an inbox page for chosen users"
 world       = "ferrite:plugin/plugin@0.1.0"

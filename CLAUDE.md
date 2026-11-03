@@ -104,15 +104,15 @@ reproducible release archives (`repro-tar.sh`); no migration. `v0.1.0` is releas
 contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub Pages
 (`.github/workflows/pages.yml`, `site/export-static.sh` + `site/rewrite-static.py`). What is
 still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. M5 (AI
-assistants over MCP) is done and released in `v0.2.0` (2026-11-02; `m5-exit.md`; the current release; `v0.1.0` was the first): every site
+assistants over MCP) is done and released in `v0.2.0` (2026-11-02; `m5-exit.md`; `v0.1.0` was the first): every site
 serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless; 56 tools and
 4 prompts in `v0.2.0`, 70 tools, 2 resources, 1 resource template and 5 prompts after M6), a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
 card; migration `0013_oauth`; design 12, roadmap "M5". M6 (the editorial platform) is done
-(`m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
+and released in `v0.3.0` (2026-11-03; the current release; `m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
 the parts' exits are `m6-1-exit.md` … `m6-6-exit.md`; designs 13–18; migrations
-`0014`–`0019`; not released yet). Its six parts:
+`0014`–`0019`). Its six parts:
 M6-6 (outgoing webhooks) is done
 (`m6-6-exit.md`): `ferrite_core::webhooks` (catalogue, Standard Webhooks signing, sealed
 rotating secrets, `WebhookService`, `emit` from the content, media, comment, user and import

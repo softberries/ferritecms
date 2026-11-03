@@ -4,8 +4,10 @@
 built and merged, the end-of-M6 review's findings fixed, and the full gate set (workspace
 tests on both backends, the admin checks, every E2E project) green on the merged branch.
 
-**Result: done** (2026-11-03, branch `m6-final` from `m6` at ae3b3ff5). Not released: the
-current release stays `v0.2.0`. Rulings: [`rulings/m6.md`](rulings/m6.md), P1–P8b.
+**Result: done** (2026-11-03, branch `m6-final` from `m6` at ae3b3ff5). `v0.3.0` is the
+release that carries M6 (the release commit `release: 0.3.0 — editorial platform` bumps the
+versions and updates the README and docs; the tag follows when that commit is merged).
+Rulings: [`rulings/m6.md`](rulings/m6.md), P1–P8b.
 
 ## 1. The six parts
 
@@ -131,3 +133,14 @@ The first E2E run's failures were all outside Chromium:
 Open items stay in the roadmap under each M6 part (unticked) and "Later": the M6-1 import
 and admin follow-ups, the M6-2 keys and registry work, the M6-3/M6-4 "Later" lists
 (including P8b's shared preview modes), and design 18 §12 for webhooks.
+
+## 6. Release
+
+`v0.3.0` carries M6. The release commit (branch `release-0.3.0` from `develop` at 229d81e7)
+bumps the workspace and the three shipped plugins (`seo`, `analytics`, `contact-form`:
+manifests, crates, lock files) to 0.3.0, updates the version examples, the README's
+"What's in" list, the landing page's pill and tool counts, and adds the checked claims to
+`site/VERIFIED.md` ("Release 0.3.0"). The M6-2 keys do not exist yet, so the release's
+plugins asset is unsigned and no registry index is published (§4); the README says so.
+Tagging `v0.3.0` is the user's decision (the M4-2 release gate applies: the tag ruleset lets
+only admins create `v*` tags).
