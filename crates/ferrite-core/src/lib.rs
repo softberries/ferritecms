@@ -5,6 +5,7 @@ pub mod actions;
 mod actor;
 pub mod auth;
 pub mod blocks;
+pub mod changes;
 pub mod comments;
 pub mod content;
 pub mod diagnostics;
@@ -23,6 +24,7 @@ pub mod oauth;
 mod options;
 pub mod permalink;
 pub mod preview_link;
+pub mod quality;
 mod redirects;
 pub mod release;
 pub mod seed;
@@ -41,8 +43,8 @@ pub mod workflow;
 pub const MAX_PARENT_DEPTH: usize = 64;
 
 pub use actor::{
-    Access, Actor, Area, Capability, Scope, Scopes, can, can_edit, can_read, require, require_read,
-    require_reader, role_can_edit, role_scopes,
+    Access, Actor, Agent, Area, Capability, Scope, Scopes, can, can_edit, can_read, require,
+    require_read, require_reader, role_can_edit, role_scopes,
 };
 pub use auth::{
     AuthService, Authenticated, IssuedSession, LoginAttempt, LoginOutcome, SessionInfo, Via,

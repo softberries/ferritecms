@@ -375,6 +375,42 @@ describe("publish", () => {
     ]);
   });
 
+  test("gate_blocked_disables_confirm", () => {
+    const item = itemWith("draft", { edit: true, publish: true, schedule: true });
+    const doc = fakeDoc(item, {});
+    wrap(
+      <PublishDialog
+        doc={doc}
+        mode="now"
+        onClose={vi.fn()}
+        siteUrl="http://localhost:8080"
+        taxonomies={[]}
+        terms={new Map()}
+        quality={{
+          findings: [
+            {
+              rule: "image-alt-missing",
+              severity: "error",
+              category: "accessibility",
+              wcag: ["1.1.1"],
+              location: { kind: "body", path: [0] },
+              key: "/a.png",
+              context: null,
+              detail: {},
+              suppressed: null,
+            },
+          ],
+          counts: { error: 1, warning: 0, notice: 0, suppressed: 0 },
+          gate: { mode: "errors", blocked: true },
+        }}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("1 accessibility error");
+    expect(dialog).toHaveTextContent("An image has no alt text.");
+    expect(within(dialog).getByRole("button", { name: "Publish now" })).toBeDisabled();
+  });
+
   test("rfc3339_keeps_the_wall_clock_time", () => {
     // Winter (CET, +1) and summer (CEST, +2) in Warsaw; New York (-5/-4); UTC; Kolkata (+5:30).
     expect(wallClockToUtc({ date: "2026-11-03", time: "09:30" }, "Europe/Warsaw")).toBe(

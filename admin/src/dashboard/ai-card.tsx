@@ -18,6 +18,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { changeSetsQuery } from "@/api/change-sets";
 import { INLINE_ERRORS } from "@/api/client";
 import { metaQuery } from "@/api/meta";
 import { grantsQuery, mcpUrl } from "@/api/oauth";
@@ -100,6 +101,7 @@ export function AiCard({ me, canSettings, className }: AiCardProps) {
             <span className="text-sm text-muted-foreground">{t("dashboard.connectedBody")}</span>
           </div>
         </div>
+        <RecentChanges />
       </Panel>
     );
   }
@@ -161,5 +163,35 @@ export function AiCard({ me, canSettings, className }: AiCardProps) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+/** "N changes by assistants in the last 24 hours — Review" when N > 0 (design 17 §11). */
+function RecentChanges() {
+  const { t } = useTranslation("ai");
+  // Counted when the list arrives (not in render): sets touched in the last 24 hours.
+  const recent = useQuery({
+    ...changeSetsQuery({}),
+    meta: INLINE_ERRORS,
+    select: (list) => {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      return list.items.filter((s) => s.last_at >= since).reduce((n, s) => n + s.changes, 0);
+    },
+  });
+  const count = recent.data ?? 0;
+  if (count === 0) return null;
+  return (
+    <p
+      data-slot="ai-recent"
+      className="mt-4 flex flex-wrap items-center gap-x-2 border-t pt-3 text-sm"
+    >
+      <span className="text-foreground tabular-nums">{t("dashboard.recent", { count })}</span>
+      <Link
+        to="/ai-activity"
+        className="inline-flex min-h-11 items-center font-medium text-primary underline-offset-4 hover:underline"
+      >
+        {t("dashboard.review")}
+      </Link>
+    </p>
   );
 }

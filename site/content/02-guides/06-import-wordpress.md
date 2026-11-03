@@ -100,3 +100,10 @@ http(s) URL". If you edit that value, the import treats the file as a different 
 site you imported from such a file before would get its posts, pages, media, comments
 and menus a second time. Delete what the first import made, or import into a fresh site,
 or keep the first import and do not run it again.
+
+## Imports and scheduled releases
+
+An import does not wait for the locks of a scheduled release: if it changes an item a
+scheduled release holds, that release fails at its time with a conflict instead of
+overwriting the imported text ([Releases and reviews](12-releases-and-reviews.md)).
+

@@ -211,6 +211,10 @@ pub trait Repos: Send + Sync {
     fn reviews(&self) -> &dyn crate::ReviewRepo;
     /// Preview links (M6-3).
     fn preview_links(&self) -> &dyn crate::PreviewLinkRepo;
+    /// AI change sets (M6-5, design 17).
+    fn change_sets(&self) -> &dyn crate::ChangeSetRepo;
+    /// Content quality (M6-4): suppressions, health runs and findings, the link cache.
+    fn quality(&self) -> &dyn crate::QualityRepo;
 }
 
 /// Most translation groups one `group_members` call takes.

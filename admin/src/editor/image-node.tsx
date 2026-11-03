@@ -4,8 +4,9 @@
 // a missing or trashed media item, or a file that fails to load shows a broken-image
 // state with the stored `src`, so nothing is silently lost. Images are inserted from the
 // media picker (`insert-image.ts`, M2b-2). On an editable screen a small "Alt text" button
-// on the image opens a popover that edits `alt`; empty is allowed and marks the image
-// decorative, which the button then says. An optional plain-text `caption` (M3 P11; the
+// on the image opens a popover that edits `alt` and the "Decorative image" switch (M6-4,
+// design 16 §4.1, ruling P3): on, it stores `decorative: true` and an empty `alt`; an
+// empty `alt` without it is "No alt text", which the checks report. An optional plain-text `caption` (M3 P11; the
 // site renders it as a `<figcaption>`) is edited in a field under the image; an empty
 // field removes the attribute, so an image without a caption stores none.
 
@@ -19,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
 const MEDIA_PREFIX = "ferrite:media/";
@@ -73,13 +75,20 @@ function useImageUrl(src: unknown, resolve: (id: string) => Promise<string | nul
 function ImageView({ node, selected, extension, editor, updateAttributes }: ReactNodeViewProps) {
   const { t } = useTranslation("editor");
   const options = extension.options as MediaImageOptions;
-  const attrs = node.attrs as { src?: unknown; alt?: unknown; title?: unknown; caption?: unknown };
+  const attrs = node.attrs as {
+    src?: unknown;
+    alt?: unknown;
+    title?: unknown;
+    caption?: unknown;
+    decorative?: unknown;
+  };
   const shown = useImageUrl(attrs.src, options.resolveMedia);
   const [failed, setFailed] = useState<string | null>(null);
   const alt = typeof attrs.alt === "string" ? attrs.alt : "";
   const src = typeof attrs.src === "string" ? attrs.src : "";
   const title = typeof attrs.title === "string" ? attrs.title : undefined;
   const caption = typeof attrs.caption === "string" ? attrs.caption : "";
+  const decorative = attrs.decorative === true;
   const broken = shown.state === "broken" || (shown.state === "ready" && failed === shown.url);
 
   return (
@@ -108,14 +117,14 @@ function ImageView({ node, selected, extension, editor, updateAttributes }: Reac
       ) : (
         <img
           src={shown.url}
-          alt={alt}
+          alt={decorative ? "" : alt}
           {...(title ? { title } : {})}
           draggable={false}
           onError={() => setFailed(shown.url)}
         />
       )}
       {editor.isEditable ? (
-        <AltEditor alt={alt} onChange={(next) => updateAttributes({ alt: next })} />
+        <AltEditor alt={alt} decorative={decorative} onChange={(next) => updateAttributes(next)} />
       ) : null}
       {editor.isEditable ? (
         <figcaption className="editor-image-caption" contentEditable={false}>
@@ -136,21 +145,39 @@ function ImageView({ node, selected, extension, editor, updateAttributes }: Reac
   );
 }
 
+/** What the alt popover writes: `alt`, and `decorative` (`undefined` removes it). */
+export interface AltChange {
+  alt: string;
+  decorative: true | undefined;
+}
+
 /**
  * The alt text button over the image and its popover: Done (or Enter) applies, Esc
- * leaves the text as it was. Empty is allowed: the image is then decorative.
+ * leaves it as it was. The "Decorative image" switch stores `decorative: true` with an
+ * empty `alt`; typing alt text turns it off.
  */
-function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => void }) {
+export function AltEditor({
+  alt,
+  decorative,
+  onChange,
+}: {
+  alt: string;
+  decorative: boolean;
+  onChange: (next: AltChange) => void;
+}) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(alt);
+  const [isDecorative, setDecorative] = useState(decorative);
   const cancelled = useRef(false);
   const fieldId = useId();
   const hintId = useId();
-  const decorative = alt.trim() === "";
+  const switchId = useId();
+  const missing = !decorative && alt.trim() === "";
   const apply = () => {
-    const next = text.replace(/\s+/g, " ").trim();
-    if (next !== alt) onChange(next);
+    const next = isDecorative ? "" : text.replace(/\s+/g, " ").trim();
+    const flag = isDecorative ? true : undefined;
+    if (next !== alt || isDecorative !== decorative) onChange({ alt: next, decorative: flag });
   };
   return (
     <div className="editor-image-alt" contentEditable={false} data-slot="image-alt">
@@ -159,6 +186,7 @@ function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => 
         onOpenChange={(next) => {
           if (next) {
             setText(alt);
+            setDecorative(decorative);
             cancelled.current = false;
           } else if (!cancelled.current) apply();
           setOpen(next);
@@ -173,11 +201,13 @@ function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => 
             aria-label={
               decorative
                 ? `${t("image.altEdit")} (${t("image.decorative")})`
-                : `${t("image.altEdit")}: ${alt}`
+                : missing
+                  ? `${t("image.altEdit")} (${t("image.altMissing")})`
+                  : `${t("image.altEdit")}: ${alt}`
             }
           >
             <TextIcon data-icon="inline-start" />
-            {decorative ? t("image.decorative") : t("image.alt")}
+            {decorative ? t("image.decorative") : missing ? t("image.altMissing") : t("image.alt")}
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -194,6 +224,7 @@ function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => 
             rows={3}
             aria-describedby={hintId}
             maxLength={1000}
+            disabled={isDecorative}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
@@ -207,6 +238,19 @@ function AltEditor({ alt, onChange }: { alt: string; onChange: (alt: string) => 
           <p id={hintId} className="text-xs text-muted-foreground">
             {t("image.altHint")}
           </p>
+          <div className="flex min-h-11 items-center justify-between gap-2">
+            <Label htmlFor={switchId} className="font-normal">
+              {t("image.decorativeSwitch")}
+            </Label>
+            <Switch
+              id={switchId}
+              checked={isDecorative}
+              onCheckedChange={(on) => {
+                setDecorative(on);
+                if (on) setText("");
+              }}
+            />
+          </div>
           <div className="flex justify-end">
             <Button
               type="button"
@@ -236,6 +280,14 @@ export const MediaImage = Image.extend<MediaImageOptions>({
   addAttributes() {
     return {
       ...this.parent?.(),
+      // M6-4: `true` only (no default, so an image without it keeps none in `getJSON()`).
+      decorative: {
+        default: undefined,
+        parseHTML: (el: HTMLElement) =>
+          el.getAttribute("data-decorative") === "true" ? true : undefined,
+        renderHTML: (attrs: { decorative?: unknown }) =>
+          attrs.decorative === true ? { "data-decorative": "true" } : {},
+      },
       // No default: an image stored without a caption keeps none in `getJSON()` (F32).
       caption: {
         default: undefined,

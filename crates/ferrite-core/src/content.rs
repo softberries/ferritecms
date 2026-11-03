@@ -12,6 +12,7 @@ use ferrite_domain::{
 };
 use ferrite_store::{MAX_ID_FILTER, Repos, Store, StoreError, Tx};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH, actions,
     actor::{Area, Capability, can_edit, can_read, require, require_read},
@@ -33,7 +34,7 @@ pub use admin::{
     StatusCounts,
 };
 pub use allowed::{AllowedActions, allowed_actions};
-pub(crate) use lifecycle::reclaim_path;
+pub(crate) use lifecycle::{Action, reclaim_path, transition_in, webhook_type};
 pub use seo::{Robots, Seo, SeoPatch};
 pub use translate::{Relocation, TranslateNote, Translated};
 pub(crate) use translate::{
@@ -154,28 +155,31 @@ impl ContentService {
         // One set of rules for the whole write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = match self
-            .create_in(
-                tx.as_ref(),
-                rules.as_ref(),
-                actor,
-                draft,
-                Placement::default(),
-            )
-            .await
-        {
+        let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::ContentCreate, &[]).await?;
+            let saved = self
+                .create_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    draft,
+                    Placement::default(),
+                )
+                .await?;
             // Here, not in `create_in`: `seed demo` and uploads create through that.
-            Ok(saved) => crate::webhooks::emit_content(
+            crate::webhooks::emit_content(
                 tx.as_ref(),
                 rules.as_ref(),
                 "content.created",
                 &saved,
                 Some(actor.user),
             )
-            .await
-            .map(|_| saved),
-            Err(e) => Err(e),
-        };
+            .await?;
+            cap.created(ObjectRef::Content(saved.id));
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
+        }
+        .await;
         finish(tx, done).await
     }
 
@@ -196,6 +200,7 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::ContentCreate, &[]).await?;
             let group = match translation_of {
                 None => None,
                 Some(of) => Some(join_target(tx.as_ref(), actor, of, &draft.kind).await?),
@@ -217,6 +222,8 @@ impl ContentService {
                 Some(actor.user),
             )
             .await?;
+            cap.created(ObjectRef::Content(saved.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -348,18 +355,28 @@ impl ContentService {
         let tx = self.store.begin().await?;
         let done = async {
             live_edit_checks(tx.as_ref(), actor, id).await?;
-            self.update_in(
+            let cap = Capture::begin(
                 tx.as_ref(),
-                rules.as_ref(),
                 actor,
-                Edit {
-                    id,
-                    expected_version,
-                    draft,
-                    note: None,
-                },
+                Op::ContentUpdate,
+                &[ObjectRef::Content(id)],
             )
-            .await
+            .await?;
+            let saved = self
+                .update_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    Edit {
+                        id,
+                        expected_version,
+                        draft,
+                        note: None,
+                    },
+                )
+                .await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
         }
         .await;
         finish(tx, done).await
@@ -445,6 +462,7 @@ impl ContentService {
             )
             .await?
         };
+        live_edit_gate(tx, &types, &current, &next).await?;
         let saved = save_with_free_slug(tx, Row::Existing(next), &base, own, &root).await?;
 
         set_terms(tx, id, &terms).await?;
@@ -491,6 +509,52 @@ pub(crate) async fn live_edit_checks(
     crate::release::check_unlocked(tx, id).await?;
     if let Some(current) = tx.content().get(id).await? {
         crate::workflow::gate::require_live_edit(tx, actor, &current).await?;
+    }
+    Ok(())
+}
+
+/// The publish gate on an edit of a live item (design 16 §5, D5): for a published or
+/// scheduled item of a gated type, refused when `next` has more unsuppressed
+/// accessibility errors than `current` (an edit that fixes or keeps old errors passes).
+async fn live_edit_gate(
+    repos: &dyn Repos,
+    types: &[ContentType],
+    current: &ContentItem,
+    next: &ContentItem,
+) -> Result<(), CoreError> {
+    use crate::quality::gate;
+    if !matches!(
+        current.status,
+        ContentStatus::Published | ContentStatus::Scheduled
+    ) {
+        return Ok(());
+    }
+    let Some(ty) = types
+        .iter()
+        .find(|t| t.name == current.kind)
+        .filter(|t| t.quality_gate == ferrite_domain::QualityGate::Errors)
+    else {
+        return Ok(());
+    };
+    let before = gate::error_count(
+        repos,
+        (&current.title, &current.body, &current.fields),
+        ty,
+        &current.locale,
+        Some(current.id),
+    )
+    .await?;
+    let mut after = gate::blocking(
+        repos,
+        (&next.title, &next.body, &next.fields),
+        ty,
+        &next.locale,
+        Some(next.id),
+    )
+    .await?;
+    if after.len() > before {
+        after.truncate(gate::MAX_BLOCKING_LISTED);
+        return Err(CoreError::QualityBlocked(Box::new(after)));
     }
     Ok(())
 }

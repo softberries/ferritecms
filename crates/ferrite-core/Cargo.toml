@@ -34,12 +34,13 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 totp-rs.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 ferrite-core = { path = ".", features = ["test-seams"] }

@@ -69,6 +69,7 @@ fn new_type(name: &str, fields: Vec<FieldDef>) -> NewType {
         hierarchical: false,
         has_archive: true,
         fields: Some(fields),
+        quality_gate: ferrite_domain::QualityGate::Off,
     }
 }
 
@@ -465,6 +466,7 @@ pub async fn type_delete_rules(db: &TestDb) {
                 label: Some(" Events ".into()),
                 has_archive: Some(false),
                 fields: Some(Some(vec![field("venue", FieldKind::Text)])),
+                quality_gate: None,
             },
         )
         .await

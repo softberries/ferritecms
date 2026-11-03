@@ -201,6 +201,12 @@ impl Repos for FailingRepos {
     fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
         self.store.read().preview_links()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.store.read().change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.store.read().quality()
+    }
 }
 
 #[async_trait]

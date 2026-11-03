@@ -18,6 +18,9 @@
 //! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
 //! | `comments.per_page` | integer 1..=100 (default 50, [`COMMENTS_PER_PAGE_DEFAULT`](crate::comments::COMMENTS_PER_PAGE_DEFAULT)): top-level comment threads per public page |
 //! | `mcp.enabled` | boolean (default `true`, [`MCP_ENABLED_DEFAULT`]): the MCP endpoint, the OAuth endpoints and their metadata documents (design 12 §2) |
+//! | `mcp.change_sets_days` | integer 1..=365 (default 90, [`CHANGE_SETS_DAYS_DEFAULT`]): how long AI change sets are kept (design 17 §12) |
+//! | `health.external_links` | boolean (default `false`, [`HEALTH_EXTERNAL_LINKS_DEFAULT`]): the content health run checks external links (design 16 §6.3; the server contacts the linked sites) |
+//! | `health.stale_days` | integer 30..=3650 (default 365, [`HEALTH_STALE_DAYS_DEFAULT`]): items not edited for longer are `stale` (design 16 §6.5) |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
@@ -147,7 +150,50 @@ pub const SETTINGS: &[SettingDef] = &[
         key: MCP_ENABLED,
         kind: SettingKind::Bool,
     },
+    SettingDef {
+        key: ferrite_domain::CHANGE_SETS_DAYS_OPTION,
+        kind: SettingKind::Integer { min: 1, max: 365 },
+    },
+    SettingDef {
+        key: HEALTH_EXTERNAL_LINKS,
+        kind: SettingKind::Bool,
+    },
+    SettingDef {
+        key: HEALTH_STALE_DAYS,
+        kind: SettingKind::Integer { min: 30, max: 3650 },
+    },
 ];
+
+/// [`CHANGE_SETS_DAYS_OPTION`](ferrite_domain::CHANGE_SETS_DAYS_OPTION) when unset.
+pub const CHANGE_SETS_DAYS_DEFAULT: i64 = 90;
+
+/// Whether the content health run checks external links (M6-4, design 16 §6.3).
+pub const HEALTH_EXTERNAL_LINKS: &str = "health.external_links";
+/// [`HEALTH_EXTERNAL_LINKS`] when unset: off (D10).
+pub const HEALTH_EXTERNAL_LINKS_DEFAULT: bool = false;
+/// Days without an edit after which a published item is `stale` (design 16 §6.5).
+pub const HEALTH_STALE_DAYS: &str = "health.stale_days";
+/// [`HEALTH_STALE_DAYS`] when unset.
+pub const HEALTH_STALE_DAYS_DEFAULT: i64 = 365;
+
+/// The health settings as stored, defaults for unset or out-of-range values:
+/// (`health.external_links`, `health.stale_days`).
+pub async fn health_settings(repos: &dyn ferrite_store::Repos) -> Result<(bool, i64), CoreError> {
+    let external = repos
+        .options()
+        .get(HEALTH_EXTERNAL_LINKS)
+        .await?
+        .and_then(|e| e.value.as_bool())
+        .unwrap_or(HEALTH_EXTERNAL_LINKS_DEFAULT);
+    let stale = repos
+        .options()
+        .get(HEALTH_STALE_DAYS)
+        .await?
+        .and_then(|e| e.value.as_i64())
+        .filter(|d| (30..=3650).contains(d))
+        .unwrap_or(HEALTH_STALE_DAYS_DEFAULT);
+    Ok((external, stale))
+}
 
 /// The option that switches the MCP endpoint and the OAuth authorization server on and
 /// off (design 12 §2).
@@ -351,6 +397,18 @@ mod tests {
             assert!(SETTINGS[..i].iter().all(|o| o.key != d.key), "{}", d.key);
             let null_ok = d.kind == SettingKind::FrontPage;
             assert_eq!(validate(d.key, &json!(null)).is_ok(), null_ok, "{}", d.key);
+        }
+    }
+
+    #[test]
+    fn health_settings_validate() {
+        validate("health.external_links", &json!(true)).unwrap();
+        assert!(validate("health.external_links", &json!("on")).is_err());
+        for ok in [30, 365, 3650] {
+            validate("health.stale_days", &json!(ok)).unwrap();
+        }
+        for bad in [json!(29), json!(3651), json!(1.5), json!("365")] {
+            assert!(validate("health.stale_days", &bad).is_err(), "{bad}");
         }
     }
 

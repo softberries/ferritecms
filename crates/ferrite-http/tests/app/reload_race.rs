@@ -213,6 +213,12 @@ impl Repos for HookRepos {
     fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
         self.inner.read().preview_links()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.read().quality()
+    }
 }
 
 #[async_trait]
@@ -284,6 +290,7 @@ async fn route_swap_during_lookup_is_not_cached(app: App) -> App {
             fields: json!({}),
             built_in: false,
             created_at: Timestamp::now(),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

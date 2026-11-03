@@ -114,6 +114,17 @@ pub const EVENT_TYPES: &[EventTypeInfo] = &[
         "review",
         "An administrator published without the approvals.",
     ),
+    // M6-5 (design 17 §7.4, ruling P2).
+    t(
+        "change_set.reverted",
+        "change_set",
+        "A person reverted changes an AI assistant made.",
+    ),
+    t(
+        "health.completed",
+        "health",
+        "A content health run finished.",
+    ),
 ];
 
 /// The group of an event type (`content` for `content.published`).

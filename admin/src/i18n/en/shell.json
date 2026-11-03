@@ -22,13 +22,15 @@
     "appearance": "Appearance",
     "plugins": "Plugins",
     "webhooks": "Webhooks",
+    "aiActivity": "AI activity",
     "import": "Import",
     "settings": "Settings",
     "system": "System",
     "viewSite": "View site",
     "badge_one": "({{count}} waiting)",
     "badge_other": "({{count}} waiting)",
-    "account": "Account"
+    "account": "Account",
+    "health": "Content health"
   },
   "crumbs": {
     "dashboard": "Dashboard",

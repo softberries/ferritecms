@@ -341,6 +341,7 @@ pub async fn tree_of_media_or_unknown_is_none(db: &TestDb) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();
@@ -478,6 +479,7 @@ pub async fn query_menu_order(db: &TestDb) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

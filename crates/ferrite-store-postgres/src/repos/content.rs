@@ -43,11 +43,11 @@ impl ContentTypeRepo for PgRepos {
         // `built_in` and `created_at` are fixed when the type is first inserted.
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (name) DO UPDATE SET label = excluded.label, \
              hierarchical = excluded.hierarchical, has_archive = excluded.has_archive, \
-             fields = excluded.fields"
+             fields = excluded.fields, quality_gate = excluded.quality_gate"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -56,6 +56,7 @@ impl ContentTypeRepo for PgRepos {
         .bind(Json(&ty.fields))
         .bind(ty.built_in)
         .bind(dt(ty.created_at))
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -66,8 +67,8 @@ impl ContentTypeRepo for PgRepos {
         validate_json(&ty.fields)?;
         run!(&self.exec, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -76,6 +77,7 @@ impl ContentTypeRepo for PgRepos {
         .bind(Json(&ty.fields))
         .bind(ty.built_in)
         .bind(dt(ty.created_at))
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }

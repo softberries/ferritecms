@@ -34,11 +34,11 @@ impl ContentTypeRepo for SqliteRepos {
         // `built_in` and `created_at` are fixed when the type is first inserted.
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (name) DO UPDATE SET label = excluded.label, \
              hierarchical = excluded.hierarchical, has_archive = excluded.has_archive, \
-             fields = excluded.fields"
+             fields = excluded.fields, quality_gate = excluded.quality_gate"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -47,6 +47,7 @@ impl ContentTypeRepo for SqliteRepos {
         .bind(codec::json_to_db(&ty.fields)?)
         .bind(ty.built_in)
         .bind(ty.created_at.as_micros())
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }
@@ -57,8 +58,8 @@ impl ContentTypeRepo for SqliteRepos {
         validate_json(&ty.fields)?;
         run!(&self.writer, |e| sqlx::query(
             "INSERT INTO content_types \
-             (name, label, hierarchical, has_archive, fields, built_in, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+             (name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&ty.name)
         .bind(&ty.label)
@@ -67,6 +68,7 @@ impl ContentTypeRepo for SqliteRepos {
         .bind(codec::json_to_db(&ty.fields)?)
         .bind(ty.built_in)
         .bind(ty.created_at.as_micros())
+        .bind(ty.quality_gate.as_str())
         .execute(e))
         .map(|_| ())
     }

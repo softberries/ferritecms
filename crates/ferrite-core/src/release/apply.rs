@@ -15,6 +15,7 @@ use super::{
 use crate::{
     Actor, ContentService, CoreError,
     actor::{Area, Capability, require, require_read},
+    changes::{Capture, ObjectRef, Op},
     content::Edit,
     jobs::{editorial_notify_job, release_apply_job},
     permalink::Permalinks,
@@ -101,6 +102,18 @@ fn outcome_of(e: CoreError) -> Result<EntryOutcome, CoreError> {
             field: None,
             message: e.to_string(),
         },
+        CoreError::QualityBlocked(findings) => EntryOutcome::Invalid {
+            field: Some("body".into()),
+            message: format!(
+                "{} accessibility error(s) block publishing ({})",
+                findings.len(),
+                findings
+                    .iter()
+                    .map(|f| f.rule.id)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
         CoreError::Locked { release } => EntryOutcome::Invalid {
             field: None,
             message: format!("locked by release {release}"),
@@ -175,6 +188,13 @@ async fn apply_entry(
             .await?;
         }
     }
+    // An assistant's apply records each item it changes (M6-5, design 15 §16).
+    let op = match (entry.transition, entry.changes.is_some()) {
+        (EntryTransition::Publish, _) => Op::ContentPublish,
+        (EntryTransition::Unpublish, _) => Op::ContentUnpublish,
+        (EntryTransition::None, _) => Op::ContentUpdate,
+    };
+    let cap = Capture::begin(tx, actor, op, &[ObjectRef::Content(item.id)]).await?;
     let mut saved = item;
     if let Some(change) = &entry.changes {
         let draft = staged::into_draft(change, &saved.kind)?;
@@ -210,6 +230,7 @@ async fn apply_entry(
             "unpublish"
         }
     };
+    cap.finish(tx).await?;
     Ok(Applied {
         before,
         item: saved,

@@ -147,13 +147,16 @@ pub async fn migration_0017_roundtrip(db: &TestDb) {
     let user = fixture_user(store).await;
     stored_release(store, &user, "Spring").await;
 
+    // Later migrations (M6-4's 0019 is lossy too) go first, with their own consent.
+    let later = store.migrate_down(17, true).await.unwrap();
     let err = store.migrate_down(16, false).await.unwrap_err();
     assert!(
         matches!(&err, StoreError::Migration(m) if m.contains("migration 17 has a lossy down")),
         "{err:?}"
     );
+    assert_eq!(store.migrate_down(16, true).await.unwrap(), vec![17]);
     assert_eq!(
-        store.migrate_down(16, true).await.unwrap(),
+        later.iter().chain([17].iter()).copied().collect::<Vec<_>>(),
         crate::migrations::down_from(16)
     );
     let objects = db.user_objects().await;
@@ -483,6 +486,7 @@ async fn custom_type(store: &dyn Store, name: &str) {
             fields: json!({}),
             built_in: false,
             created_at: Timestamp::now(),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

@@ -22,6 +22,7 @@
 //! | `theme` | the active theme or its files; recorded by every page |
 //! | `plugins` | the set of enabled plugins; recorded by every page |
 //! | `all` | flush everything; the cache honours it by dropping every entry |
+//! | `run:<health run id>` | a finished content health run ([`HEALTH_COMPLETED`], M6-4); no page records it |
 //!
 //! # Emitter side (write paths in this crate)
 //!
@@ -222,6 +223,19 @@ pub fn options_changed(key: &str) -> NewEvent {
     NewEvent {
         kind: OPTIONS_CHANGED.to_owned(),
         keys: vec![option_key(key)],
+        origin_node: None,
+    }
+}
+
+/// A content health run finished (M6-4, design 16 §9); keys `[run:<id>]`, which no page
+/// records, so the cache drops nothing.
+pub const HEALTH_COMPLETED: &str = "health.completed";
+
+/// The [`HEALTH_COMPLETED`] event of run `id`.
+pub fn health_completed(id: ferrite_domain::HealthRunId) -> NewEvent {
+    NewEvent {
+        kind: HEALTH_COMPLETED.to_owned(),
+        keys: vec![format!("run:{id}")],
         origin_node: None,
     }
 }

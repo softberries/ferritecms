@@ -86,3 +86,10 @@ as a word diff, and **Restore** brings it back (with an undo).
 with an undo. From the list's Trash tab you can restore it (as a draft) or delete it
 permanently.
 Contributors cannot restore or delete items.
+
+## Preview while you write
+
+**Preview** in the editor bar (`Ctrl`/`⌘` + `Alt` + `P`) shows the item as the theme renders
+it, next to the text, and follows your autosaved working copy as you type. Releases, shared
+preview links and approval workflows are in [Releases and reviews](12-releases-and-reviews.md).
+

@@ -775,6 +775,376 @@
         ]
       }
     },
+    "/api/v1/change-sets": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "list_change_sets",
+        "parameters": [
+          {
+            "name": "user",
+            "in": "query",
+            "description": "Another user's sets (`manage_users`), or `all` for every user's.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Only one connection's (a grant or token id).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "description": "Only open (`true`) or closed (`false`) sets.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Change sets, newest last change first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-query` or `invalid-cursor`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`; another user's or `all`: `manage_users`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`limit`, `user`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "get_change_set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The set and its changes, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSetDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found` (also another user's set without `manage_users`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}/changes/{seq}": {
+      "get": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "get_change_set_change",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The change with its before and after images (`images: hidden` without your read right on the object's area; plugin secrets as `{\"secret\": \"set\"}`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`read_admin`, `users:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/change-sets/{id}/revert": {
+      "post": {
+        "tags": [
+          "change-sets"
+        ],
+        "operationId": "revert_change_set",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevertInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reverted (or, with `dry_run`, what would be)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json` or `malformed-header` (`Idempotency-Key`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (a token, not a session; or a reverse write's missing capability, `report.change` naming the change), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`change-conflict` (`report.conflicts`), or an `Idempotency-Key` still in use",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`changes`: unknown seq or more than 500; or a reverse write's own error, `report.change` naming the change)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/v1/comments": {
       "get": {
         "tags": [
@@ -1480,6 +1850,94 @@
         ]
       }
     },
+    "/api/v1/content/{type}/check": {
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "check_content",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The findings of the draft, their counts and the type's gate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such type, or `id` names no item of this type you may read",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/content/{type}/counts": {
       "get": {
         "tags": [
@@ -1895,7 +2353,7 @@
             }
           },
           "422": {
-            "description": "`validation`",
+            "description": "`validation`; `content-quality` (`findings`): an edit of a live item of a gated type adds accessibility errors",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2628,7 +3086,7 @@
             }
           },
           "422": {
-            "description": "`validation`: illegal transition",
+            "description": "`validation`: illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item's accessibility errors",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3209,7 +3667,7 @@
             }
           },
           "422": {
-            "description": "`validation`: `at` not in the future, or illegal transition",
+            "description": "`validation`: `at` not in the future, or illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3363,6 +3821,285 @@
           },
           "428": {
             "description": "`precondition-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/content/{type}/{id}/suppressions": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "list_suppressions",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The item's suppressions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuppressionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "create_suppression",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuppressInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Suppressed (an existing one for the same rule and key is replaced)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuppressionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (the right to edit the item; `edit_others` for an error on a gated type; `content:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `rule`, `key` or `reason`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/content/{type}/{id}/suppressions/{rule}": {
+      "delete": {
+        "tags": [
+          "content"
+        ],
+        "operationId": "delete_suppression",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "description": "The finding's key; absent or empty: the suppression of the whole rule.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: no such item or suppression",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `rule` or `key`)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3606,6 +4343,245 @@
           },
           "428": {
             "description": "`precondition-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health/findings": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health_findings",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "description": "`accessibility`, `links`, `media`, `site` or `freshness`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "A rule id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "`error`, `warning` or `notice`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A content type.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the newest run's findings, each with its item or redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthFindingList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`errors[0].field`: `limit` or `cursor`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `category`, `rule` or `severity`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health/runs": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "start_health_run",
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthRunQueuedDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: a run is queued or running",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health/summary": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health_summary",
+        "responses": {
+          "200": {
+            "description": "The newest run, the running one, the next run and whether external links are checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:read`) or `password-reset-required`",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -14790,6 +15766,346 @@
           }
         }
       },
+      "CategoryDto": {
+        "type": "string",
+        "description": "The category of a rule.",
+        "enum": [
+          "accessibility",
+          "links",
+          "media",
+          "site",
+          "freshness"
+        ]
+      },
+      "ChangeDetailDto": {
+        "type": "object",
+        "description": "One change with its images.",
+        "required": [
+          "change",
+          "images"
+        ],
+        "properties": {
+          "after": {
+            "description": "The object after (`null`: deleted, hidden or too large)."
+          },
+          "before": {
+            "description": "The object before (`null`: it did not exist, or hidden, or too large)."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ChangeDto"
+          },
+          "images": {
+            "type": "string",
+            "description": "`shown`, or `hidden` when you may not read the object's area now.",
+            "example": "shown"
+          }
+        }
+      },
+      "ChangeDto": {
+        "type": "object",
+        "description": "One change.",
+        "required": [
+          "seq",
+          "at",
+          "op",
+          "object",
+          "created",
+          "deleted",
+          "revertable",
+          "forced"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "The write created the object."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "The write deleted the object."
+          },
+          "forced": {
+            "type": "boolean",
+            "description": "Reverted over a later edit."
+          },
+          "object": {
+            "$ref": "#/components/schemas/ChangeObjectDto"
+          },
+          "op": {
+            "type": "string",
+            "example": "content.update"
+          },
+          "revertable": {
+            "type": "boolean",
+            "description": "`false` when an image was too large to keep."
+          },
+          "reverted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reverted_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ChangeObjectDto": {
+        "type": "object",
+        "description": "The object a change touched.",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "properties": {
+          "admin_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The admin screen of the object when it still exists (relative to `/admin`)."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`content`, `media`, `term`, `menu`, `type`, `redirect`, `comment`, `option`,\n`theme` or `plugin`."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its title or name at write time."
+          }
+        }
+      },
+      "ChangeSetAgentDto": {
+        "type": "object",
+        "description": "The connection that wrote.",
+        "required": [
+          "kind",
+          "id",
+          "client",
+          "connected"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The client's name when the set opened."
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "Whether the grant or token still exists."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The grant or token id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`oauth` (a connected app) or `token` (a personal API token).",
+            "example": "oauth"
+          }
+        }
+      },
+      "ChangeSetDetailDto": {
+        "type": "object",
+        "required": [
+          "set",
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeDto"
+            },
+            "description": "Newest first."
+          },
+          "set": {
+            "$ref": "#/components/schemas/ChangeSetDto"
+          }
+        }
+      },
+      "ChangeSetDto": {
+        "type": "object",
+        "description": "One change set.",
+        "required": [
+          "id",
+          "agent",
+          "started_at",
+          "last_at",
+          "open",
+          "changes",
+          "reverted",
+          "status"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/ChangeSetAgentDto"
+          },
+          "changes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "Whether the assistant's next write still lands here."
+          },
+          "reverted": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many changes are reverted.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`open`, `closed`, `reverted` or `partly_reverted`.",
+            "example": "open"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChangeSetUserDto",
+                "description": "`null` once the user is deleted."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ChangeSetList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeSetDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChangeSetUserDto": {
+        "type": "object",
+        "description": "Who a set belongs to.",
+        "required": [
+          "id",
+          "login",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "login": {
+            "type": "string"
+          }
+        }
+      },
+      "CheckRequestDto": {
+        "type": "object",
+        "description": "`POST /content/{type}/check`: the editor's working draft.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "The block tree."
+          },
+          "fields": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Custom fields (rich-text fields are checked; `featured_image` too)."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The stored item this is a draft of (its suppressions and locale apply)."
+          },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The locale of a new item; the site's default when absent."
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CheckResponseDto": {
+        "type": "object",
+        "description": "What a check found.",
+        "required": [
+          "findings",
+          "counts",
+          "gate"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/CountsDto"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingDto"
+            }
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateDto"
+          }
+        }
+      },
       "ClientKindDto": {
         "type": "string",
         "description": "How a client is known.",
@@ -15651,7 +16967,8 @@
           "label",
           "hierarchical",
           "has_archive",
-          "built_in"
+          "built_in",
+          "quality_gate"
         ],
         "properties": {
           "built_in": {
@@ -15681,6 +16998,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "quality_gate": {
+            "$ref": "#/components/schemas/QualityGateDto",
+            "description": "The publish gate (M6-4, design 16 §5)."
           }
         }
       },
@@ -15715,6 +17036,17 @@
           "name": {
             "type": "string",
             "description": "`[a-z][a-z0-9_-]{0,31}`; not a router word, type, taxonomy or top-level post or\npage slug, and not a first segment of a permalink structure."
+          },
+          "quality_gate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QualityGateDto",
+                "description": "The publish gate (M6-4): `off` (default) or `errors`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -15759,6 +17091,42 @@
           },
           "label": {
             "type": "string"
+          },
+          "quality_gate": {
+            "$ref": "#/components/schemas/QualityGateDto",
+            "description": "The publish gate (M6-4): `errors` refuses publishing while accessibility errors\nremain; the `media` type refuses it (`422`, field `quality_gate`)."
+          }
+        }
+      },
+      "CountsDto": {
+        "type": "object",
+        "description": "Unsuppressed findings per severity, and the suppressed ones.",
+        "required": [
+          "error",
+          "warning",
+          "notice",
+          "suppressed"
+        ],
+        "properties": {
+          "error": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "notice": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "suppressed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "warning": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -16270,6 +17638,82 @@
           "repeater"
         ]
       },
+      "FindingDto": {
+        "type": "object",
+        "description": "One finding.",
+        "required": [
+          "rule",
+          "severity",
+          "category",
+          "wcag",
+          "location",
+          "key",
+          "detail"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/CategoryDto"
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What was found: link text, alt, href or heading text (at most 120 characters)."
+          },
+          "detail": {
+            "type": "object",
+            "description": "Rule-specific facts, e.g. `{\"href\": \"/x/\", \"status\": 404}`."
+          },
+          "key": {
+            "type": "string",
+            "description": "The suppression key of this finding."
+          },
+          "location": {
+            "$ref": "#/components/schemas/LocationDto"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/SeverityDto"
+          },
+          "suppressed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuppressionDto",
+                "description": "Set when a person accepted this finding: it counts nowhere."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wcag": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "WCAG 2.2 success criteria, e.g. `1.1.1`."
+          }
+        }
+      },
+      "GateDto": {
+        "type": "object",
+        "description": "The type's publish gate and whether it refuses this draft now.",
+        "required": [
+          "mode",
+          "blocked"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/QualityGateDto"
+          }
+        }
+      },
       "GrantDto": {
         "type": "object",
         "description": "A connected app: one grant of a user to a client.",
@@ -16380,6 +17824,253 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "HealthFindingDto": {
+        "type": "object",
+        "description": "One finding of the health report.",
+        "required": [
+          "rule",
+          "severity",
+          "category",
+          "wcag",
+          "key",
+          "detail"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/CategoryDto"
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "object",
+            "description": "Rule-specific facts; `location` says where in the item."
+          },
+          "item": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthItemRefDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "redirect": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RedirectRefDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/SeverityDto"
+          },
+          "suppressed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuppressionDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wcag": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "HealthFindingList": {
+        "type": "object",
+        "description": "`GET /health/findings`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HealthFindingDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "HealthItemRefDto": {
+        "type": "object",
+        "description": "The item a health finding is on.",
+        "required": [
+          "id",
+          "type",
+          "title",
+          "status",
+          "locale",
+          "admin_url"
+        ],
+        "properties": {
+          "admin_url": {
+            "type": "string",
+            "description": "The item's editor in the admin."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthRunDto": {
+        "type": "object",
+        "description": "One health run.",
+        "required": [
+          "id",
+          "status",
+          "trigger",
+          "started_at",
+          "items_checked",
+          "paths_checked",
+          "urls_checked",
+          "totals",
+          "truncated"
+        ],
+        "properties": {
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items_checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "paths_checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`running`, `done`, `failed` or `abandoned`."
+          },
+          "totals": {
+            "type": "object",
+            "description": "Unsuppressed findings: `{\"rules\": {\"<rule>\": n}, \"severity\": {\"error\": n, …}}`."
+          },
+          "trigger": {
+            "type": "string",
+            "description": "`schedule` or `manual`."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "urls_checked": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "HealthRunQueuedDto": {
+        "type": "object",
+        "description": "`POST /health/runs`: the queued job.",
+        "required": [
+          "job_id"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "HealthSummaryDto": {
+        "type": "object",
+        "description": "`GET /health/summary`.",
+        "required": [
+          "next_at",
+          "external_links"
+        ],
+        "properties": {
+          "external_links": {
+            "type": "boolean",
+            "description": "Whether external links are checked (`health.external_links`)."
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthRunDto",
+                "description": "The newest finished run."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The next daily run (04:00 UTC)."
+          },
+          "running": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthRunDto",
+                "description": "The run going on now."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -16992,6 +18683,46 @@
               "null"
             ],
             "description": "At most 200 characters."
+          }
+        }
+      },
+      "LocationDto": {
+        "type": "object",
+        "description": "Where a finding is.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `field`: the field's path, e.g. `chapters[1].summary`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`title`, `body`, `field`, `featured_image`, `item` or `redirect`."
+          },
+          "path": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "For `body` and `field`: the child indices from the document root."
+          },
+          "redirect_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "For `redirect`: the redirect's id."
           }
         }
       },
@@ -18714,6 +20445,16 @@
             },
             "description": "Omitted when empty."
           },
+          "findings": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FindingDto"
+            },
+            "description": "The blocking findings (`FindingDto`); only on `content-quality` (422), when the\ntype's publish gate refuses the item (M6-4)."
+          },
           "report": {
             "description": "The permission report (`PermissionReportDto`) of the refused upload; only on a\n`validation` (422) of `POST /plugins` whose `approve` does not match, so the\nadmin can review what this upload asks for and approve it."
           },
@@ -18836,6 +20577,14 @@
             "type": "string"
           }
         }
+      },
+      "QualityGateDto": {
+        "type": "string",
+        "description": "A type's publish gate.",
+        "enum": [
+          "off",
+          "errors"
+        ]
       },
       "QueuedDeliveryDto": {
         "type": "object",
@@ -19000,6 +20749,27 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "RedirectRefDto": {
+        "type": "object",
+        "description": "The redirect a health finding is on.",
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
           "source": {
             "type": "string"
@@ -19573,6 +21343,97 @@
           }
         }
       },
+      "RevertInput": {
+        "type": "object",
+        "description": "`POST /change-sets/{id}/revert`.",
+        "properties": {
+          "changes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "The seqs to revert (at most 500); omitted: every change not reverted yet."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Check and report only; nothing is written."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Overwrite later edits."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevertNoteDto": {
+        "type": "object",
+        "required": [
+          "seq",
+          "text"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "RevertReportDto": {
+        "type": "object",
+        "description": "What a revert did (or, with `dry_run`, would do).",
+        "required": [
+          "reverted",
+          "skipped",
+          "forced",
+          "notes",
+          "dry_run"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "forced": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevertNoteDto"
+            }
+          },
+          "reverted": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Newest first."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        }
+      },
       "ReviewDto": {
         "type": "object",
         "description": "A review.",
@@ -19921,6 +21782,36 @@
             "description": "The new secret, shown this once."
           }
         }
+      },
+      "RuleId": {
+        "type": "string",
+        "description": "Every rule id (`ferrite_core::quality::RULES`, design 16 §3); a test keeps the two\nequal.",
+        "enum": [
+          "image-alt-missing",
+          "image-alt-empty",
+          "image-alt-filename",
+          "heading-empty",
+          "heading-level-skipped",
+          "link-text-empty",
+          "link-text-vague",
+          "link-text-url",
+          "table-header-missing",
+          "table-header-empty",
+          "html-unchecked",
+          "media-missing",
+          "featured-alt-missing",
+          "link-internal-broken",
+          "link-internal-redirected",
+          "link-anchor-missing",
+          "link-external-broken",
+          "orphan",
+          "redirect-chain",
+          "redirect-loop",
+          "redirect-target-broken",
+          "stale",
+          "check-truncated",
+          "findings-truncated"
+        ]
       },
       "ScheduleReleaseInput": {
         "type": "object",
@@ -20297,6 +22188,29 @@
             "format": "int64",
             "description": "1..=100 (default 50): top-level comment threads per public comment page\n(`?cpage=N`); each thread shows with all its approved replies."
           },
+          "health.external_links": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the content health run checks external links (default `false`; the\nserver then contacts every linked site, M6-4)."
+          },
+          "health.stale_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Days without an edit after which a published item is reported `stale` (30 to\n3650, default 365)."
+          },
+          "mcp.change_sets_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "1..=365 (default 90): how many days AI change sets are kept (M6-5). Not\nwritable over MCP."
+          },
           "mcp.enabled": {
             "type": [
               "boolean",
@@ -20390,6 +22304,15 @@
       "SettingsPatch": {
         "type": "object",
         "description": "`PATCH /themes/{name}/settings` and `PATCH /plugins/{name}/settings` (the schema\nonly): an object of declared keys to their new values; `null` resets a key to its\ndefault (for a secret: deletes it). Keys not in the body stay as they are."
+      },
+      "SeverityDto": {
+        "type": "string",
+        "description": "The severity of a rule.",
+        "enum": [
+          "error",
+          "warning",
+          "notice"
+        ]
       },
       "SignerDto": {
         "type": "object",
@@ -20522,6 +22445,76 @@
           }
         },
         "additionalProperties": false
+      },
+      "SuppressInput": {
+        "type": "object",
+        "description": "`POST /content/{type}/{id}/suppressions`.",
+        "required": [
+          "rule",
+          "reason"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "One finding's key, or `\"\"` for every finding of the rule on the item."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why (1 to 500 characters)."
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleId"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SuppressionDto": {
+        "type": "object",
+        "description": "Who accepted a finding, and why.",
+        "required": [
+          "rule",
+          "key",
+          "reason",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "key": {
+            "type": "string",
+            "description": "`\"\"`: every finding of the rule on the item."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "SuppressionList": {
+        "type": "object",
+        "description": "An item's suppressions.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuppressionDto"
+            }
+          }
+        }
       },
       "SystemStatusDto": {
         "type": "object",
@@ -22071,6 +24064,14 @@
     {
       "name": "webhooks",
       "description": "Outgoing webhooks: endpoints, the event catalogue, test deliveries, secret rotation, the delivery log and redelivery (admins)"
+    },
+    {
+      "name": "change-sets",
+      "description": "What AI assistants changed over MCP, grouped in change sets: review with before/after images and revert (a signed-in session)"
+    },
+    {
+      "name": "health",
+      "description": "The content health report and runs (M6-4; editors and admins)"
     },
     {
       "name": "releases",

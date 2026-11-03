@@ -356,6 +356,21 @@ pub struct SettingsDto {
     #[serde(rename = "mcp.enabled")]
     #[schema(value_type = Option<bool>)]
     pub mcp_enabled: Value,
+    /// 1..=365 (default 90): how many days AI change sets are kept (M6-5). Not
+    /// writable over MCP.
+    #[serde(rename = "mcp.change_sets_days")]
+    #[schema(value_type = Option<i64>)]
+    pub mcp_change_sets_days: Value,
+    /// Whether the content health run checks external links (default `false`; the
+    /// server then contacts every linked site, M6-4).
+    #[serde(rename = "health.external_links")]
+    #[schema(value_type = Option<bool>)]
+    pub health_external_links: Value,
+    /// Days without an edit after which a published item is reported `stale` (30 to
+    /// 3650, default 365).
+    #[serde(rename = "health.stale_days")]
+    #[schema(value_type = Option<i64>)]
+    pub health_stale_days: Value,
 }
 
 impl SettingsDto {
@@ -377,6 +392,9 @@ impl SettingsDto {
             comments_moderation: take("comments.moderation"),
             comments_per_page: take("comments.per_page"),
             mcp_enabled: take("mcp.enabled"),
+            mcp_change_sets_days: take("mcp.change_sets_days"),
+            health_external_links: take("health.external_links"),
+            health_stale_days: take("health.stale_days"),
         }
     }
 }

@@ -106,6 +106,9 @@ pub async fn settings_allowlist_and_validation(db: &TestDb) {
             "comments.moderation",
             "comments.per_page",
             "mcp.enabled",
+            "mcp.change_sets_days",
+            "health.external_links",
+            "health.stale_days",
         ]
     );
 

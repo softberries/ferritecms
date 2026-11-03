@@ -1,4 +1,5 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
+use ferrite_store_tests::change_sets::*;
 use ferrite_store_tests::editorial::*;
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
@@ -6,7 +7,8 @@ use ferrite_store_tests::{
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*,
     locale::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
     node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, plugin_trust::*, pool::*,
-    search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*, webhooks::*,
+    quality::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    webhooks::*,
 };
 
 backend_tests!(
@@ -496,4 +498,33 @@ backend_tests!(
     prune_removes_expired_links,
     delete_for_target,
     deleting_user_deletes_links,
+);
+
+backend_tests!(
+    migration_0018_roundtrip,
+    extend_open_returns_consecutive_seqs,
+    idle_set_is_not_extended,
+    full_set_is_not_extended,
+    open_closes_the_stale_set_and_starts_a_new_one,
+    images_round_trip_bytes_and_hashes,
+    list_is_newest_first_with_cursor_and_filters,
+    reverted_counts_in_list,
+    deleting_user_nulls_user_and_reverted_by,
+    prune_deletes_old_sets_and_their_changes,
+);
+
+backend_tests_spawning!(concurrent_open_meets_in_one_set);
+
+backend_tests!(
+    migration_0019_roundtrip,
+    quality_gate_defaults_off_and_round_trips,
+    suppression_upsert_and_delete,
+    suppressions_cascade_with_item,
+    published_page_skips_drafts_media_and_trash,
+    last_revision_at_groups_per_item,
+    findings_page_filters_and_cursor,
+    findings_cascade_with_run_and_item,
+    delete_findings_except_keeps_one_run,
+    abandon_running_marks_old_runs,
+    link_cache_put_get_prune,
 );

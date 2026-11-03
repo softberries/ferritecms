@@ -1,7 +1,10 @@
 //! Heading ids (M4-3b P54) and the table-of-contents entries built from them.
 
+use super::MAX_DEPTH;
+use super::text::heading_text;
 use ferrite_domain::html::is_reserved_fragment_id;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 /// The id given when a heading's text leaves nothing after the rule.
@@ -59,6 +62,61 @@ impl Anchors {
     fn take(&mut self, id: &str) -> bool {
         !is_reserved_fragment_id(id) && self.used.insert(id.to_owned())
     }
+}
+
+/// The node types whose children the renderer renders as nodes (`render_object`); every
+/// other type renders its text only, so headings under it get no id.
+const CONTAINERS: &[&str] = &[
+    "doc",
+    "paragraph",
+    "heading",
+    "bulletList",
+    "orderedList",
+    "listItem",
+    "blockquote",
+    "table",
+    "tableRow",
+    "tableHeader",
+    "tableCell",
+];
+
+/// The `id`s [`render_html_toc`](super::render_html_toc) gives the headings of `doc`, in
+/// document order, without rendering (design 16 §4.3: `link-anchor-missing` compares
+/// fragments against them). Iterative: any depth.
+pub fn heading_ids(doc: &Value) -> Vec<String> {
+    let mut anchors = Anchors::new();
+    let mut ids = Vec::new();
+    let mut stack = vec![(doc, 0usize)];
+    while let Some((v, depth)) = stack.pop() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
+        let children: &[Value] = match v {
+            Value::Array(items) => items,
+            Value::Object(map) => {
+                let ty = map.get("type").and_then(Value::as_str).unwrap_or("");
+                if !CONTAINERS.contains(&ty) {
+                    continue;
+                }
+                if ty == "heading"
+                    && map
+                        .get("attrs")
+                        .and_then(|a| a.get("level"))
+                        .and_then(Value::as_u64)
+                        .is_some_and(|l| (1..=6).contains(&l))
+                {
+                    ids.push(anchors.id(&heading_text(v)));
+                }
+                match map.get("content") {
+                    Some(Value::Array(items)) => items,
+                    _ => &[],
+                }
+            }
+            _ => continue,
+        };
+        stack.extend(children.iter().rev().map(|c| (c, depth + 1)));
+    }
+    ids
 }
 
 /// Lowercase, keep alphanumerics, `-`, `_` and spaces, turn each space into `-` (runs

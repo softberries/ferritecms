@@ -61,14 +61,29 @@ pub async fn guard(State(api): State<Arc<ApiState>>, mut req: Request, next: Nex
         Ok(token) => token,
         Err(refusal) => return unauthorized(&api, refusal),
     };
-    let who = match api.auth.resolve_token(token, ip).await {
+    let mut who = match api.auth.resolve_token(token, ip).await {
         Ok(Some(who)) => who,
         Ok(None) => return unauthorized(&api, Refusal::Invalid),
         Err(e) => return Problem::from(e).into_response(),
     };
+    // Every write through `/mcp` is recorded as a change set (design 17 §3.1); nothing
+    // else marks the actor.
+    if let Some(agent) = agent_of(&who) {
+        who.actor = who.actor.with_agent(agent);
+    }
     let client = client_name(&who);
     req.extensions_mut().insert(Caller { who, client, ip });
     next.run(req).await
+}
+
+/// The connection acting: the OAuth grant, else the personal token. A session never
+/// reaches `/mcp` (the guard takes bearer tokens only).
+fn agent_of(who: &Authenticated) -> Option<ferrite_core::Agent> {
+    match (who.oauth, &who.via) {
+        (Some(grant), _) => Some(ferrite_core::Agent::OAuth(grant)),
+        (None, ferrite_core::Via::Token(id)) => Some(ferrite_core::Agent::Token(*id)),
+        (None, ferrite_core::Via::Session(_)) => None,
+    }
 }
 
 /// The label the audit and `site_overview` show for the caller's connection: the OAuth

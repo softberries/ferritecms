@@ -1,6 +1,6 @@
 # 16 — Accessibility and content health
 
-Status: **design for M6-4** · Date: 2026-11-02
+Status: **built (M6-4)**, see §15 · Date: 2026-11-02
 
 Two features on one rule engine:
 
@@ -515,3 +515,29 @@ AI suggestions.
   them; history is the run totals (30 days).
 - **D19** No rate limit on `check` beyond the body cap and the 200-path probe cap — it is
   read-only, and DB-backed limits would write a row per keystroke pause.
+
+## 15. As built (M6-4)
+
+Built on branch `m6-4-content-quality`; the execution decisions R-4-1 to R-4-18 are in
+[`m6-4-exit.md`](../superpowers/m6-4-exit.md). What changes this design:
+
+- **Ruling P3** (R-4-1): `image-alt-missing` (error) is an image with no `alt` attribute;
+  an `alt` that is blank after trimming and removing format characters is the new
+  `image-alt-empty` (warning, accessibility, WCAG 1.1.1). `decorative: true` clears both.
+  §4.1's "existing images with `alt: ""` become `image-alt-missing`" is replaced: they
+  become `image-alt-empty`, which does not gate.
+- **The gate** (R-4-2, ruling P4) runs in `ContentService`'s public `transition` wrapper,
+  after the transition's own rights and version checks and before the webhook emit, for
+  `Publish` and `Schedule`; `transition_item` and `publish_in` stay ungated. Callers that
+  publish several items (M6-3 releases) call `quality::gate::check(repos, &item, &ty)` per
+  item in their transaction; any `Err` is `CoreError::QualityBlocked` and refuses the batch.
+- `heading-level-skipped` is checked in the body only (R-4-7); finding keys (R-4-9):
+  image `src`, link `href|text`, heading `h<level>:<text>`, tables `table:<n>` (1-based,
+  both table rules), raw HTML `html:<n>`.
+- robots.txt is parsed in core (`quality::robots`); `LinkProbe::robots` returns the body
+  (`RobotsFetch`) (R-4-4).
+- Health findings keep their location in `detail.location` (R-4-8); the run row's
+  counters are `HealthCounters` (R-4-3); suppressible are the item-scope rules and
+  `orphan`, `stale`, `link-external-broken` (R-4-6).
+- `health.completed` is both an outbox event (`run:<id>`) and a webhook event of the group
+  `health` (R-4-15).

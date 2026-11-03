@@ -113,11 +113,13 @@ async fn reference_rows_match_annotations_and_scopes(api: Api) -> Api {
         let want = if read_only { "read" } else { "write" };
         assert_eq!(row.access, want, "{}: access", row.name);
         // The scope is `<area>:read` or `<area>:write`, matching the access; the site
-        // overview needs none (a section the caller cannot read is left out).
+        // overview needs none (a section the caller cannot read is left out), nor does
+        // `changes_list` (the connection's own changes, M6-5).
         if row.scope.starts_with("none") {
-            assert_eq!(
-                row.name, "site_overview",
-                "only the overview needs no scope"
+            assert!(
+                ["site_overview", "changes_list"].contains(&row.name.as_str()),
+                "only the overview and changes_list need no scope: {}",
+                row.name
             );
             continue;
         }

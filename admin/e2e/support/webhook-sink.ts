@@ -57,7 +57,12 @@ export async function startWebhookSink(): Promise<WebhookSink> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   sink.url = `http://127.0.0.1:${port}/hook`;
-  sink.stop = () => new Promise((resolve) => server.close(() => resolve()));
+  sink.stop = () =>
+    new Promise((resolve) => {
+      server.close(() => resolve());
+      // The site's HTTP client keeps idle connections open, which `close` would wait for.
+      server.closeAllConnections();
+    });
   return sink;
 }
 

@@ -70,6 +70,7 @@ pub async fn types_seeded_and_upsert(db: &TestDb) {
         fields: json!({"type": "object", "properties": {"city": {"type": "string"}}}),
         built_in: false,
         created_at: micros(1_700_000_000_000_000),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
     types.upsert(&custom).await.unwrap();
     assert_eq!(types.get("event").await.unwrap().unwrap(), custom);

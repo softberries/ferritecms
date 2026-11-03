@@ -94,7 +94,7 @@ pub(crate) fn content_item(row: &PgRow) -> Result<ContentItem, StoreError> {
 }
 
 pub(crate) const TYPE_COLUMNS: &str =
-    "name, label, hierarchical, has_archive, fields, built_in, created_at";
+    "name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate";
 
 /// Maps a row selected with [`TYPE_COLUMNS`].
 pub(crate) fn content_type(row: &PgRow) -> Result<ContentType, StoreError> {
@@ -108,6 +108,10 @@ pub(crate) fn content_type(row: &PgRow) -> Result<ContentType, StoreError> {
         fields: fields.0,
         built_in: row.try_get("built_in").map_err(map_db_err)?,
         created_at: created_at.into(),
+        quality_gate: {
+            let g: String = row.try_get("quality_gate").map_err(map_db_err)?;
+            g.parse()?
+        },
     })
 }
 

@@ -9,6 +9,7 @@ mod common;
 mod contact_form;
 mod egress;
 mod install;
+mod link_check;
 mod mail;
 mod registry;
 mod registry_fetch;

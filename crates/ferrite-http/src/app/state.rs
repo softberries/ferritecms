@@ -302,7 +302,7 @@ impl AppState {
     }
 
     /// Link and whole-site previews (M6-3) use `releases` and `links`; at most
-    /// [`PREVIEW_SLOTS`](super::preview::preview_slots) release previews render at once
+    /// one (SQLite) or two (Postgres) release previews render at once
     /// on this node.
     pub fn with_editorial(
         mut self,

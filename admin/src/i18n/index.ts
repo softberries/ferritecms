@@ -14,6 +14,7 @@ import media from "./en/media.json";
 import palette from "./en/palette.json";
 import releases from "./en/releases.json";
 import reviews from "./en/reviews.json";
+import quality from "./en/quality.json";
 import shell from "./en/shell.json";
 import structure from "./en/structure.json";
 import styleguide from "./en/styleguide.json";
@@ -40,6 +41,7 @@ export const resources = {
     webhooks,
     releases,
     reviews,
+    quality,
   },
 } as const;
 

@@ -82,11 +82,16 @@ test("webhook_end_to_end", async ({ as, site, siteKey, guard, expectAccessible }
     await expect
       .poll(() => hitsFor(sink, failing.id).length, { timeout: 20_000 })
       .toBeGreaterThan(0);
-    const log = await api.ctx.get(`/api/v1/webhooks/${id}/deliveries?status=pending`);
-    const pending = (await log.json()) as {
-      items: { id: string; attempts: number; next_attempt_at: string | null }[];
-    };
-    expect(pending.items.some((d) => d.attempts >= 1 && d.next_attempt_at !== null)).toBe(true);
+    // The sink answers before the job writes the attempt, so this is polled.
+    await expect
+      .poll(async () => {
+        const log = await api.ctx.get(`/api/v1/webhooks/${id}/deliveries?status=pending`);
+        const pending = (await log.json()) as {
+          items: { id: string; attempts: number; next_attempt_at: string | null }[];
+        };
+        return pending.items.some((d) => d.attempts >= 1 && d.next_attempt_at !== null);
+      })
+      .toBe(true);
     await page.reload();
     const row = detail(page)
       .getByRole("table", { name: "Deliveries" })

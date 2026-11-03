@@ -1,6 +1,7 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
 pub mod catalogue;
+mod change_set;
 mod editorial;
 mod error;
 mod export;
@@ -15,12 +16,17 @@ mod node_metrics;
 mod notify;
 mod paging;
 mod plugin_trust;
+mod quality;
 mod repos;
 mod search;
 mod session;
 mod text;
 mod webhook;
 
+pub use change_set::{
+    ChangeSetRepo, MAX_CHANGES_READ, change_set_cursor, check_new_change, check_new_change_set,
+    encode_change_set_cursor,
+};
 pub use editorial::{
     MAX_RELEASES_OF, PreviewLinkRepo, RELEASE_CURSOR_TAG, REVIEW_CURSOR_TAG, ReleaseRepo,
     ReviewRepo, WorkflowRepo, check_release, check_review, check_steps, encode_release_cursor,
@@ -35,8 +41,8 @@ pub use import_writer::{
 pub use json::validate_json;
 pub use locale::{LocaleFilter, check_groups, kinds_locale_filter, locale_filter};
 pub use lock::{
-    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES,
-    LockGuard, check_lock_name, lock,
+    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_HEALTH, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL,
+    LOCK_TYPES, LockGuard, check_lock_name, lock,
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{
@@ -67,6 +73,11 @@ pub use paging::{
 };
 pub use plugin_trust::{
     PluginTrustRepo, check_plugin_owner, check_registry_row, check_trusted_key,
+};
+pub use quality::{
+    FINDING_CURSOR_TAG, MAX_FINDING_BATCH, MAX_LINK_BATCH, QualityRepo, RunEnd, check_finding,
+    check_finding_query, check_link, check_run, check_suppression, encode_finding_cursor,
+    finding_cursor, link_url_hash,
 };
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,

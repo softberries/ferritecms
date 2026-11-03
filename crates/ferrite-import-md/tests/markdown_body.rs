@@ -250,3 +250,20 @@ fn pathological_nesting_converts_in_bounded_time_and_depth() {
         );
     }
 }
+
+/// A decorative image (design 16 §4.1) goes out as a `ferrite-block` fence and comes
+/// back with its flag; `![](…)` in is not decorative.
+#[test]
+fn decorative_image_round_trips_through_markdown() {
+    let image = json!({"type":"image","attrs":{
+        "src": format!("ferrite:media/{ID}"), "alt": "", "decorative": true}});
+    let body = json!({"type":"doc","content":[image]});
+    let md = to_markdown(&body);
+    assert!(md.starts_with("```ferrite-block\n"), "{md}");
+    let back = markdown_to_body(&md);
+    assert!(back.notes.is_empty(), "{:?}", back.notes);
+    assert_eq!(back.body, body);
+    let plain = markdown_to_body(&format!("![](ferrite:media/{ID})\n"));
+    let attrs = &plain.body["content"][0]["attrs"];
+    assert!(attrs.get("decorative").is_none(), "{attrs}");
+}

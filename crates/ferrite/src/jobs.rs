@@ -12,6 +12,7 @@
 mod backup;
 mod editorial;
 mod gc;
+mod health;
 mod import;
 pub(crate) mod media;
 mod permalinks;
@@ -49,6 +50,7 @@ pub use gc::{
     ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_OFFSET, ARTIFACTS_GC_TIMEOUT,
     ArtifactsGcHandler, artifacts_gc_periodic,
 };
+pub use health::{ContentHealthHandler, content_health_periodic};
 pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 #[cfg(feature = "test-seams")]
 pub use media::ImageProcessor;
@@ -376,6 +378,7 @@ pub fn core_periodics() -> Vec<Periodic> {
         webhooks_prune_periodic(),
         release_apply_due_periodic(),
         preview_links_prune_periodic(),
+        content_health_periodic(),
     ]
 }
 

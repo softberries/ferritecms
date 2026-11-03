@@ -610,3 +610,48 @@ throwaway keys only.
 | cli | The command list and the output formats | `ferrite plugin --help`, `ferrite plugin keys --help` run on the release build | Verified |
 | configuration | `registry` (default URL, `""` off, https or `file:///`), `registry_key` required for another registry, cluster nodes need the same values | `ferrite-config` `plugin_trust::*` tests; design 14 §13 for the cluster rule (not run on two nodes) | Verified (the cluster rule from the design only) |
 | mcp-tools | `plugins_list` carries the publisher and an offered update | `plugin_registry::mcp_plugins_list_includes_trust` | Verified |
+
+## AI change sets, M6-5 (2026-11-03)
+
+Checked on branch `m6-5-change-sets` against the tests named and a release build serving a
+fresh `seed demo` site on `127.0.0.1:8091` (the screenshot's run: a personal token named
+"Claude Code" made four MCP writes, then the admin opened the set).
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| ai-assistants, mcp-tools | 58 tools, in 14 areas on the reference page | `tests/api/mcp_changes.rs` `every_write_tool_records_a_change` (31 write tools); `mcp_reference` `reference_page_lists_every_tool` | Verified |
+| ai-assistants | Every MCP write is recorded, by the consent screen's apps and by personal tokens; REST calls are not | `every_write_tool_records_a_change`, `oauth_refresh_keeps_one_set`, `rest_write_with_same_token_records_nothing` | Verified |
+| ai-assistants | Changes no more than 30 minutes apart form one change set | `crates/ferrite-core/src/changes/capture.rs` (`IDLE_WINDOW_MICROS`, `thirty_minute_gap_opens_a_new_set`); contract `idle_set_is_not_extended` | Verified |
+| ai-assistants | AI activity is in the sidebar for every role; administrators tick Every user's; Activity next to apps and tokens | `admin/src/shell/nav.ts` (`activity`, `read_admin`); `nav.test.ts`; `activity-list.tsx`; `connected-apps-card.tsx` `ActivityLink`; e2e `ai-activity.spec.ts` | Verified |
+| ai-assistants | Statuses open, closed, reverted, partly reverted | `crates/ferrite-http/src/api/change_sets.rs` `status_of`; API `revert_force_and_dry_run` | Verified |
+| ai-assistants | The diff of posts and pages is the revisions drawer's; other objects show each changed field; a role that can no longer read the area sees only what was done | `content-change-diff.tsx`, `json-diff.tsx`; Vitest `detail_renders_content_diff_and_hidden_images`; core `images_hidden_without_area_read`; API `change_detail_shows_images_or_hidden` | Verified |
+| ai-assistants | A later edit is a conflict naming who and when (posts and pages); Overwrite later edits forces it; deleted objects and later unselected changes cannot be reverted | core `person_edit_between_is_changed_since_naming_the_revision_author`, `force_overwrites_and_marks_forced`, `later_change_in_same_set_refuses_single_revert`; e2e `ai_activity_review_and_revert` | Verified |
+| ai-assistants | A revert runs as you with your role; posts get the revision "Reverted an AI change"; created content goes to the trash | core `reverting_person_role_is_checked`, `revert_two_updates_newest_first_without_force`, `revert_create_trashes_the_item`, `media_upload_revert_trashes_media`, `comment_reply_revert_trashes_comment` | Verified |
+| ai-assistants | An assistant cannot revert; it has no revert tool | core `assistant_cannot_revert`; the tool list (`changes_list` read-only) | Verified |
+| ai-assistants | Kept 90 days by default, 1 to 365 in Settings → AI assistants, not changeable by an assistant | `crates/ferrite-core/src/settings.rs`; `crates/ferrite-cluster/tests/change_sets_prune.rs`; API `mcp_settings_not_writable_via_mcp` | Verified |
+| ai-assistants | The screenshot `admin-ai-activity.webp` shows what its alt text says | Looked at after it was taken (1440 × 900, scale 2) | Verified |
+| README | Changes are recorded as change sets you review and undo | As the rows above | Verified |
+
+## Accessibility checks and content health, M6-4 (2026-11-03)
+
+Claims of `02-guides/11-content-health.md` and the M6-4 lines of `08-ai-assistants.md` and
+`05-reference/02-mcp-tools.md`, checked against the code on branch `m6-4-content-quality`.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| content-health | Checks run about 1.5 s after typing stops and when the publish dialog opens | `admin/src/editor/quality/use-quality-check.ts` (`CHECK_DEBOUNCE_MS`); `editor.tsx` (`checkNow` on `publishMode`); Vitest `debounces 1.5 s after the last change` | Verified |
+| content-health | The listed errors, warnings and notices, with their severities | `crates/ferrite-core/src/quality/rules.rs` (`RULES`); unit tests in `quality/check.rs` | Verified |
+| content-health | Vague link text in English, German, French, Spanish and Polish | `crates/ferrite-core/src/quality/vague.rs`; test `by_locale` | Verified |
+| content-health | Decorative image clears alt and is not reported; empty alt without it is a warning | `image-node.tsx` `AltEditor`; Vitest `the decorative switch writes decorative and clears alt`; core `image_rules`; `render.rs` `decorative_image_renders_empty_alt` | Verified |
+| content-health | Gate: dialog disabled, API `422 content-quality`, live edits refused only when adding errors, scheduler, imports and seed never refused | `content/lifecycle.rs` `gate`; `content.rs` `live_edit_gate`; core tests `publish_refused_on_gated_type_with_errors`, `update_of_live_item_refused_only_when_errors_increase`, `publish_due_and_publish_scheduled_never_gated`, `publish_in_not_gated`; API `publish_on_gated_type_is_422_with_findings`; Vitest `gate_blocked_disables_confirm` | Verified |
+| content-health | Only accessibility errors gate | `quality/gate.rs` `blocks` | Verified |
+| content-health | A suppression needs a reason, counts nowhere; on a gated type only editors suppress errors; audited `quality.suppress` | `quality/service.rs` `suppress`; tests `author_cannot_suppress_error_on_gated_type`, `check_marks_suppressed_and_excludes_from_counts`, `suppress_audited`, `suppressed_findings_excluded_from_totals` | Verified |
+| content-health | Daily at 04:00 UTC or Run now; `g h`; editors and administrators | `jobs.rs` `CONTENT_HEALTH_OFFSET`; `jobs/health.rs` test `periodic_is_daily_at_0400_and_fits`; `admin/src/shell/nav.ts` (`health`, `edit_others`, `g h`); API `summary_and_findings_need_edit_others` | Verified |
+| content-health | Orphan rule (front page, menu of its language, linked, reachable parent, types with an archive) | `quality/health.rs` `orphans`; test `orphan_rules` | Verified |
+| content-health | Redirect chains, loops, broken targets; stale after 30–3650 days (default 365) from the newest revision | `health.rs` `redirects`, `freshness`; `settings.rs` `health.stale_days`; tests `redirect_chain_loop_and_broken_target`, `stale_uses_newest_revision`, `health_settings_validate` | Verified |
+| content-health | External links off by default; robots.txt, one request at a time per site with 2 s between, at most 1 000 a day, a good answer reused for a week, public addresses and standard ports only, no page content read; 404/410/no such name at once, failures after two at least 20 h apart | `quality/external.rs` (`Pacing::default`, `OK_REUSE`, `FAILING_SPREAD`); `ferrite-http/src/link_check.rs`; tests `external_off_by_default_contacts_nothing`, `external_cache_reuses_ok_for_7_days`, `external_broken_after_two_failures_20h_apart`, `failing_becomes_broken_after_two_failures_20h_apart`, `redirect_to_private_address_refused`, `non_default_port_unchecked_and_credentials_refused`, `body_never_read`, `robots_fetched_and_capped` | Verified |
+| ai-assistants, mcp-tools | `content_check` and `health_report`, read-only; 60 tools in 15 areas | `crates/ferrite-http/src/mcp/tools/quality.rs`; API `tools_list_has_both_with_annotations`, `reference_page_lists_every_tool` | Verified |
+| releases-and-reviews | Apply is one transaction (all or nothing); one merged invalidation event; scheduled releases lock their items and a failure unlocks them with a report and mail | `crates/ferrite-core/src/release/apply.rs`; tests `apply_is_all_or_nothing`, `apply_writes_one_invalidate_event_with_all_keys`, `failed_release_is_unlocked_with_report_and_notify_job` (`crates/ferrite-core/tests/releases.rs`, both backends) | Verified (tests) |
+| releases-and-reviews | Whole-site preview through a rolled-back sandbox, never cached, `no-store`, `noindex`, with the preview bar; links 1 h–7 days, revocable, dead when the creator is disabled or loses the right | `crates/ferrite-http/src/app/preview.rs`, `crates/ferrite-core/src/preview_link.rs`; tests `cookie_preview_renders_release_and_is_never_cached`, `revoked_cookie_cleared_and_live_page_served` (`tests/app/release_preview.rs`), `disabled_creator_link_dead`, `creator_losing_rights_link_dead` | Verified (tests) |
+| releases-and-reviews | Workflow types publish only with an approved, current review; nobody approves their own item or submission; approvers edit live items in place (audited `review.bypassed`); admin override audited `workflow.override` | `crates/ferrite-core/src/workflow/`; tests in `crates/ferrite-core/tests/workflows.rs`, API `gated_publish_review_and_override` | Verified (tests) |
+| ai-assistants, mcp-tools | Ten release and review tools; approvals stay human; 70 tools in 16 areas | `crates/ferrite-http/src/mcp/tools/releases.rs`; API `mcp_releases`, `reference_page_lists_every_tool` | Verified (tests) |

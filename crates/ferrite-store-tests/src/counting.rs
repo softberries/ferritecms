@@ -253,6 +253,12 @@ impl Repos for CountingRepos {
     fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
         self.inner.read().preview_links()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.read().quality()
+    }
 }
 
 #[async_trait]
@@ -760,6 +766,12 @@ impl Repos for CountingTx {
     }
     fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
         self.tx.preview_links()
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.tx.change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.tx.quality()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

@@ -40,6 +40,7 @@ import { SlugField } from "./slug-field";
 import { ReviewSection } from "@/reviews/review-section";
 import { StatusSection } from "./status-section";
 import { TermsSection } from "./terms-section";
+import { QualitySection, type QualitySectionProps } from "./quality-section";
 import { TranslationsSection } from "./translations-section";
 
 /** The id of the panel's region (the toggle's `aria-controls`). */
@@ -59,6 +60,8 @@ export interface SidePanelProps {
   onRevisions?: () => void;
   /** The custom fields go in the panel (else nowhere, or a card under the body). */
   fieldsHere: boolean;
+  /** The checks (M6-4); without it there is no "Checks" section. */
+  quality?: QualitySectionProps;
 }
 
 export function SidePanel({
@@ -71,6 +74,7 @@ export function SidePanel({
   onPublish,
   onRevisions,
   fieldsHere,
+  quality,
 }: SidePanelProps) {
   const { t } = useTranslation("editor");
   if (wide) {
@@ -104,6 +108,7 @@ export function SidePanel({
             onPublish={onPublish}
             fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
+            {...(quality ? { quality } : {})}
           />
         </div>
       </aside>
@@ -130,6 +135,7 @@ export function SidePanel({
             onPublish={onPublish}
             fieldsHere={fieldsHere}
             {...(onRevisions ? { onRevisions } : {})}
+            {...(quality ? { quality } : {})}
           />
         </div>
       </SheetContent>
@@ -143,12 +149,14 @@ function PanelBody({
   onPublish,
   onRevisions,
   fieldsHere,
+  quality,
 }: {
   doc: EditorDocument;
   type: string;
   onPublish: (mode: "now" | "schedule") => void;
   onRevisions?: () => void;
   fieldsHere: boolean;
+  quality?: QualitySectionProps;
 }) {
   const { t } = useTranslation("editor");
   const me = useMe();
@@ -172,6 +180,12 @@ function PanelBody({
         <RevisionsEntry type={type} id={doc.item.id} onOpen={onRevisions} />
       ) : null}
       <TranslationsPart doc={doc} type={type} />
+      {quality ? (
+        <>
+          <Separator />
+          <QualitySection {...quality} />
+        </>
+      ) : null}
       <Separator />
       <section aria-labelledby="panel-url" className="flex flex-col gap-4">
         <h3 id="panel-url" className="sr-only">

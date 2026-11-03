@@ -81,6 +81,7 @@ pub async fn type_and_taxonomy_insert(db: &TestDb) {
         fields: serde_json::json!({"fields": []}),
         built_in: false,
         created_at: Timestamp::from_micros(1_700_000_000_000_000).unwrap(),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
     store.read().types().insert(&ty).await.unwrap();
     assert_eq!(

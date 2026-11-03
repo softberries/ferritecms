@@ -9,6 +9,7 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::{Value, json};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require},
@@ -240,10 +241,20 @@ async fn write_with_invalidation(
     changes: &[Change<'_>],
     settings_write: bool,
 ) -> Result<(), CoreError> {
+    // A settings write by an assistant records one change per key (design 17 §3.3).
+    let cap = if settings_write {
+        let keys: Vec<ObjectRef> = changes
+            .iter()
+            .map(|c| ObjectRef::Option(c.key.to_owned()))
+            .collect();
+        Capture::begin(repos, actor, Op::SettingsUpdate, &keys).await?
+    } else {
+        Capture::inert()
+    };
     if write_changes(repos, actor, changes, settings_write).await? {
         invalidate_all(repos).await?;
     }
-    Ok(())
+    cap.finish(repos).await
 }
 
 /// Inside the write's transaction: the checks that need the store (`permalink.*` pair;

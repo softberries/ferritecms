@@ -656,3 +656,59 @@ mod tests {
         assert_eq!(back, typed);
     }
 }
+
+/// One content health run (M6-4, design 16 §6.1); payload [`ContentHealth`]. Periodic
+/// daily at [`CONTENT_HEALTH_OFFSET`], or enqueued by
+/// [`QualityService::request_run`](crate::quality::QualityService::request_run).
+pub const CONTENT_HEALTH_KIND: &str = "content.health";
+
+/// Current version of the [`ContentHealth`] payload.
+pub const CONTENT_HEALTH_VERSION: u32 = 1;
+
+/// How often the periodic run is due.
+pub const CONTENT_HEALTH_EVERY: Duration = Duration::from_secs(86_400);
+
+/// When in the (UTC) day it is due: 04:00, after `artifacts.gc` at 03:00.
+pub const CONTENT_HEALTH_OFFSET: Duration = Duration::from_secs(4 * 3_600);
+
+/// The longest run.
+pub const CONTENT_HEALTH_TIMEOUT: Duration = Duration::from_secs(3_600);
+
+/// Payload of a [`CONTENT_HEALTH_KIND`] job: `{"v":1,"trigger":"schedule"|"manual",
+/// "user":"<uuid>"|null}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentHealth {
+    pub v: u32,
+    pub trigger: ferrite_domain::HealthTrigger,
+    #[serde(default)]
+    pub user: Option<UserId>,
+}
+
+/// A run requested by `user` now: unique key `content.health:manual:<uuid v7>`.
+pub fn content_health_job(trigger: ferrite_domain::HealthTrigger, user: Option<UserId>) -> NewJob {
+    let payload = ContentHealth {
+        v: CONTENT_HEALTH_VERSION,
+        trigger,
+        user,
+    };
+    let mut job = NewJob::new(
+        CONTENT_HEALTH_KIND,
+        serde_json::to_value(payload).unwrap_or(Value::Null),
+    );
+    job.unique_key = Some(format!(
+        "{CONTENT_HEALTH_KIND}:{}:{}",
+        trigger.as_str(),
+        uuid::Uuid::now_v7()
+    ));
+    job
+}
+
+/// The next periodic run after `now` (the next [`CONTENT_HEALTH_OFFSET`] of a UTC day).
+pub fn next_content_health(now: Timestamp) -> Timestamp {
+    let day = 86_400_000_000i64;
+    let offset = i64::try_from(CONTENT_HEALTH_OFFSET.as_micros()).unwrap_or(0);
+    let t = now.as_micros();
+    let base = t.div_euclid(day) * day + offset;
+    let next = if base > t { base } else { base + day };
+    Timestamp::from_micros(next).unwrap_or(now)
+}

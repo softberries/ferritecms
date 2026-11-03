@@ -1313,9 +1313,9 @@ pub async fn migration_0015_roundtrip(db: &TestDb) {
         .await
         .unwrap();
 
-    // Later migrations (0017 is lossy) go first.
+    // Lossy: refused without allow_lossy, nothing reverted (newer lossy migrations are
+    // reverted first, so the refusal names 15).
     store.migrate_down(15, true).await.unwrap();
-    // Lossy: refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(14, false).await.unwrap_err();
     assert!(
         matches!(&err, StoreError::Migration(m) if m.contains("migration 15 has a lossy down")),

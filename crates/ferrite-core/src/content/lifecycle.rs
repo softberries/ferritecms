@@ -24,7 +24,9 @@ use super::ContentService;
 use crate::{
     Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
-    blocks, events, jobs,
+    blocks,
+    changes::{Capture, ObjectRef, Op},
+    events, jobs,
     permalink::{Permalinks, load_input},
     redirects::{delete_redirects_from, emit_redirects_changed},
     tx::finish,
@@ -34,7 +36,7 @@ use crate::{
 const DUE_BATCH: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum Action {
+pub(crate) enum Action {
     Publish,
     /// Publish by the scheduler: the item must be scheduled.
     PublishDue,
@@ -329,13 +331,21 @@ impl ContentService {
         id: ContentId,
         expected_version: i64,
         action: Action,
-        gate: Gate,
+        extras: Gate,
     ) -> Result<ContentItem, CoreError> {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
             crate::release::check_unlocked(tx.as_ref(), id).await?;
+            // An assistant's transition is recorded (design 17 §3.3).
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                capture_op(action),
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
             let current = tx.content().get(id).await?.ok_or(CoreError::NotFound)?;
             let repos = tx.as_ref();
             if let Action::Submit = action
@@ -357,9 +367,10 @@ impl ContentService {
                     &current,
                     ReviewTarget::Item(id),
                     None,
-                    gate.submit.unwrap_or_default(),
+                    extras.submit.unwrap_or_default(),
                 )
                 .await?;
+                cap.finish(repos).await?;
                 return Ok(current);
             }
             if matches!(action, Action::Publish | Action::Schedule(_)) {
@@ -371,7 +382,7 @@ impl ContentService {
                     &current,
                     ReviewTarget::Item(id),
                     None,
-                    gate.override_reason.as_deref(),
+                    extras.override_reason.as_deref(),
                 )
                 .await?;
             }
@@ -384,6 +395,8 @@ impl ContentService {
                 action,
             )
             .await?;
+            // The publish gate (M6-4), after the transition's own checks.
+            gate(repos, action, &saved).await?;
             if let Action::Submit = action {
                 crate::workflow::start_in(
                     repos,
@@ -391,7 +404,7 @@ impl ContentService {
                     &saved,
                     ReviewTarget::Item(id),
                     None,
-                    gate.submit.unwrap_or_default(),
+                    extras.submit.unwrap_or_default(),
                 )
                 .await?;
             }
@@ -405,6 +418,7 @@ impl ContentService {
                 Some(actor.user),
             )
             .await?;
+            cap.finish(repos).await?;
             Ok(saved)
         }
         .await;
@@ -473,7 +487,22 @@ pub(super) struct Gate {
     pub(super) submit: Option<crate::workflow::SubmitInput>,
 }
 
-async fn transition_in(
+/// The publish gate (design 16 §5) of a person's publish or schedule, after the
+/// transition's own rights and version checks: the type's gate refuses an item with
+/// unsuppressed accessibility errors ([`quality::gate::check`](crate::quality::gate::check)).
+/// The scheduler's due-time publish, `publish_in` (seed, uploads) and imports are never
+/// gated (D6, D7).
+async fn gate(repos: &dyn Repos, action: Action, item: &ContentItem) -> Result<(), CoreError> {
+    if !matches!(action, Action::Publish | Action::Schedule(_)) {
+        return Ok(());
+    }
+    let Some(ty) = repos.types().get(&item.kind).await? else {
+        return Ok(());
+    };
+    crate::quality::gate::check(repos, item, &ty).await
+}
+
+pub(crate) async fn transition_in(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     actor: &Actor,
@@ -531,7 +560,7 @@ async fn transition_item(
 }
 
 /// The webhook event type of a transition (design 18 §3.1).
-fn webhook_type(action: Action) -> &'static str {
+pub(crate) fn webhook_type(action: Action) -> &'static str {
     match action {
         Action::Publish | Action::PublishDue => "content.published",
         Action::Unpublish => "content.unpublished",
@@ -539,6 +568,18 @@ fn webhook_type(action: Action) -> &'static str {
         Action::Submit => "content.submitted",
         Action::Trash => "content.trashed",
         Action::Restore => "content.restored",
+    }
+}
+
+/// The change-set op of a transition (design 17 §3.3).
+fn capture_op(action: Action) -> Op {
+    match action {
+        Action::Publish | Action::PublishDue => Op::ContentPublish,
+        Action::Unpublish => Op::ContentUnpublish,
+        Action::Schedule(_) => Op::ContentSchedule,
+        Action::Submit => Op::ContentSubmit,
+        Action::Trash => Op::ContentTrash,
+        Action::Restore => Op::ContentRestore,
     }
 }
 

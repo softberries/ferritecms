@@ -7,6 +7,7 @@ import { navFor, navItemAt, withBadges, type ScreenEntry } from "./nav";
 const type = (name: string, label: string, built_in = false): ContentTypeDto => ({
   name,
   label,
+  quality_gate: "off",
   built_in,
   hierarchical: false,
   has_archive: false,
@@ -57,6 +58,8 @@ test("author_sees_posts_pages_and_custom_types", () => {
         ["Reviews", "/reviews"],
       ],
     ],
+    // M6-5: every role with the admin sees its own AI activity.
+    ["admin", [["AI activity", "/ai-activity"]]],
   ]);
   expect(navFor(AUTHOR, TYPES)[0]?.items[0]?.shortcut).toBe("g d");
   // 11 §6: the lists' chords; custom types have none; `g m` Media.
@@ -109,11 +112,16 @@ test("users_is_registered", () => {
   expect(section?.label).toBe("Administration");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
     ["users", "Users", "/users", "g u"],
+    ["activity", "AI activity", "/ai-activity", undefined],
   ]);
   expect(navItemAt(admin, "/users")?.id).toBe("users");
   expect(navItemAt(admin, "/users/")?.id).toBe("users");
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id),
+  ).toEqual(["activity"]);
 });
 
 test("appearance_is_registered", () => {
@@ -123,10 +131,15 @@ test("appearance_is_registered", () => {
   const section = admin.find((s) => s.id === "admin");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
     ["appearance", "Appearance", "/appearance/themes", "g a"],
+    ["activity", "AI activity", "/ai-activity", undefined],
   ]);
   expect(navItemAt(admin, "/appearance/themes")?.id).toBe("appearance");
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id),
+  ).toEqual(["activity"]);
 });
 
 test("plugins_is_registered", () => {
@@ -136,10 +149,15 @@ test("plugins_is_registered", () => {
   const section = admin.find((s) => s.id === "admin");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
     ["plugins", "Plugins", "/plugins", "g l"],
+    ["activity", "AI activity", "/ai-activity", undefined],
   ]);
   expect(navItemAt(admin, "/plugins")?.id).toBe("plugins");
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id),
+  ).toEqual(["activity"]);
 });
 
 test("nav shows Import only with the import capability", () => {
@@ -148,6 +166,7 @@ test("nav shows Import only with the import capability", () => {
   const admin = navFor(me("admin", ["read_admin", "import"]), TYPES);
   const section = admin.find((s) => s.id === "admin");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["activity", "AI activity", "/ai-activity", undefined],
     ["import", "Import", "/import", "g i"],
   ]);
   expect(navItemAt(admin, "/import")?.id).toBe("import");
@@ -171,11 +190,16 @@ test("system_is_registered", () => {
   const admin = navFor(me("admin", ["read_admin", "manage_system"]), TYPES);
   const section = admin.find((s) => s.id === "admin");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["activity", "AI activity", "/ai-activity", undefined],
     ["system", "System", "/system", "g y"],
   ]);
   expect(navItemAt(admin, "/system")?.id).toBe("system");
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id),
+  ).toEqual(["activity"]);
 });
 
 test("settings_is_registered", () => {
@@ -184,11 +208,16 @@ test("settings_is_registered", () => {
   const admin = navFor(me("admin", ["read_admin", "manage_settings"]), TYPES);
   const section = admin.find((s) => s.id === "admin");
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["activity", "AI activity", "/ai-activity", undefined],
     ["settings", "Settings", "/settings", "g s"],
   ]);
   expect(navItemAt(admin, "/settings")?.id).toBe("settings");
   const editor = me("editor", ["read_admin", "edit_others", "manage_terms", "manage_menus"]);
-  expect(navFor(editor, TYPES).find((s) => s.id === "admin")).toBeUndefined();
+  expect(
+    navFor(editor, TYPES)
+      .find((s) => s.id === "admin")
+      ?.items.map((i) => i.id),
+  ).toEqual(["activity"]);
 });
 
 test("content_types_is_registered", () => {
@@ -272,7 +301,9 @@ test("comments_is_registered", () => {
   const items = navFor(editor, TYPES).flatMap((s) => s.items);
   const comments = items.find((i) => i.id === "comments");
   expect(comments).toMatchObject({ label: "Comments", to: "/comments", shortcut: "g c" });
-  expect(items.map((i) => i.id).slice(-2)).toEqual(["media", "comments"]);
+  // Content health (M6-4) follows for `edit_others`; the admin section follows (M6-5's
+  // AI activity).
+  expect(items.map((i) => i.id).slice(-4)).toEqual(["media", "comments", "health", "activity"]);
   expect(navItemAt(navFor(editor, TYPES), "/comments/")?.id).toBe("comments");
   expect(
     navFor(AUTHOR, TYPES)
@@ -510,6 +541,7 @@ test("nav_entry_only_for_manage_webhooks", () => {
   expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
     ["plugins", "Plugins", "/plugins", "g l"],
     ["webhooks", "Webhooks", "/webhooks", "g w"],
+    ["activity", "AI activity", "/ai-activity", undefined],
   ]);
   expect(navItemAt(admin, "/webhooks")?.id).toBe("webhooks");
   const others = me("admin", ["read_admin", "manage_system", "manage_settings"]);
@@ -517,5 +549,19 @@ test("nav_entry_only_for_manage_webhooks", () => {
     navFor(others, TYPES)
       .flatMap((s) => s.items)
       .some((i) => i.id === "webhooks"),
+  ).toBe(false);
+});
+
+test("nav_entry_health_for_edit_others", () => {
+  // M6-4 registers Content health in Content, after Comments: `edit_others`, `g h`.
+  const editor = me("editor", ["read_admin", "edit_others"]);
+  const item = navFor(editor, TYPES)
+    .flatMap((s) => s.items)
+    .find((i) => i.id === "health");
+  expect(item).toMatchObject({ label: "Content health", to: "/health", shortcut: "g h" });
+  expect(
+    navFor(AUTHOR, TYPES)
+      .flatMap((s) => s.items)
+      .some((i) => i.id === "health"),
   ).toBe(false);
 });

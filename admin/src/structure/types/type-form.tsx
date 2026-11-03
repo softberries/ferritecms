@@ -80,6 +80,8 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
   const [base, setBase] = useState(initial);
   const [label, setLabel] = useState(initial.label);
   const [hasArchive, setHasArchive] = useState(initial.has_archive);
+  // M6-4: the publish gate (`off` reports only, `errors` blocks publishing).
+  const [gate, setGate] = useState(initial.quality_gate);
   const [rows, setRowsState] = useState<BuilderRow[]>(() => fromSchema(initial.fields));
   // The server's refusal of a relation's types, at that field, until the rows change.
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
@@ -107,7 +109,11 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
   const baseSchema = useMemo(() => toSchema(fromSchema(base.fields)), [base.fields]);
   const schema = useMemo(() => toSchema(rows), [rows]);
   const fieldsChanged = !stableEqual(schema, baseSchema);
-  const dirty = label !== base.label || hasArchive !== base.has_archive || fieldsChanged;
+  const dirty =
+    label !== base.label ||
+    hasArchive !== base.has_archive ||
+    gate !== base.quality_gate ||
+    fieldsChanged;
 
   const allErrors = useMemo(() => checkBuilder(rows, registered), [rows, registered]);
   // Before the first save attempt only a name typed wrong shows (feedback while typing);
@@ -130,6 +136,7 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
     setBase(dto);
     setLabel(dto.label);
     setHasArchive(dto.has_archive);
+    setGate(dto.quality_gate);
     setRows(fromSchema(dto.fields));
     setOpenKeys(new Set());
     setAttempted(false);
@@ -199,11 +206,13 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
       const saved = await patchType(base.name, {
         label: label.trim(),
         has_archive: hasArchive,
+        ...(gate !== base.quality_gate ? { quality_gate: gate } : {}),
         ...(fieldsChanged ? { fields: schema } : {}),
       });
       setBase(saved);
       setLabel(saved.label);
       setHasArchive(saved.has_archive);
+      setGate(saved.quality_gate);
       setRows((r) => markSaved(r));
       setAttempted(false);
       setSavedAt(new Date());
@@ -387,6 +396,19 @@ export function TypeForm({ initial }: { initial: ContentTypeDto }) {
                 />
               )}
             </SwitchRow>
+            {base.name !== "media" ? (
+              <SwitchRow label={t("form.qualityGate")} hint={t("form.qualityGateHint")}>
+                {(control) => (
+                  <Switch
+                    {...control}
+                    data-slot="type-quality-gate"
+                    checked={gate === "errors"}
+                    disabled={saving}
+                    onCheckedChange={(on) => setGate(on ? "errors" : "off")}
+                  />
+                )}
+              </SwitchRow>
+            ) : null}
             {base.built_in ? (
               <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
                 {t("form.builtIn")}

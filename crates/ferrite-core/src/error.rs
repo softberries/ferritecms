@@ -82,6 +82,10 @@ pub enum CoreError {
     /// (`409 staging-required`).
     #[error("staging required: stage the change in a release")]
     StagingRequired,
+    /// The type's publish gate refuses the item: these unsuppressed accessibility
+    /// errors remain (at most 50; M6-4, design 16 §5). `422 content-quality`.
+    #[error("accessibility errors block publishing")]
+    QualityBlocked(Box<Vec<crate::quality::Finding>>),
 }
 
 /// One invalid row of a batch ([`CoreError::InvalidRows`]).

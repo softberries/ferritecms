@@ -72,10 +72,17 @@ impl FerriteMcp {
         if let Err(p) = results::within_json_cap("changes", &input.changes) {
             return results::from_problem(p);
         }
-        if input.changes.contains_key(MCP_ENABLED) {
+        // Every `mcp.*` key stays a person's (design 17 §10, §12): the switch of this
+        // endpoint, and the retention of the assistant's own change record.
+        if let Some(key) = input.changes.keys().find(|k| k.starts_with("mcp.")) {
+            let key = if key == MCP_ENABLED {
+                MCP_ENABLED
+            } else {
+                ferrite_domain::CHANGE_SETS_DAYS_OPTION
+            };
             return results::invalid(
-                Some(MCP_ENABLED),
-                "mcp.enabled cannot be changed through MCP: change this in the admin \
+                Some(key),
+                "mcp.* settings cannot be changed through MCP: change this in the admin \
                  (Settings, AI assistants)",
             );
         }

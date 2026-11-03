@@ -1,6 +1,6 @@
 # 15 — Editing: live preview, releases and approval workflows
 
-Status: **design for M6-3** · Date: 2026-11-02 · Roadmap: "M6-3 — Editing" · Migration
+Status: **built (M6-3, see §19 and `docs/superpowers/m6-3-exit.md`)** · Date: 2026-11-02 · Roadmap: "M6-3 — Editing" · Migration
 `0017_releases_workflows` · Wave B (assumes M6-1's locale model and M6-6's webhooks)
 
 Three features that turn the editor from "write, then publish" into an editorial process:
@@ -879,3 +879,34 @@ change); scheduling a release relative to another; a release calendar view.
 - **D38** Final approval does not publish; publishing (or scheduling, or a release) stays a separate action.
 - **D39** Entry transitions are validated against the item's status when staged; the base-version check guarantees the status is unchanged at apply.
 - **D40** A release's preview links are deleted when it is applied or deleted, an item's when it is deleted: a link never outlives what it shows.
+
+## 19. As built (M6-3)
+
+Rulings P4 and P7 (`docs/superpowers/rulings/m6.md`) and the execution rulings R-M6-3-*
+(`docs/superpowers/m6-3-exit.md`) change this design as follows:
+
+- **D16 (P7):** the editor's preview frame is `sandbox="allow-scripts allow-popups
+  allow-forms"` without `allow-same-origin` and loads through a 1 h preview link of the
+  editor (`/_preview/link/<token>?working=1`, change mode `?release=<id>`); item links
+  take those two queries. The frame is an opaque origin, so §3.2's scroll restore is not
+  built. Links always show the preview bar (also in the editor's frame).
+- **D20 (P7):** in a workflow type an approver (holding `edit_others` and named by a step
+  by role or id) edits a published, scheduled or private item in place, with the audit row
+  `review.bypassed`; everyone else gets `staging-required`. `allowed.edit` follows it.
+- **D10 (P7):** the SQLite writer is held per preview request (one page).
+- **P4:** a release calls M6-4's `quality::gate::check` for every entry it publishes; a
+  blocked entry refuses the whole release (`release-conflict`, outcome `invalid`).
+- The partial unique index is `reviews_open_target_uq` (not `_key`): SQLite's constraint
+  map wants `_pkey`/`_uq` names.
+- §9.4: no `ReadView` type; a preview renders through `AppState::preview_view(store,
+  title)`, the same state over the sandbox store (reader, redirects), without counters,
+  without cache writes and with read-only plugins.
+- Entries of a whole-site preview are applied with the link creator's full rights (the
+  sandbox rolls back); the page renders as the link's `content:read` principal.
+- §10: no `Idempotency-Key` on apply (it is version-checked; a retry is `412`). Optional
+  bodies on submit, publish, apply and link creation. The content DTO's `releases` is
+  left out when empty.
+- §12: `content_preview_link` creates a link, so it is a write tool (`content:write`).
+  Releases created over MCP record their per-item changes in M6-5 change sets on apply;
+  the tools that change only release or link rows are listed as excluded in the capture
+  guard test.

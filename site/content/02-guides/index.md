@@ -7,6 +7,9 @@ Task-oriented guides for running a site day to day.
   menus, moderate comments, check the site's health.
 - [Writing and publishing](01-writing.md): the editor, publishing and scheduling,
   autosave, revisions and previews.
+- [Releases and reviews](12-releases-and-reviews.md): live preview beside the editor,
+  releases applied together now or on a schedule, whole-site and shared previews,
+  approval workflows.
 - [Media](02-media.md): uploads, image sizes, featured and inline images.
 - [Content types, taxonomies and menus](03-content-types.md): model your content and
   your navigation.

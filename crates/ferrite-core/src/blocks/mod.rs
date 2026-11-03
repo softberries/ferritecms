@@ -9,7 +9,7 @@ mod render;
 mod text;
 mod url;
 
-pub use anchor::TocEntry;
+pub use anchor::{TocEntry, heading_ids};
 pub use markdown::{BLOCK_FENCE, to_markdown};
 pub use render::{render_html, render_html_toc};
 pub use text::{excerpt, extract_text};

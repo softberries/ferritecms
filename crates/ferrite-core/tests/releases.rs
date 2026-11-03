@@ -853,7 +853,51 @@ async fn applied_release_deletes_its_preview_links(db: &TestDb) {
     );
 }
 
+/// P4: a release publishing an item that fails the type's quality gate is refused as a
+/// whole; nothing of it is written.
+async fn quality_gate_refuses_the_whole_release(db: &TestDb) {
+    let s = site(db);
+    let admin = actor(s.store.as_ref(), Role::Admin).await;
+    ferrite_core::ContentTypeService::new(s.store.clone())
+        .update(
+            &admin,
+            "post",
+            ferrite_core::TypePatch {
+                quality_gate: Some(ferrite_domain::QualityGate::Errors),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let e = actor(s.store.as_ref(), Role::Editor).await;
+    let good = s.item(&e, "post", "Good").await;
+    let mut bad = draft("post", "Bad");
+    bad.body = json!({"type": "doc", "content": [{"type": "image", "attrs": {"src": "/a.png"}}]});
+    let bad = s.content.create(&e, bad).await.unwrap();
+    let mut r = s.release(&e).await;
+    for it in [&good, &bad] {
+        r = s
+            .stage(&e, &r, it.id, EntryTransition::Publish, None)
+            .await
+            .unwrap();
+    }
+    let report = s.releases.check(&e, r.id).await.unwrap();
+    assert!(matches!(
+        report.entries[1].outcome,
+        EntryOutcome::Invalid { .. }
+    ));
+    let err = s
+        .releases
+        .apply(&e, r.id, r.version, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::ReleaseConflict(_)), "{err:?}");
+    assert_eq!(s.get(good.id).await.status, ContentStatus::Draft);
+    assert_eq!(s.get(bad.id).await.status, ContentStatus::Draft);
+}
+
 backend_tests!(
+    quality_gate_refuses_the_whole_release,
     contributor_creates_and_stages_own_draft,
     cannot_stage_others_item_without_edit_others,
     publish_entry_needs_publish_right,

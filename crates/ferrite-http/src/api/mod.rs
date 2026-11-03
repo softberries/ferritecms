@@ -27,6 +27,7 @@
 //! [`auth`] extractors; `GET /meta` and `GET /openapi.json` need none.
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
 pub mod cookie;
@@ -45,6 +46,7 @@ pub mod openapi;
 pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
+pub mod quality;
 pub mod redirects;
 pub mod releases;
 pub mod reviews;
@@ -278,6 +280,19 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(webhooks::get_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook))
+        .routes(routes!(change_sets::list_change_sets))
+        .routes(routes!(change_sets::get_change_set))
+        .routes(routes!(change_sets::get_change_set_change))
+        .routes(routes!(change_sets::revert_change_set))
+        .routes(routes!(quality::check_content))
+        .routes(routes!(
+            quality::list_suppressions,
+            quality::create_suppression
+        ))
+        .routes(routes!(quality::delete_suppression))
+        .routes(routes!(quality::health_summary))
+        .routes(routes!(quality::health_findings))
+        .routes(routes!(quality::start_health_run))
         // M6-3: releases, preview links, workflows and reviews.
         .routes(routes!(releases::list_releases, releases::create_release))
         .routes(routes!(

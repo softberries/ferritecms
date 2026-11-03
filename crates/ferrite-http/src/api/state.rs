@@ -65,6 +65,12 @@ pub struct ApiParts {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
+    /// Content checks and suppressions (M6-4).
+    pub quality: Arc<ferrite_core::quality::QualityService>,
+    /// The node's internal link probe for checks (`None`: links are not probed).
+    pub probe: Option<Arc<dyn ferrite_core::quality::PathProbe>>,
     /// Releases, preview links, workflows and reviews (M6-3).
     pub editorial: super::releases::EditorialApi,
 }
@@ -114,6 +120,12 @@ pub struct ApiState {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
+    /// Content checks and suppressions (M6-4).
+    pub quality: Arc<ferrite_core::quality::QualityService>,
+    /// The node's internal link probe for checks (`None`: links are not probed).
+    pub probe: Option<Arc<dyn ferrite_core::quality::PathProbe>>,
     /// Releases, preview links, workflows and reviews (M6-3).
     pub editorial: super::releases::EditorialApi,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
@@ -156,6 +168,9 @@ impl ApiState {
             site_url,
             site_title,
             webhooks,
+            change_sets,
+            quality,
+            probe,
             editorial,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
@@ -185,6 +200,9 @@ impl ApiState {
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
             webhooks,
+            change_sets,
+            quality,
+            probe,
             editorial,
             origin,
             cookie_secure,

@@ -67,7 +67,9 @@
       "stay": "Stay",
       "leave": "Leave"
     },
-    "notFound": "This content type does not exist (any more)."
+    "notFound": "This content type does not exist (any more).",
+    "qualityGate": "Block publishing on accessibility errors",
+    "qualityGateHint": "Off: the checks only report. On: an item with an accessibility error, such as an image without alt text, cannot be published until it is fixed or an editor suppresses it."
   },
   "builder": {
     "title": "Fields",

@@ -649,6 +649,7 @@ pub async fn text_writes_reject_nul(db: &TestDb) {
         fields: json!([]),
         built_in: false,
         created_at: Timestamp::now(),
+        quality_gate: ferrite_domain::QualityGate::Off,
     };
     invalid(repos.types().upsert(&ty).await);
 

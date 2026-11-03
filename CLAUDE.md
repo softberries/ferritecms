@@ -118,6 +118,47 @@ jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[
 local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
 OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
 `0016_webhooks`; design 18.
+M6-4 (accessibility and content health, design 16, `m6-4-exit.md`) is built:
+`ferrite_core::quality` (the rule catalogue `RULES`, iterative capped document checks,
+media facts, `gate::check` the per-type publish gate (`content_types.quality_gate`
+`off`|`errors`; ruling P4: M6-3 releases call it per item), `QualityService` (check,
+suppressions with a reason, the health summary and findings, "Run now"), `HealthRunner`
+(items, internal links, orphans, redirects, stale, opt-in external links with the
+`link_checks` cache), `robots`), decorative images (`decorative: true` renders `alt=""`),
+`ferrite_http::quality_probe::SiteProbe` (paths through the router and the page lookup, no
+render, cache, counters or plugins) and `link_check::LinkChecker` (SSRF-checked, robots.txt,
+default ports), the `content.health` job (`crates/ferrite/src/jobs/health.rs`, daily 04:00
+UTC, lock `content.health`), the REST `POST /content/{type}/check`,
+`/content/{type}/{id}/suppressions`, `/health/summary|findings|runs` and `422
+content-quality`, MCP `content_check` and `health_report` (60 tools), the settings
+`health.external_links` and `health.stale_days`, the webhook event `health.completed`, the
+admin's editor checks (marks, the panel's Checks, the publish dialog, the Decorative image
+switch), Content health screen (`g h`), dashboard card, type gate switch and Settings →
+Content health; migration `0019_content_health`. Try it: `POST /api/v1/content/post/check`
+with `{"body": {...}}`; `POST /api/v1/health/runs` then `GET /api/v1/health/findings`
+(`serve` runs the job).
+M6-5 (AI change sets) is built
+(`m6-5-exit.md`): `ferrite_core::changes` (`Actor.agent` set only by the MCP guard, typed
+canonical snapshots, zstd images, `Capture` in every public write path the MCP write tools
+use, `ChangeSetService` with list, detail, images and revert as the person), the
+`mcp.change_sets_days` setting and the `change_sets.prune` job, `/api/v1/change-sets`
+(revert session only), MCP `changes_list` (58 tools), the admin's AI activity screens
+(`/admin/ai-activity`); migration `0018_change_sets`; design 17.
+M6-3 (editing, design 15) is built (`m6-3-exit.md`): `ferrite_core::release` (`ReleaseService`:
+staged changes as JSON snapshots, item locks, apply in one transaction through `ApplyTx`
+with one merged `invalidate` event, check and whole-site preview in a rolled-back sandbox
+(`SandboxStore`), scheduled apply as the scheduler with `release.apply` + the 30 s
+`release.apply_due`, failures with a report; P4: `quality::gate::check` per published
+entry), `ferrite_core::workflow` (`WorkflowService`, the publish gate, `ReviewService` with
+steps, assignees and `editorial.notify` mail; P7: approvers edit live items in place with
+audit `review.bypassed`), `ferrite_core::preview_link` (`ferp_` tokens, 1–168 h, daily
+`preview_links.prune`), `ferrite-http` `app/preview.rs` (`/_preview/link/<token>`, the
+preview cookie, `/_preview/exit`, the core preview bar, `AppState::preview_view`),
+`/api/v1/releases`, `/preview-links`, `/workflows`, `/reviews`, MCP release tools, the
+admin's live preview pane, Releases (`g r`), Reviews (`g v`) and the Workflow section of
+a content type; migration `0017_releases_workflows`. Try it: `POST /api/v1/releases`,
+`POST /api/v1/releases/{id}/items` (`If-Match`), then `POST …/preview-links` and open
+the `url`.
 M6-2 (plugin trust, design 14,
 `m6-2-exit.md`) is built: minisign-signed plugins (`ferrite-plugin.minisig`,
 `ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the

@@ -79,12 +79,14 @@ pub(crate) async fn check_unlocked(repos: &dyn Repos, id: ContentId) -> Result<(
     }
 }
 
-/// The content-quality gate for an item a release publishes (ruling P4). M6-3 leaves it
-/// open; at the merge with M6-4 its body becomes
-/// `crate::quality::gate::check(repos, item, &ty)` with `ty` from
-/// `repos.types().get(&item.kind)` (R-M6-3-4).
-pub(crate) async fn quality_gate(_repos: &dyn Repos, _item: &ContentItem) -> Result<(), CoreError> {
-    Ok(())
+/// The content-quality gate for an item a release publishes (ruling P4, M6-4's
+/// `quality::gate::check`): with the type's gate on, unsuppressed accessibility errors
+/// refuse the entry, and so the whole release (all or nothing).
+pub(crate) async fn quality_gate(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+    let Some(ty) = repos.types().get(&item.kind).await? else {
+        return Ok(());
+    };
+    crate::quality::gate::check(repos, item, &ty).await
 }
 
 /// Whether `actor` may see `release` (§4.7).

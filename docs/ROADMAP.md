@@ -637,29 +637,50 @@ M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
 
 ### M6-3 — Editing
 
-- [ ] Live preview beside the editor: the item's unsaved state rendered by the active theme,
-  refreshed on autosave.
-- [ ] Releases: a named set of changes (new revisions, publish, unpublish) applied together in
-  one transaction, now or on a schedule, with a whole-site preview of the site as it will
-  look (menus, listings, page tree, sitemap).
-- [ ] Approval workflows: configurable steps per content type, required approvals before
-  publishing, reviewer assignment and mail notifications (extends submit-for-review).
+- [x] Live preview beside the editor: the item's unsaved state rendered by the active theme,
+  refreshed on autosave (M6-3, [`m6-3-exit.md`](superpowers/m6-3-exit.md); design 15; a
+  sandboxed frame on a signed preview link, ruling P7).
+- [x] Releases: a named set of changes (staged changes, publish, unpublish) applied together
+  in one transaction, now or on a schedule, with a whole-site preview of the site as it will
+  look (menus, listings, page tree, sitemap) and signed, expiring preview links (migration
+  `0017_releases_workflows`; MCP release tools).
+- [x] Approval workflows: configurable steps per content type, required approvals before
+  publishing, reviewer assignment and mail notifications (extends submit-for-review; P7:
+  approvers may edit live items in place, audited).
+- Later (M6-3 follow-ups): an endpoint listing eligible approvers for non-admins (the
+  reviewer pickers show only with `manage_users`); `GET /workflows/{type}` 404 for a type
+  without a workflow is logged by browsers; change mode keeps no local backup and its
+  "Back to the item" skips the leave guard; the working preview's SEO patch is not applied
+  to the head; scroll position across preview reloads (the sandboxed frame is opaque);
+  `Idempotency-Key` on release apply; the release E2E specs in Firefox and WebKit; a
+  property test over roles x statuses x review states for `allowed`; tests for the
+  preview slot 503, the 15 s sandbox deadline and the plugin `kv.set` refusal; plugin
+  hooks for releases and reviews (design 15 §17).
 
 ### M6-4 — Accessibility and content health
 
-- [ ] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
+- [x] Accessibility checks in the editor: missing alt text, skipped heading levels, empty or
   vague link text, empty headings, tables without headers; a per-type setting that blocks
-  publishing on errors; the same checks as an MCP tool.
-- [ ] Content health screen, fed by a periodic job: broken internal and external links,
-  orphan pages, missing alt text, redirect chains and loops, items not updated in a year.
+  publishing on errors; the same checks as an MCP tool (M6-4,
+  [`m6-4-exit.md`](superpowers/m6-4-exit.md); migration `0019_content_health`; design 16;
+  MCP `content_check`).
+- [x] Content health screen, fed by a periodic job: broken internal and external links,
+  orphan pages, missing alt text, redirect chains and loops, items not updated in a year
+  (M6-4; `content.health` daily at 04:00 UTC; MCP `health_report`).
+- Later (M6-4 follow-ups): plugin-provided rules (a `quality` WIT hook); a log-capture test
+  that the link checker names hosts only; the E2E specs `editor-quality` and `health` in
+  Firefox and WebKit; decorative images inside a paragraph lose the flag in Markdown;
+  change-set snapshots of a type do not hold its publish gate (a revert keeps the current
+  one).
 
 ### M6-5 — AI change sets
 
-- [ ] Writes through an OAuth grant or a personal token over MCP are grouped into change
+- [x] Writes through an OAuth grant or a personal token over MCP are grouped into change
   sets (per grant and session window), with before-images for what has no revisions
-  (terms, menus, settings, redirects).
-- [ ] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
-  one change, refusing where a later edit conflicts.
+  (terms, menus, settings, redirects) (M6-5, [`m6-5-exit.md`](superpowers/m6-5-exit.md);
+  migration `0018_change_sets`; design 17).
+- [x] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
+  one change, refusing where a later edit conflicts (M6-5; MCP `changes_list` read-only).
 
 ### M6-6 — Outgoing webhooks
 

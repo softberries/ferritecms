@@ -213,6 +213,10 @@ pub struct NodeOptions {
     /// queue, when configured).
     #[cfg(feature = "test-seams")]
     pub webhook_mailer: Option<Arc<dyn ferrite_core::mail::Mailer>>,
+    /// Test seam: the external link checker of `content.health` (default the
+    /// SSRF-checked client).
+    #[cfg(feature = "test-seams")]
+    pub link_probe: Option<Arc<dyn ferrite_core::quality::LinkProbe>>,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -566,6 +570,10 @@ async fn boot(
         ImportService::new(store.clone(), dyn_permalinks.clone())
             .with_artifacts(Arc::new(MediaArtifacts::new(media.clone()))),
     );
+    let change_sets = Arc::new(ferrite_core::changes::ChangeSetService::new(
+        store.clone(),
+        dyn_permalinks.clone(),
+    ));
     let media_service = Arc::new(MediaService::new(
         store.clone(),
         content.clone(),
@@ -653,6 +661,12 @@ async fn boot(
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
             webhooks: webhooks.clone(),
+            change_sets,
+            quality: Arc::new(ferrite_core::quality::QualityService::new(
+                store.clone(),
+                state.config.site_url.clone(),
+            )),
+            probe: Some(Arc::new(ferrite_http::SiteProbe::new(state.clone()))),
             editorial: ferrite_http::api::releases::EditorialApi::new(
                 store.clone(),
                 releases.clone(),
@@ -736,6 +750,31 @@ async fn boot(
     )));
     handlers.push(Arc::new(jobs::WebhooksPruneHandler {
         service: webhooks.clone(),
+    }));
+    // `content.health` (M6-4): the node's own probe, and the external link checker
+    // (only ever used by this job; never built into a request path, design 16 D12).
+    let link_checker: Option<Arc<dyn ferrite_core::quality::LinkProbe>> =
+        match ferrite_http::link_check::LinkChecker::new(
+            env!("CARGO_PKG_VERSION"),
+            &state.config.site_url,
+        ) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(e) => {
+                tracing::error!(error = %e, "external link checks are off on this node: the outbound client could not be built");
+                None
+            }
+        };
+    #[cfg(feature = "test-seams")]
+    let link_checker = opts.link_probe.clone().or(link_checker);
+    handlers.push(Arc::new(jobs::ContentHealthHandler {
+        runner: Arc::new(ferrite_core::quality::HealthRunner::new(
+            store.clone(),
+            state.config.site_url.clone(),
+            Arc::new(ferrite_http::SiteProbe::new(state.clone())),
+            link_checker,
+            registry.id().to_string(),
+        )),
+        store: store.clone(),
     }));
     // M6-3: releases, editorial mail, preview-link pruning.
     handlers.push(Arc::new(jobs::ReleaseApplyHandler {

@@ -25,12 +25,13 @@ use ferrite_domain::{
     WebhookEventRow, WebhookId,
 };
 use ferrite_store::{
-    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
-    EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
-    NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    PluginTrustRepo, PreviewLinkRepo, RateLimitRepo, RedirectRepo, ReleaseRepo, Repos, ReviewRepo,
-    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo,
-    ThemeRepo, Tx, UserRepo, WebhookRepo, WorkflowRepo,
+    ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, ChangeSetRepo, CommentRepo, ContentRepo,
+    ContentTypeRepo, EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo,
+    MenuRepo, MetaRepo, NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo,
+    PluginKvRepo, PluginRepo, PluginTrustRepo, PreviewLinkRepo, QualityRepo, RateLimitRepo,
+    RedirectRepo, ReleaseRepo, Repos, ReviewRepo, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, WebhookRepo,
+    WorkflowRepo,
 };
 
 use crate::events::{self, ALL_KEY, INVALIDATE};
@@ -178,6 +179,8 @@ impl Repos for ApplyTx {
         workflows: WorkflowRepo,
         reviews: ReviewRepo,
         preview_links: PreviewLinkRepo,
+        change_sets: ChangeSetRepo,
+        quality: QualityRepo,
     );
 
     fn revisions(&self) -> &dyn RevisionRepo {

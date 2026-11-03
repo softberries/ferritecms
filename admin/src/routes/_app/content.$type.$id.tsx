@@ -61,6 +61,7 @@ interface ItemLoaderData {
 
 interface ItemSearch {
   release?: string;
+  check?: string;
 }
 
 /** Whether the screen will be editable, so a slot can matter (else none is read). */
@@ -68,8 +69,13 @@ const mayHaveSlot = (item: SchemaContentDto) =>
   (item.allowed.edit || item.allowed.stage) && item.status !== "trash";
 
 export const Route = createFileRoute("/_app/content/$type/$id")({
-  validateSearch: (raw: Record<string, unknown>): ItemSearch =>
-    typeof raw.release === "string" && raw.release !== "" ? { release: raw.release } : {},
+  // `?release=<id>` (M6-3): change mode; `?check=<rule>:<key>` (M6-4): the health
+  // report's link to one finding.
+  validateSearch: (raw: Record<string, unknown>): ItemSearch => ({
+    ...(typeof raw.release === "string" && raw.release !== "" ? { release: raw.release } : {}),
+    ...(typeof raw.check === "string" && raw.check.length <= 400 ? { check: raw.check } : {}),
+  }),
+  // Only the release changes what the loader reads (`check` is the screen's).
   loaderDeps: ({ search }) => ({ release: search.release }),
   staticData: {
     crumb: (t, data) => {

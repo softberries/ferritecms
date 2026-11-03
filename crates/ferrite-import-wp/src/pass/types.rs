@@ -148,6 +148,7 @@ pub(crate) fn plan(
             hierarchical: *has_parent,
             has_archive: true,
             fields,
+            quality_gate: ferrite_domain::QualityGate::Off,
         });
     }
     let registered: BTreeSet<&str> = schema

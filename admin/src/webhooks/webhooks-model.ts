@@ -28,7 +28,7 @@ export function groupCatalogue(
   return out;
 }
 
-const KNOWN_GROUPS = ["content", "media", "comment", "user", "import"] as const;
+const KNOWN_GROUPS = ["content", "media", "comment", "user", "import", "health"] as const;
 type KnownGroup = (typeof KNOWN_GROUPS)[number];
 const isKnownGroup = (g: string): g is KnownGroup =>
   (KNOWN_GROUPS as readonly string[]).includes(g);

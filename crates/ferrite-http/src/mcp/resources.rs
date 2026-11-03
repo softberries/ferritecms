@@ -229,6 +229,17 @@ async fn writing_guide(server: &FerriteMcp) -> String {
          - `seo.canonical`: an absolute http(s) URL of at most {MAX_SEO_CANONICAL} \
          characters, when the page is a copy of another\n\
          - `seo.robots`: any of `{robots}`\n\n\
+         ## Accessibility\n\n\
+         - Every image needs alt text that says what it shows; not a file name and not \
+         \"image\". An image that only decorates is marked decorative in the admin editor.\n\
+         - Headings go in order: `##` after the title, then `###`; never skip a level, \
+         never leave one empty.\n\
+         - Link text says where the link leads (\"the pricing page\"), never \"click here\" \
+         or a bare URL.\n\
+         - Tables have a header row.\n\n\
+         Call content_check on an item (or on a draft before you write it) and fix what it \
+         finds before content_publish: when the type's publish gate is on, publishing is \
+         refused while accessibility errors remain.\n\n\
          ## Publishing\n\n\
          Changes are live when a tool returns. Write drafts, show the user a preview \
          (content_preview_link) and publish only when they ask.\n",

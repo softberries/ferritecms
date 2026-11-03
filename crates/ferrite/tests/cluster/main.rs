@@ -13,6 +13,7 @@
 
 mod comments;
 mod harness;
+mod health;
 mod invalidation;
 mod jobs;
 mod reload;

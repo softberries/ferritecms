@@ -771,6 +771,55 @@ pub(crate) fn webhook_client_for_tests(
     )
 }
 
+/// The longest external link check, redirects included (design 16 §6.3).
+pub const LINK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The client external link checks use ([`LinkChecker`](crate::link_check::LinkChecker),
+/// M6-4): the checked resolver with [`is_public_ip`], no redirects (the checker follows
+/// them itself, each hop checked), no proxy, no cookie store, no `Referer`, `http` and
+/// `https`, [`LINK_TIMEOUT`], the platform roots with the `webpki-roots` fallback.
+pub(crate) fn link_client() -> Result<reqwest::Client, String> {
+    with_fallback(
+        || {
+            build(
+                Lookup::System,
+                is_public_ip,
+                Roots::Platform,
+                false,
+                LINK_TIMEOUT,
+            )
+        },
+        || {
+            build(
+                Lookup::System,
+                is_public_ip,
+                Roots::WebPki(Vec::new()),
+                false,
+                LINK_TIMEOUT,
+            )
+        },
+    )
+}
+
+/// Test seam: [`link_client`] with `overrides`' resolver, roots and address rule.
+#[cfg(feature = "test-seams")]
+pub(crate) fn link_client_for_tests(
+    overrides: EgressOverrides,
+    timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    let EgressOverrides {
+        resolver,
+        roots,
+        allow_ip,
+    } = overrides;
+    let roots = if roots.is_empty() {
+        Roots::Platform
+    } else {
+        Roots::Only(roots)
+    };
+    build(Lookup::Custom(resolver), allow_ip, roots, false, timeout)
+}
+
 /// A client with the checked resolver, no redirects, no proxy and no `Referer`.
 fn build(
     lookup: Lookup,

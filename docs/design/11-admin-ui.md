@@ -389,6 +389,7 @@ of the manual Safari pass.
 | Anywhere | `g a` | Appearance: themes (M2b-3) |
 | Anywhere | `g l` | Plugins (M2b-3; not `g p`, which is Posts) |
 | Anywhere | `g i` | Import (M3-2) |
+| Anywhere | `g h` | Content health (M6-4) |
 | Anywhere | `g s` | Settings (M2b-3) |
 | Anywhere | `g y` | System (M2b-3) |
 | Anywhere | `c p` / `c g` | New post / new page |

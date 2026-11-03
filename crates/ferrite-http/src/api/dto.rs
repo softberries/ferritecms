@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer};
 use zeroize::Zeroizing;
 
 pub mod auth;
+pub mod change_sets;
 pub mod comments;
 pub mod content;
 pub mod editorial;
@@ -17,6 +18,7 @@ pub mod extensions;
 pub mod import;
 pub mod media;
 pub mod oauth;
+pub mod quality;
 pub mod site;
 pub mod system;
 pub mod types;

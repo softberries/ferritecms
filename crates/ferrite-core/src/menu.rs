@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ferrite_domain::{ContentId, ContentStatus, Menu, MenuItem, MenuItemKind, TermId};
 use ferrite_store::{MenuSummary, Repos, Store};
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Area, Capability, require, require_read},
@@ -103,8 +104,16 @@ impl MenuService {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::MenuPut,
+                &[ObjectRef::Menu(menu.name.clone())],
+            )
+            .await?;
             let keys = put_in(tx.as_ref(), menu).await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;
@@ -115,18 +124,20 @@ impl MenuService {
     pub async fn delete(&self, actor: &Actor, name: &str) -> Result<(), CoreError> {
         require(actor, Capability::ManageMenus)?;
         let tx = self.store.begin().await?;
-        let done = async {
-            let Some(stored) = tx.menus().get(name).await? else {
-                return Err(CoreError::NotFound);
-            };
-            tx.menus().delete(name).await?;
-            let keys = menu_keys(name, [stored.translation_of.as_deref()]);
-            tx.events().append(&events::invalidate(keys)).await?;
-            Ok(())
-        }
-        .await;
+        let done = delete_in(tx.as_ref(), name).await;
         finish(tx, done).await
     }
+}
+
+/// [`MenuService::delete`] inside the caller's `repos`, without the capability check.
+pub(crate) async fn delete_in(repos: &dyn Repos, name: &str) -> Result<(), CoreError> {
+    let Some(stored) = repos.menus().get(name).await? else {
+        return Err(CoreError::NotFound);
+    };
+    repos.menus().delete(name).await?;
+    let keys = menu_keys(name, [stored.translation_of.as_deref()]);
+    repos.events().append(&events::invalidate(keys)).await?;
+    Ok(())
 }
 
 /// The checks of [`MenuService::put`] that need no store: name, label, item count.

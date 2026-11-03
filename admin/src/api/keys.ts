@@ -1,5 +1,11 @@
 import type { operations } from "./schema";
 
+/** The filters of the health report (`api/quality.ts`). */
+type HealthFilters = Omit<
+  NonNullable<operations["health_findings"]["parameters"]["query"]>,
+  "cursor" | "limit"
+>;
+
 /** The filters of a media list (every query member but the page cursor and size). */
 export type MediaListFilters = Omit<
   NonNullable<operations["list_media"]["parameters"]["query"]>,
@@ -159,5 +165,21 @@ export const qk = {
       ["webhooks", "item", id, "deliveries", status] as const,
     delivery: (id: string, delivery: string) =>
       ["webhooks", "item", id, "delivery", delivery] as const,
+  },
+  /** AI change sets (M6-5). `all` covers the lists, every set and its changes. */
+  changeSets: {
+    all: ["changeSets"] as const,
+    list: (filter: { user?: string; agent?: string; open?: boolean }) =>
+      ["changeSets", "list", filter] as const,
+    item: (id: string) => ["changeSets", "item", id] as const,
+    change: (id: string, seq: number) => ["changeSets", "item", id, "change", seq] as const,
+    /** The dashboard's count of the last 24 hours. */
+    recent: ["changeSets", "recent"] as const,
+  },
+  /** The content health report (M6-4). `all` covers the summary and every page. */
+  health: {
+    all: ["health"] as const,
+    summary: ["health", "summary"] as const,
+    findings: (filters: HealthFilters) => ["health", "findings", filters] as const,
   },
 } as const;

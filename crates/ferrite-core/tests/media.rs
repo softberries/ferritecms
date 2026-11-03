@@ -921,6 +921,12 @@ impl Repos for FailingTx {
     fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
         self.inner.preview_links()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.change_sets()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.quality()
+    }
 }
 
 #[async_trait]
