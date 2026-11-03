@@ -1,6 +1,6 @@
 # 13 — Multilingual content
 
-Status: **design for M6-1** · Date: 2026-11-02
+Status: **built in M6-1** (ruling P6; as-built differences in §14) · Date: 2026-11-02
 
 A FerriteCMS site can hold its content in several languages. Every content item, term and
 menu has a locale; translations of one item form a translation group; the public site
@@ -547,4 +547,30 @@ keys through the same event bus. Both profiles behave the same.
 Per-locale media text; translated type and taxonomy prefixes; locale-aware `date` names;
 a domain per locale; optional fallback listings; `post.locale` in a new plugin world;
 term language import from Polylang (needs a WordPress plugin or the database); a
-translation memory or glossary for assistants; side-by-side editing.
+translation memory or glossary for assistants; side-by-side editing; `hreflang`
+alternates on term archives.
+
+## 14. As built (M6-1)
+
+Where the build differs from the sections above (the M6-1 exit lists each as an
+`R-1-<n>` decision):
+
+- **Reader scoping (§5).** `SiteReader` methods keep their signatures;
+  `SiteReader::in_locale(ReadLocale)` returns a reader scoped to one locale, and the HTTP
+  layer builds one per request on a multilingual site (`ReadLocale::All`, the shared
+  reader, on a one-locale site). `PublicItem` carries `locale` and (not serialized)
+  `translation_group`.
+- **Store API (§3).** `ContentRepo::slugs_with_prefix` takes a `locale` too (slug
+  allocation per locale); `TranslationRef` also carries `title` and `author_id` (the admin
+  filters members by `can_read`). A new `CoreError::InUse` is the `409` of a locale that
+  still holds content and of a group that already has a member in a locale.
+- **Root namespace (§2.3).** `Permalinks::locale_prefixes(kind)` returns the prefixes only
+  for kinds whose top-level items live at `/<slug>/` (pages, and posts under `/%slug%/`).
+  Type and taxonomy names may not equal a locale prefix either.
+- **`init` (§2.2).** `ferrite init` does not settle: `import-site` needs the new database
+  empty; the first command that runs `startup_check` settles.
+- **Alternates (§5).** Items and the front page get `hreflang` links; term archives do not
+  (moved to §13).
+- **`site.locale`.** Deleting it on a one-locale site leaves `site.locales` as it is.
+- **Menus (§2.6).** A menu written with an empty `locale` keeps its stored locale (a new
+  menu takes the default), so callers that do not know about locales keep working.

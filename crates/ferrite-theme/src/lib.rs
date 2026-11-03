@@ -32,6 +32,6 @@ pub use package::{MAX_FILES, MAX_TOTAL_BYTES, Theme, ThemeSource};
 pub const DEFAULT_THEME: &str = "blog";
 
 pub use render::{
-    ArchiveInfo, FUEL, MAX_BRIDGE_CALLS, MAX_OUTPUT, Pagination, RenderContext, RenderOutput,
-    Renderer, RequestInfo, SiteInfo,
+    ArchiveInfo, FUEL, LocaleLink, MAX_BRIDGE_CALLS, MAX_OUTPUT, Pagination, RenderContext,
+    RenderOutput, Renderer, RequestInfo, SiteInfo,
 };

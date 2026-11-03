@@ -20,6 +20,7 @@ mod cost;
 mod errors;
 mod feeds;
 mod freshness;
+mod locales;
 mod metrics;
 mod plugin_route;
 mod preview;

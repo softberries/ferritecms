@@ -131,10 +131,21 @@ impl BlockingBridge {
         name: &str,
         deps: &mut DepKeys,
     ) -> Result<Option<MenuTree>, CoreError> {
-        let menu = match MenuService::new(self.store.clone()).get(name).await {
-            Ok(m) => m,
-            Err(CoreError::NotFound) => return Ok(None),
-            Err(e) => return Err(e),
+        let menus = MenuService::new(self.store.clone());
+        let menu = match self.reader.locale() {
+            // A locale's translation of the location's menu, else the menu (13 §2.6).
+            ferrite_core::ReadLocale::Only(tag) => match menus.for_location(name, tag).await? {
+                Some(m) => {
+                    deps.insert(menu_key(&m.name));
+                    m
+                }
+                None => return Ok(None),
+            },
+            ferrite_core::ReadLocale::All => match menus.get(name).await {
+                Ok(m) => m,
+                Err(CoreError::NotFound) => return Ok(None),
+                Err(e) => return Err(e),
+            },
         };
         let shown = self.entries(&menu.items, deps).await?;
         Ok(Some(MenuTree {
@@ -258,6 +269,22 @@ impl HelperBridge for BlockingBridge {
                 (None, deps)
             }
         }
+    }
+
+    /// [`SiteReader::translations`] of the public item `item`.
+    fn translations(&self, item: ContentId) -> Bridged<Vec<ferrite_core::TranslationLink>> {
+        let mut deps = DepKeys::default();
+        let links = self.run("translations", async {
+            let read = self.reader.by_id(item).await?;
+            deps.extend(read.deps);
+            let Some(p) = read.value else {
+                return Ok(Vec::new());
+            };
+            let t = self.reader.translations(&p).await?;
+            deps.extend(t.deps);
+            Ok(t.value)
+        });
+        (links.unwrap_or_default(), deps)
     }
 
     fn image(&self, media: ContentId, size: &str) -> Option<ImageRef> {

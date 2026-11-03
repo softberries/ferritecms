@@ -1048,3 +1048,24 @@ input[type="search"] {
     display: none;
   }
 }
+
+/* The language switcher (M6-1): shown only on a multilingual site. */
+.language-switcher__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.language-switcher__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.5rem;
+}
+.language-switcher__link[aria-current="true"] {
+  font-weight: 700;
+  text-decoration: none;
+}

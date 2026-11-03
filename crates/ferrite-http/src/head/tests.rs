@@ -35,7 +35,11 @@ fn item(title: &str, excerpt: &str) -> PageItem {
 }
 
 fn page<'a>(item: Option<&'a PageItem>, path: &'a str) -> HeadPage<'a> {
-    HeadPage { item, path }
+    HeadPage {
+        item,
+        path,
+        alternates: &[],
+    }
 }
 
 fn render(h: &Head) -> String {

@@ -59,6 +59,7 @@ async fn head(site: &Site) -> String {
         ferrite_http::HeadPage {
             item: None,
             path: "/",
+            alternates: &[],
         },
         &PluginRequest::public("/", "en", None),
         &mut trace,

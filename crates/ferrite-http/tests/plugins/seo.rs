@@ -176,6 +176,7 @@ async fn render(site: &Site, item: Option<ContentId>, path: &str, locale: &str) 
         HeadPage {
             item: page.as_ref(),
             path,
+            alternates: &[],
         },
         &PluginRequest::public(path, locale, item),
         &mut trace,

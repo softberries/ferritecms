@@ -8,7 +8,7 @@ use ferrite_domain::{
     ContentId, ContentItem, ContentQuery, ContentStatus, MEDIA_KIND, NewAudit, ParentFilter,
     TermId, Timestamp, locale::SiteLocales,
 };
-use ferrite_store::Repos;
+use ferrite_store::{Repos, Tx};
 use serde_json::json;
 
 use super::{
@@ -217,8 +217,24 @@ impl ContentService {
         require(actor, Capability::EditOwn)?;
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = async {
-            let repos: &dyn Repos = tx.as_ref();
+        let done = self
+            .translate_in(tx.as_ref(), rules.as_ref(), actor, id, locale)
+            .await;
+        finish(tx, done).await
+    }
+
+    /// [`translate`](Self::translate) inside the caller's `tx` with its pinned `rules`,
+    /// without the capability check (the demo seed's batch).
+    pub(crate) async fn translate_in(
+        &self,
+        tx: &dyn Tx,
+        rules: &dyn crate::Permalinks,
+        actor: &Actor,
+        id: ContentId,
+        locale: &str,
+    ) -> Result<Translated, CoreError> {
+        {
+            let repos: &dyn Repos = tx;
             let source = repos
                 .content()
                 .get(id)
@@ -285,8 +301,8 @@ impl ContentService {
             };
             let item = self
                 .create_in(
-                    tx.as_ref(),
-                    rules.as_ref(),
+                    tx,
+                    rules,
                     actor,
                     draft,
                     Placement {
@@ -307,8 +323,6 @@ impl ContentService {
                 .await?;
             Ok(Translated { item, notes })
         }
-        .await;
-        finish(tx, done).await
     }
 
     /// Moves item `id` (at `expected_version`, else `Conflict`) to another locale or

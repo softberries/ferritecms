@@ -1,0 +1,9 @@
+{#- The language switcher (M6-1): one link per site locale, to this page's translation
+    when it exists, else that locale's front page. Shown only on a multilingual site. -#}
+<nav class="language-switcher" aria-label="{{ t('Languages') }}">
+  <ul class="language-switcher__list">
+  {%- for l in locale_links(post) %}
+    <li class="language-switcher__item"><a class="language-switcher__link" href="{{ l.url }}" hreflang="{{ l.tag }}" lang="{{ l.tag }}"{% if l.current %} aria-current="true"{% endif %}>{{ l.label }}</a></li>
+  {%- endfor %}
+  </ul>
+</nav>

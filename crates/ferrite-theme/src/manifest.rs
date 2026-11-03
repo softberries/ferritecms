@@ -25,6 +25,9 @@ pub struct ThemeManifest {
     pub images: BTreeMap<String, ImageSize>,
     /// Declarative settings, rendered by the admin.
     pub settings: BTreeMap<String, SettingSpec>,
+    /// Translations of the theme's own texts (`[strings.<tag>]`, 13 §5.1): locale tag
+    /// -> source text -> translation; what `t(text)` looks up.
+    pub strings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -87,7 +90,16 @@ struct Raw {
     images: BTreeMap<String, ImageSize>,
     #[serde(default)]
     settings: BTreeMap<String, RawSetting>,
+    #[serde(default)]
+    strings: BTreeMap<String, BTreeMap<String, String>>,
 }
+
+/// Most `[strings.<tag>]` tables a theme may have.
+pub const MAX_STRING_TABLES: usize = 32;
+/// Most strings per table.
+pub const MAX_STRINGS: usize = 500;
+/// Longest translated string, in characters.
+pub const MAX_STRING_CHARS: usize = 1000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -186,10 +198,37 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
             },
         );
     }
+    if raw.strings.len() > MAX_STRING_TABLES {
+        problems.push(format!(
+            "theme.toml: at most {MAX_STRING_TABLES} [strings.<locale>] tables"
+        ));
+    }
+    let mut strings = BTreeMap::new();
+    for (tag, table) in raw.strings {
+        let path = format!("theme.toml: strings.{tag}");
+        let Ok(canonical) = ferrite_domain::locale::parse_tag(&tag) else {
+            problems.push(format!("{path}: not a locale tag"));
+            continue;
+        };
+        if table.len() > MAX_STRINGS {
+            problems.push(format!("{path}: at most {MAX_STRINGS} strings"));
+            continue;
+        }
+        if table.iter().any(|(k, v)| {
+            k.chars().count() > MAX_STRING_CHARS || v.chars().count() > MAX_STRING_CHARS
+        }) {
+            problems.push(format!(
+                "{path}: a string has more than {MAX_STRING_CHARS} characters"
+            ));
+            continue;
+        }
+        strings.insert(canonical, table);
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
     Ok(ThemeManifest {
+        strings,
         name: raw.theme.name,
         version: raw.theme.version,
         author: raw.theme.author,
@@ -203,6 +242,20 @@ pub(crate) fn parse(src: &str) -> Result<ThemeManifest, Vec<String>> {
 }
 
 impl ThemeManifest {
+    /// The strings `t(text)` uses in `locale` (13 §5.1): its language subtag's table
+    /// (`pt-BR` → `pt`) with the exact tag's entries over it. A text missing from both is
+    /// printed as written.
+    pub fn strings_for(&self, locale: &str) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        let language = ferrite_domain::locale::language(locale);
+        for tag in [language, locale] {
+            if let Some(table) = self.strings.get(tag) {
+                out.extend(table.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        out
+    }
+
     /// The width of the widest `[images]` size, `None` when the theme declares none
     /// (or only zero widths): the largest display size of inline body images (06 §4).
     pub fn largest_image_width(&self) -> Option<u32> {
@@ -256,6 +309,41 @@ fn is_name(s: &str, underscore: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const META: &str = "[theme]\nname = \"t\"\nversion = \"0.1.0\"\n";
+
+    #[test]
+    fn t_falls_back_tag_language_text() {
+        let m = parse(&format!(
+            "{META}[strings.pt]\n\"Read more\" = \"Leia mais\"\n\"Home\" = \"Início\"\n\
+             [strings.pt_br]\n\"Home\" = \"Página inicial\"\n"
+        ))
+        .unwrap();
+        let br = m.strings_for("pt-BR");
+        assert_eq!(br.get("Home").map(String::as_str), Some("Página inicial"));
+        assert_eq!(br.get("Read more").map(String::as_str), Some("Leia mais"));
+        assert!(m.strings_for("de").is_empty());
+        assert!(m.strings.contains_key("pt-BR"), "tags are stored canonical");
+    }
+
+    #[test]
+    fn strings_caps_refused() {
+        let tables: String = (0..33)
+            .map(|i| format!("[strings.a{}]\n", (b'a' + (i % 26) as u8) as char))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let many: String = (0..501).map(|i| format!("\"s{i}\" = \"x\"\n")).collect();
+        for bad in [
+            format!("{META}[strings.\"not a tag\"]\n\"a\" = \"b\"\n"),
+            format!("{META}[strings.de]\n{many}"),
+            format!("{META}[strings.de]\n\"a\" = \"{}\"\n", "x".repeat(1001)),
+        ] {
+            assert!(parse(&bad).is_err(), "{}", &bad[..bad.len().min(80)]);
+        }
+        // 26 distinct tables are fine (the 33-table case needs more tags than letters).
+        assert!(parse(&format!("{META}{tables}")).is_ok());
+    }
 
     const OK: &str = r##"
 [theme]

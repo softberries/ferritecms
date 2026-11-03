@@ -9,7 +9,8 @@ use std::{
 use bytes::Bytes;
 use ferrite_cache::{CachedPage, etag_for};
 use ferrite_core::{
-    Actor, CoreError, DepKeys, FrontPage, Listing, PageItem, Previewed, SiteRead,
+    Actor, CoreError, DepKeys, FrontPage, Listing, PageItem, Previewed, ReadLocale, SiteRead,
+    SiteReader,
     events::{PLUGINS_KEY, THEME_KEY, archive_key},
 };
 use ferrite_domain::ContentId;
@@ -21,9 +22,9 @@ use tokio::{runtime::Handle, sync::OwnedSemaphorePermit};
 
 use super::{AppState, bridge::BlockingBridge, error_page, feeds, response::HTML};
 use crate::{
-    head::{HeadPage, HeadSite, page_head},
+    head::{Alternate, HeadPage, HeadSite, page_head},
     plugins::{PluginRequest, RenderTrace, filter_footer, filter_item},
-    route::{Candidate, NormalQuery, Route, listing_page_url},
+    route::{Candidate, NormalQuery, Route, RouteLocale, listing_page_url},
 };
 
 /// Why a page could not be rendered: [`Busy`](Self::Busy) is answered with 503, every
@@ -67,12 +68,65 @@ enum Loaded {
 pub(crate) async fn render(
     state: Arc<AppState>,
     route: Route,
+    locale: RouteLocale,
     path: String,
     query: NormalQuery,
     logged_in: bool,
 ) -> Result<CachedPage, NotFound> {
-    let result = render_route(&state, &route, &path, query, logged_in).await;
+    let l = localized(&state, locale.tag.as_deref());
+    let result = render_route(&state, &l, &route, &path, query, logged_in).await;
     outcome(&state, &path, result).await
+}
+
+/// A request's locale (13 §4–§5): the reader scoped to it and, on a multilingual site,
+/// its tag and URL prefix.
+pub(crate) struct Localized {
+    /// [`AppState::reader`] itself on a one-locale site (no locale predicate, D4).
+    pub(crate) reader: Arc<SiteReader>,
+    /// The request's locale tag on a multilingual site; `None` on a one-locale site.
+    pub(crate) tag: Option<String>,
+    /// The URL prefix of a non-default locale.
+    pub(crate) prefix: Option<String>,
+    /// The default locale's tag.
+    pub(crate) default: String,
+}
+
+impl Localized {
+    /// The locale's root path (`/` or `/de/`).
+    pub(crate) fn root(&self) -> String {
+        self.prefix
+            .as_ref()
+            .map_or_else(|| "/".to_owned(), |p| format!("/{p}/"))
+    }
+
+    /// `path` under the locale's prefix.
+    fn prefixed(&self, path: String) -> String {
+        match &self.prefix {
+            Some(p) => format!("/{p}{path}"),
+            None => path,
+        }
+    }
+}
+
+/// The request context for locale `tag` (`None`: the default locale, no prefix).
+pub(crate) fn localized(state: &AppState, tag: Option<&str>) -> Localized {
+    let table = state.routes.load();
+    let default = table.default_locale().to_owned();
+    if !table.is_multilingual() {
+        return Localized {
+            reader: state.reader.clone(),
+            tag: None,
+            prefix: None,
+            default,
+        };
+    }
+    let tag = tag.unwrap_or(&default).to_owned();
+    Localized {
+        reader: Arc::new(state.reader.in_locale(ReadLocale::Only(tag.clone()))),
+        prefix: table.prefix_of(&tag).map(str::to_owned),
+        tag: Some(tag),
+        default,
+    }
 }
 
 /// The preview of item `id` for `actor` (P20): loaded with `SiteReader::preview`
@@ -125,13 +179,14 @@ enum Viewer {
 
 async fn render_route(
     state: &Arc<AppState>,
+    l: &Localized,
     route: &Route,
     path: &str,
     query: NormalQuery,
     logged_in: bool,
 ) -> Result<Option<CachedPage>, RenderError> {
     match route {
-        Route::Feed(source) => return feeds::feed(state, source).await,
+        Route::Feed(source) => return feeds::feed(state, l, source).await,
         Route::Sitemap(part) => return feeds::sitemap(state, part).await,
         Route::Robots => return feeds::robots(state).await.map(Some),
         _ => {}
@@ -141,9 +196,11 @@ async fn render_route(
     let slot = acquire_slot(state).await?;
     let until = budget_end(state.config.render_budget);
     let mut deps = DepKeys::default();
-    let shown = match load(state, route, path, &mut deps).await? {
+    let shown = match load(l, route, path, &mut deps).await? {
         None => return Ok(None),
-        Some(Loaded::FrontPermalink) => return Ok(Some(front_redirect(query.cpage, deps))),
+        Some(Loaded::FrontPermalink) => {
+            return Ok(Some(front_redirect(&l.root(), query.cpage, deps)));
+        }
         Some(Loaded::Shown(shown)) => shown,
     };
     let target = Target {
@@ -153,7 +210,7 @@ async fn render_route(
         until,
     };
     let viewer = Viewer::Public { logged_in };
-    finish(state, slot, target, shown, deps, viewer)
+    finish(state, l, slot, target, shown, deps, viewer)
         .await
         .map(Some)
 }
@@ -175,6 +232,8 @@ async fn preview_route(
     let mut deps = DepKeys::default();
     let previewed = take(read, &mut deps);
     let item = previewed.item().clone();
+    // A preview renders in the item's own locale (13 §4).
+    let l = localized(state, Some(&item.item.locale));
     let key = item_template(&item);
     let shown = Shown::Item(Box::new(item), key);
     let target = Target {
@@ -185,6 +244,7 @@ async fn preview_route(
     };
     finish(
         state,
+        &l,
         slot,
         target,
         shown,
@@ -199,6 +259,7 @@ async fn preview_route(
 /// `slot`.
 async fn finish(
     state: &Arc<AppState>,
+    l: &Localized,
     slot: OwnedSemaphorePermit,
     target: Target<'_>,
     shown: Shown,
@@ -212,12 +273,18 @@ async fn finish(
         until,
     } = target;
     let theme = state.theme.load_full();
-    let site = state.site_info(&theme, &mut deps).await?;
+    let site = state.site_info(&theme, l.tag.as_deref(), &mut deps).await?;
     let (mut item, mut listing, key, archive) = match shown {
         Shown::Item(item, key) => (Some(*item), None, key, None),
         Shown::Listing(listing, key, archive) => (None, Some(listing), key, Some(*archive)),
     };
-    let pagination = listing.as_ref().map(|l| pagination(route, l));
+    let pagination = listing.as_ref().map(|list| {
+        let mut p = pagination(route, list);
+        p.prev_url = p.prev_url.map(|u| l.prefixed(u));
+        p.next_url = p.next_url.map(|u| l.prefixed(u));
+        p
+    });
+    let alternates = alternates(l, item.as_ref(), route, &site, &mut deps).await?;
     let preview = matches!(viewer, Viewer::Preview(_));
     let req = match viewer {
         Viewer::Public { logged_in } => {
@@ -253,6 +320,7 @@ async fn finish(
         HeadPage {
             item: item.as_ref(),
             path,
+            alternates: &alternates,
         },
         &req,
         &mut trace,
@@ -285,7 +353,7 @@ async fn finish(
     };
     let bridge = Arc::new(BlockingBridge::new(
         Handle::current(),
-        state.reader.clone(),
+        l.reader.clone(),
         state.store.clone(),
     ));
     let out = render_in_slot(state, slot, theme, template, ctx, bridge.clone()).await?;
@@ -376,10 +444,10 @@ const FRONT_REDIRECT_CACHE_CONTROL: &str = "public, max-age=3600";
 /// hop cheap for repeat visits while bounding how long a changed front page leaves old
 /// links pointing at the wrong page. Logged-in answers get `private, no-store` from the
 /// handler instead.
-fn front_redirect(cpage: Option<u32>, deps: DepKeys) -> CachedPage {
+fn front_redirect(root: &str, cpage: Option<u32>, deps: DepKeys) -> CachedPage {
     let location = match cpage {
-        Some(n) => format!("/?cpage={n}"),
-        None => "/".to_owned(),
+        Some(n) => format!("{root}?cpage={n}"),
+        None => root.to_owned(),
     };
     let mut page = html_page(301, String::new(), deps.into_vec(), None);
     page.headers = vec![
@@ -472,14 +540,14 @@ fn pagination(route: &Route, l: &Listing) -> Pagination {
 /// Loads what `route` shows through [`SiteReader`], merging every read's keys into
 /// `deps`. `None`: nothing to show (404).
 async fn load(
-    state: &AppState,
+    l: &Localized,
     route: &Route,
     path: &str,
     deps: &mut DepKeys,
 ) -> Result<Option<Loaded>, CoreError> {
-    let r = &state.reader;
+    let r = &l.reader;
     let shown = match route {
-        Route::Content(candidates) => return content(state, candidates, path, deps).await,
+        Route::Content(candidates) => return content(l, candidates, path, deps).await,
         Route::Front { page } => match take(r.front_page(*page).await?, deps) {
             // A static front page has no `/page/N/`.
             Some(FrontPage::Page(_)) if *page > 1 => None,
@@ -575,7 +643,7 @@ async fn load(
 /// shows it, so its permalink is a duplicate (the hit records
 /// `option:reading.front_page` either way, so changing the option refreshes it).
 async fn content(
-    state: &AppState,
+    l: &Localized,
     candidates: &[Candidate],
     path: &str,
     deps: &mut DepKeys,
@@ -585,10 +653,10 @@ async fn content(
             Candidate::Single { kind, parts } => (kind.as_str(), parts.clone()),
             Candidate::PostByStructure { slug, .. } => ("post", vec![slug.clone()]),
         };
-        let found = take(state.reader.single(kind, &parts).await?, deps);
+        let found = take(l.reader.single(kind, &parts).await?, deps);
         match found.filter(|item| item.url == path) {
             Some(item) => {
-                if take(state.reader.is_front_page(&item.item).await?, deps) {
+                if take(l.reader.is_front_page(&item.item).await?, deps) {
                     return Ok(Some(Loaded::FrontPermalink));
                 }
                 let key = item_template(&item);
@@ -598,6 +666,47 @@ async fn content(
         }
     }
     Ok(None)
+}
+
+/// The page in every locale it exists in (13 §5), for the head's `hreflang` links: an
+/// item's public translations, or every locale's root on a post-listing front page,
+/// each with `x-default` for the default locale's version. Empty on a one-locale site.
+async fn alternates(
+    l: &Localized,
+    item: Option<&PageItem>,
+    route: &Route,
+    site: &ferrite_theme::SiteInfo,
+    deps: &mut DepKeys,
+) -> Result<Vec<Alternate>, CoreError> {
+    if l.tag.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<Alternate> = match item {
+        Some(item) => take(l.reader.translations(item).await?, deps)
+            .into_iter()
+            .map(|t| Alternate {
+                hreflang: t.locale,
+                href: t.url,
+            })
+            .collect(),
+        None if matches!(route, Route::Front { page: 1 }) => site
+            .locales
+            .iter()
+            .map(|loc| Alternate {
+                hreflang: loc.tag.clone(),
+                href: loc.url.clone(),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    if let Some(default) = out.iter().find(|a| a.hreflang == l.default) {
+        let href = default.href.clone();
+        out.push(Alternate {
+            hreflang: "x-default".to_owned(),
+            href,
+        });
+    }
+    Ok(out)
 }
 
 /// The template key of a single item: `page` items use the page hierarchy.

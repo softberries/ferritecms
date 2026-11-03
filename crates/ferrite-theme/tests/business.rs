@@ -34,6 +34,8 @@ fn site(theme: &Theme, overrides: serde_json::Value) -> SiteInfo {
         locale: "en-GB".into(),
         timezone: "UTC".into(),
         settings: theme.manifest().settings_values(&stored),
+        locales: Vec::new(),
+        default_locale: String::new(),
     }
 }
 

@@ -68,6 +68,12 @@ pub trait HelperBridge: Send + Sync {
     fn tree(&self, _kind: &str) -> Bridged<Option<ContentTree>> {
         (None, DepKeys::default())
     }
+    /// The public translations of the public item `item` (`SiteReader::translations`,
+    /// M6-1), in the site's locale order; empty for an item without translations. Keys:
+    /// `group:<group>`, `option:site.locales`. The default has no data.
+    fn translations(&self, _item: ContentId) -> Bridged<Vec<ferrite_core::TranslationLink>> {
+        (Vec::new(), DepKeys::default())
+    }
 }
 
 /// A bridge with no data: every helper returns nothing. For error pages and tests.

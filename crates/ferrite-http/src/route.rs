@@ -103,6 +103,8 @@ pub struct RouteTable {
     taxonomies: Vec<String>,
     /// `(prefix, tag)` of every non-default locale (13 §4), in site order.
     locales: Vec<(String, String)>,
+    /// The default locale's tag.
+    default_locale: String,
 }
 
 impl RouteTable {
@@ -118,7 +120,21 @@ impl RouteTable {
                 .iter()
                 .map(|d| (d.prefix(), d.tag.clone()))
                 .collect(),
+            default_locale: rules.locales().default.tag.clone(),
         }
+    }
+
+    /// The default locale's tag.
+    pub fn default_locale(&self) -> &str {
+        &self.default_locale
+    }
+
+    /// The URL prefix of the non-default locale `tag`, if it is one.
+    pub fn prefix_of(&self, tag: &str) -> Option<&str> {
+        self.locales
+            .iter()
+            .find(|(_, t)| t == tag)
+            .map(|(p, _)| p.as_str())
     }
 
     /// Whether the site has locale prefixes (more than one locale).

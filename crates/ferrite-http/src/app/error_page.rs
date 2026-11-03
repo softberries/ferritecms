@@ -91,7 +91,7 @@ async fn render_missing(state: &Arc<AppState>, kind: Missing) -> CachedPage {
     let mut deps = DepKeys::default();
     deps.insert(THEME_KEY.to_owned());
     deps.insert(PLUGINS_KEY.to_owned());
-    let (site, mut degraded) = match state.site_info(&theme, &mut deps).await {
+    let (site, mut degraded) = match state.site_info(&theme, None, &mut deps).await {
         Ok(site) => (site, false),
         Err(e) => {
             tracing::warn!(error = %e, "site options unreadable for the error page");

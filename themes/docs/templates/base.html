@@ -15,10 +15,10 @@
 </head>
 {%- set tree = page_tree(post=post, kind=site.settings.nav_type or "page") %}
 <body class="{% block body_class %}{% endblock %}">
-<a class="skip-link" href="#content">Skip to content</a>
+<a class="skip-link" href="#content">{{ t("Skip to content") }}</a>
 <header class="site-header">
   <div class="site-header__inner">
-    <a class="site-title" href="/" rel="home">{{ site.title or "Home" }}</a>
+    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home">{{ site.title or "Home" }}</a>
     {%- set primary = menu("primary") %}
     {%- if primary and primary.items %}
     <nav class="site-nav" aria-label="Primary">
@@ -26,10 +26,10 @@
     </nav>
     {%- endif %}
     {% with form_id = "search", form_label = "Site", compact = true %}{% include "partials/search-form.html" %}{% endwith %}
-  </div>
+{% if site.locales | length > 1 %}{% include "partials/languages.html" %}{% endif %}  </div>
 </header>
 {%- if request.preview %}
-<p class="preview-notice" role="status">Preview: this content is not published.</p>
+<p class="preview-notice" role="status">{{ t("Preview: this content is not published.") }}</p>
 {%- endif %}
 <div class="docs-layout">
 {% include "partials/sidebar.html" %}
@@ -48,7 +48,7 @@
       {% with items = footer_menu.items, flat = false %}{% include "partials/menu.html" %}{% endwith %}
     </nav>
     {%- endif %}
-    <p class="site-credit">{% if site.title %}{{ site.title }}. {% endif %}Powered by FerriteCMS</p>
+    <p class="site-credit">{% if site.title %}{{ site.title }}. {% endif %}{{ t("Powered by FerriteCMS") }}</p>
   </div>
 </footer>
 {{ footer() }}

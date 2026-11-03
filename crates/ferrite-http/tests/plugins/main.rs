@@ -41,7 +41,11 @@ async fn head(site: &Site, item: Option<&PageItem>, req: &PluginRequest) -> (Str
         &site.host,
         site.store.as_ref(),
         SITE,
-        HeadPage { item, path },
+        HeadPage {
+            item,
+            path,
+            alternates: &[],
+        },
         req,
         &mut trace,
     )
@@ -855,6 +859,7 @@ async fn render_budget_bounds_the_head(site: Site) -> Site {
         HeadPage {
             item: Some(&item),
             path: &item.url,
+            alternates: &[],
         },
         &req,
         &mut trace,

@@ -19,3 +19,10 @@ accent_color = { type = "color", default = "#2563eb", label = "Accent colour (mi
 nav_type     = { type = "text", default = "page", label = "Content type shown in the sidebar (its page tree)" }
 show_toc     = { type = "bool", default = true, label = "Show the table of contents (“On this page”) on wide screens" }
 show_updated = { type = "bool", default = true, label = "Show when a page was last updated" }
+
+# The theme's own texts in German (M6-1, `t()`); a text without an entry prints as written.
+[strings.de]
+"Skip to content" = "Zum Inhalt springen"
+"Preview: this content is not published." = "Vorschau: Dieser Inhalt ist nicht veröffentlicht."
+"Powered by FerriteCMS" = "Betrieben mit FerriteCMS"
+"Languages" = "Sprachen"

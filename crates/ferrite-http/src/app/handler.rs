@@ -29,7 +29,7 @@ use super::{
 };
 use crate::api::cookie::read_session_cookie;
 use crate::plugins::{CacheOutcome, ServedEvent, is_preview_path};
-use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve};
+use crate::route::{MAX_PATH_BYTES, NormalQuery, Route, resolve_localized};
 
 /// Longest wait for the `/readyz` database ping.
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -61,7 +61,7 @@ pub(crate) async fn handle(State(state): State<Arc<AppState>>, req: Request) -> 
     }
     let path = req.uri().path().to_owned();
     let raw_query = req.uri().query().map(str::to_owned);
-    let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
+    let (_, route) = resolve_localized(&path, raw_query.as_deref(), &state.routes.load());
     match &route {
         Route::Health => return text(StatusCode::OK, "ok\n"),
         Route::Ready => return ready(&state).await,
@@ -197,8 +197,9 @@ async fn page(
         let rendered = rendered.clone();
         async move {
             rendered.store(true, Ordering::Relaxed);
-            let route = resolve(&path, raw_query.as_deref(), &state.routes.load());
-            pipeline::render(state, route, path, query, logged_in).await
+            let (locale, route) =
+                resolve_localized(&path, raw_query.as_deref(), &state.routes.load());
+            pipeline::render(state, route, locale, path, query, logged_in).await
         }
     };
     let (page, cache) = match key {

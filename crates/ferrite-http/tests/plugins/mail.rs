@@ -383,6 +383,7 @@ async fn mail_refused_on_render_path(site: Site) -> Site {
         ferrite_http::HeadPage {
             item: None,
             path: "/",
+            alternates: &[],
         },
         &PluginRequest::public("/", "en", None),
         &mut trace,

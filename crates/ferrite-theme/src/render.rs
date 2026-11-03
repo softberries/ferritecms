@@ -87,7 +87,7 @@ use std::{
 };
 
 use ferrite_core::{
-    DepKeys, Listing, MediaPublic, PageItem, TermPublic, UserPublic,
+    DepKeys, Listing, MediaPublic, PageItem, TermPublic, TranslationLink, UserPublic,
     comments::{COMMENT_FORM_PATH, CommentThread, HONEYPOT_FIELD},
     events::{THEME_KEY, archive_key, menu_key, option_key, post_key, term_key, user_key},
     is_type_name_shaped,
@@ -144,6 +144,21 @@ pub struct SiteInfo {
     /// Every declared setting with its value
     /// ([`ThemeManifest::settings_values`](crate::ThemeManifest::settings_values)).
     pub settings: BTreeMap<String, serde_json::Value>,
+    /// The site's locales, the default first (13 §5): one entry on a one-locale site.
+    pub locales: Vec<LocaleLink>,
+    /// The default locale's tag.
+    pub default_locale: String,
+}
+
+/// One entry of `site.locales` in templates: the locale and its root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LocaleLink {
+    pub tag: String,
+    pub label: String,
+    /// The locale's root path (`/`, `/de/`).
+    pub url: String,
+    /// The request's locale.
+    pub current: bool,
 }
 
 /// `request` in templates.
@@ -258,6 +273,8 @@ impl Renderer {
             hash: theme.hash().to_owned(),
             cpage: ctx.request.cpage.max(1),
             max_calls: self.max_bridge_calls,
+            locales: ctx.site.locales.clone(),
+            strings: theme.manifest().strings_for(&ctx.site.locale),
             state: Mutex::new(ScopeState::default()),
         });
         {
@@ -417,6 +434,10 @@ struct Scope {
     /// The comment page `comments()` asks for ([`RequestInfo::cpage`]).
     cpage: u32,
     max_calls: u32,
+    /// `site.locales`: the switcher's entries.
+    locales: Vec<LocaleLink>,
+    /// The theme's `[strings]` for the render's locale (its language's, then its own).
+    strings: HashMap<String, String>,
     state: Mutex<ScopeState>,
 }
 
@@ -435,6 +456,8 @@ struct ScopeState {
     /// Media already in the context (featured images of items and of tree nodes), for
     /// `image()` without a bridge call.
     media: HashMap<ContentId, MediaPublic>,
+    /// `translations()` results by item (M6-1), one bridge call per item.
+    translations: HashMap<ContentId, Vec<TranslationLink>>,
 }
 
 impl Scope {
@@ -577,7 +600,70 @@ fn root_value(ctx: RenderContext, scope: &Arc<Scope>) -> Value {
         "comments",
         Value::from_function(move |item: &Value| comments(&s, item)),
     );
+    let s = scope.clone();
+    root.insert(
+        "translations",
+        Value::from_function(move |item: &Value| Value::from(Serde(translations(&s, item)))),
+    );
+    let s = scope.clone();
+    root.insert(
+        "locale_links",
+        Value::from_function(move |post: Option<Value>| locale_links(&s, post)),
+    );
+    let s = scope.clone();
+    root.insert(
+        "t",
+        Value::from_function(move |text: &str| {
+            s.strings.get(text).map_or(text, String::as_str).to_owned()
+        }),
+    );
     Value::from(root)
+}
+
+/// The public translations of `item` (`SiteReader::translations`, 13 §5): one bridge
+/// call per item and render (memoised), none on a one-locale site.
+fn translations(scope: &Scope, item: &Value) -> Vec<TranslationLink> {
+    if scope.locales.len() < 2 {
+        return Vec::new();
+    }
+    let Some(id) = content_id(item) else {
+        return Vec::new();
+    };
+    if let Some(found) = scope.lock().translations.get(&id) {
+        return found.clone();
+    }
+    if !scope.take_call("translations") {
+        return Vec::new();
+    }
+    let (links, deps) = scope.bridge.translations(id);
+    scope.merge(deps);
+    scope.lock().translations.insert(id, links.clone());
+    links
+}
+
+/// One entry per site locale for a language switcher (13 §5): `{ tag, label, url,
+/// current, translated }`, the url being `post`'s translation in that locale when it
+/// exists, else the locale's root.
+fn locale_links(scope: &Scope, post: Option<Value>) -> Value {
+    let found = post
+        .filter(|p| !p.is_undefined() && !p.is_none())
+        .map(|p| translations(scope, &p))
+        .unwrap_or_default();
+    let links: Vec<Value> = scope
+        .locales
+        .iter()
+        .map(|l| {
+            let t = found.iter().find(|t| t.locale == l.tag);
+            minijinja::context! {
+                tag => l.tag.clone(),
+                label => l.label.clone(),
+                url => t.map_or(l.url.as_str(), |t| t.url.as_str()),
+                current => l.current,
+                translated => t.is_some(),
+            }
+        })
+        .collect();
+    Value::from(links)
 }
 
 fn listing_value(l: Listing, scope: &Scope) -> Value {

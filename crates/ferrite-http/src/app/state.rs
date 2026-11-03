@@ -19,7 +19,7 @@ use ferrite_domain::locale::bcp47_loose;
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::PluginHost;
 use ferrite_store::{Store, StoreError};
-use ferrite_theme::{Renderer, SiteInfo, Theme};
+use ferrite_theme::{LocaleLink, Renderer, SiteInfo, Theme};
 use tokio::sync::Semaphore;
 
 use super::hits::HitCounter;
@@ -335,12 +335,59 @@ impl AppState {
     /// a string) and the theme's settings, read per render (cache misses only) and
     /// recorded as `option:<key>`. The renderer records the `site.*` keys itself; the
     /// settings key is recorded here.
+    ///
+    /// `locale` is the request's locale on a multilingual site (`None` on a one-locale
+    /// site, where `site` is exactly as before M6-1): `site.locale` is then that tag,
+    /// `site.title` / `site.description` come from `site.locale_texts` when set, and
+    /// `site.locales` lists every locale with its root (13 §5).
     pub(crate) async fn site_info(
         &self,
         theme: &Theme,
+        locale: Option<&str>,
         deps: &mut DepKeys,
     ) -> Result<SiteInfo, CoreError> {
-        let texts = self.site_texts(deps).await?;
+        let mut texts = self.site_texts(deps).await?;
+        let (site_locale, locales, default_locale) = match locale {
+            None => {
+                let tag = bcp47_loose(&texts.locale);
+                let link = LocaleLink {
+                    label: ferrite_domain::locale::native_name(&tag)
+                        .map_or_else(|| tag.clone(), str::to_owned),
+                    tag: tag.clone(),
+                    url: "/".to_owned(),
+                    current: true,
+                };
+                (tag.clone(), vec![link], tag)
+            }
+            Some(tag) => {
+                let repos = self.store.read();
+                deps.insert(option_key(ferrite_domain::locale::LOCALES_OPTION));
+                deps.insert(option_key(ferrite_domain::locale::LOCALE_TEXTS_OPTION));
+                let site_locales = ferrite_core::locales::read(repos).await?;
+                if tag != site_locales.default.tag
+                    && let Some(t) = ferrite_core::locales::texts(repos, tag).await?
+                {
+                    if let Some(title) = t.title {
+                        texts.title = title;
+                    }
+                    if let Some(description) = t.description {
+                        texts.description = description;
+                    }
+                }
+                let links = site_locales
+                    .all()
+                    .map(|d| LocaleLink {
+                        tag: d.tag.clone(),
+                        label: d.label.clone(),
+                        url: site_locales
+                            .prefix_of(&d.tag)
+                            .map_or_else(|| "/".to_owned(), |p| format!("/{p}/")),
+                        current: d.tag == tag,
+                    })
+                    .collect();
+                (tag.to_owned(), links, site_locales.default.tag.clone())
+            }
+        };
         let options = self.store.read().options();
         let key = theme_settings_option(theme.name());
         deps.insert(option_key(&key));
@@ -353,9 +400,11 @@ impl AppState {
             title: texts.title,
             url: self.config.site_url.clone(),
             description: texts.description,
-            locale: bcp47_loose(&texts.locale),
+            locale: site_locale,
             timezone: self.config.timezone.clone(),
             settings: theme.manifest().settings_values(&stored),
+            locales,
+            default_locale,
         })
     }
 
@@ -378,6 +427,19 @@ impl AppState {
         })
     }
 
+    /// The site title and tagline of locale `tag` from `site.locale_texts` (each `None`
+    /// when not set; none for the default locale), recording the option.
+    pub(crate) async fn site_info_texts(
+        &self,
+        tag: &str,
+        deps: &mut DepKeys,
+    ) -> Result<(Option<String>, Option<String>), CoreError> {
+        deps.insert(option_key(ferrite_domain::locale::LOCALE_TEXTS_OPTION));
+        Ok(ferrite_core::locales::texts(self.store.read(), tag)
+            .await?
+            .map_or((None, None), |t| (t.title, t.description)))
+    }
+
     /// `site` from the config defaults alone, for error pages when the store fails.
     pub(crate) fn fallback_site(&self, theme: &Theme) -> SiteInfo {
         SiteInfo {
@@ -389,6 +451,8 @@ impl AppState {
             settings: theme
                 .manifest()
                 .settings_values(&serde_json::Map::default()),
+            locales: Vec::new(),
+            default_locale: bcp47_loose(&self.config.locale),
         }
     }
 }

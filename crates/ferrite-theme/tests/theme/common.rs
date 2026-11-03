@@ -59,6 +59,8 @@ pub fn site() -> SiteInfo {
         locale: "en".into(),
         timezone: "UTC".into(),
         settings: Default::default(),
+        locales: Vec::new(),
+        default_locale: String::new(),
     }
 }
 

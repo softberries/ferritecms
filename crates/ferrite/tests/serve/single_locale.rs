@@ -464,6 +464,44 @@ fn golden_docs() {
     snapshot(&server, "docs", &routes);
 }
 
+/// `seed demo --profile multilingual` (M6-1 Task 12): the blog in English and German,
+/// served with `<html lang>`, the language switcher, `hreflang` links, the translated
+/// menu and the theme's German strings.
+#[test]
+fn multilingual_demo_serves_both_locales() {
+    let p = Profile::solo();
+    p.init();
+    seed(&p, &["--profile", "multilingual"]);
+    let server = Server::start(&p);
+    let de = server.get("/de/");
+    assert_eq!(de.status, 200, "{de:?}");
+    let html = de.text();
+    assert!(html.contains("<html lang=\"de\">"), "{html}");
+    assert!(html.contains("Willkommen bei FerriteCMS"), "{html}");
+    assert!(!html.contains(">Welcome to FerriteCMS<"), "{html}");
+    assert!(html.contains("class=\"language-switcher\""), "{html}");
+    assert!(html.contains("Zum Inhalt springen"), "{html}");
+    assert!(
+        html.contains("Hauptnavigation") || html.contains(">Kontakt<"),
+        "{html}"
+    );
+    let about = server.get("/de/about/");
+    assert_eq!(about.status, 200, "{about:?}");
+    let about = about.text();
+    assert!(about.contains("Über uns"), "{about}");
+    assert!(
+        about.contains("hreflang=\"en\"") && about.contains("hreflang=\"x-default\""),
+        "{about}"
+    );
+    let en = server.get("/about/").text();
+    assert!(en.contains("<html lang=\"en\">"), "{en}");
+    assert!(en.contains("hreflang=\"de\""), "{en}");
+    assert!(en.contains("Skip to content"), "{en}");
+    let feed = server.get("/de/feed/").text();
+    assert!(feed.contains("<language>de</language>"), "{feed}");
+    assert_eq!(server.get("/de/robots.txt").status, 404);
+}
+
 #[test]
 fn normalize_is_stable() {
     let s = "id 0192f0a4-1b2c-7d3e-8f40-123456789abc at 2026-11-02T10:00:00.123Z \

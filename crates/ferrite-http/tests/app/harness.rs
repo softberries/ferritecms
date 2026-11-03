@@ -229,6 +229,44 @@ impl App {
         self.rebuilt(config, |s| s.with_admin_assets(admin)).await
     }
 
+    /// This app on a multilingual site (M6-1): `locales` written as `site.locales`, then
+    /// a fresh state whose reader, route table and content service use the rules with
+    /// those locales.
+    pub async fn localized(mut self, locales: serde_json::Value) -> Self {
+        ferrite_core::OptionService::new(self.site.store.clone())
+            .set_many(&self.admin, &[("site.locales".into(), Some(locales))])
+            .await
+            .expect("site.locales");
+        let rules = ferrite_core::permalink::rules_from(self.site.store.read(), &[])
+            .await
+            .expect("rules");
+        let reader = Arc::new(ferrite_core::SiteReader::new(
+            self.site.store.clone(),
+            Arc::new(rules.clone()),
+            Arc::new(|hash: &ferrite_domain::ArtifactHash, name: &str| {
+                format!("/_media/{hash}/{name}")
+            }),
+            Arc::new(ferrite_domain::Timestamp::now),
+        ));
+        let state = Self::build_state(
+            &self.site,
+            reader,
+            load_theme(fixture("app-theme")),
+            true,
+            Self::config(),
+        )
+        .await;
+        state.swap_routes(
+            load_route_table(self.site.store.as_ref(), &rules)
+                .await
+                .expect("route table"),
+        );
+        self.state = Arc::new(state);
+        self.router = build_app(self.state.clone());
+        self.svc = ContentService::new(self.site.store.clone(), Arc::new(rules));
+        self
+    }
+
     /// The default config of [`App::new`].
     pub fn config() -> HttpConfig {
         HttpConfig::new(SITE_URL, SITE_TITLE, "en")

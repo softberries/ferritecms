@@ -94,6 +94,10 @@ pub enum Profile {
     Blog,
     /// A small-business site with a static front page, for the `business` theme.
     Business,
+    /// The blog in English and German (M6-1): `site.locales` `en`, `de`, German
+    /// translations of three posts, About and Contact, the category News and the menu
+    /// `primary-de`.
+    Multilingual,
 }
 
 pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
@@ -121,7 +125,7 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
         // The sizes a `media.variants` job would make on a node with this theme; the
         // business profile's images are made for the theme it is seeded for.
         let specs = match args.profile {
-            Profile::Blog => variant_specs(&theme),
+            Profile::Blog | Profile::Multilingual => variant_specs(&theme),
             Profile::Business => variant_specs(
                 &Theme::load_embedded("business").context("the embedded business theme")?,
             ),
@@ -144,6 +148,11 @@ pub async fn run(cmd: SeedCommand) -> anyhow::Result<()> {
         Profile::Blog => println!(
             "Seeded demo content: {} posts, {} pages, {} terms, 2 menus, 1 image (admin user: {ADMIN_LOGIN}).",
             s.posts, s.pages, s.terms
+        ),
+        Profile::Multilingual => println!(
+            "Seeded multilingual demo content in en and de: {} posts and {} pages in English, \
+             their German translations under /de/, 3 menus, 1 image (admin user: {ADMIN_LOGIN}).",
+            s.posts, s.pages
         ),
         Profile::Business => {
             println!(
@@ -210,7 +219,7 @@ async fn seed_demo(
     // files of a run that fails are left for the artifacts GC.
     let mut images = Vec::new();
     match profile {
-        Profile::Blog => images.push(
+        Profile::Blog | Profile::Multilingual => images.push(
             store_image(
                 media,
                 specs,
@@ -230,10 +239,11 @@ async fn seed_demo(
 
     let batch = DemoBatch::begin(store.clone(), Arc::new(rules)).await?;
     let written = match profile {
-        Profile::Blog => {
+        Profile::Blog | Profile::Multilingual => {
             write_rows(
                 &batch,
                 images.remove(0),
+                profile == Profile::Multilingual,
                 #[cfg(feature = "test-seams")]
                 fail_after_posts,
             )
@@ -267,6 +277,7 @@ async fn seed_demo(
 async fn write_rows(
     batch: &DemoBatch,
     image: StoredImage,
+    multilingual: bool,
     #[cfg(feature = "test-seams")] fail_after_posts: bool,
 ) -> anyhow::Result<Summary> {
     let (actor, admin_has_password) = admin_actor(batch).await?;
@@ -292,6 +303,7 @@ async fn write_rows(
 
     let now = Timestamp::now().as_micros();
     let mut posts = 0;
+    let mut newest = Vec::new();
     for (i, p) in demo::POSTS.iter().enumerate() {
         let mut ids = vec![term_id(p.category)?];
         for tag in p.tags {
@@ -317,10 +329,13 @@ async fn write_rows(
         // Newest first, about nine days apart, at varied times of day.
         let age = i64::try_from(i)? * 9 * DAY_MICROS + i64::try_from(i % 4)? * 3_600_000_000;
         let published_at = Timestamp::from_micros(now - DAY_MICROS / 24 - age)?;
-        batch
+        let written = batch
             .publish(&actor, draft, Some(published_at))
             .await
             .with_context(|| format!("post {:?}", p.title))?;
+        if newest.len() < 3 {
+            newest.push(written.id);
+        }
         posts += 1;
     }
     #[cfg(feature = "test-seams")]
@@ -372,6 +387,9 @@ async fn write_rows(
         .await
         .context("footer menu")?;
 
+    if multilingual {
+        write_german(batch, &actor, &newest, about.id, contact.id, news).await?;
+    }
     batch
         .option(&actor, "site.title", &json!(demo::SITE_TITLE), true)
         .await?;
@@ -390,6 +408,62 @@ async fn write_rows(
         images: 1,
         admin_has_password,
     })
+}
+
+/// The German half of the `multilingual` profile (M6-1): `site.locales` `en`, `de`, the
+/// category Nachrichten (News), translations of the `newest` posts, About and Contact,
+/// and the menu `primary-de` translating `primary`.
+async fn write_german(
+    batch: &DemoBatch,
+    actor: &Actor,
+    newest: &[ContentId],
+    about: ContentId,
+    contact: ContentId,
+    news: TermId,
+) -> anyhow::Result<()> {
+    batch
+        .locales(&json!([{"tag": "en"}, {"tag": "de", "label": "Deutsch"}]))
+        .await
+        .context("site.locales")?;
+    let news_de = batch
+        .term_translation("category", "nachrichten", "Nachrichten", "de", news)
+        .await
+        .context("category Nachrichten")?;
+    let titles = [
+        "Willkommen bei FerriteCMS",
+        "Ihr erstes Plugin schreiben",
+        "Themes ohne Code",
+    ];
+    for (id, title) in newest.iter().zip(titles) {
+        batch
+            .translation(actor, *id, "de", title)
+            .await
+            .with_context(|| format!("translation {title:?}"))?;
+    }
+    let about_de = batch
+        .translation(actor, about, "de", "Über uns")
+        .await
+        .context("page Über uns")?;
+    let contact_de = batch
+        .translation(actor, contact, "de", "Kontakt")
+        .await
+        .context("page Kontakt")?;
+    batch
+        .menu(&Menu {
+            name: "primary-de".into(),
+            label: "Hauptnavigation".into(),
+            items: vec![
+                url_item(0, "Start", "/de/"),
+                item(1, "Über uns", MenuItemKind::Item, about_de.id.as_uuid()),
+                item(2, "Nachrichten", MenuItemKind::Term, news_de.id.as_uuid()),
+                item(3, "Kontakt", MenuItemKind::Item, contact_de.id.as_uuid()),
+            ],
+            locale: "de".into(),
+            translation_of: Some("primary".into()),
+        })
+        .await
+        .context("menu primary-de")?;
+    Ok(())
 }
 
 /// The admin every profile writes as, and whether that account already has a password.
