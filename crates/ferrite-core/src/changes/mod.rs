@@ -1,0 +1,12 @@
+//! AI change sets (design 17): every write an assistant makes over MCP is recorded with
+//! before- and after-images, grouped per connection and time window, and can be
+//! reviewed and reverted by a person.
+
+mod capture;
+mod object;
+mod snapshot;
+
+pub(crate) use capture::Capture;
+pub use capture::{IDLE_WINDOW_MICROS, MAX_SET_CHANGES};
+pub(crate) use object::{ObjectRef, Op};
+pub use snapshot::canonical;
