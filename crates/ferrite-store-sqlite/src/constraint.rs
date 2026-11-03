@@ -14,6 +14,12 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("artifacts.hash", "artifacts_pkey"),
     ("audit_log.id", "audit_log_pkey"),
     ("autosaves.item_id, autosaves.user_id", "autosaves_pkey"),
+    (
+        "change_set_changes.set_id, change_set_changes.seq",
+        "change_set_changes_pkey",
+    ),
+    ("change_sets.id", "change_sets_pkey"),
+    ("change_sets.open_key", "change_sets_open_key_uq"),
     ("comments.id", "comments_pkey"),
     ("content_items.id", "content_items_pkey"),
     (

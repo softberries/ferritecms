@@ -189,6 +189,9 @@ impl Repos for FailingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.store.read().plugin_trust()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.store.read().change_sets()
+    }
 }
 
 #[async_trait]

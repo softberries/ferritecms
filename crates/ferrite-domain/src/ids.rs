@@ -68,7 +68,8 @@ uuid_id!(
     OAuthGrantId,
     WebhookId,
     WebhookEventId,
-    DeliveryId
+    DeliveryId,
+    ChangeSetId
 );
 
 /// SHA-256 content hash: exactly 64 lowercase hex characters.

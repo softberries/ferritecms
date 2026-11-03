@@ -14,6 +14,7 @@
 
 mod auth;
 mod autosave;
+mod change_set;
 mod comment;
 mod content;
 mod event;
@@ -39,6 +40,7 @@ mod user;
 mod webhook;
 
 use async_trait::async_trait;
+use ferrite_store::ChangeSetRepo;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
@@ -169,6 +171,9 @@ impl Repos for SqliteRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -256,4 +261,5 @@ delegate_repos!(
     locales: LocaleRepo,
     webhooks: WebhookRepo,
     plugin_trust: PluginTrustRepo,
+    change_sets: ChangeSetRepo,
 );

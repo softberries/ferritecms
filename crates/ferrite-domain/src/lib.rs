@@ -1,6 +1,7 @@
 //! Pure domain types shared by every FerriteCMS storage backend.
 
 mod auth;
+mod change_set;
 mod comment;
 mod content;
 mod event;
@@ -33,6 +34,10 @@ pub use auth::{
     OAuthPruned, OAuthRequest, RateHit, SESSION_ABSOLUTE, SESSION_IDLE, SESSION_TOUCH_EVERY,
     Session,
 };
+pub use change_set::{
+    AgentKind, CHANGE_SET_CURSOR_TAG, CHANGE_SETS_DAYS_OPTION, Change, ChangeSet, ChangeSetQuery,
+    ChangeSummary, Image, ImageState, NewChange, NewChangeSet,
+};
 pub use comment::{Comment, CommentQuery, CommentStatus};
 pub use content::{
     Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MEDIA_KIND,
@@ -40,6 +45,7 @@ pub use content::{
 };
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
+pub use ids::ChangeSetId;
 pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, ImportRunId, JobId, MenuItemId,
     NodeId, OAuthGrantId, OAuthRequestId, RedirectId, RevisionId, TermId, UserId,

@@ -356,6 +356,34 @@ pub fn rich_site() -> Dump {
             ]),
         ),
         (
+            "change_sets",
+            rows(vec![
+                json!({"id": uid(0xc01), "user_id": uid(U1), "agent_kind": "oauth",
+                       "agent_id": uid(0xc0f), "client": "Claude", "open_key": null,
+                       "started_at": T_PRE_1970, "last_at": T_NOW, "changes": 2,
+                       "reverted_at": T_NOW, "reverted_by": uid(U1)}),
+                json!({"id": uid(0xc02), "user_id": null, "agent_kind": "token",
+                       "agent_id": uid(0xc0e), "client": "API token cli",
+                       "open_key": "token:x", "started_at": T_NOW, "last_at": T_NOW,
+                       "changes": 0, "reverted_at": null, "reverted_by": null}),
+            ]),
+        ),
+        (
+            "change_set_changes",
+            rows(vec![
+                json!({"set_id": uid(0xc01), "seq": 1, "at": T_NOW, "op": "content.create",
+                       "object_kind": "content", "object_id": "x", "label": "Hello",
+                       "before_image": null, "before_hash": null, "after_image": "AP8=",
+                       "after_hash": "h1", "reverted_at": T_NOW, "reverted_by": uid(U1),
+                       "revert_forced": true}),
+                json!({"set_id": uid(0xc01), "seq": 2, "at": T_NOW, "op": "term.update",
+                       "object_kind": "term", "object_id": "y", "label": "",
+                       "before_image": "AP8=", "before_hash": "h2", "after_image": null,
+                       "after_hash": "h3", "reverted_at": null, "reverted_by": null,
+                       "revert_forced": false}),
+            ]),
+        ),
+        (
             "import_runs",
             rows(vec![json!({
                 "id": uid(0x901), "source": "wp:example", "token": "tok", "state": "done",

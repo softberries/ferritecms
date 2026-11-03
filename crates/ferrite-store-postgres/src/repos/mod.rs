@@ -2,6 +2,7 @@
 
 mod auth;
 mod autosave;
+mod change_set;
 mod comment;
 mod content;
 mod event;
@@ -29,6 +30,7 @@ mod webhook;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use ferrite_store::ChangeSetRepo;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
@@ -162,6 +164,9 @@ impl Repos for PgRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -252,4 +257,5 @@ delegate_repos!(
     locales: LocaleRepo,
     webhooks: WebhookRepo,
     plugin_trust: PluginTrustRepo,
+    change_sets: ChangeSetRepo,
 );

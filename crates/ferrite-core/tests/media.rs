@@ -909,6 +909,9 @@ impl Repos for FailingTx {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.plugin_trust()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.change_sets()
+    }
 }
 
 #[async_trait]

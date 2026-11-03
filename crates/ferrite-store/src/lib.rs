@@ -1,6 +1,7 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
 pub mod catalogue;
+mod change_set;
 mod error;
 mod export;
 mod import;
@@ -20,6 +21,10 @@ mod session;
 mod text;
 mod webhook;
 
+pub use change_set::{
+    ChangeSetRepo, MAX_CHANGES_READ, change_set_cursor, check_new_change, check_new_change_set,
+    encode_change_set_cursor,
+};
 pub use error::StoreError;
 pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
 pub use import::{check_import_map, check_import_run, token_from_db, token_to_db};
