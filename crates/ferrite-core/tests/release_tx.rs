@@ -234,6 +234,30 @@ async fn sandbox_sees_its_own_writes(db: &TestDb) {
     assert_eq!(store.read().content().get(item.id).await.unwrap(), None);
 }
 
+async fn sandbox_savepoint_commit_keeps_writes(db: &TestDb) {
+    let store = db.shared_store();
+    let user = fixture_user(store.as_ref()).await;
+    let sandbox = SandboxStore::begin(store.clone()).await.unwrap();
+    let nested = sandbox.tx().begin_nested().await.unwrap();
+    let item = nested
+        .content()
+        .insert(&new_post(&user, "in-savepoint"))
+        .await
+        .unwrap();
+    nested.commit().await.unwrap();
+    assert!(
+        sandbox
+            .read()
+            .content()
+            .get(item.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    sandbox.finish().await.unwrap();
+    assert_eq!(store.read().content().get(item.id).await.unwrap(), None);
+}
+
 async fn sandbox_rollback_leaves_no_rows(db: &TestDb) {
     let store = db.shared_store();
     let user = fixture_user(store.as_ref()).await;
@@ -296,6 +320,7 @@ backend_tests!(
     nested_savepoints_share_the_collector,
     sandbox_writes_no_event_job_audit_revision,
     sandbox_sees_its_own_writes,
+    sandbox_savepoint_commit_keeps_writes,
     sandbox_rollback_leaves_no_rows,
     postgres_sandbox_leaves_no_sequence_gap,
     sandbox_store_refuses_begin,

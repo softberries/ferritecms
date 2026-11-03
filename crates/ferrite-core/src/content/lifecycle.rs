@@ -567,6 +567,11 @@ async fn delete_in(
     // the event back with the `Tx`.
     let actor_id = Some(actor.user);
     crate::webhooks::emit_content(repos, permalinks, "content.deleted", &current, actor_id).await?;
+    // A link never outlives what it shows (D40).
+    repos
+        .preview_links()
+        .delete_for_target(&ferrite_domain::PreviewTarget::Item(id))
+        .await?;
     match repos.content().delete(id).await {
         Err(StoreError::ForeignKey { .. }) => {
             return Err(CoreError::Invalid("has children".into()));

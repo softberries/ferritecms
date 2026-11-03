@@ -75,8 +75,8 @@ use crate::{
 use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, ReadLocale, SiteRead, SitemapEntry, SitemapFile, SitemapPage,
-    TermPublic, TranslationLink, UserPublic, srcset,
+    PageItem, PreviewSource, Previewed, PublicItem, ReadLocale, SiteRead, SitemapEntry,
+    SitemapFile, SitemapPage, TermPublic, TranslationLink, UserPublic, srcset,
 };
 pub use tree::{ContentTree, TreeNode};
 
@@ -285,6 +285,16 @@ struct GroupMember {
 }
 
 /// The published-only read facade; see the module docs.
+/// The in-memory overlay of a working or staged preview.
+struct Overlay {
+    source: PreviewSource,
+    title: String,
+    excerpt: Option<String>,
+    body: serde_json::Value,
+    fields: serde_json::Value,
+    seo: Option<serde_json::Value>,
+}
+
 pub struct SiteReader {
     store: Arc<dyn Store>,
     permalinks: Arc<dyn Permalinks>,
@@ -331,6 +341,20 @@ impl SiteReader {
             clock: self.clock.clone(),
             image_width: AtomicU32::new(self.image_width.load(Ordering::Relaxed)),
             locale,
+        }
+    }
+
+    /// This reader reading through `store` (a release preview's sandbox, design 15
+    /// §5.2), sharing the permalinks, media URLs, clock, image width and locale.
+    pub fn with_store(&self, store: Arc<dyn Store>) -> SiteReader {
+        SiteReader {
+            store,
+            permalinks: self.permalinks.clone(),
+            sitemap_file_len: self.sitemap_file_len,
+            media_url: self.media_url.clone(),
+            clock: self.clock.clone(),
+            image_width: AtomicU32::new(self.image_width.load(Ordering::Relaxed)),
+            locale: self.locale.clone(),
         }
     }
 
@@ -1473,17 +1497,92 @@ impl SiteReader {
         actor: &Actor,
         id: ContentId,
     ) -> Result<SiteRead<Previewed>, CoreError> {
+        self.preview_with(actor, id, None).await
+    }
+
+    /// [`preview`](Self::preview) with `actor`'s autosave slot of the item overlaid in
+    /// memory (design 15 §3.1, D14): title, excerpt (derived from the body when unset),
+    /// body, fields and the SEO patch; slug, parent, menu order and terms as saved. No
+    /// slot: the stored item. Never validates, so a half-typed copy still previews.
+    pub async fn preview_working(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+    ) -> Result<SiteRead<Previewed>, CoreError> {
+        let slot = self.store.read().autosaves().get(id, actor.user).await?;
+        let overlay = slot.map(|a| Overlay {
+            source: PreviewSource::Working,
+            title: a.title,
+            excerpt: a.excerpt,
+            body: a.body,
+            fields: a.fields,
+            seo: a.seo,
+        });
+        self.preview_with(actor, id, overlay).await
+    }
+
+    /// [`preview`](Self::preview) with the staged change of the item's entry in
+    /// `release` overlaid as [`preview_working`](Self::preview_working) does. The actor
+    /// must see the release (§4.7); an entry without a change shows the stored item.
+    pub async fn preview_staged(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        release: ferrite_domain::ReleaseId,
+    ) -> Result<SiteRead<Previewed>, CoreError> {
+        let repos = self.store.read();
+        let r = repos
+            .releases()
+            .get(release)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        if !crate::release::may_see(actor, &r) {
+            return Err(CoreError::NotFound);
+        }
+        let entry = repos
+            .releases()
+            .entry(release, id)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let overlay = entry.changes.map(|c| Overlay {
+            source: PreviewSource::Staged,
+            title: c.title,
+            excerpt: c.excerpt,
+            body: c.body,
+            fields: c.fields,
+            seo: c.seo,
+        });
+        self.preview_with(actor, id, overlay).await
+    }
+
+    async fn preview_with(
+        &self,
+        actor: &Actor,
+        id: ContentId,
+        overlay: Option<Overlay>,
+    ) -> Result<SiteRead<Previewed>, CoreError> {
         let now = (self.clock)();
         // One set of rules for the whole read (R10).
         let pinned = self.permalinks.pin();
         let rules = pinned.as_ref();
         let repos = self.store.read();
-        let item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
+        let mut item = repos.content().get(id).await?.ok_or(CoreError::NotFound)?;
         if !can_read(actor, &item, now) {
             return Err(CoreError::Forbidden(Capability::EditOthers.as_str()));
         }
         if item.status == ContentStatus::Trash {
             return Err(CoreError::NotFound);
+        }
+        let mut source = (PreviewSource::Stored, None);
+        if let Some(o) = overlay {
+            item.excerpt = o
+                .excerpt
+                .unwrap_or_else(|| crate::blocks::excerpt(&o.body, crate::content::EXCERPT_CHARS));
+            item.title = o.title;
+            item.body = o.body;
+            item.body_html = None;
+            item.fields = o.fields;
+            source = (o.source, o.seo);
         }
         let mut deps = DepKeys::default();
         let status = item.status;
@@ -1494,7 +1593,7 @@ impl SiteReader {
             .pop()
             .ok_or(CoreError::NotFound)?;
         Ok(SiteRead {
-            value: Previewed::new(item, status),
+            value: Previewed::new(item, status).with_source(source.0, source.1),
             deps,
             cacheable: false,
         })

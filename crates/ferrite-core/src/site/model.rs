@@ -139,11 +139,51 @@ pub struct PageItem {
 pub struct Previewed {
     item: PageItem,
     status: ContentStatus,
+    source: PreviewSource,
+    seo: Option<serde_json::Value>,
+}
+
+/// What a preview shows (M6-3, design 15 §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewSource {
+    /// The item as stored.
+    Stored,
+    /// The caller's autosave slot over the stored item.
+    Working,
+    /// A release entry's staged change over the stored item.
+    Staged,
 }
 
 impl Previewed {
     pub(crate) fn new(item: PageItem, status: ContentStatus) -> Self {
-        Self { item, status }
+        Self {
+            item,
+            status,
+            source: PreviewSource::Stored,
+            seo: None,
+        }
+    }
+
+    pub(crate) fn with_source(
+        mut self,
+        source: PreviewSource,
+        seo: Option<serde_json::Value>,
+    ) -> Self {
+        self.source = source;
+        self.seo = seo;
+        self
+    }
+
+    /// Where the shown content comes from.
+    pub fn source(&self) -> PreviewSource {
+        self.source
+    }
+
+    /// The working copy's or staged change's SEO patch (`SeoPatch` JSON), applied over
+    /// the stored SEO meta for the head.
+    pub fn seo(&self) -> Option<&serde_json::Value> {
+        self.seo.as_ref()
     }
 
     pub fn item(&self) -> &PageItem {

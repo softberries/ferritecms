@@ -52,6 +52,9 @@ pub struct ApplyTx {
     inner: Box<dyn Tx>,
     mode: Mode,
     keys: Arc<Mutex<BTreeSet<String>>>,
+    /// A savepoint inside another `ApplyTx` (its commit releases the savepoint, also in
+    /// the sandbox).
+    nested: bool,
 }
 
 const READ_ONLY: StoreError = StoreError::Unsupported("preview is read-only");
@@ -63,6 +66,7 @@ impl ApplyTx {
             inner,
             mode,
             keys: Arc::new(Mutex::new(BTreeSet::new())),
+            nested: false,
         }
     }
 
@@ -112,7 +116,7 @@ impl ApplyTx {
 #[async_trait]
 impl Tx for ApplyTx {
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
-        if self.mode == Mode::Sandbox {
+        if self.mode == Mode::Sandbox && !self.nested {
             // A sandbox never commits.
             return self.inner.rollback().await;
         }
@@ -128,6 +132,7 @@ impl Tx for ApplyTx {
             inner: self.inner.begin_nested().await?,
             mode: self.mode,
             keys: self.keys.clone(),
+            nested: true,
         }))
     }
 }

@@ -22,6 +22,7 @@ mod menu;
 pub mod oauth;
 mod options;
 pub mod permalink;
+pub mod preview_link;
 mod redirects;
 pub mod release;
 pub mod seed;
@@ -72,8 +73,8 @@ pub use redirects::{
 };
 pub use site::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, ReadLocale, SiteRead, SiteReader, SitemapEntry, SitemapFile,
-    SitemapPage, TermPublic, TranslationLink, UserPublic,
+    PageItem, PreviewSource, Previewed, PublicItem, ReadLocale, SiteRead, SiteReader, SitemapEntry,
+    SitemapFile, SitemapPage, TermPublic, TranslationLink, UserPublic,
 };
 pub use system::{MetricsSeries, SystemService};
 pub use taxonomy::{NewTermInput, TaxonomyService, TermPlacement};
