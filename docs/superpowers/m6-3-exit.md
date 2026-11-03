@@ -66,7 +66,10 @@ Design: [15](../design/15-editing.md) (§19 "As built"). Plan:
 - Admin: `lint`, `typecheck`, `test` (156 files, 954 tests after the merge), `build`,
   `bundle:check` (no budget raised); E2E `live-preview`, `releases`, `workflows`, the editor
   specs, types, dashboard, revisions, palette and shell on `chromium-sqlite` and
-  `chromium-pg` (before the merge with M6-4/M6-5).
+  `chromium-pg` before the merge with M6-4/M6-5; after it, `live-preview`, `releases`,
+  `workflows`, `shell` and `editor-publish` on both (51 of 52 in the combined run;
+  `editor-publish` `phone_publish_bar` timed out once on SQLite under load and passed
+  alone).
 
 ## 3. Execution rulings
 
@@ -106,8 +109,8 @@ Design: [15](../design/15-editing.md) (§19 "As built"). Plan:
 
 ## 4. Not verified
 
-- The admin E2E after the merge with M6-4/M6-5 (Vitest, lint and typecheck ran); Firefox
-  and WebKit for the three new specs.
+- The full admin E2E suite after the merge (only the specs above); Firefox and WebKit for
+  the three new specs.
 - Real SMTP for review mail (the handler is tested with `MemoryMailer`); Safari; real
   devices; whether real browsers apply the theme stylesheet inside the sandboxed frame
   (Playwright's trace logged a CORS error).
