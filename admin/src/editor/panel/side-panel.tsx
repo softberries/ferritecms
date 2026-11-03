@@ -18,6 +18,7 @@ import { settingsQuery } from "@/api/settings";
 import { typesQuery } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { KbdCombo } from "@/components/kit/kbd-combo";
+import { useSiteLocales } from "@/lib/locales";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -38,6 +39,7 @@ import { SeoSection } from "./seo-section";
 import { SlugField } from "./slug-field";
 import { StatusSection } from "./status-section";
 import { TermsSection } from "./terms-section";
+import { TranslationsSection } from "./translations-section";
 
 /** The id of the panel's region (the toggle's `aria-controls`). */
 export const PANEL_ID = "editor-panel";
@@ -166,6 +168,7 @@ function PanelBody({
       {onRevisions && doc.item?.allowed.edit ? (
         <RevisionsEntry type={type} id={doc.item.id} onOpen={onRevisions} />
       ) : null}
+      <TranslationsPart doc={doc} type={type} />
       <Separator />
       <section aria-labelledby="panel-url" className="flex flex-col gap-4">
         <h3 id="panel-url" className="sr-only">
@@ -217,6 +220,18 @@ function PanelBody({
         </>
       ) : null}
     </div>
+  );
+}
+
+/** The Translations section with its separator, on a multilingual site only. */
+function TranslationsPart({ doc, type }: { doc: EditorDocument; type: string }) {
+  const locales = useSiteLocales();
+  if (!locales.multilingual || !doc.item) return null;
+  return (
+    <>
+      <Separator />
+      <TranslationsSection doc={doc} type={type} />
+    </>
   );
 }
 

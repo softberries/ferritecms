@@ -468,6 +468,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/content/{type}/{id}/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["translate_content"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/content/{type}/{id}/unpublish": {
         parameters: {
             query?: never;
@@ -1188,6 +1204,22 @@ export interface paths {
         patch: operations["update_term"];
         trace?: never;
     };
+    "/api/v1/terms/{id}/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["translate_term"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/themes": {
         parameters: {
             query?: never;
@@ -1721,6 +1753,8 @@ export interface components {
             fields: unknown;
             /** Format: uuid */
             id: string;
+            /** @description The item's locale (a tag of `GET /meta`'s `locales`). */
+            locale: string;
             /** Format: int32 */
             menu_order: number;
             /** Format: uuid */
@@ -1739,6 +1773,13 @@ export interface components {
             /** @description Term ids in their stored order. */
             terms: string[];
             title: string;
+            /**
+             * Format: uuid
+             * @description The id of the translation group's original (the item's own id when alone).
+             */
+            translation_group: string;
+            /** @description The other members of the item's translation group the caller may read. */
+            translations: components["schemas"]["TranslationRefDto"][];
             /** @description The content type (`post`, `page`, …). */
             type: string;
             /** Format: date-time */
@@ -1756,6 +1797,8 @@ export interface components {
             /** @description Derived from the body (160 characters) when absent. */
             excerpt?: string | null;
             fields?: Record<string, never>;
+            /** @description One of the site's locales (`GET /meta`); absent: the default. */
+            locale?: string | null;
             /** Format: int32 */
             menu_order?: number;
             /**
@@ -1769,6 +1812,12 @@ export interface components {
             /** @description Term ids, in order; duplicates are ignored. */
             terms?: string[];
             title: string;
+            /**
+             * Format: uuid
+             * @description An item of the same type whose translation group the new item joins (its locale
+             *     must be free there, else `409`).
+             */
+            translation_of?: string | null;
         };
         /** @description `GET /content/{type}`. */
         ContentList: {
@@ -1786,6 +1835,11 @@ export interface components {
             body?: Record<string, never>;
             excerpt?: string | null;
             fields?: Record<string, never>;
+            /**
+             * @description Moves the item to another of the site's locales (a published item's old path
+             *     redirects; not for an item with children).
+             */
+            locale?: string;
             /** Format: int32 */
             menu_order?: number;
             /** Format: uuid */
@@ -1800,6 +1854,11 @@ export interface components {
             /** @description Replaces the item's terms; `[]` removes them all. */
             terms?: string[];
             title?: string;
+            /**
+             * Format: uuid
+             * @description Joins the translation group of this item; `null` leaves the group.
+             */
+            translation_of?: string | null;
         };
         /** @description An item named by id (`GET /content/refs`). */
         ContentRefDto: {
@@ -1837,6 +1896,8 @@ export interface components {
             fields: unknown;
             /** Format: uuid */
             id: string;
+            /** @description The item's locale. */
+            locale: string;
             /** Format: int32 */
             menu_order: number;
             /** Format: uuid */
@@ -1848,6 +1909,8 @@ export interface components {
             slug: string;
             status: string;
             title: string;
+            /** @description The other members of its translation group the caller may read. */
+            translations: components["schemas"]["TranslationStatusDto"][];
             type: string;
             /** Format: date-time */
             updated_at: string;
@@ -2296,6 +2359,23 @@ export interface components {
             /** Format: int64 */
             requested: number;
         };
+        /** @description One entry of `site.locales`. */
+        LocaleEntryDto: {
+            /** @description What the language switcher shows (1–50 characters; default the native name). */
+            label?: string | null;
+            /**
+             * @description A BCP 47 tag `language[-Script][-REGION]` (e.g. `de`, `pt-BR`); its lowercase is
+             *     the URL prefix of a non-default locale.
+             */
+            tag: string;
+        };
+        /** @description The texts of one locale in `site.locale_texts`. */
+        LocaleTextDto: {
+            /** @description At most 1000 characters. */
+            description?: string | null;
+            /** @description At most 200 characters. */
+            title?: string | null;
+        };
         /** @description `POST /auth/login`. */
         LoginRequest: {
             /** @description Login or e-mail address. */
@@ -2450,8 +2530,12 @@ export interface components {
         MenuDto: {
             items: components["schemas"]["MenuItemDto"][];
             label: string;
+            /** @description The menu's locale. */
+            locale: string;
             /** @description Lowercase, no whitespace or `/` (a theme's menu location, e.g. `primary`). */
             name: string;
+            /** @description The default-locale menu this one translates (`primary` for `primary-de`). */
+            translation_of?: string | null;
         };
         /**
          * @description `PUT /menus/{name}`: the whole menu (the path names it; a `name` member, if sent,
@@ -2462,7 +2546,11 @@ export interface components {
             items?: components["schemas"]["MenuItemDto"][];
             /** @description At most 200 characters. */
             label?: string;
+            /** @description One of the site's locales; absent: the stored menu's (a new menu: the default). */
+            locale?: string | null;
             name?: string | null;
+            /** @description The name of the default-locale menu this one translates; absent or `null`: none. */
+            translation_of?: string | null;
         };
         /**
          * @description One menu entry. The tree is flat: `parent_id` names another entry of the same menu
@@ -2513,19 +2601,36 @@ export interface components {
             /** @description The location, and the name of the menu the theme shows there. */
             name: string;
         };
-        /** @description A menu's name and label. */
+        /** @description A menu's name, label and locale. */
         MenuSummary: {
             label: string;
+            locale: string;
             name: string;
+            /** @description The default-locale menu this one translates. */
+            translation_of?: string | null;
         };
         /** @description The API version and the site it serves. */
         MetaDto: {
             /** @description Always `v1` under `/api/v1`. */
             api: string;
+            /** @description The default locale's tag (M6-1). */
+            default_locale: string;
+            /**
+             * @description Every locale of the site, the default first (public: the `hreflang` links show
+             *     them anyway, design 13 D19).
+             */
+            locales: components["schemas"]["MetaLocaleDto"][];
             /** @description `site.url`. */
             site_url: string;
             /** @description The FerriteCMS version serving the request. */
             version: string;
+        };
+        /** @description One of the site's locales. */
+        MetaLocaleDto: {
+            label: string;
+            /** @description The URL prefix (`de` for `/de/`); `null` for the default locale. */
+            prefix?: string | null;
+            tag: string;
         };
         /** @description `GET /system/metrics/series`: every bucket of the range, ascending (dense). */
         MetricsSeriesDto: {
@@ -3250,6 +3355,16 @@ export interface components {
             "site.description"?: string | null;
             /** @description 1 to 35 ASCII letters, digits, `-` or `_` (e.g. `en`, `pt-BR`). */
             "site.locale"?: string | null;
+            /** @description The site title and tagline per non-default locale, keyed by its tag. */
+            "site.locale_texts"?: {
+                [key: string]: components["schemas"]["LocaleTextDto"];
+            } | null;
+            /**
+             * @description The site's locales, the default first (1–20). A prefix that would shadow a
+             *     route, type, taxonomy or top-level page is `422`; removing a locale that still
+             *     holds content is `409` with the counts. Cannot be reset to `null`.
+             */
+            "site.locales"?: components["schemas"]["LocaleEntryDto"][] | null;
             /** @description At most 200 characters. */
             "site.title"?: string | null;
         };
@@ -3315,16 +3430,25 @@ export interface components {
             description: string;
             /** Format: uuid */
             id: string;
+            /** @description The term's locale. */
+            locale: string;
             name: string;
             /** Format: uuid */
             parent_id?: string | null;
             /** @description Unique in the taxonomy; the archive is `/{taxonomy}/{slug}/`. */
             slug: string;
             taxonomy: string;
+            /**
+             * Format: uuid
+             * @description The id of the term translation group's original.
+             */
+            translation_group: string;
         };
         /** @description `POST /taxonomies/{taxonomy}/terms`. */
         TermInput: {
             description?: string;
+            /** @description One of the site's locales; absent: the default. */
+            locale?: string | null;
             /** @description Not empty after trimming. */
             name: string;
             /**
@@ -3334,6 +3458,11 @@ export interface components {
             parent_id?: string | null;
             /** @description Derived from the name when absent; a taken slug gets `-2`, `-3`, …. */
             slug?: string | null;
+            /**
+             * Format: uuid
+             * @description A term of the same taxonomy whose translation group the new term joins.
+             */
+            translation_of?: string | null;
         };
         /** @description `GET /taxonomies/{taxonomy}/terms`: every term of the taxonomy. */
         TermList: {
@@ -3352,6 +3481,11 @@ export interface components {
             parent_id?: string | null;
             /** @description A taken slug gets `-2`, `-3`, …. */
             slug?: string;
+        };
+        /** @description The body of `POST /terms/{id}/translations`. */
+        TermTranslateInput: {
+            /** @description One of the site's locales the term's group has no member in yet. */
+            locale: string;
         };
         /**
          * Format: binary
@@ -3578,6 +3712,35 @@ export interface components {
             otpauth_url: string;
             secret_base32: string;
         };
+        /** @description `POST /content/{type}/{id}/translations`. */
+        TranslateInput: {
+            /** @description The target locale (one of the site's, not the item's). */
+            locale: string;
+        };
+        /** @description The new translation (`201`) and what it could not take over. */
+        TranslationCreated: {
+            item: components["schemas"]["ContentDto"];
+            /** @description `parent_untranslated`, `term_untranslated:<term id>`. */
+            notes: string[];
+        };
+        /** @description Another item of a translation group. */
+        TranslationRefDto: {
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            /** @description The public path (whatever the status). */
+            permalink: string;
+            /** @description `draft`, `pending`, `scheduled`, `published`, `private` or `trash`. */
+            status: string;
+            title: string;
+        };
+        /** @description A list row's translation: its locale and status. */
+        TranslationStatusDto: {
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            status: string;
+        };
         /**
          * @description A user account. Only the user themselves and accounts with `manage_users` can read
          *     one, so `email` is never shown to anyone else.
@@ -3709,6 +3872,8 @@ export type SchemaJobCountsDto = components['schemas']['JobCountsDto'];
 export type SchemaJobDto = components['schemas']['JobDto'];
 export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaLimitItemDto = components['schemas']['LimitItemDto'];
+export type SchemaLocaleEntryDto = components['schemas']['LocaleEntryDto'];
+export type SchemaLocaleTextDto = components['schemas']['LocaleTextDto'];
 export type SchemaLoginRequest = components['schemas']['LoginRequest'];
 export type SchemaLoginResponse = components['schemas']['LoginResponse'];
 export type SchemaMailStatusDto = components['schemas']['MailStatusDto'];
@@ -3727,6 +3892,7 @@ export type SchemaMenuList = components['schemas']['MenuList'];
 export type SchemaMenuLocationDto = components['schemas']['MenuLocationDto'];
 export type SchemaMenuSummary = components['schemas']['MenuSummary'];
 export type SchemaMetaDto = components['schemas']['MetaDto'];
+export type SchemaMetaLocaleDto = components['schemas']['MetaLocaleDto'];
 export type SchemaMetricsSeriesDto = components['schemas']['MetricsSeriesDto'];
 export type SchemaMetricsSummaryDto = components['schemas']['MetricsSummaryDto'];
 export type SchemaNodeCountsDto = components['schemas']['NodeCountsDto'];
@@ -3788,6 +3954,7 @@ export type SchemaTermDto = components['schemas']['TermDto'];
 export type SchemaTermInput = components['schemas']['TermInput'];
 export type SchemaTermList = components['schemas']['TermList'];
 export type SchemaTermPatch = components['schemas']['TermPatch'];
+export type SchemaTermTranslateInput = components['schemas']['TermTranslateInput'];
 export type SchemaThemeBundle = components['schemas']['ThemeBundle'];
 export type SchemaThemeDto = components['schemas']['ThemeDto'];
 export type SchemaThemeImageDto = components['schemas']['ThemeImageDto'];
@@ -3805,6 +3972,10 @@ export type SchemaTotpConfirm = components['schemas']['TotpConfirm'];
 export type SchemaTotpDisable = components['schemas']['TotpDisable'];
 export type SchemaTotpLoginRequest = components['schemas']['TotpLoginRequest'];
 export type SchemaTotpSetupDto = components['schemas']['TotpSetupDto'];
+export type SchemaTranslateInput = components['schemas']['TranslateInput'];
+export type SchemaTranslationCreated = components['schemas']['TranslationCreated'];
+export type SchemaTranslationRefDto = components['schemas']['TranslationRefDto'];
+export type SchemaTranslationStatusDto = components['schemas']['TranslationStatusDto'];
 export type SchemaUserDto = components['schemas']['UserDto'];
 export type SchemaUserInput = components['schemas']['UserInput'];
 export type SchemaUserList = components['schemas']['UserList'];
@@ -4777,6 +4948,8 @@ export interface operations {
                 limit?: number;
                 /** @description `next_cursor` of the previous page of the same query. */
                 cursor?: string;
+                /** @description Only items in this locale (one of `GET /meta`'s; another is `400 invalid-locale`). */
+                locale?: string;
             };
             header?: never;
             path: {
@@ -4926,7 +5099,10 @@ export interface operations {
     };
     count_content: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only items in this locale (`400 invalid-locale` for another). */
+                locale?: string;
+            };
             header?: never;
             path: {
                 /** @description Content type */
@@ -4943,6 +5119,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContentCountsDto"];
+                };
+            };
+            /** @description `invalid-locale` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
             /** @description `unauthenticated` */
@@ -6064,6 +6249,87 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    translate_content: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranslateInput"];
+            };
+        };
+        responses: {
+            /** @description The new draft translation (`Location`) and its notes */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationCreated"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (needs `edit_own`, `content:write`) or `csrf` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such item the caller may read */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: the locale has a translation already (`detail` names its id) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`locale`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9490,7 +9756,10 @@ export interface operations {
     };
     list_terms: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only terms in this locale (`400 invalid-locale` for another). */
+                locale?: string;
+            };
             header?: never;
             path: {
                 /** @description Taxonomy */
@@ -9500,13 +9769,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every term of the taxonomy */
+            /** @description Every term of the taxonomy (in `locale` when given) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["TermList"];
+                };
+            };
+            /** @description `invalid-locale` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
             /** @description `unauthenticated` */
@@ -9608,7 +9886,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation` (name, slug, parent) */
+            /** @description `validation` (name, slug, parent, `locale`, `translation_of`: another taxonomy or a locale its group has already) */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -9803,6 +10081,86 @@ export interface operations {
                 };
             };
             /** @description `validation` (name, slug, parent) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    translate_term: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TermTranslateInput"];
+            };
+        };
+        responses: {
+            /** @description The new term in `locale`, same name and slug, in the term's translation group (`Location`) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TermDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_terms`, `terms:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: the group has a term in that locale already */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`locale`) */
             422: {
                 headers: {
                     [name: string]: unknown;

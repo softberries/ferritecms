@@ -29,6 +29,8 @@ export interface ListSearch {
   term?: string;
   /** Absent = `updated`. */
   order?: Exclude<ListOrder, "updated">;
+  /** Only items in this locale (M6-1); absent = every locale. */
+  locale?: string;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -52,6 +54,11 @@ const schema = z.object({
     .catch(undefined),
   term: z.string().regex(UUID).optional().catch(undefined),
   order: z.enum(LIST_ORDERS).optional().catch(undefined),
+  locale: z
+    .string()
+    .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$/)
+    .optional()
+    .catch(undefined),
 });
 
 /** `validateSearch` of the route: valid members only, defaults omitted. */
@@ -63,12 +70,18 @@ export function parseListSearch(raw: Record<string, unknown>): ListSearch {
   if (parsed.mine === true) out.mine = true;
   if (parsed.term !== undefined) out.term = parsed.term.toLowerCase();
   if (parsed.order !== undefined && parsed.order !== "updated") out.order = parsed.order;
+  if (parsed.locale !== undefined) out.locale = parsed.locale;
   return out;
 }
 
 /** Whether `search` narrows the list beyond its status tab (for the empty state). */
 export function hasFilters(search: ListSearch): boolean {
-  return search.q !== undefined || search.mine === true || search.term !== undefined;
+  return (
+    search.q !== undefined ||
+    search.mine === true ||
+    search.term !== undefined ||
+    search.locale !== undefined
+  );
 }
 
 /** Whether a filter chip is inactive because a search is running (07 §1: `q` excludes them). */
@@ -83,6 +96,7 @@ export function searchDisables(search: ListSearch): boolean {
 export function listQuery(search: ListSearch, meId: string): Omit<ContentListQuery, "cursor"> {
   const query: Omit<ContentListQuery, "cursor"> = { limit: LIST_PAGE_SIZE };
   if (search.status !== undefined) query.status = search.status;
+  if (search.locale !== undefined) query.locale = search.locale;
   if (search.q !== undefined) {
     query.q = search.q;
     return query;

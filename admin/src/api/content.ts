@@ -14,6 +14,7 @@ import type {
   SchemaRevisionDto,
   SchemaRevisionList,
   SchemaScheduleRequest,
+  SchemaTranslationCreated,
   operations,
 } from "./schema";
 
@@ -102,6 +103,23 @@ export function patchContent(
     api.PATCH("/api/v1/content/{type}/{id}", {
       params: { path: { type, id }, header: ifMatch(version) },
       body,
+    }),
+  );
+}
+
+/**
+ * `POST /content/{type}/{id}/translations`: a draft copy of the item in `locale`, in its
+ * translation group, and what it could not carry over (`notes`; M6-1).
+ */
+export function translateContent(
+  type: string,
+  id: string,
+  locale: string,
+): Promise<SchemaTranslationCreated> {
+  return unwrap(
+    api.POST("/api/v1/content/{type}/{id}/translations", {
+      params: { path: { type, id } },
+      body: { locale },
     }),
   );
 }

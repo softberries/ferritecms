@@ -14,7 +14,8 @@ import type { SchemaContentSummaryDto } from "@/api/schema";
 import { dataTableColumns } from "@/components/kit/data-table-features";
 import { RelativeTime } from "@/components/kit/relative-time";
 import { StatusDot } from "@/components/kit/status-badge";
-import { StatusCell, UnavailableParent } from "./list-cells";
+import type { SiteLocales } from "@/lib/locales";
+import { LocaleChips, StatusCell, UnavailableParent } from "./list-cells";
 import type { ParentState } from "./parent-ref";
 
 export type ContentSummary = SchemaContentSummaryDto;
@@ -49,9 +50,11 @@ export interface ListColumnsOptions {
   hierarchical: boolean;
   /** Parents by id: from the loaded rows, or resolved one by one (`parent-ref.ts`). */
   parents: ReadonlyMap<string, ParentState>;
+  /** The site's locales: a multilingual site gets the Language column (M6-1). */
+  locales: SiteLocales;
 }
 
-export function useListColumns({ type, hierarchical, parents }: ListColumnsOptions) {
+export function useListColumns({ type, hierarchical, parents, locales }: ListColumnsOptions) {
   const { t } = useTranslation("content");
   const { t: tc } = useTranslation();
   return useMemo(() => {
@@ -130,6 +133,15 @@ export function useListColumns({ type, hierarchical, parents }: ListColumnsOptio
             }),
           ]
         : []),
+      ...(locales.multilingual
+        ? [
+            col.display({
+              id: "locale",
+              header: () => t("locale.column"),
+              cell: (c) => <LocaleChips item={c.row.original} locales={locales} />,
+            }),
+          ]
+        : []),
       col.accessor("status", {
         header: () => t("columns.status"),
         cell: (c) => <StatusCell item={c.row.original} />,
@@ -168,12 +180,13 @@ export function useListColumns({ type, hierarchical, parents }: ListColumnsOptio
       }),
     ];
     return col.columns(columns);
-  }, [type, hierarchical, parents, t, tc]);
+  }, [type, hierarchical, parents, locales, t, tc]);
 }
 
 /** Which columns hide at which width (`DataTable.columnClassName`). */
 export const COLUMN_CLASSES: Record<string, string> = {
   parent: "hidden lg:table-cell",
+  locale: "hidden md:table-cell",
   status: "hidden md:table-cell",
   author: "hidden lg:table-cell",
   date: "hidden md:table-cell",

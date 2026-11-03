@@ -581,5 +581,20 @@
     "cancel": "Cancel",
     "empty": "No video URL yet",
     "shownAsLink": "The site shows this URL as a link."
+  },
+  "translations": {
+    "heading": "Translations",
+    "language": "Language: {{locale}} ({{tag}})",
+    "untitled": "Untitled",
+    "translate": "Translate into {{locale}}",
+    "making": "Making the draft…",
+    "made": "Draft in {{locale}} made. Translate it, then publish it.",
+    "failed": "The translation could not be made.",
+    "saveFirst": "Save your changes first: a translation starts from the saved version.",
+    "notes": {
+      "parentUntranslated": "Its parent page has no translation in that language yet, so it has no parent.",
+      "termUntranslated": "Some terms have no translation in that language and were left off.",
+      "other": "Some details could not be carried over."
+    }
   }
 }

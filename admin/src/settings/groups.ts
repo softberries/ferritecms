@@ -3,6 +3,7 @@
 import {
   BookOpenIcon,
   ImageIcon,
+  LanguagesIcon,
   Link2Icon,
   MailIcon,
   MessageSquareIcon,
@@ -13,6 +14,7 @@ import {
 
 export const SETTINGS_GROUPS = [
   "general",
+  "languages",
   "reading",
   "permalinks",
   "comments",
@@ -27,6 +29,7 @@ export const isSettingsGroup = (s: string): s is SettingsGroup =>
 
 export const GROUP_ICONS: Record<SettingsGroup, LucideIcon> = {
   general: SlidersHorizontalIcon,
+  languages: LanguagesIcon,
   reading: BookOpenIcon,
   permalinks: Link2Icon,
   comments: MessageSquareIcon,
@@ -38,6 +41,7 @@ export const GROUP_ICONS: Record<SettingsGroup, LucideIcon> = {
 /** The group's key under `settings.groups` (i18n keys cannot hold `-`). */
 export const GROUP_KEYS = {
   general: "general",
+  languages: "languages",
   reading: "reading",
   permalinks: "permalinks",
   comments: "comments",

@@ -193,5 +193,13 @@
     "bodyMany_other": "You won't be able to restore these {{count}} items yourself. An editor can restore them from the trash.",
     "confirm_one": "Move to trash",
     "confirm_other": "Move {{count}} to trash"
+  },
+  "locale": {
+    "title": "Language",
+    "all": "All languages",
+    "label": "Language: {{locale}}, change",
+    "column": "Language",
+    "chip": "{{locale}}: {{status}}",
+    "missing": "Not translated into {{locale}}"
   }
 }

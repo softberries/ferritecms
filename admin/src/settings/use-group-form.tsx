@@ -141,6 +141,8 @@ export function useGroupForm<S extends Specs>(
         return t("settings.errors.integer", { min: p.min, max: p.max });
       case "pickPage":
         return t("settings.errors.pickPage");
+      case "localeList":
+        return t(`settings.errors.localeList.${p.detail}`);
       case "permalink": {
         const d = p.detail;
         return "segment" in d

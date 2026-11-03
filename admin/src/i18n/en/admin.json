@@ -415,12 +415,23 @@
         "noParentPath": "Pages need %parent_path%, or sub-pages would share addresses.",
         "routeWord": "“{{segment}}” starts author, page or search addresses and cannot start this one.",
         "year": "“{{segment}}” looks like a year archive and cannot start an address."
+      },
+      "localeList": {
+        "empty": "The site needs at least one language.",
+        "tooMany": "At most 20 languages.",
+        "badTag": "One of the tags is not a language tag, such as de or pt-BR.",
+        "duplicate": "Two languages have the same tag.",
+        "labelTooLong": "A label has more than 50 characters."
       }
     },
     "groups": {
       "general": {
         "title": "General",
         "description": "The site's name, tagline and language."
+      },
+      "languages": {
+        "title": "Languages",
+        "description": "The languages the site is written in. The first is the default; every other one gets its own address prefix, such as /de/."
       },
       "reading": {
         "title": "Reading",
@@ -557,6 +568,26 @@
       "testNeedsSystem": "Sending a test e-mail needs System access.",
       "sent": "Test e-mail queued for {{to}}",
       "notSent": "Test e-mail not sent"
+    },
+    "languages": {
+      "default": "Default",
+      "makeDefault": "Make default",
+      "remove": "Remove {{tag}}",
+      "labelFor": "Label of {{tag}}",
+      "labelPlaceholder": "Name shown to visitors",
+      "tag": "Language tag",
+      "tagHint": "Such as de, fr or pt-BR.",
+      "label": "Label",
+      "add": "Add language",
+      "badTag": "Not a language tag. Use a language like de, optionally with a region like pt-BR.",
+      "duplicate": "The site has this language already.",
+      "tooMany": "At most {{max}} languages.",
+      "changeDefault": {
+        "title": "Change the default language?",
+        "body": "Content in {{from}} will move under its own prefix and content in {{to}} will lose its prefix. Old addresses are not redirected.",
+        "cancel": "Cancel",
+        "confirm": "Change the default"
+      }
     }
   },
   "themes": {
