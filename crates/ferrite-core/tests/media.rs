@@ -901,6 +901,10 @@ impl Repos for FailingTx {
     fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
         self.inner.webhooks()
     }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.plugin_trust()
+    }
 }
 
 #[async_trait]

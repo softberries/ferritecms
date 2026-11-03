@@ -595,13 +595,28 @@ with OpenAPI and MCP cover headless use).
 
 ### M6-2 — Plugin trust
 
-- [ ] Publisher keys (minisign, as releases use) and a signature over the plugin bundle;
+- [x] Publisher keys (minisign, as releases use) and a signature over the plugin bundle;
   install verifies it and the permission report shows the verified publisher.
-- [ ] Plugin data and sealed secrets keyed by publisher and name, so a same-named plugin from
-  another publisher cannot read them (05 §2, M2a-2a R22).
-- [ ] A registry index (a signed static JSON file, hostable on GitHub Pages):
+- [x] Plugin data and sealed secrets keyed by publisher and name, so a same-named plugin from
+  another publisher cannot read them (05 §2, M2a-2a R22). As built: the name's data is bound
+  to its publisher (`plugin_owners`, design 14 D12) rather than re-keyed.
+- [x] A registry index (a signed static JSON file, hostable on GitHub Pages):
   `ferrite plugin search|install NAME`, update checks on the Plugins screen, and the three
-  example plugins published there.
+  example plugins published there. As built (ruling P5): the publishing steps run once the
+  user creates the plugin and registry keys (09 §7 "Plugin keys"); until then the plugins
+  ship unsigned and no index is published.
+
+M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
+
+- [ ] Create the plugin publisher key and the registry key, commit `crates/ferrite/registry.pub`
+  and the key in `registry/publishers.json`, store the four secrets; then the first signed
+  release and the first Pages publication of the index (neither run yet).
+- [ ] Content meta under `plugin.<name>.*` is not erased with a plugin's data, so a new owner
+  of a freed name can read it (design 14 §12; ruling P5: Later).
+- [ ] Record a failed first registry fetch when there is no cache row yet (the Plugins screen
+  and doctor then show only "not checked yet").
+- [ ] A submission flow for third-party publishers, signed theme bundles, a transparency log
+  of index versions, an index expiry (design 14 §14).
 
 ### M6-3 — Editing
 

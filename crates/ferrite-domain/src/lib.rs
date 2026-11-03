@@ -14,6 +14,8 @@ mod metrics;
 mod node;
 mod page;
 mod plugin;
+pub mod plugin_registry;
+pub mod plugin_trust;
 mod search;
 mod secret;
 mod setting;

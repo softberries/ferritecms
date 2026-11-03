@@ -33,10 +33,13 @@ ferritecms/
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
 │   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
+│   │                             #   M6-2: `plugin_trust` (keys, owner ids, rows),
+│   │                             #   `plugin_registry` (the signed index format, schema 1)
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
 │   │                             #   the table `catalogue`, `export` reader, `import_writer`;
 │   │                             #   M4-2: `MigrateReport`, `NodeMetricsRepo` (`node_metrics`,
-│   │                             #   skipped by the catalogue like `jobs`)
+│   │                             #   skipped by the catalogue like `jobs`); M6-2:
+│   │                             #   `PluginTrustRepo` (`0015_plugin_publishers`)
 │   ├── ferrite-store-sqlite/     # (built) SQLite impl + migrations/
 │   ├── ferrite-store-postgres/   # (built) Postgres impl + migrations/
 │   ├── ferrite-store-tests/      # (built) contract test suite run against both backends;
@@ -76,7 +79,9 @@ ferritecms/
 │   │                             #   (`page_tree.rs`), `query(order=)`
 │   ├── ferrite-plugin-host/      # (built) wasmtime engine, capability linker, limits, registry,
 │   │                             #   output validation + ammonia sanitising, call tracing;
-│   │                             #   M2a-2a: grants, permission report, call cap, render budget
+│   │                             #   M2a-2a: grants, permission report, call cap, render budget;
+│   │                             #   M6-2: `trust` (minisign verify for plugins, the index
+│   │                             #   and self-update; the signing payload)
 │   ├── ferrite-http/             # (built, M1c-2: public site, router, head, plugin wiring;
 │   │                             #   M2a-1: REST API v1 in `src/api/`, previews, logged-in requests;
 │   │                             #   M2a-2a: extensions/settings/reset endpoints, the install
@@ -94,7 +99,10 @@ ferritecms/
 │   │                             #   metrics registry and `/metrics` text (`metrics`), HSTS
 │   │                             #   and the redirect app (`tls`), the series endpoint;
 │   │                             #   M6-6: `webhook_send::WebhookClient` over the egress
-│   │                             #   resolver and the `/webhooks` endpoints))
+│   │                             #   resolver and the `/webhooks` endpoints;
+│   │                             #   M6-2: signed uploads and registry installs in the
+│   │                             #   installer (`extensions/{trust,registry}.rs`), the
+│   │                             #   SSRF-checked `registry_fetch`, `api/plugin_registry.rs`))
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`

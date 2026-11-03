@@ -153,6 +153,14 @@ With `backend = "s3"`:
 | `disable_after_failures` | `20` | failures within `failure_window` that disable a plugin |
 | `failure_window` | `"10m"` | |
 | `volatile_ttl` | `"60s"` | how long a page whose plugin calls failed or were marked volatile stays cached, 1 s to 1 h |
+| `signatures` | `"any"` | which plugins installs and updates accept: `any` (unsigned too), `signed`, or `trusted` (keys from the registry or `ferrite plugin keys trust` only) |
+| `registry` | the official registry URL | the plugin registry index, `https://…` or `file:///absolute/path/index.json`; `""` turns it off |
+| `registry_key` | none | the registry's minisign public key; required for any registry other than the official one |
+| `registry_check` | `"off"` | `"daily"` checks the registry for updates and revoked keys once a day; otherwise only on demand |
+
+Cluster nodes must use the same `signatures` and `registry` values. The official registry
+needs a key built into the binary; a build without one has it off until `registry_key` is
+set.
 
 ## [auth]
 

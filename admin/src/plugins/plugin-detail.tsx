@@ -3,11 +3,19 @@
 // nodes that loaded it (a failed node with its scrubbed error), its metrics, its
 // settings, its permission report (the grant it was approved with) and Delete with the
 // two choices of H-P3. A broken plugin (`report: null`, H-P2) says why it does not load.
+// M6-2: a Publisher section (verified, signed, unsigned or revoked; the signing key; how
+// it arrived; whose data it holds) and Update when the registry offers a newer version.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ExternalLinkIcon, PowerIcon, PowerOffIcon, Trash2Icon } from "lucide-react";
+import {
+  ArrowUpCircleIcon,
+  ExternalLinkIcon,
+  PowerIcon,
+  PowerOffIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -22,9 +30,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { safeHomepage } from "@/appearance/theme-model";
 import { Panel } from "@/dashboard/panel";
 import { DeletePluginDialog } from "./delete-plugin-dialog";
+import { InstallPluginDialog } from "./install-flow";
 import { PermissionReport } from "./permission-report";
 import { PluginMetrics } from "./plugin-metrics";
-import { forgetPlugin, nodeStatus, pluginState } from "./plugin-model";
+import { forgetPlugin, nodeStatus, pluginState, publisherText } from "./plugin-model";
 import { PluginStateBadge } from "./plugin-parts";
 import { PluginSettings } from "./plugin-settings";
 
@@ -34,6 +43,7 @@ export function PluginDetail({ name }: { name: string }) {
   const navigate = useNavigate();
   const plugin = useQuery(pluginQuery(name));
   const [deleting, setDeleting] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const toggle = useMutation({
     mutationFn: (p: PluginDto) => (p.enabled ? disablePlugin(p.name) : enablePlugin(p.name)),
     onSuccess: (p) => {
@@ -80,6 +90,20 @@ export function PluginDetail({ name }: { name: string }) {
         }
         actions={
           <>
+            {p.trust.update ? (
+              <Button
+                variant="outline"
+                data-slot="plugin-update"
+                aria-label={t("plugins.trust.updateLabel", {
+                  name: p.name,
+                  version: p.trust.update.version,
+                })}
+                onClick={() => setUpdating(true)}
+              >
+                <ArrowUpCircleIcon data-icon="inline-start" />
+                {t("plugins.trust.update", { version: p.trust.update.version })}
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               className="text-destructive hover:text-destructive pointer-coarse:min-h-11"
@@ -120,11 +144,9 @@ export function PluginDetail({ name }: { name: string }) {
           <PluginStateBadge plugin={p} />
         </li>
         <li className="tabular-nums">{t("plugins.facts.version", { version: p.version })}</li>
-        {p.publisher ? (
-          <li data-slot="plugin-publisher" className="min-w-0 break-words">
-            {t("plugins.facts.publisher", { publisher: p.publisher })}
-          </li>
-        ) : null}
+        <li data-slot="plugin-publisher" data-trust={p.trust.state} className="min-w-0 break-words">
+          {publisherText(t, p)}
+        </li>
         {p.license ? (
           <li data-slot="plugin-license" className="min-w-0 break-words">
             {t("plugins.facts.license", { license: p.license })}
@@ -171,6 +193,9 @@ export function PluginDetail({ name }: { name: string }) {
           </section>
         </div>
         <div className="flex min-w-0 flex-col gap-5">
+          <Panel title={t("plugins.trust.publisherSection")}>
+            <Publisher plugin={p} />
+          </Panel>
           <Panel title={t("plugins.nodes.title")} description={t("plugins.nodes.description")}>
             <Nodes plugin={p} />
           </Panel>
@@ -186,6 +211,17 @@ export function PluginDetail({ name }: { name: string }) {
           </Panel>
         </div>
       </div>
+      <InstallPluginDialog
+        open={updating}
+        onOpenChange={setUpdating}
+        registry={p.trust.update ? { name: p.name, version: p.trust.update.version } : null}
+        onInstalled={(np) => {
+          toast.success(t("plugins.install.installed", { name: np.name }));
+          queryClient.setQueryData(qk.plugin(np.name), np);
+          void queryClient.invalidateQueries({ queryKey: qk.plugins });
+          void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+        }}
+      />
       <DeletePluginDialog
         name={deleting ? p.name : null}
         onClose={() => setDeleting(false)}
@@ -258,5 +294,47 @@ function Nodes({ plugin }: { plugin: PluginDto }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Who made the plugin and whose data it holds (M6-2). */
+function Publisher({ plugin: p }: { plugin: PluginDto }) {
+  const { t } = useTranslation("admin");
+  const trust = p.trust;
+  const kind = trust.source?.kind;
+  return (
+    <dl data-slot="plugin-trust" className="flex flex-col gap-2 text-sm">
+      <div className="flex flex-col gap-0.5">
+        <dt className="text-muted-foreground">{t("plugins.trust.label")}</dt>
+        <dd className="break-words text-foreground">{publisherText(t, p)}</dd>
+      </div>
+      {trust.signer ? (
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-muted-foreground">{t("plugins.trust.key")}</dt>
+          <dd className="font-mono text-xs break-all text-foreground">{trust.signer.key_id}</dd>
+        </div>
+      ) : null}
+      {kind === "upload" || kind === "folder" || kind === "registry" ? (
+        <div className="flex flex-col gap-0.5">
+          <dd className="break-words text-muted-foreground">
+            {t(`plugins.trust.arrived.${kind}`)}
+            {trust.source?.url ? (
+              <span className="block font-mono text-xs break-all">{trust.source.url}</span>
+            ) : null}
+          </dd>
+        </div>
+      ) : null}
+      <div className="flex flex-col gap-0.5">
+        <dt className="text-muted-foreground">{t("plugins.trust.owner")}</dt>
+        <dd className="break-words text-foreground">
+          {trust.owner ? trust.owner.label : t("plugins.trust.noOwner")}
+        </dd>
+      </div>
+      {trust.update && !trust.update.publisher_matches ? (
+        <p className="text-xs text-muted-foreground">
+          {t("plugins.trust.updateUnbound", { name: p.name })}
+        </p>
+      ) : null}
+    </dl>
   );
 }

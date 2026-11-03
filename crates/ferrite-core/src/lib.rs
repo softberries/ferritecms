@@ -48,7 +48,9 @@ pub use content::{
 };
 pub use error::{CoreError, RowError};
 pub use extensions::{
-    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, MAX_FAILURE_BUCKETS, RetainedPluginData,
+    EXTENSIONS_LOCK_WAIT, ExtensionAdmin, ExtensionService, InstallTrust, MAX_FAILURE_BUCKETS,
+    OwnerChange, RegistryContext, RegistryRefresh, RegistryStored, RetainedPluginData, SignerInput,
+    SignerSource, SignerView, TrustDecision, TrustWarning, owner_label,
 };
 pub use media::{
     MAX_MEDIA_ALT, MAX_MEDIA_TITLE, MAX_ORIGINAL_NAME, MediaItem, MediaPatch, MediaQuery,

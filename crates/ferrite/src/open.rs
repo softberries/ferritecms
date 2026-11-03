@@ -212,6 +212,67 @@ impl SqliteReadOnly {
         .await?)
     }
 
+    /// What doctor's `plugins.trust` reads (M6-2); `None` before `0015`.
+    pub(crate) async fn trust_facts(
+        &self,
+        url: Option<&str>,
+    ) -> anyhow::Result<Option<crate::doctor::TrustFactsRef>> {
+        use crate::doctor::{KeyFactsRef, PluginFactsRef, RegistryFactsRef, TrustFactsRef};
+        let mut conn = self.conn.lock().await;
+        if !ferrite_store_sqlite::table_exists(&mut conn, "plugin_owners").await? {
+            return Ok(None);
+        }
+        let plugins: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p.name, o.owner, o.signer_key FROM plugins p \
+             LEFT JOIN plugin_owners o ON o.plugin = p.name ORDER BY p.name",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        let keys: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+            "SELECT key_id, source, revoked_at FROM plugin_publishers ORDER BY key_id",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        let registry = match url {
+            None => None,
+            Some(url) => {
+                let row: Option<(i64, i64, Option<String>)> = sqlx::query_as(
+                    "SELECT serial, checked_at, last_error FROM plugin_registry WHERE url = ?",
+                )
+                .bind(url)
+                .fetch_optional(&mut *conn)
+                .await?;
+                match row {
+                    None => None,
+                    Some((serial, checked_at, last_error)) => Some(RegistryFactsRef {
+                        serial,
+                        checked_at: ferrite_domain::Timestamp::from_micros(checked_at)?,
+                        last_error,
+                    }),
+                }
+            }
+        };
+        Ok(Some(TrustFactsRef {
+            plugins: plugins
+                .into_iter()
+                .map(|(name, owner, signer)| PluginFactsRef {
+                    name,
+                    owner,
+                    signer,
+                })
+                .collect(),
+            keys: keys
+                .into_iter()
+                .map(|(key_id, source, revoked_at)| KeyFactsRef {
+                    key_id,
+                    source,
+                    revoked: revoked_at.is_some(),
+                })
+                .collect(),
+            registry,
+        }))
+    }
+
     /// A `schema_meta` value (`None` without the table or the key).
     pub(crate) async fn schema_meta(&self, key: &str) -> anyhow::Result<Option<String>> {
         let mut conn = self.conn.lock().await;

@@ -565,7 +565,8 @@ async fn boot(
     // One install pipeline per node: its compile slots bound the node (P8).
     let installer = Arc::new(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
-            .context("cannot start the plugin installer")?,
+            .context("cannot start the plugin installer")?
+            .with_trust(crate::registry::trust_settings(&config.plugins.trust)?),
     );
     // The OAuth authorization server (design 12 §3.2): its issuer is `site.url`; client
     // metadata documents come through the SSRF-checked egress rules.
@@ -621,7 +622,7 @@ async fn boot(
             options: Arc::new(OptionService::new(store.clone())),
             redirects: Arc::new(RedirectService::new(store.clone())),
             extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
-            installer,
+            installer: installer.clone(),
             media: media.clone(),
             media_service: media_service.clone(),
             uploader,
@@ -720,6 +721,16 @@ async fn boot(
         media.clone(),
         crate::gc::grace_days(config.uploads.gc_grace_days),
     )));
+    // `plugins.registry_check` (M6-2, ruling P5): the handler always (a check is a
+    // job like any other), the daily periodic only with `registry_check = "daily"` and
+    // a registry.
+    handlers.push(Arc::new(jobs::RegistryCheckHandler {
+        installer: installer.clone(),
+    }));
+    let registry_periodic = (config.plugins.trust.registry_check
+        == ferrite_config::RegistryCheck::Daily
+        && installer.trust_settings().registry.is_some())
+    .then(jobs::registry_check_periodic);
     // `[backup]` (P15): nothing is registered while the schedule is off.
     let backup_periodic = match jobs::site_backup(config, store.clone(), media.clone())
         .context("cannot set up the scheduled backup ([backup])")?
@@ -749,6 +760,7 @@ async fn boot(
     let mut periodics = builtin::periodics();
     periodics.extend(jobs::core_periodics());
     periodics.extend(backup_periodic);
+    periodics.extend(registry_periodic);
     let tick = SCHEDULER_TICK;
     #[cfg(feature = "test-seams")]
     let (periodics, tick) = (
@@ -1403,6 +1415,7 @@ mod tests {
             max_concurrent_calls: 5,
             render_budget_ms: 300,
             volatile_ttl_secs: 60,
+            trust: Default::default(),
         };
         let h = host_config(&p);
         assert_eq!(h.max_concurrent_calls, 5);

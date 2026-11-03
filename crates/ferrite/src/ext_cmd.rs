@@ -12,6 +12,14 @@
 //! folder lock is held while the question is open.
 //!
 //! Output never includes setting values; plugin settings are not touched here.
+//!
+//! **Trust (M6-2, design 14 §9).** A plugin folder may hold `ferrite-plugin.minisig` and
+//! `ferrite-plugin.pub`; the report then starts with the publisher lines. `install NAME`,
+//! `search` and `update` use the configured registry and always fetch it first. `keys`
+//! lists, trusts and revokes publisher keys; `unbind` frees a name and keeps its data
+//! (both operator only: the API has neither). `digest` prints the signing payload of a
+//! folder and needs no data folder. Exit codes: 0 done, 1 error (refusals included), 2
+//! only for `update --check` when updates are available.
 
 use std::{
     io::{IsTerminal, Write},
@@ -19,12 +27,20 @@ use std::{
     sync::Arc,
 };
 
+use std::process::ExitCode;
+
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use clap::{Args, Subcommand};
-use ferrite_core::{CoreError, ExtensionService};
+use ferrite_core::{CoreError, ExtensionService, OwnerChange, SignerSource};
 use ferrite_domain::InstalledTheme;
-use ferrite_http::extensions::{Inspected, Installer, MAX_PLUGIN_BYTES};
+use ferrite_domain::plugin_trust::{
+    InstallSource, KeyId, KeySource, MAX_PUBLISHER_KEY_BYTES, MAX_SIGNATURE_BYTES,
+    PUBLISHER_KEY_FILE, PublisherKey, Revocation, SIGNATURE_FILE,
+};
+use ferrite_http::extensions::{
+    BundleSignature, Inspected, Installer, MAX_PLUGIN_BYTES, update_for,
+};
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PermissionItem, PermissionReport, Risk};
 use ferrite_store::Store;
@@ -98,11 +114,17 @@ pub enum PluginCommand {
         #[command(flatten)]
         data: DataArg,
     },
-    /// Install (or update) a plugin from a folder after showing its permission report.
+    /// Install (or update) a plugin from a folder, or `NAME[@VERSION]` from the
+    /// configured registry (fetched first), after showing its permission report.
     Install {
-        /// The plugin folder: `ferrite-plugin.toml` and one `*.wasm`.
+        /// A registry plugin, `NAME` or `NAME@VERSION` (default: the newest this binary
+        /// runs).
+        #[arg(conflicts_with = "dir", required_unless_present = "dir")]
+        name: Option<String>,
+        /// The plugin folder: `ferrite-plugin.toml`, one `*.wasm`, and optionally
+        /// `ferrite-plugin.minisig` and `ferrite-plugin.pub`.
         #[arg(long)]
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         /// Enable it after installing.
         #[arg(long)]
         enable: bool,
@@ -133,6 +155,78 @@ pub enum PluginCommand {
         /// Delete the plugin's KV and settings now.
         #[arg(long)]
         purge: bool,
+        #[command(flatten)]
+        data: DataArg,
+    },
+    /// Search the configured registry (fetched first): `<name>  <latest>  <publisher>
+    /// <description>`. Exit 1 without a registry or when it cannot be fetched.
+    Search {
+        /// Matches name, description and publisher name; none lists every plugin.
+        query: Option<String>,
+        #[command(flatten)]
+        data: DataArg,
+    },
+    /// Install the updates the registry offers for installed plugins (all, or `NAME…`).
+    ///
+    /// `--check` prints `<name>  <installed> -> <available>` and exits 2 when there are
+    /// updates, 0 when there are none.
+    Update {
+        names: Vec<String>,
+        /// Only list the updates.
+        #[arg(long)]
+        check: bool,
+        /// Approve each printed report without asking.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        data: DataArg,
+    },
+    /// Print the signing payload of a plugin folder (what `minisign -S -m` signs); needs
+    /// no data folder.
+    Digest {
+        /// The plugin folder: `ferrite-plugin.toml` and one `*.wasm`.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Write it to this file instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Publisher keys: list, trust (operator) and revoke.
+    #[command(subcommand)]
+    Keys(KeysCommand),
+    /// Delete the owner binding of a plugin name and keep its data, so the next install
+    /// binds it again (operator only; for a publisher that lost its key).
+    Unbind {
+        name: String,
+        #[command(flatten)]
+        data: DataArg,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KeysCommand {
+    /// List the site's keys: `<key_id>  <source>  <label>  [revoked[, compromised]: <reason>]`.
+    List(DataArg),
+    /// Trust a minisign public key file as an operator key (clears a local revocation).
+    Trust {
+        /// A minisign public key file (or the bare base64 line).
+        file: PathBuf,
+        /// What the key is (shown in lists).
+        #[arg(long)]
+        label: String,
+        #[command(flatten)]
+        data: DataArg,
+    },
+    /// Revoke a key: installs and updates signed by it are refused; with
+    /// `--compromised` its installed plugins are disabled.
+    Revoke {
+        /// 16 hex digits, as minisign prints it.
+        key_id: String,
+        #[arg(long)]
+        reason: String,
+        /// The key was stolen or leaked: disable its plugins.
+        #[arg(long)]
+        compromised: bool,
         #[command(flatten)]
         data: DataArg,
     },
@@ -191,8 +285,8 @@ fn pack_theme(dir: &Path, out: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn run_plugin(cmd: PluginCommand) -> anyhow::Result<()> {
-    match cmd {
+pub async fn run_plugin(cmd: PluginCommand) -> anyhow::Result<ExitCode> {
+    let done = match cmd {
         PluginCommand::Check { dir, data } => {
             // The package is read before the database lock is taken.
             let package = read_package(&dir)?;
@@ -200,32 +294,122 @@ pub async fn run_plugin(cmd: PluginCommand) -> anyhow::Result<()> {
                 let installer = installer(&site)?;
                 let inspected = inspect(&installer, &package).await?;
                 print_report(&inspected);
+                refusal(&inspected)?;
                 println!("ok: nothing was stored");
                 Ok(())
             })
             .await
         }
         PluginCommand::Install {
+            name,
             dir,
             enable,
             yes,
             data,
         } => {
-            let package = read_package(&dir)?;
+            let package = dir.as_deref().map(read_package).transpose()?;
             with_site(&data.data, async |site| {
                 let installer = installer(&site)?;
-                let inspected = inspect(&installer, &package).await?;
-                print_report(&inspected);
-                if !yes && !confirm()? {
-                    bail!("aborted; nothing was installed");
+                let inspected = match (&package, &name) {
+                    (Some(package), _) => inspect(&installer, package).await?,
+                    (None, Some(spec)) => {
+                        let (name, version) = match spec.split_once('@') {
+                            Some((n, v)) => (n, Some(v)),
+                            None => (spec.as_str(), None),
+                        };
+                        refresh(&installer).await?;
+                        installer
+                            .inspect_registry(name, version)
+                            .await
+                            .with_context(|| format!("cannot install {spec} from the registry"))?
+                    }
+                    (None, None) => bail!("give a registry plugin NAME or --dir"),
+                };
+                approve_and_record(&site, &installer, inspected, enable, yes).await
+            })
+            .await
+        }
+        PluginCommand::Search { query, data } => {
+            with_site(&data.data, async |site| {
+                let installer = installer(&site)?;
+                refresh(&installer).await?;
+                let view = installer.registry_view(query.as_deref()).await?;
+                for p in view.plugins {
+                    println!(
+                        "{}  {}  {}  {}",
+                        p.plugin.name,
+                        p.latest.as_deref().unwrap_or("-"),
+                        p.publisher_name,
+                        one_line(&p.plugin.description)
+                    );
                 }
-                let row = record_plugin(&site.store, &installer, inspected, enable).await?;
-                println!(
-                    "installed plugin {} {} ({})",
-                    row.name,
-                    row.version,
-                    if row.enabled { "enabled" } else { "disabled" }
-                );
+                Ok(())
+            })
+            .await
+        }
+        PluginCommand::Update {
+            names,
+            check,
+            yes,
+            data,
+        } => {
+            let mut updates_found = false;
+            let done = with_site(&data.data, async |site| {
+                let installer = installer(&site)?;
+                refresh(&installer).await?;
+                let updates = available_updates(&site, &installer, &names).await?;
+                updates_found = !updates.is_empty();
+                if check || updates.is_empty() {
+                    for (name, installed, available) in &updates {
+                        println!("{name}  {installed} -> {available}");
+                    }
+                    if updates.is_empty() {
+                        println!("no updates");
+                    }
+                    return Ok(());
+                }
+                for (name, _, available) in updates {
+                    let inspected = installer
+                        .inspect_registry(&name, Some(&available))
+                        .await
+                        .with_context(|| format!("cannot update {name} to {available}"))?;
+                    approve_and_record(&site, &installer, inspected, false, yes).await?;
+                }
+                Ok(())
+            })
+            .await;
+            done?;
+            return Ok(if check && updates_found {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            });
+        }
+        PluginCommand::Digest { dir, out } => {
+            let package = read_package(&dir)?;
+            let payload = ferrite_plugin_host::trust::signing_payload(
+                package.manifest.as_bytes(),
+                &package.wasm,
+            );
+            match out {
+                Some(out) => std::fs::write(&out, payload)
+                    .with_context(|| format!("cannot write {}", out.display()))?,
+                None => print!("{payload}"),
+            }
+            Ok(())
+        }
+        PluginCommand::Keys(cmd) => run_keys(cmd).await,
+        PluginCommand::Unbind { name, data } => {
+            with_site(&data.data, async |site| {
+                if ExtensionService::new(site.store.clone()).unbind(&name).await? {
+                    eprintln!(
+                        "warning: {name}'s data is kept but no longer bound to a publisher: the \
+                         next install of {name}, signed or not, gets it"
+                    );
+                    println!("unbound plugin {name}");
+                } else {
+                    println!("plugin {name} had no binding");
+                }
                 Ok(())
             })
             .await
@@ -261,7 +445,202 @@ pub async fn run_plugin(cmd: PluginCommand) -> anyhow::Result<()> {
             })
             .await
         }
+    };
+    done.map(|()| ExitCode::SUCCESS)
+}
+
+async fn run_keys(cmd: KeysCommand) -> anyhow::Result<()> {
+    match cmd {
+        KeysCommand::List(data) => {
+            with_site(&data.data, async |site| {
+                for k in ExtensionService::new(site.store.clone())
+                    .list_keys()
+                    .await?
+                {
+                    let revoked = match &k.revoked {
+                        Some(r) if r.compromised => {
+                            format!("  [revoked, compromised: {}]", one_line(&r.reason))
+                        }
+                        Some(r) => format!("  [revoked: {}]", one_line(&r.reason)),
+                        None => String::new(),
+                    };
+                    println!(
+                        "{}  {}  {}{revoked}",
+                        k.key.key_id,
+                        k.source.as_str(),
+                        one_line(&k.label)
+                    );
+                }
+                Ok(())
+            })
+            .await
+        }
+        KeysCommand::Trust { file, label, data } => {
+            let len = std::fs::metadata(&file)
+                .with_context(|| format!("cannot read {}", file.display()))?
+                .len();
+            if len > MAX_PUBLISHER_KEY_BYTES as u64 {
+                bail!(
+                    "{} is not a minisign public key (too large)",
+                    file.display()
+                );
+            }
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("cannot read {}", file.display()))?;
+            let key = PublisherKey::parse(&text)
+                .with_context(|| format!("{} is not a minisign public key", file.display()))?
+                .with_context(|| format!("{} holds no key", file.display()))?;
+            with_site(&data.data, async |site| {
+                // Checked against the cached registry: a key with a registry key's id but
+                // other bytes is refused (M6-2 review).
+                let registry = installer(&site)?.registry_context().await?;
+                ExtensionService::new(site.store.clone())
+                    .trust_key(&key, &label, registry.as_ref().map(|r| r.index.as_ref()))
+                    .await?;
+                println!("trusted key {} ({label})", key.key_id);
+                Ok(())
+            })
+            .await
+        }
+        KeysCommand::Revoke {
+            key_id,
+            reason,
+            compromised,
+            data,
+        } => {
+            let id = KeyId::parse(&key_id).context("a key id is 16 hex digits")?;
+            if reason.trim().is_empty() || reason.chars().count() > 500 {
+                bail!("--reason needs 1 to 500 characters");
+            }
+            with_site(&data.data, async |site| {
+                let service = ExtensionService::new(site.store.clone());
+                let installer = installer(&site)?;
+                let found = match service.get_key(&id).await? {
+                    Some(k) => Some((k.key, k.label)),
+                    None => installer.registry_context().await?.and_then(|r| {
+                        r.index.publishers.iter().find_map(|p| {
+                            p.keys
+                                .iter()
+                                .chain(p.revoked_keys.iter().map(|r| &r.key))
+                                .find(|k| k.key_id == id)
+                                .map(|k| (k.clone(), p.name.clone()))
+                        })
+                    }),
+                };
+                let Some((key, label)) = found else {
+                    bail!("key {id} is not known to this site or its registry");
+                };
+                let disabled = service
+                    .revoke_key(
+                        &key,
+                        &Revocation {
+                            at: ferrite_domain::Timestamp::now(),
+                            reason: reason.clone(),
+                            compromised,
+                        },
+                        &label,
+                        KeySource::Registry,
+                    )
+                    .await?;
+                println!("revoked key {id}");
+                for name in disabled {
+                    println!("disabled plugin {name}");
+                }
+                Ok(())
+            })
+            .await
+        }
     }
+}
+
+/// Fetches the configured registry now (operator commands always do); a missing
+/// registry or a failed fetch is an error.
+async fn refresh(installer: &Installer) -> anyhow::Result<()> {
+    let r = installer
+        .refresh_registry()
+        .await
+        .context("cannot check the plugin registry")?;
+    for id in &r.collisions {
+        eprintln!(
+            "warning: publisher key {id} had the id of a registry key with other key bytes; \
+             it was removed and the plugins it signed disabled"
+        );
+    }
+    for name in r.disabled {
+        eprintln!("warning: plugin {name} was disabled by the registry check");
+    }
+    Ok(())
+}
+
+/// `(name, installed, available)` for each installed plugin (of `names`, when given)
+/// the registry offers an update for.
+async fn available_updates(
+    site: &Site,
+    installer: &Installer,
+    names: &[String],
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    let Some(ctx) = installer.registry_context().await? else {
+        return Ok(Vec::new());
+    };
+    let service = ExtensionService::new(site.store.clone());
+    let mut out = Vec::new();
+    for row in site.store.read().plugins().list().await? {
+        if !names.is_empty() && !names.contains(&row.name) {
+            continue;
+        }
+        let owner = service.owner(&row.name).await?;
+        if let Some((version, _)) = update_for(&ctx.index, &ctx.registry_key, &row, owner.as_ref())
+        {
+            out.push((row.name.clone(), row.version.clone(), version));
+        }
+    }
+    for name in names {
+        if !out.iter().any(|(n, _, _)| n == name)
+            && site.store.read().plugins().get(name).await?.is_none()
+        {
+            bail!("plugin not installed: {name:?}");
+        }
+    }
+    Ok(out)
+}
+
+/// Prints the report, asks (or takes `--yes`) and records the plugin.
+async fn approve_and_record(
+    site: &Site,
+    installer: &Installer,
+    inspected: Inspected,
+    enable: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    print_report(&inspected);
+    refusal(&inspected)?;
+    if !yes && !confirm()? {
+        bail!("aborted; nothing was installed");
+    }
+    let row = record_plugin(&site.store, installer, inspected, enable).await?;
+    println!(
+        "installed plugin {} {} ({})",
+        row.name,
+        row.version,
+        if row.enabled { "enabled" } else { "disabled" }
+    );
+    Ok(())
+}
+
+/// The trust refusal of an inspection, as the command's error.
+fn refusal(inspected: &Inspected) -> anyhow::Result<()> {
+    match inspected.decision() {
+        Ok(_) => Ok(()),
+        Err(r) => bail!("refused ({}): {}", r.field, r.message),
+    }
+}
+
+/// Text from a plugin, a registry or a key file on one line: control characters
+/// (newlines, escapes) are replaced, so it cannot forge output lines.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Loads the config, opens the store and media and runs the startup check, then `f`;
@@ -294,12 +673,13 @@ async fn with_site(
 }
 
 fn installer(site: &Site) -> anyhow::Result<Installer> {
-    Installer::new(
+    Ok(Installer::new(
         site.store.clone(),
         site.media.clone(),
         host_config(&site.config.plugins),
     )
-    .context("cannot start a plugin host")
+    .context("cannot start a plugin host")?
+    .with_trust(crate::registry::trust_settings(&site.config.plugins.trust)?))
 }
 
 // ---- themes --------------------------------------------------------------------------
@@ -376,10 +756,27 @@ fn print_theme(row: &InstalledTheme) {
 
 // ---- plugins -------------------------------------------------------------------------
 
-/// A plugin folder's two files.
+/// A plugin folder's files.
 struct Package {
     manifest: String,
     wasm: Vec<u8>,
+    /// `ferrite-plugin.minisig` and `ferrite-plugin.pub`, when present.
+    signature: Option<BundleSignature>,
+}
+
+/// An optional small file of `dir`, refused above `max` bytes before it is read.
+fn read_small(dir: &Path, name: &str, max: usize) -> anyhow::Result<Option<Vec<u8>>> {
+    let path = dir.join(name);
+    match std::fs::metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+        Ok(m) if m.len() > max as u64 => bail!("{} is larger than {max} bytes", path.display()),
+        Ok(_) => {
+            Ok(Some(std::fs::read(&path).with_context(|| {
+                format!("cannot read {}", path.display())
+            })?))
+        }
+    }
 }
 
 /// Reads `ferrite-plugin.toml` and the one `*.wasm` of `dir` (the size is checked before
@@ -414,14 +811,76 @@ fn read_package(dir: &Path) -> anyhow::Result<Package> {
     }
     let wasm =
         std::fs::read(wasm_path).with_context(|| format!("cannot read {}", wasm_path.display()))?;
-    Ok(Package { manifest, wasm })
+    let minisig = read_small(dir, SIGNATURE_FILE, MAX_SIGNATURE_BYTES)?;
+    let key = read_small(dir, PUBLISHER_KEY_FILE, MAX_PUBLISHER_KEY_BYTES)?;
+    let signature = match (minisig, key) {
+        (None, None) => None,
+        (None, Some(_)) => bail!(
+            "{} holds {PUBLISHER_KEY_FILE} but no {SIGNATURE_FILE}",
+            dir.display()
+        ),
+        (Some(sig), key) => Some(
+            BundleSignature::from_bytes(&sig, key.as_deref())
+                .map_err(|e| anyhow::anyhow!("{SIGNATURE_FILE}: {e}"))?,
+        ),
+    };
+    Ok(Package {
+        manifest,
+        wasm,
+        signature,
+    })
 }
 
 async fn inspect(installer: &Installer, package: &Package) -> anyhow::Result<Inspected> {
     installer
-        .inspect_plugin(&package.manifest, Bytes::copy_from_slice(&package.wasm))
+        .inspect_bundle(
+            &package.manifest,
+            Bytes::copy_from_slice(&package.wasm),
+            package.signature.clone(),
+            InstallSource::Folder,
+        )
         .await
         .context("the plugin is refused")
+}
+
+/// The publisher and data lines of a report (design 14 §9).
+fn print_trust(inspected: &Inspected) {
+    let trust = inspected.trust();
+    let claim = one_line(&trust.publisher_claim);
+    let Ok(d) = inspected.decision() else {
+        return;
+    };
+    match &d.signer {
+        None => println!("! unsigned: nothing confirms who made it (claims {claim})"),
+        Some(s) => match &s.source {
+            SignerSource::Registry { publisher_id, name } => println!(
+                "publisher: verified {} ({}, registry key {})",
+                one_line(publisher_id),
+                one_line(name),
+                s.key_id
+            ),
+            SignerSource::New => println!(
+                "! new publisher key {} (claims {claim}): approving trusts it for this plugin's updates",
+                s.key_id
+            ),
+            SignerSource::Approved | SignerSource::Operator => {
+                println!("publisher: key {} (claims {claim})", s.key_id)
+            }
+        },
+    }
+    let next = d.next_owner.as_ref().map(ToString::to_string);
+    match d.owner_change {
+        OwnerChange::Claim => println!(
+            "! data: the plugin's existing data will be bound to {}",
+            next.unwrap_or_default()
+        ),
+        OwnerChange::Bind => println!("data: bound to {}", next.unwrap_or_default()),
+        OwnerChange::UnsignedUpdate => {
+            println!("! data: unsigned; it gets the data of the plugin installed under this name")
+        }
+        OwnerChange::BindUnsigned | OwnerChange::Same => {}
+    }
+    println!("signatures policy: {}", trust.policy.as_str());
 }
 
 /// Prints the report: one line per capability (`!` marks high risk), what an update
@@ -434,6 +893,7 @@ fn print_report(inspected: &Inspected) {
         "new"
     };
     println!("plugin {} {} ({kind})", report.plugin, report.version);
+    print_trust(inspected);
     println!("component: {}", report.artifact);
     println!("permissions:");
     if report.items.is_empty() {

@@ -17,6 +17,12 @@
 #
 #   .github/scripts/package-plugins.sh VERSION OUT_DIR
 #
+# Signed plugins (M6-2, design 14 §11): with SIGNATURES_DIR set, each folder also gets
+# `ferrite-plugin.minisig` (required) and `ferrite-plugin.pub` (when present) from
+# SIGNATURES_DIR/<plugin>/, so the extracted folder installs as a signed plugin. With
+# ASSETS=1 the per-plugin registry assets `ferrite-plugin-<plugin>-<VERSION>.toml` and
+# `.wasm` are written to OUT_DIR too (the registry index names them).
+#
 # Run from the repository root. Used by .github/workflows/release.yml and the CI
 # `packaging` job; runs on Linux and macOS (bsdtar). The archive is reproducible (M4-4
 # P83, repro-tar.sh): the same files give the same bytes.
@@ -76,10 +82,28 @@ for entry in "${plugins[@]}"; do
     if [ -f "$f" ]; then cp "$f" "$stage/$plugin/"; fi
   done
   cp "$wasm_dir/$wasm" "$stage/$plugin/$plugin.wasm"
+  if [ -n "${SIGNATURES_DIR:-}" ]; then
+    sig="$SIGNATURES_DIR/$plugin/ferrite-plugin.minisig"
+    if [ ! -f "$sig" ]; then
+      echo "::error::$sig is missing" >&2
+      exit 1
+    fi
+    cp "$sig" "$stage/$plugin/"
+    if [ -f "$SIGNATURES_DIR/$plugin/ferrite-plugin.pub" ]; then
+      cp "$SIGNATURES_DIR/$plugin/ferrite-plugin.pub" "$stage/$plugin/"
+    fi
+  fi
   chmod 0644 "$stage/$plugin"/*
 done
 
 mkdir -p "$out"
+if [ "${ASSETS:-0}" = 1 ]; then
+  for entry in "${plugins[@]}"; do
+    plugin=${entry%%:*}
+    cp "$stage/$plugin/ferrite-plugin.toml" "$out/ferrite-plugin-$plugin-$version.toml"
+    cp "$stage/$plugin/$plugin.wasm" "$out/ferrite-plugin-$plugin-$version.wasm"
+  done
+fi
 repro_pack "$stage" "$out/$name.tar.gz" "${plugins[@]%%:*}"
 echo "packed $out/$name.tar.gz:"
 tar -tzvf "$out/$name.tar.gz"

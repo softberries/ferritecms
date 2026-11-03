@@ -307,6 +307,57 @@ pub struct PluginsConfig {
     /// Cache TTL in seconds of pages whose plugin calls were volatile or failed
     /// (`plugins.volatile_ttl`, 05 §7a): default 60, 1..=3 600.
     pub volatile_ttl_secs: u64,
+    /// Signatures and the registry (M6-2, design 14 §3.2, §5.2).
+    pub trust: PluginTrustConfig,
+}
+
+/// The default plugin registry (design 14 §5.2): the official plugins on GitHub Pages,
+/// verified with the key embedded from `crates/ferrite/registry.pub`.
+pub const DEFAULT_REGISTRY_URL: &str =
+    "https://softberries.github.io/ferritecms/registry/v1/index.json";
+
+/// `[plugins] signatures`, `registry`, `registry_key`, `registry_check` (M6-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginTrustConfig {
+    /// `any` (default), `signed` or `trusted` (design 14 §3.2).
+    pub signatures: ferrite_domain::plugin_trust::SignaturePolicy,
+    /// The registry index URL (`https://…` or `file:///abs/…`); `None` when set to `""`.
+    /// Default [`DEFAULT_REGISTRY_URL`].
+    pub registry: Option<String>,
+    /// The registry's minisign public key (the base64 line); required for any registry
+    /// but the default, which uses the embedded key.
+    pub registry_key: Option<String>,
+    /// Whether `serve` checks the registry daily (ruling P5: off by default; the Plugins
+    /// screen's "Check for updates" and the CLI fetch on demand).
+    pub registry_check: RegistryCheck,
+}
+
+impl Default for PluginTrustConfig {
+    fn default() -> Self {
+        Self {
+            signatures: Default::default(),
+            registry: Some(DEFAULT_REGISTRY_URL.to_owned()),
+            registry_key: None,
+            registry_check: RegistryCheck::Off,
+        }
+    }
+}
+
+/// `plugins.registry_check`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegistryCheck {
+    #[default]
+    Off,
+    Daily,
+}
+
+impl RegistryCheck {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegistryCheck::Off => "off",
+            RegistryCheck::Daily => "daily",
+        }
+    }
 }
 
 /// `[auth]` (P4). `secret_key` is the site key as 64 hex characters; `None` means solo

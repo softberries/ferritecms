@@ -117,7 +117,16 @@ auto-disable at 5 days + 10 failures or a `410`, mail to admins) and hourly `web
 jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[webhooks]
 local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
 OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
-`0016_webhooks`; design 18. Work top-down in
+`0016_webhooks`; design 18.
+M6-2 (plugin trust, design 14,
+`m6-2-exit.md`) is built: minisign-signed plugins (`ferrite-plugin.minisig`,
+`ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the
+signer), plugin data bound to its publisher (`plugin_owners`), the signed static registry
+(`[plugins] registry|registry_key|signatures|registry_check`, off-by-default daily check per
+ruling P5), publisher keys and revocation, `ferrite plugin search|install NAME|update|digest|keys|unbind`,
+doctor `plugins.trust`, the admin's Registry tab and Publisher keys; migration
+`0015_plugin_publishers`; the real signing keys are the user's to create (09 §7 "Plugin keys";
+`crates/ferrite/registry.pub` is a placeholder). Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
 `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`).
 
@@ -127,7 +136,8 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
-`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
+`doctor/` (`ferrite doctor`'s checks); M6-2: `registry` (the configured registry and the
+embedded `registry.pub`), `jobs/registry.rs` (`plugins.registry_check`), `doctor/plugins.rs`) -> `ferrite-http` (public site, router, head,
 previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
 plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
 `extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
@@ -136,7 +146,8 @@ source), `import_blobs` (import reports over the media store), `metrics` (the re
 OpenAPI snapshot `openapi.json`; M5: `mcp/` (the MCP endpoint: `auth` guard, `server`,
 `tools/` one file per area, `resources`, `prompts`, `results`), `oauth.rs` (the OAuth
 endpoints and the off-switch gate), `oauth_fetch.rs` (the SSRF-checked Client ID Metadata
-Document fetch), `api/oauth.rs` (the consent API)) -> `ferrite-import-wp` (the WordPress importer: WXR
+Document fetch), `api/oauth.rs` (the consent API); M6-2: `registry_fetch` (the SSRF-checked
+registry fetcher, file registries), `extensions/{trust,registry}.rs`, `api/plugin_registry.rs`) -> `ferrite-import-wp` (the WordPress importer: WXR
 parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter (M5: `markdown_to_body`, used by the MCP
@@ -230,7 +241,15 @@ the admin's Appearance and Plugins screens. The example plugins: unpack the rele
 inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
-Check a site: `ferrite doctor --data DIR [--offline]` (26 checks that write nothing locally,
+Signed plugins and the registry (M6-2, design 14): a folder may hold `ferrite-plugin.minisig`
+(`ferrite plugin digest --dir DIR` prints the payload to sign with `minisign -S`) and
+`ferrite-plugin.pub`; the API takes them as the multipart parts `signature` and `publisher_key`.
+`ferrite plugin search|install NAME[@VERSION]|update [--check]` use `[plugins] registry` (+
+`registry_key`; `file:///abs/index.json` works for local tests) and fetch it first;
+`ferrite plugin keys list|trust|revoke`, `ferrite plugin unbind NAME` (operator only). API:
+`/api/v1/plugins/registry` (+ `/refresh`, `/inspect`, `/install`), `/api/v1/plugins/publishers`
+(+ `/{key_id}/revoke`).
+Check a site: `ferrite doctor --data DIR [--offline]` (27 checks that write nothing locally,
 S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
 runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
 3 schema incompatible; 09 §8).

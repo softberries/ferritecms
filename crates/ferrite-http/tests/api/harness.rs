@@ -467,6 +467,23 @@ impl Api {
         (router, uploader)
     }
 
+    /// The whole site again, with the same store and services but an installer with
+    /// `trust` (M6-2: a signature policy, a registry).
+    pub fn router_with_trust(&self, trust: ferrite_http::extensions::TrustSettings) -> Router {
+        self.router_with(ApiParts {
+            installer: Arc::new(
+                Installer::new(
+                    self.store.clone(),
+                    self.api.media.clone(),
+                    HostConfig::default(),
+                )
+                .expect("installer")
+                .with_trust(trust),
+            ),
+            ..self.same_parts()
+        })
+    }
+
     /// Every file under the media store's root (artifacts and staging objects alike).
     pub fn stored_files(&self) -> Vec<PathBuf> {
         fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -916,6 +933,22 @@ impl Client {
             .body(Body::from(body))
             .unwrap();
         self.send_on(&api.router, req).await
+    }
+
+    /// [`multipart`](Self::multipart) on another router of the site.
+    pub async fn multipart_on(
+        &mut self,
+        router: &Router,
+        path: &str,
+        parts: &[(&str, &[u8])],
+    ) -> Resp {
+        let (content_type, body) = multipart_body(parts);
+        let req = self
+            .builder(Method::POST, path)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send_on(router, req).await
     }
 
     /// `POST path` with `body` as `Content-Type: content_type`.

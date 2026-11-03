@@ -125,7 +125,8 @@ pub async fn migration_0016_roundtrip(db: &TestDb) {
     let e = endpoint("roundtrip", &install, now);
     store.read().webhooks().insert_endpoint(&e).await.unwrap();
 
-    assert_eq!(store.migrate_down(13, false).await.unwrap(), vec![16]);
+    // Down to 0015 (lossy, M6-2), which stays applied.
+    assert_eq!(store.migrate_down(15, false).await.unwrap(), vec![16]);
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");

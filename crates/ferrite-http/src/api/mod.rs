@@ -42,6 +42,7 @@ pub mod meta;
 pub mod multipart;
 pub mod oauth;
 pub mod openapi;
+pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
 pub mod redirects;
@@ -200,6 +201,12 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         ))
         .routes(routes!(plugins::list_retained_plugins))
         .routes(routes!(plugins::purge_plugin))
+        .routes(routes!(plugin_registry::get_registry))
+        .routes(routes!(plugin_registry::refresh_registry))
+        .routes(routes!(plugin_registry::inspect_registry_plugin))
+        .routes(routes!(plugin_registry::install_registry_plugin))
+        .routes(routes!(plugin_registry::list_publishers))
+        .routes(routes!(plugin_registry::revoke_publisher))
         .routes(routes!(plugins::get_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::enable_plugin))
         .routes(routes!(plugins::disable_plugin))

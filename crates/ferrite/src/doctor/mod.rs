@@ -25,7 +25,13 @@ mod db;
 mod fs;
 mod media;
 mod net;
+mod plugins;
 mod webhooks;
+
+pub(crate) use plugins::{
+    KeyFacts as KeyFactsRef, PluginFacts as PluginFactsRef, RegistryFacts as RegistryFactsRef,
+    TrustFacts as TrustFactsRef,
+};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -262,6 +268,7 @@ async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     findings.push(schema);
     findings.push(db::identity(database, config).await);
     findings.push(webhooks::endpoints_check(database, config).await);
+    findings.push(plugins::trust(database, config).await);
     findings.push(fs::upgrade_record(data, config));
     let (media_store, media) = media::store(config, offline).await;
     findings.push(media_store);

@@ -9,7 +9,11 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::{Map, Value, json};
 
-use super::{ExtensionService, RetainedPluginData, append_audit, finish_locked};
+use ferrite_domain::plugin_trust::{KeySource, PluginOwner, PublisherKey, Revocation, TrustedKey};
+
+use super::{
+    ExtensionService, InstallTrust, RetainedPluginData, TrustDecision, append_audit, finish_locked,
+};
 use crate::{
     Actor, CoreError,
     actor::{Capability, require, require_reader},
@@ -62,6 +66,26 @@ impl ExtensionAdmin {
     /// an upload (every write checks again).
     pub fn authorize_plugins(&self, actor: &Actor) -> Result<(), CoreError> {
         require(actor, Capability::ManagePlugins)
+    }
+
+    /// Whether `actor` may read plugins (`manage_plugins` with `extensions:read`): the
+    /// registry view and the publisher keys (M6-2).
+    pub fn authorize_plugin_reads(&self, actor: &Actor) -> Result<(), CoreError> {
+        require_reader(actor, Capability::ManagePlugins)
+    }
+
+    /// Whether `actor` may refresh the registry now: a plugin write, and at most one
+    /// refresh per minute for the whole site (`RateLimited` otherwise; M6-2, design 14
+    /// §7.3). Counts the attempt.
+    pub async fn authorize_registry_refresh(&self, actor: &Actor) -> Result<(), CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        crate::auth::limits::hit(
+            self.store.as_ref(),
+            &crate::auth::limits::registry_refresh(),
+            crate::auth::limits::REGISTRY_REFRESH_PER_SITE,
+            crate::auth::limits::WINDOW,
+        )
+        .await
     }
 
     /// Whether `actor` may write themes; handlers call it before unpacking an upload.
@@ -147,9 +171,105 @@ impl ExtensionAdmin {
             "granted": row.granted,
         });
         let audit = audit(actor, "plugin.install", "plugin", &row.name, details);
+        let trust = InstallTrust::unsigned(super::manifest_publisher(&row.manifest));
         self.service
-            .install_plugin_with(artifact, row, Some(audit))
+            .install_plugin_with(artifact, row, &trust, Some(audit))
             .await
+            .map(|_| ())
+    }
+
+    /// [`ExtensionService::install_plugin_trusted`] with audit `plugin.install` `{name,
+    /// version, artifact, granted, signer, owner, source}`.
+    pub async fn install_plugin_trusted(
+        &self,
+        actor: &Actor,
+        artifact: &Artifact,
+        row: &InstalledPlugin,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        if !row.granted.is_object() {
+            return Err(CoreError::invalid_field("approve", "a grant is required"));
+        }
+        let details = json!({
+            "name": row.name,
+            "version": row.version,
+            "artifact": artifact.hash.as_str(),
+            "granted": row.granted,
+        });
+        let audit = audit(actor, "plugin.install", "plugin", &row.name, details);
+        self.service
+            .install_plugin_with(artifact, row, trust, Some(audit))
+            .await
+    }
+
+    /// The trust decision for a report ([`ExtensionService::trust_preview`]).
+    pub async fn trust_preview(
+        &self,
+        actor: &Actor,
+        name: &str,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        self.service.trust_preview(name, trust).await
+    }
+
+    /// [`ExtensionService::revoke_key`] with audit `plugin.publisher.revoke` `{key_id,
+    /// reason, compromised, disabled}`.
+    pub async fn revoke_key(
+        &self,
+        actor: &Actor,
+        key: &PublisherKey,
+        revocation: &Revocation,
+        label_if_new: &str,
+        source_if_new: KeySource,
+    ) -> Result<Vec<String>, CoreError> {
+        require(actor, Capability::ManagePlugins)?;
+        let reason = revocation.reason.trim();
+        if reason.is_empty() || reason.chars().count() > 500 {
+            return Err(CoreError::invalid_field(
+                "reason",
+                "a reason of 1 to 500 characters is required",
+            ));
+        }
+        let details = json!({
+            "key_id": key.key_id.to_string(),
+            "reason": revocation.reason,
+            "compromised": revocation.compromised,
+        });
+        let audit = audit(
+            actor,
+            "plugin.publisher.revoke",
+            "publisher",
+            &key.key_id.to_string(),
+            details,
+        );
+        self.service
+            .revoke_key_with(key, revocation, label_if_new, source_if_new, Some(audit))
+            .await
+    }
+
+    /// The site's publisher key rows.
+    pub async fn publishers(&self, actor: &Actor) -> Result<Vec<TrustedKey>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.list_keys().await
+    }
+
+    /// The plugin owner rows.
+    pub async fn owners(&self, actor: &Actor) -> Result<Vec<PluginOwner>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.owners().await
+    }
+
+    /// The owner row of `name`.
+    pub async fn owner(&self, actor: &Actor, name: &str) -> Result<Option<PluginOwner>, CoreError> {
+        require_reader(actor, Capability::ManagePlugins)?;
+        self.service.owner(name).await
+    }
+
+    /// The system service behind this facade (registry refreshes are system writes).
+    pub fn service(&self) -> &ExtensionService {
+        &self.service
     }
 
     /// [`ExtensionService::set_plugin_enabled`] with audit `plugin.enable` or

@@ -88,13 +88,13 @@ the release lookup). The database is still opened, which on Postgres is a networ
 connection, and a running node's own listeners are still probed (`net.listen`).
 
 It prints one line per check, `<status>  <check>  <detail>`, the status one of `ok`,
-`info`, `warn`, `error` or `skip`, and then a summary line. The 26 checks:
+`info`, `warn`, `error` or `skip`, and then a summary line. The 27 checks:
 
 | Area | Checks |
 |---|---|
 | Binary and config | `version.binary`, `config.load` |
 | Files | `fs.data_dir`, `fs.config_file`, `fs.secret_key`, `fs.database_files`, `fs.backups_dir`, `fs.themes_dir` |
-| Database | `db.lock_state`, `db.connect`, `db.schema`, `db.identity`, `webhooks.endpoints` |
+| Database | `db.lock_state`, `db.connect`, `db.schema`, `db.identity`, `webhooks.endpoints`, `plugins.trust` |
 | Upgrades | `upgrade.record` |
 | Media | `media.store`, `media.owner` |
 | Clock and cluster | `clock.db_skew`, `clock.peers`, `cluster.versions`, `cluster.site_url` |

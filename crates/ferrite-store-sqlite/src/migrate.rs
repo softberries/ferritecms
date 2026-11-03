@@ -487,8 +487,15 @@ mod tests {
         store.migrate_up(None).await.unwrap();
         let names = snapshots(&backups);
         assert_eq!(names.len(), 2, "{names:?}");
+        let latest = store
+            .migration_status(&semver::Version::new(0, 0, 0))
+            .await
+            .unwrap()
+            .binary_version;
         assert!(
-            names.iter().all(|n| n.starts_with("pre-0-to-16-")),
+            names
+                .iter()
+                .all(|n| n.starts_with(&format!("pre-0-to-{latest}-"))),
             "{names:?}"
         );
 

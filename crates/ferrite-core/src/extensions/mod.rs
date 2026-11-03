@@ -28,9 +28,14 @@
 //! [`PLUGIN_PURGE_KIND`]: crate::jobs::PLUGIN_PURGE_KIND
 
 mod admin;
+pub mod trust;
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use ferrite_domain::plugin_registry::RegistryIndex;
+use ferrite_domain::plugin_trust::{
+    KeyId, KeySource, PluginOwner, PublisherKey, RegistryCacheRow, Revocation, TrustedKey,
+};
 use ferrite_domain::{
     Artifact, ArtifactKind, InstalledPlugin, InstalledTheme, NewAudit, Timestamp,
 };
@@ -47,6 +52,31 @@ use crate::{
 };
 
 pub use admin::{ExtensionAdmin, MAX_FAILURE_BUCKETS};
+pub use trust::{
+    InstallTrust, OwnerChange, RegistryContext, SignerInput, SignerSource, SignerView,
+    TrustDecision, TrustWarning, owner_label,
+};
+
+/// What [`ExtensionService::store_registry`] did with a fetched index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistryStored {
+    /// A newer serial: the cache now holds it.
+    Stored,
+    /// The same serial and bytes as the cache: only the check time moved.
+    Unchanged,
+}
+
+/// [`ExtensionService::store_registry`]'s result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryRefresh {
+    pub stored: RegistryStored,
+    /// Plugins disabled by a newly compromised key the index revokes, or by a key
+    /// collision.
+    pub disabled: Vec<String>,
+    /// Site keys whose id the index lists under other key bytes: their rows were removed
+    /// and the plugins they signed disabled (M6-2 review).
+    pub collisions: Vec<KeyId>,
+}
 
 /// KV keys deleted per statement by a purge.
 const KV_PURGE_BATCH: u32 = 1_000;
@@ -168,24 +198,196 @@ impl ExtensionService {
     /// Enabling is [`set_plugin_enabled`](Self::set_plugin_enabled). A replacement with
     /// a different artifact clears the plugin's shared failure counters in the same
     /// transaction (P20).
+    ///
+    /// This is an unsigned install under policy `any` ([`InstallTrust::unsigned`]); a
+    /// signed one is [`install_plugin_trusted`](Self::install_plugin_trusted).
     pub async fn install_plugin(
         &self,
         artifact: &Artifact,
         row: &InstalledPlugin,
     ) -> Result<(), CoreError> {
-        self.install_plugin_with(artifact, row, None).await
+        let trust = InstallTrust::unsigned(manifest_publisher(&row.manifest));
+        self.install_plugin_with(artifact, row, &trust, None)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`install_plugin`](Self::install_plugin) with the upload's trust (M6-2, design 14
+    /// §4.2): the decision is made again inside the transaction, under the `extensions`
+    /// lock, and its writes (a newly approved key, the owner row) are part of it. A
+    /// refusal (`InvalidField` on `signature` or `publisher`) writes nothing.
+    pub async fn install_plugin_trusted(
+        &self,
+        artifact: &Artifact,
+        row: &InstalledPlugin,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        self.install_plugin_with(artifact, row, trust, None).await
     }
 
     pub(crate) async fn install_plugin_with(
         &self,
         artifact: &Artifact,
         row: &InstalledPlugin,
+        trust: &InstallTrust,
         audit: Option<NewAudit>,
-    ) -> Result<(), CoreError> {
+    ) -> Result<TrustDecision, CoreError> {
         check_artifact(artifact, ArtifactKind::Plugin, &row.artifact_hash)?;
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_install_plugin(tx.as_ref(), artifact, row, audit).await;
+        let done = write_install_plugin(tx.as_ref(), artifact, row, trust, audit).await;
         finish_locked(guard, tx, done).await
+    }
+
+    /// The trust decision an install of `name` with `trust` would make now (read
+    /// connection; the install decides again in its transaction).
+    pub async fn trust_preview(
+        &self,
+        name: &str,
+        trust: &InstallTrust,
+    ) -> Result<TrustDecision, CoreError> {
+        trust::decide(self.store.read(), name, trust).await
+    }
+
+    /// Revokes `key` (design 14 §3.4), inserting its row (with `label_if_new` and
+    /// `source_if_new`) when the site has none; with `compromised` every installed plugin
+    /// whose current version it signed is disabled in the same transaction. Returns the
+    /// disabled plugins.
+    pub async fn revoke_key(
+        &self,
+        key: &PublisherKey,
+        revocation: &Revocation,
+        label_if_new: &str,
+        source_if_new: KeySource,
+    ) -> Result<Vec<String>, CoreError> {
+        self.revoke_key_with(key, revocation, label_if_new, source_if_new, None)
+            .await
+    }
+
+    pub(crate) async fn revoke_key_with(
+        &self,
+        key: &PublisherKey,
+        revocation: &Revocation,
+        label_if_new: &str,
+        source_if_new: KeySource,
+        audit: Option<NewAudit>,
+    ) -> Result<Vec<String>, CoreError> {
+        let (guard, tx) = self.begin_locked().await?;
+        let done = trust::write_revocation(
+            tx.as_ref(),
+            key,
+            revocation,
+            label_if_new,
+            source_if_new,
+            audit,
+        )
+        .await;
+        finish_locked(guard, tx, done).await
+    }
+
+    /// Trusts `key` as an operator key (`ferrite plugin keys trust`), clearing a local
+    /// revocation. A key whose id the cached registry `index` lists under other key bytes
+    /// is refused (`InvalidField { field: "key" }`; a key id is 8 bytes anyone can choose).
+    pub async fn trust_key(
+        &self,
+        key: &PublisherKey,
+        label: &str,
+        index: Option<&RegistryIndex>,
+    ) -> Result<(), CoreError> {
+        if let Some(p) = index.and_then(|i| i.collides(key)) {
+            return Err(CoreError::invalid_field(
+                "key",
+                format!(
+                    "key {} has the id of a key the registry lists for {}, but other key bytes",
+                    key.key_id, p.name
+                ),
+            ));
+        }
+        let (guard, tx) = self.begin_locked().await?;
+        let done = tx
+            .plugin_trust()
+            .upsert_key(&TrustedKey {
+                key: key.clone(),
+                label: label.to_owned(),
+                source: KeySource::Operator,
+                trusted_at: Timestamp::now(),
+                revoked: None,
+            })
+            .await
+            .map_err(CoreError::from);
+        finish_locked(guard, tx, done).await
+    }
+
+    /// Deletes the owner row of `name` and keeps its data (`ferrite plugin unbind`,
+    /// operator only): the next install binds the name again. `false` when it had none.
+    pub async fn unbind(&self, name: &str) -> Result<bool, CoreError> {
+        let (guard, tx) = self.begin_locked().await?;
+        let done = tx
+            .plugin_trust()
+            .delete_owner(name)
+            .await
+            .map_err(CoreError::from);
+        finish_locked(guard, tx, done).await
+    }
+
+    /// Stores a fetched and verified index of registry `row.url` (signed by
+    /// `registry_key`), then applies its revocations, in one transaction under the
+    /// `extensions` lock: a lower serial than the cached one, or the same serial with
+    /// other bytes, is refused (`InvalidField { field: "serial" }`, a rollback) and the
+    /// cache stays. Every revoked key of the index gets a revocation row; a newly
+    /// compromised one disables the plugins it signed.
+    ///
+    /// `stale`: the cached index text the caller found not to verify under the current
+    /// registry key (the key changed, or the row was tampered with); a cached row with
+    /// exactly that text is replaced without the serial rule.
+    ///
+    /// A site key whose id the index lists under other key bytes (a collision, possible
+    /// for a key approved before the index was fetched) is removed, every installed plugin
+    /// it signed is disabled, and the collision is audited (`plugin.publisher.collision`).
+    pub async fn store_registry(
+        &self,
+        row: &RegistryCacheRow,
+        index: &RegistryIndex,
+        stale: Option<&str>,
+    ) -> Result<RegistryRefresh, CoreError> {
+        let (guard, tx) = self.begin_locked().await?;
+        let done = write_registry(tx.as_ref(), row, index, stale).await;
+        finish_locked(guard, tx, done).await
+    }
+
+    /// Records a failed check of registry `url` (the cache, if any, stays).
+    pub async fn registry_failed(&self, url: &str, error: &str) -> Result<(), CoreError> {
+        let error: String = error.chars().take(500).collect();
+        self.store
+            .read()
+            .plugin_trust()
+            .registry_checked(url, Timestamp::now(), Some(&error))
+            .await?;
+        Ok(())
+    }
+
+    /// The cached index row of registry `url`.
+    pub async fn registry_cache(&self, url: &str) -> Result<Option<RegistryCacheRow>, CoreError> {
+        Ok(self.store.read().plugin_trust().get_registry(url).await?)
+    }
+
+    /// The site's key rows (trusted and revoked), by key id.
+    pub async fn list_keys(&self) -> Result<Vec<TrustedKey>, CoreError> {
+        Ok(self.store.read().plugin_trust().list_keys().await?)
+    }
+
+    /// One key row.
+    pub async fn get_key(&self, id: &KeyId) -> Result<Option<TrustedKey>, CoreError> {
+        Ok(self.store.read().plugin_trust().get_key(id).await?)
+    }
+
+    /// The owner row of `name`.
+    pub async fn owner(&self, name: &str) -> Result<Option<PluginOwner>, CoreError> {
+        Ok(self.store.read().plugin_trust().get_owner(name).await?)
+    }
+
+    /// Every owner row, by plugin name.
+    pub async fn owners(&self) -> Result<Vec<PluginOwner>, CoreError> {
+        Ok(self.store.read().plugin_trust().list_owners().await?)
     }
 
     /// Enables or disables the plugin `name` (missing: `NotFound`) and clears its
@@ -567,8 +769,26 @@ async fn write_install_plugin(
     repos: &dyn Repos,
     artifact: &Artifact,
     row: &InstalledPlugin,
+    trust: &InstallTrust,
     audit: Option<NewAudit>,
-) -> Result<(), CoreError> {
+) -> Result<TrustDecision, CoreError> {
+    // Decided on committed state, before anything is written (design 14 §4.2).
+    let decision = trust::decide(repos, &row.name, trust).await?;
+    trust::write_trust(repos, &row.name, trust, &decision, Timestamp::now()).await?;
+    let audit = audit.map(|mut a| {
+        if let Some(details) = a.details.as_object_mut() {
+            details.insert(
+                "signer".into(),
+                json!(trust.signer.as_ref().map(|s| s.key.key_id.to_string())),
+            );
+            details.insert(
+                "owner".into(),
+                json!(decision.next_owner.as_ref().map(ToString::to_string)),
+            );
+            details.insert("source".into(), json!(trust.source.as_str()));
+        }
+        a
+    });
     record_artifact(repos, artifact).await?;
     let (enabled, disabled_reason) = match repos.plugins().get(&row.name).await? {
         Some(existing) => {
@@ -595,7 +815,147 @@ async fn write_install_plugin(
         .events()
         .append(&events::plugins_changed(&row.name))
         .await?;
-    append_audit(repos, audit).await
+    append_audit(repos, audit).await?;
+    Ok(decision)
+}
+
+/// The serial rule, the cache row and the index's revocations (see
+/// [`ExtensionService::store_registry`]).
+async fn write_registry(
+    repos: &dyn Repos,
+    row: &RegistryCacheRow,
+    index: &RegistryIndex,
+    stale: Option<&str>,
+) -> Result<RegistryRefresh, CoreError> {
+    let trust = repos.plugin_trust();
+    let cached = trust
+        .get_registry(&row.url)
+        .await?
+        .filter(|c| stale != Some(c.index_json.as_str()));
+    let stored = match cached {
+        Some(cached) if cached.serial > row.serial => {
+            return Err(CoreError::invalid_field(
+                "serial",
+                format!(
+                    "the registry served serial {}, older than the cached {} (a rollback)",
+                    row.serial, cached.serial
+                ),
+            ));
+        }
+        Some(cached) if cached.serial == row.serial => {
+            if cached.index_json != row.index_json {
+                return Err(CoreError::invalid_field(
+                    "serial",
+                    format!(
+                        "the registry served serial {} with other bytes than the cached copy",
+                        row.serial
+                    ),
+                ));
+            }
+            trust
+                .registry_checked(&row.url, row.checked_at, None)
+                .await?;
+            RegistryStored::Unchanged
+        }
+        _ => {
+            trust.put_registry(row).await?;
+            RegistryStored::Stored
+        }
+    };
+    let mut disabled = Vec::new();
+    let mut collisions = Vec::new();
+    for site_key in trust.list_keys().await? {
+        let Some(p) = index.collides(&site_key.key) else {
+            continue;
+        };
+        let id = site_key.key.key_id;
+        let reason = format!(
+            "publisher key {id} has the id of the registry's key for {} but other key bytes",
+            p.name
+        );
+        let mut off = Vec::new();
+        for owner in trust.owners_signed_by(&id).await? {
+            let Some(plugin) = repos.plugins().get_for_update(&owner.plugin).await? else {
+                continue;
+            };
+            if plugin.enabled {
+                repos
+                    .plugins()
+                    .set_enabled(&owner.plugin, false, Some(&reason))
+                    .await?;
+                repos
+                    .events()
+                    .append(&events::plugins_changed(&owner.plugin))
+                    .await?;
+                off.push(owner.plugin);
+            }
+        }
+        trust.delete_key(&id).await?;
+        append_audit(
+            repos,
+            Some(NewAudit {
+                actor_id: None,
+                action: "plugin.publisher.collision".to_owned(),
+                target_kind: "publisher".to_owned(),
+                target_id: Some(id.to_string()),
+                details: json!({
+                    "key_id": id.to_string(),
+                    "registry_publisher": p.id,
+                    "removed_label": site_key.label,
+                    "disabled": off,
+                }),
+            }),
+        )
+        .await?;
+        tracing::warn!(key = %id, publisher = %p.id, disabled = ?off, "{reason}; the site key was removed");
+        disabled.extend(off);
+        collisions.push(id);
+    }
+    for publisher in &index.publishers {
+        for revoked in &publisher.revoked_keys {
+            let current = trust
+                .get_key(&revoked.key.key_id)
+                .await?
+                .filter(|k| k.key == revoked.key);
+            let same = current
+                .as_ref()
+                .and_then(|k| k.revoked.as_ref())
+                .is_some_and(|r| r.compromised || !revoked.compromised);
+            if same {
+                continue;
+            }
+            let revocation = Revocation {
+                at: revoked.revoked_at,
+                reason: revoked.reason.clone(),
+                compromised: revoked.compromised,
+            };
+            disabled.extend(
+                trust::write_revocation(
+                    repos,
+                    &revoked.key,
+                    &revocation,
+                    &publisher.name,
+                    KeySource::Registry,
+                    None,
+                )
+                .await?,
+            );
+        }
+    }
+    Ok(RegistryRefresh {
+        stored,
+        disabled,
+        collisions,
+    })
+}
+
+/// The manifest's `plugin.publisher` text of a stored row (empty when absent).
+pub(crate) fn manifest_publisher(manifest: &Value) -> String {
+    manifest
+        .pointer("/plugin/publisher")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 async fn write_plugin_enabled(
@@ -690,6 +1050,8 @@ async fn delete_options(
     if repos.options().get(&erased).await?.is_some() {
         delete_option(repos, &erased).await?;
     }
+    // The data is gone: the name is free for any publisher (design 14 §4.3).
+    repos.plugin_trust().delete_owner(name).await?;
     delete_option(repos, &deleted_marker(name)).await
 }
 

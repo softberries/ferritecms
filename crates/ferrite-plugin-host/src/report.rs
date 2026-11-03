@@ -9,10 +9,13 @@
 //!
 //! **Fingerprint.** Lowercase hex SHA-256 of the compact JSON of
 //! `{"artifact":<hash>,"grant":<Grant::of(manifest).to_json()>,"plugin":<name>,
-//! "version":<version>}`. serde_json objects are sorted maps (the workspace does not
+//! "version":<version>}`, plus `"signer":<KEY_ID>` when the bundle is signed (M6-2 D11:
+//! unsigned fingerprints stay byte-identical, and an approval of a signed report cannot be
+//! replayed with the signature stripped or swapped). serde_json objects are sorted maps (the workspace does not
 //! enable `preserve_order`; a unit test pins one fingerprint so a change there fails
 //! loudly), so equal inputs give equal fingerprints on every node and release.
 
+use ferrite_domain::plugin_trust::KeyId;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -37,6 +40,8 @@ pub struct PermissionReport {
     pub limits: Vec<LimitItem>,
     /// What an approval must carry (see the module docs).
     pub fingerprint: String,
+    /// The key that signed the bundle, when it is signed (part of the fingerprint).
+    pub signer: Option<KeyId>,
 }
 
 /// One capability asked for.
@@ -105,6 +110,18 @@ impl Manifest {
         current: Option<&Grant>,
         host: &HostConfig,
     ) -> Result<PermissionReport, PluginError> {
+        self.permission_report_signed(artifact, None, current, host)
+    }
+
+    /// [`Manifest::permission_report`] for a bundle signed by `signer` (its key id is
+    /// part of the fingerprint, M6-2 D11).
+    pub fn permission_report_signed(
+        &self,
+        artifact: &str,
+        signer: Option<&KeyId>,
+        current: Option<&Grant>,
+        host: &HostConfig,
+    ) -> Result<PermissionReport, PluginError> {
         let (memory, fuel) = LimitBounds::of_host(host);
         let bounds = [
             ("memory", self.limits.memory, memory),
@@ -160,18 +177,22 @@ impl Manifest {
             items,
             added,
             limits,
-            fingerprint: fingerprint(self, artifact),
+            fingerprint: fingerprint(self, artifact, signer),
+            signer: signer.copied(),
         })
     }
 }
 
-fn fingerprint(m: &Manifest, artifact: &str) -> String {
-    let doc = json!({
+fn fingerprint(m: &Manifest, artifact: &str, signer: Option<&KeyId>) -> String {
+    let mut doc = json!({
         "plugin": m.plugin.name,
         "version": m.plugin.version.to_string(),
         "artifact": artifact,
         "grant": Grant::of(m).to_json(),
     });
+    if let Some(signer) = signer {
+        doc["signer"] = json!(signer.to_string());
+    }
     ferrite_domain::to_hex(&Sha256::digest(doc.to_string().as_bytes()))
 }
 
@@ -706,7 +727,7 @@ mod tests {
             "grant": Grant::of(&m).to_json(),
         });
         assert_eq!(doc.to_string(), PINNED_DOC);
-        assert_eq!(fingerprint(&m, ARTIFACT), PINNED_FINGERPRINT);
+        assert_eq!(fingerprint(&m, ARTIFACT, None), PINNED_FINGERPRINT);
         let r = m
             .permission_report(ARTIFACT, None, &HostConfig::default())
             .expect("report");
@@ -721,7 +742,42 @@ mod tests {
             "grant": Grant::of(&m).to_json(),
         });
         assert_eq!(doc.to_string(), PINNED_SERVED_DOC);
-        assert_eq!(fingerprint(&m, ARTIFACT), PINNED_SERVED_FINGERPRINT);
+        assert_eq!(fingerprint(&m, ARTIFACT, None), PINNED_SERVED_FINGERPRINT);
+    }
+
+    /// M6-2 D11: a signer changes the fingerprint; the same signer gives the same one.
+    #[test]
+    fn signer_changes_fingerprint() {
+        let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
+        let host = HostConfig::default();
+        let a = KeyId::parse("432051207B9BA065").unwrap();
+        let b = KeyId::parse("0123456789ABCDEF").unwrap();
+        let unsigned = m.permission_report(ARTIFACT, None, &host).unwrap();
+        let signed_a = m
+            .permission_report_signed(ARTIFACT, Some(&a), None, &host)
+            .unwrap();
+        let signed_b = m
+            .permission_report_signed(ARTIFACT, Some(&b), None, &host)
+            .unwrap();
+        assert_ne!(unsigned.fingerprint, signed_a.fingerprint);
+        assert_ne!(signed_a.fingerprint, signed_b.fingerprint);
+        assert_eq!(signed_a.signer, Some(a));
+        assert_eq!(unsigned.signer, None);
+        assert_eq!(unsigned.fingerprint, PINNED_SERVED_FINGERPRINT);
+    }
+
+    #[test]
+    fn same_signer_same_fingerprint() {
+        let m = Manifest::parse(DESIGN_EXAMPLE).expect("parses");
+        let host = HostConfig::default();
+        let a = KeyId::parse("432051207B9BA065").unwrap();
+        let one = m
+            .permission_report_signed(ARTIFACT, Some(&a), None, &host)
+            .unwrap();
+        let two = m
+            .permission_report_signed(ARTIFACT, Some(&a), None, &host)
+            .unwrap();
+        assert_eq!(one.fingerprint, two.fingerprint);
     }
 
     /// Checked independently: `printf '%s' "$PINNED_DOC" | shasum -a 256`.

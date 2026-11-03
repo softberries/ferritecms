@@ -173,6 +173,7 @@ const ORDER: &[&str] = &[
     "db.schema",
     "db.identity",
     "webhooks.endpoints",
+    "plugins.trust",
     "upgrade.record",
     "media.store",
     "media.owner",
@@ -212,6 +213,8 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         ("db.schema", "ok"),
         ("db.identity", "ok"),
         ("webhooks.endpoints", "ok"),
+        // M6-2: no plugins, and this build has no key for the default registry.
+        ("plugins.trust", "info"),
         ("upgrade.record", "ok"),
         // The local probe is not a network check: it runs offline too.
         ("media.store", "ok"),
@@ -2312,4 +2315,153 @@ fn webhooks_without_a_database_skips() {
     std::fs::remove_file(tmp.path().join("ferrite.db")).unwrap();
     let out = offline(tmp.path());
     assert_eq!(out.status("webhooks.endpoints"), "skip", "{}", out.stdout);
+}
+
+// ---- plugins.trust (M6-2) ---------------------------------------------------------------
+
+const TRUST_KEY: &str = "RWRloJt7IFEgQ3QWSMCPZT0k6xJ8KEMme02/HBySQSajqZ9ld96QHy9a";
+
+/// A plugin row `name` (with its artifact) and, with `signer`, an owner row signed by it.
+fn trust_plugin(dir: &Path, name: &str, owner: Option<&str>, signer: Option<&str>) {
+    let hash = format!("{:0>64}", name.len());
+    let mut sql = vec![
+        format!(
+            "INSERT OR IGNORE INTO artifacts (hash, kind, bytes, mime, created_at) \
+             VALUES ('{hash}', 'plugin', 1, 'application/wasm', 0)"
+        ),
+        format!(
+            "INSERT INTO plugins (name, version, artifact_hash, manifest, granted, enabled, \
+             installed_at, updated_at) VALUES ('{name}', '0.1.0', '{hash}', '{{}}', '{{}}', 1, 0, 0)"
+        ),
+    ];
+    if signer.is_some() || owner.is_some() {
+        let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
+        sql.push(format!(
+            "INSERT INTO plugin_owners (plugin, owner, signer_key, publisher, source, bound_at, \
+             updated_at) VALUES ('{name}', {}, {}, 'x', 'upload', 0, 0)",
+            q(owner),
+            q(signer)
+        ));
+    }
+    let refs: Vec<&str> = sql.iter().map(String::as_str).collect();
+    sqlite_exec(&dir.join("ferrite.db"), &refs);
+}
+
+fn append_config(dir: &Path, text: &str) {
+    let path = dir.join("ferrite.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    // `[plugins]` exists in the generated file: add the keys under it.
+    let config = config.replacen("[plugins]\n", &format!("[plugins]\n{text}"), 1);
+    std::fs::write(&path, config).unwrap();
+}
+
+#[test]
+fn trust_info_registry_off() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "info", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust").contains("registry off"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.detail("plugins.trust").contains("0 plugins"));
+}
+
+#[test]
+fn trust_ok() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(
+        tmp.path(),
+        &format!(
+            "registry = \"file:///srv/registry/index.json\"\nregistry_key = \"{TRUST_KEY}\"\n"
+        ),
+    );
+    trust_plugin(
+        tmp.path(),
+        "seo",
+        Some("reg:432051207B9BA065:ferritecms.dev"),
+        Some("0102030405060708"),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[
+            "INSERT INTO plugin_registry (url, serial, index_json, signature, generated_at, \
+           fetched_at, checked_at) VALUES ('file:///srv/registry/index.json', 3, '{}', 's', 0, 0, \
+           (CAST(strftime('%s','now') AS INTEGER) * 1000000))",
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "ok", "{}", out.stdout);
+    let detail = out.detail("plugins.trust");
+    assert!(detail.contains("1 plugins, 1 verified"), "{detail}");
+    assert!(detail.contains("registry serial 3"), "{detail}");
+}
+
+#[test]
+fn trust_warns_unsigned_under_signed_policy() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(tmp.path(), "signatures = \"signed\"\n");
+    trust_plugin(tmp.path(), "plain", None, None);
+    let out = offline(tmp.path());
+    assert_eq!(out.code, 2, "{}", out.stdout);
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(out.detail("plugins.trust").contains("plain is unsigned"));
+}
+
+#[test]
+fn trust_warns_revoked_signer() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    trust_plugin(
+        tmp.path(),
+        "seo",
+        Some("key:0102030405060708"),
+        Some("0102030405060708"),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[&format!(
+            "INSERT INTO plugin_publishers (key_id, public_key, label, source, trusted_at, \
+             revoked_at, revoked_reason, compromised) VALUES ('0102030405060708', '{TRUST_KEY}', \
+             'x', 'approved', 0, 1, 'leaked', 1)"
+        )],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust")
+            .contains("revoked key 0102030405060708"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn trust_warns_stale_check() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(
+        tmp.path(),
+        &format!(
+            "registry = \"file:///srv/registry/index.json\"\nregistry_key = \"{TRUST_KEY}\"\nregistry_check = \"daily\"\n"
+        ),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[
+            "INSERT INTO plugin_registry (url, serial, index_json, signature, generated_at, \
+           fetched_at, checked_at) VALUES ('file:///srv/registry/index.json', 3, '{}', 's', 0, 0, 0)",
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust").contains("last checked"),
+        "{}",
+        out.stdout
+    );
 }

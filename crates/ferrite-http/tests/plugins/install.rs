@@ -116,10 +116,11 @@ async fn stage_requires_the_fingerprint(site: Site) -> Site {
     nothing_written(&site, &inspected.report().artifact).await;
 
     let fingerprint = inspected.report().fingerprint.clone();
-    let (artifact, row) = installer
+    let staged = installer
         .stage_plugin(inspected, &fingerprint)
         .await
         .unwrap();
+    let (artifact, row) = (staged.artifact, staged.row);
     assert_eq!(artifact.kind, ArtifactKind::Plugin);
     assert_eq!(artifact.mime, PLUGIN_MIME);
     assert_eq!(artifact.bytes, wasm.len() as i64);

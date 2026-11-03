@@ -565,7 +565,7 @@ fn rollback_schema_stores_the_older_version() {
     let (data, _) = upgraded_site(tmp.path(), from);
 
     rollback(&bins.current)
-        .args(["--schema", "--data"])
+        .args(["--schema", "--allow-lossy", "--data"])
         .arg(&data)
         .assert()
         .success();
@@ -622,7 +622,7 @@ fn rollback_schema_without_from_stores_the_reported_version() {
     upgrade::write(&data, &rec).unwrap();
 
     let out = rollback(&bins.current)
-        .args(["--schema", "--data"])
+        .args(["--schema", "--allow-lossy", "--data"])
         .arg(&data)
         .output()
         .unwrap();
@@ -1002,7 +1002,7 @@ fn rollback_schema_refuses_while_a_postgres_node_is_live() {
     );
 
     let out = rollback(&bins.current)
-        .args(["--schema", "--data"])
+        .args(["--schema", "--allow-lossy", "--data"])
         .arg(&data)
         .output()
         .unwrap();
@@ -1020,7 +1020,7 @@ fn rollback_schema_refuses_while_a_postgres_node_is_live() {
         "UPDATE nodes SET heartbeat_at = now() - interval '60 seconds'",
     );
     let out = rollback(&bins.current)
-        .args(["--schema", "--data"])
+        .args(["--schema", "--allow-lossy", "--data"])
         .arg(&data)
         .output()
         .unwrap();

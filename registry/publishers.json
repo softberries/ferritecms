@@ -1,0 +1,12 @@
+{
+  "note": "The publishers of the FerriteCMS plugin registry (M6-2, design 14 §11): reviewed in PRs. keys holds each publisher's current minisign public keys (the base64 line); the release owner adds the public half of PLUGINS_SECRET_KEY here when creating it (docs/design/09-operations.md, Plugin keys). A revoked key moves to revoked_keys with revoked_at, reason and compromised.",
+  "publishers": [
+    {
+      "id": "ferritecms.dev",
+      "name": "FerriteCMS (Softberries)",
+      "homepage": "https://softberries.github.io/ferritecms/",
+      "keys": [],
+      "revoked_keys": []
+    }
+  ]
+}

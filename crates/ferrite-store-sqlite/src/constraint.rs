@@ -57,6 +57,13 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "plugin_failures_pkey",
     ),
     ("plugin_kv.plugin, plugin_kv.key", "plugin_kv_pkey"),
+    ("plugin_owners.plugin", "plugin_owners_pkey"),
+    ("plugin_publishers.key_id", "plugin_publishers_pkey"),
+    (
+        "plugin_publishers.public_key",
+        "plugin_publishers_public_key_uq",
+    ),
+    ("plugin_registry.url", "plugin_registry_pkey"),
     ("plugins.name", "plugins_pkey"),
     ("rate_limits.bucket", "rate_limits_pkey"),
     ("redirects.id", "redirects_pkey"),

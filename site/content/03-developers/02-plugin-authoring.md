@@ -246,3 +246,22 @@ ferrite plugin install --data ./mysite --dir ./hello-plugin --enable
 
 Every page now has `<meta name="generator" content="ferrite-hello">` in its head. See
 [Plugins](../02-guides/05-plugins.md) for the permission report, settings and removal.
+
+## Sign a plugin
+
+Sign the folder with a [minisign](https://jedisct1.github.io/minisign/) key, so that sites
+see who published it and only your later versions get its data. The binary never handles
+secret keys: you sign with the `minisign` tool. Print the signing payload (the manifest's
+and the component's SHA-256 under a fixed header), sign it, and add your public key:
+
+```sh
+minisign -G -p ~/.minisign/plugins.pub -s ~/.minisign/plugins.key   # once
+ferrite plugin digest --dir ./hello-plugin --out /tmp/payload
+minisign -S -s ~/.minisign/plugins.key -m /tmp/payload -x ./hello-plugin/ferrite-plugin.minisig
+cp ~/.minisign/plugins.pub ./hello-plugin/ferrite-plugin.pub
+```
+
+`ferrite plugin digest` needs no data folder. The first install on a site shows your key as
+a new publisher key; approving it trusts the key for the plugin's updates. Sign every new
+version with the same key. A changed byte in either file invalidates the signature, so sign
+last.

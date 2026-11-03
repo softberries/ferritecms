@@ -555,3 +555,28 @@ output are in the exit's §4), a fresh site at `http://127.0.0.1:8197`, `serve` 
 | monitoring, cli | 26 doctor checks, `webhooks.endpoints` in the database group | `tests/doctor.rs` `ORDER`; run | Verified |
 | configuration | `[webhooks] local_targets`, default `false`, env `FERRITE_WEBHOOKS__LOCAL_TARGETS` | `ferrite-config` `webhooks_local_targets` | Verified |
 | upgrades | Old nodes in a rolling upgrade emit no webhook events and claim no delivery jobs | design 18 §10.4; the runner claims only handled kinds (`ferrite-cluster`) | Not run (no mixed-version cluster with webhooks) |
+
+## Plugin trust (M6-2, 2026-11-03)
+
+Checked on branch `m6-2-plugin-trust` with a release build, against the tests named and the
+manual run recorded in `docs/superpowers/m6-2-exit.md` ("Manual end-to-end check"), with
+throwaway keys only.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| plugins | A signed folder also holds `ferrite-plugin.minisig` and optionally `ferrite-plugin.pub` | `crates/ferrite/src/ext_cmd.rs` (`read_package`), `plugin_trust_cli::install_dir_with_signature_records_owner`; the manual run installed the signed `seo` folder | Verified |
+| plugins | The report says Verified publisher, New publisher key or Unsigned | `admin/src/plugins/trust-summary.test.tsx`, `plugin_trust_cli::check_prints_verified_publisher`, `plugins_trust::signed_upload_reports_new_key_and_installs`, `e2e/plugins-trust.spec.ts` | Verified |
+| plugins | A signature that does not match, or an unknown key without its `.pub`, is refused, never treated as unsigned | `plugins_trust::swapped_component_signature_mismatch`, `unknown_key_without_key_part_refused`, `garbage_key_part_422` | Verified |
+| plugins | The data belongs to the first signed publisher; an update from another key, or unsigned, is refused until the data is erased | `ferrite-core/tests/plugin_trust.rs` (`stripped_signature_after_signed_owner_refused`, `other_key_same_name_refused_even_if_approved_new`, `erase_frees_name`), `plugin_trust_cli::install_dir_stripped_signature_refused_exit_1`, the E2E refusal step | Verified |
+| plugins | An unsigned plugin keeps working; the first signed version takes over its data | `existing_rows_without_owner_are_unsigned_owned`, `signed_over_unsigned_claims`, `registry::registry_install_claims_unsigned_owner` | Verified |
+| plugins, configuration | `[plugins] signatures` is `any` (default), `signed` or `trusted`; the admin only shows it | `ferrite-config` `plugin_trust::signatures_values`, `trust_defaults`; `policy_signed_refuses_unsigned`, `policy_trusted_refuses_new_key`; no API writes it (`api/plugin_registry.rs`) | Verified |
+| plugins, cli | `search`, `install NAME`, `update` fetch the registry first; `update --check` exits 2 with updates, 0 without | `plugin_trust_cli::{search_lists_matches, install_name_from_file_registry, update_check_exits_2_with_updates_0_without}`; the manual run | Verified |
+| plugins | Check for updates, the Registry tab and the Update chip in the admin | `e2e/plugins-trust.spec.ts` (Chromium, SQLite and Postgres), `registry-browser.test.tsx`, `plugins-list.test.tsx::list_shows_update_chip` | Verified |
+| plugins, configuration | The registry is fetched only on demand unless `registry_check = "daily"` | `serve.rs` (the periodic only with `daily`), `jobs/registry.rs::periodic_is_daily` (not in `core_periodics`) | Verified |
+| plugins | The official registry is not published yet; a build without its key has it off until `registry_key` is set | `crates/ferrite/registry.pub` is the placeholder; `registry::tests::placeholder_means_off_for_the_default_url`; doctor `trust_info_registry_off` | Verified |
+| plugins, cli | Publisher keys page, `keys list|trust|revoke`, compromised revocation disables the plugins | `plugin_trust_cli::keys_trust_list_revoke`, `plugin_registry::revoke_compromised_disables_plugin`, the E2E revocation step, `publishers_revoke_dialog_requires_reason` | Verified |
+| plugins, cli | `unbind` frees a name and keeps its data | `plugin_trust_cli::unbind_then_other_publisher_installs`, `unbind_keeps_data` | Verified |
+| plugin-authoring | `ferrite plugin digest` needs no data folder and prints what `minisign -S` signs; a folder signed with the minisign CLI installs | `plugin_trust_cli::digest_matches_payload`, `tests/plugin_payload.rs`; the manual run signed with the `minisign` CLI 0.12 (`.github/scripts/sign-plugins.sh`) and installed | Verified |
+| cli | The command list and the output formats | `ferrite plugin --help`, `ferrite plugin keys --help` run on the release build | Verified |
+| configuration | `registry` (default URL, `""` off, https or `file:///`), `registry_key` required for another registry, cluster nodes need the same values | `ferrite-config` `plugin_trust::*` tests; design 14 §13 for the cluster rule (not run on two nodes) | Verified (the cluster rule from the design only) |
+| mcp-tools | `plugins_list` carries the publisher and an offered update | `plugin_registry::mcp_plugins_list_includes_trust` | Verified |

@@ -14,6 +14,7 @@ mod gc;
 mod import;
 pub(crate) mod media;
 mod permalinks;
+mod registry;
 mod webhooks;
 
 use std::{sync::Arc, time::Duration};
@@ -47,6 +48,10 @@ pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};
 pub use permalinks::PermalinkRedirectsHandler;
+pub use registry::{
+    REGISTRY_CHECK_EVERY, REGISTRY_CHECK_KIND, REGISTRY_CHECK_OFFSET, RegistryCheckHandler,
+    registry_check_periodic,
+};
 pub use webhooks::{
     WEBHOOK_DELIVER_TIMEOUT, WEBHOOKS_PRUNE_EVERY, WebhookDeliverHandler, WebhookNotice,
     WebhooksPruneHandler, notice_mail, webhook_slots, webhooks_prune_periodic,

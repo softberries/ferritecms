@@ -12,6 +12,7 @@ mod migrate;
 mod node_metrics;
 mod notify;
 mod paging;
+mod plugin_trust;
 mod repos;
 mod search;
 mod session;
@@ -55,6 +56,9 @@ pub use paging::{
     encode_grant_cursor, encode_job_cursor, encode_text_cursor, file_bounds_from_rows,
     grant_cursor, idempotency_status, job_backoff, job_cursor, like_contains, media_kind_sql,
     rate_hit, sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
+};
+pub use plugin_trust::{
+    PluginTrustRepo, check_plugin_owner, check_registry_row, check_trusted_key,
 };
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,

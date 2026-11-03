@@ -59,6 +59,7 @@ webpki-roots.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+minisign.workspace = true
 ferrite-http = { path = ".", features = ["test-seams"] }
 ferrite-store-tests = { path = "../ferrite-store-tests" }
 http-body-util.workspace = true

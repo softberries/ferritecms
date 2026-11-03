@@ -56,8 +56,18 @@ pub async fn open(req: Request, max_body: usize) -> Result<Multipart, Problem> {
 /// Reads every part of `mp`: each must be named in `spec` (name, most bytes) and appear
 /// once, and every part of `spec` must be there (see the module docs for the problems).
 pub async fn read_parts(
+    mp: Multipart,
+    spec: &[(&'static str, usize)],
+) -> Result<BTreeMap<&'static str, Bytes>, Problem> {
+    read_parts_with(mp, spec, &[]).await
+}
+
+/// [`read_parts`] where the parts named in `optional` may be left out (M6-2: a plugin's
+/// `signature` and `publisher_key`).
+pub async fn read_parts_with(
     mut mp: Multipart,
     spec: &[(&'static str, usize)],
+    optional: &[&str],
 ) -> Result<BTreeMap<&'static str, Bytes>, Problem> {
     let mut parts = BTreeMap::new();
     while let Some(mut field) = mp.next_field().await.map_err(body_error)? {
@@ -76,7 +86,10 @@ pub async fn read_parts(
         let buf = read_field(&mut field, name, max).await?;
         parts.insert(name, buf);
     }
-    if let Some((missing, _)) = spec.iter().find(|(n, _)| !parts.contains_key(n)) {
+    if let Some((missing, _)) = spec
+        .iter()
+        .find(|(n, _)| !parts.contains_key(n) && !optional.contains(n))
+    {
         return Err(Problem::validation(format!("part {missing:?} is required"))
             .with_error(Some(missing), "required"));
     }
