@@ -1090,4 +1090,40 @@ mod tests {
             std::mem::forget(v); // Value's Drop recurses
         });
     }
+
+    /// `heading_ids` gives exactly the ids the renderer writes (design 16 §4.3).
+    #[test]
+    fn heading_ids_match_render_toc() {
+        let every: Value = serde_json::from_str(include_str!(
+            "../../../../admin/src/editor/fixtures/every-node.json"
+        ))
+        .unwrap();
+        let mut deep = heading(2, vec![t("Deep")]);
+        for i in 0..MAX_DEPTH + 2 {
+            deep = json!({"type":"blockquote","content":[deep, heading(3, vec![t(&format!("L{i}"))])]});
+        }
+        let cases = vec![
+            every,
+            doc(vec![
+                heading(1, vec![t("Title")]),
+                heading(2, vec![t("Setup")]),
+                heading(3, vec![t("Setup")]),
+                json!({"type":"heading","attrs":{"level":7},"content":[t("H")]}),
+                json!({"type":"codeBlock","content":[heading(2, vec![t("in code")])]}),
+                json!({"type":"callout","content":[heading(2, vec![t("unknown")])]}),
+                json!({"type":"table","content":[{"type":"tableRow","content":[
+                    {"type":"tableHeader","content":[heading(2, vec![t("Cell")])]}]}]}),
+                json!([heading(2, vec![t("array")])]),
+                heading(2, vec![t("Content")]),
+                heading(2, vec![t("🎉")]),
+            ]),
+            doc(vec![deep]),
+            json!({"type":"heading","attrs":{"level":2},"content":[t("root")]}),
+            json!(null),
+        ];
+        for d in cases {
+            let rendered: Vec<String> = toc(&d).1.into_iter().map(|e| e.id).collect();
+            assert_eq!(crate::blocks::heading_ids(&d), rendered, "{d}");
+        }
+    }
 }

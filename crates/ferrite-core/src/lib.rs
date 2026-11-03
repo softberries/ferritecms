@@ -22,6 +22,7 @@ mod menu;
 pub mod oauth;
 mod options;
 pub mod permalink;
+pub mod quality;
 mod redirects;
 pub mod seed;
 pub mod settings;

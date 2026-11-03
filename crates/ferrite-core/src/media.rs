@@ -725,7 +725,7 @@ pub fn check_file_name(raw: &str) -> Result<String, CoreError> {
 /// names, where a bidi override disguises the extension (`report\u{202E}fdp.zip` shows
 /// as `reportpiz.pdf`). Not refused in titles or alt text, where joiners (U+200D in
 /// emoji sequences) are legitimate.
-fn is_format(c: char) -> bool {
+pub(crate) fn is_format(c: char) -> bool {
     matches!(
         u32::from(c),
         0x00AD
