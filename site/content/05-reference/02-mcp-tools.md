@@ -74,8 +74,8 @@ offered: they stay with a person in the admin.
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
 | `taxonomies_list` | Lists the taxonomies, such as categories and tags. | `content:read` | read |
-| `terms_list` | Lists the terms of one taxonomy, with filters and paging. | `terms:read` | read |
-| `term_create` | Creates a term in a taxonomy. | `terms:write` | write |
+| `terms_list` | Lists the terms of one taxonomy, with filters (a language among them) and paging. | `terms:read` | read |
+| `term_create` | Creates a term in a taxonomy, in a language and as another term's translation if asked. | `terms:write` | write |
 | `term_update` | Changes a term's name, slug, parent or description. | `terms:write` | write |
 | `term_delete` | Deletes a term; the content that had it stays. | `terms:write` | write |
 
@@ -84,8 +84,8 @@ offered: they stay with a person in the admin.
 | Tool | What it does | Scope | Access |
 |---|---|---|---|
 | `menus_list` | Lists the menus and the locations the active theme declares. | `menus:read` | read |
-| `menu_get` | Returns one menu as a nested tree of entries. | `menus:read` | read |
-| `menu_set` | Replaces a menu's whole item tree. | `menus:write` | write |
+| `menu_get` | Returns one menu as a nested tree of entries, with its language and the menu it translates. | `menus:read` | read |
+| `menu_set` | Replaces a menu's whole item tree; sets its language and the default-language menu it translates. | `menus:write` | write |
 
 ## Content types
 

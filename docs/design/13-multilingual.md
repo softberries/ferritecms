@@ -584,5 +584,6 @@ Where the build differs from the sections above (the M6-1 exit lists each as an
   files in dependency order; a page that cannot join is reported as `translation-of`.
 - **Admin.** The taxonomy and menu screens do not show locales yet (per-locale terms and
   menus through the API); the content list's status counts are not per locale.
-- **MCP.** `terms_list`, `term_create`, `menu_get` and `menu_set` take no `locale`; the
-  terms and menus of other locales are reached through the REST API.
+- **MCP.** `terms_list` takes `locale`; `term_create` takes `locale` and `translation_of`;
+  `menu_get` returns and `menu_set` takes `locale` and `translation_of` (left out: kept,
+  `null`: removed).

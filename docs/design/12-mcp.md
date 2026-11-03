@@ -238,8 +238,8 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Site | `site_overview` (title, URL, version, active theme, content types, taxonomies, menus, counts, the caller's role and scopes), `site_search` (full-text over content) |
 | Content | `content_list`, `content_get`, `content_create`, `content_update`, `content_publish`, `content_unpublish`, `content_schedule`, `content_submit_for_review`, `content_trash`, `content_restore`, `content_revisions`, `content_restore_revision`, `content_preview_link`, `content_translate` (M6-1) |
 | Media | `media_list`, `media_get`, `media_upload` (from an `https` URL fetched with the SSRF-checked client, or base64 data up to 6 MiB), `media_update` (title, alt), `media_trash`, `media_restore` |
-| Taxonomies | `taxonomies_list`, `terms_list`, `term_create`, `term_update`, `term_delete` |
-| Menus | `menus_list`, `menu_get`, `menu_set` (replace the item tree) |
+| Taxonomies | `taxonomies_list`, `terms_list`, `term_create`, `term_update`, `term_delete` (M6-1: `locale` on `terms_list` and `term_create`, `translation_of` on `term_create`) |
+| Menus | `menus_list`, `menu_get`, `menu_set` (replace the item tree; M6-1: `locale`, `translation_of`) |
 | Content types | `content_types_list`, `content_type_get`, `content_type_create`, `content_type_update` |
 | Redirects | `redirects_list`, `redirect_create`, `redirect_update`, `redirect_delete` |
 | Comments | `comments_list`, `comment_moderate` (approve, spam, trash), `comment_reply` |

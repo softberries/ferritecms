@@ -50,6 +50,10 @@ pub struct ListInput {
     #[serde(default)]
     #[schemars(range(min = 1, max = 100))]
     pub per_page: Option<u32>,
+    /// Only terms in this locale (a tag site_overview lists, e.g. `de`); absent: every
+    /// locale.
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 /// The input of `term_create`.
@@ -70,6 +74,14 @@ pub struct CreateInput {
     /// A short description (themes may show it on the archive page).
     #[serde(default)]
     pub description: Option<String>,
+    /// The term's locale (a tag site_overview lists, e.g. `de`); absent: the site's
+    /// default. Its parent must be in the same locale.
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The id of a term of the same taxonomy that this one translates: the new term joins
+    /// its translation group (one term per locale in a group).
+    #[serde(default)]
+    pub translation_of: Option<Uuid>,
 }
 
 /// The input of `term_update`.
@@ -151,9 +163,10 @@ impl FerriteMcp {
     }
 
     /// Lists the terms of one taxonomy (for example every category), filtered by words
-    /// in the name or slug (`q`) or by `parent`, in pages with the total. Each term has
-    /// its id (what content_create and content_update take in `terms`), slug, name,
-    /// description and parent id.
+    /// in the name or slug (`q`), by `parent` or by `locale`, in pages with the total.
+    /// Each term has its id (what content_create and content_update take in `terms`;
+    /// on a multilingual site use terms in the item's locale), slug, name, description,
+    /// parent id, locale and translation group.
     #[tool(annotations(title = "List terms", read_only_hint = true, open_world_hint = false))]
     pub async fn terms_list(
         &self,
@@ -181,10 +194,22 @@ impl FerriteMcp {
                 }
             },
         };
+        if let Some(l) = &input.locale {
+            match ferrite_core::locales::read(self.api.store.read()).await {
+                Ok(locales) if locales.contains(l) => {}
+                Ok(_) => {
+                    return results::invalid(
+                        Some("locale"),
+                        "locale is not one of the site's locales (see site_overview)",
+                    );
+                }
+                Err(e) => return results::from_core(e),
+            }
+        }
         let terms = match self
             .api
             .taxonomy
-            .list_terms_for(caller.actor(), &input.taxonomy, None)
+            .list_terms_for(caller.actor(), &input.taxonomy, input.locale.as_deref())
             .await
         {
             Ok(t) => t,
@@ -234,8 +259,11 @@ impl FerriteMcp {
 
     /// Creates a term (a category, a tag, ...) in a taxonomy. The slug is derived from
     /// the name unless given. Only hierarchical taxonomies such as `category` take a
-    /// `parent`. Check terms_list first so you do not create a duplicate. Returns the
-    /// term with its `id`, which content_create and content_update take in `terms`.
+    /// `parent`. Check terms_list first so you do not create a duplicate. On a
+    /// multilingual site give `locale` for a term in another language, and
+    /// `translation_of` (a term of the same taxonomy) to link it as that term's
+    /// translation. Returns the term with its `id`, which content_create and
+    /// content_update take in `terms`.
     #[tool(annotations(
         title = "Create term",
         read_only_hint = false,
@@ -251,13 +279,19 @@ impl FerriteMcp {
         match self
             .api
             .taxonomy
-            .create_term(
+            .create_localized_term(
                 caller.actor(),
-                &input.taxonomy,
-                &input.name,
-                input.slug,
-                input.parent.map(TermId::from_uuid),
-                input.description.as_deref().unwrap_or_default(),
+                ferrite_core::NewTermInput {
+                    taxonomy: input.taxonomy,
+                    name: input.name,
+                    slug: input.slug,
+                    parent: input.parent.map(TermId::from_uuid),
+                    description: input.description.unwrap_or_default(),
+                },
+                ferrite_core::TermPlacement {
+                    locale: input.locale,
+                    translation_of: input.translation_of.map(TermId::from_uuid),
+                },
             )
             .await
         {

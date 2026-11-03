@@ -18,6 +18,7 @@ api_tests!(
     terms_and_menus_per_locale,
     mcp_translate_then_update,
     patch_with_refused_move_saves_nothing,
+    mcp_terms_and_menus_take_locale,
 );
 
 const POSTS: &str = "/api/v1/content/post";
@@ -351,5 +352,100 @@ async fn patch_with_refused_move_saves_nothing(api: Api) -> Api {
     assert_eq!(now["title"], "Hello", "{now}");
     assert_eq!(now["locale"], "en");
     assert_eq!(now["version"], en["version"]);
+    api
+}
+
+/// MCP: `terms_list` filters by `locale`, `term_create` takes `locale` and
+/// `translation_of`, `menu_set` takes `locale` and `translation_of` and keeps them when
+/// they are left out, `menu_get` returns them.
+async fn mcp_terms_and_menus_take_locale(api: Api) -> Api {
+    let b = bilingual(&api).await;
+    let ok = |r: &Value| {
+        assert_eq!(r["isError"], false, "{r}");
+        r["structuredContent"].clone()
+    };
+    let news = ok(&tool(
+        &api,
+        &b.0,
+        "term_create",
+        json!({"taxonomy": "category", "name": "News"}),
+    )
+    .await);
+    assert_eq!(news["locale"], "en");
+    let de = ok(&tool(
+        &api,
+        &b.0,
+        "term_create",
+        json!({"taxonomy": "category", "name": "Nachrichten", "locale": "de-AT",
+               "translation_of": news["id"]}),
+    )
+    .await);
+    assert_eq!(de["locale"], "de-AT");
+    assert_eq!(de["translation_group"], news["translation_group"]);
+    let list = ok(&tool(
+        &api,
+        &b.0,
+        "terms_list",
+        json!({"taxonomy": "category", "locale": "de-AT"}),
+    )
+    .await);
+    let names: Vec<&str> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Nachrichten"]);
+    let bad = tool(
+        &api,
+        &b.0,
+        "terms_list",
+        json!({"taxonomy": "category", "locale": "xx"}),
+    )
+    .await;
+    assert_eq!(bad["isError"], true, "{bad}");
+
+    ok(&tool(
+        &api,
+        &b.0,
+        "menu_set",
+        json!({"name": "primary", "items": []}),
+    )
+    .await);
+    let m = ok(&tool(
+        &api,
+        &b.0,
+        "menu_set",
+        json!({"name": "primary-de", "label": "Haupt", "items": [],
+               "locale": "de-AT", "translation_of": "primary"}),
+    )
+    .await);
+    assert_eq!(
+        (m["locale"].as_str(), m["translation_of"].as_str()),
+        (Some("de-AT"), Some("primary"))
+    );
+    // Left out: kept.
+    let m = ok(&tool(
+        &api,
+        &b.0,
+        "menu_set",
+        json!({"name": "primary-de", "items": []}),
+    )
+    .await);
+    assert_eq!(
+        (m["locale"].as_str(), m["translation_of"].as_str()),
+        (Some("de-AT"), Some("primary"))
+    );
+    let got = ok(&tool(&api, &b.0, "menu_get", json!({"name": "primary-de"})).await);
+    assert_eq!(got["translation_of"], "primary");
+    // `null` removes the link.
+    let m = ok(&tool(
+        &api,
+        &b.0,
+        "menu_set",
+        json!({"name": "primary-de", "items": [], "translation_of": null}),
+    )
+    .await);
+    assert_eq!(m["translation_of"], Value::Null);
     api
 }
