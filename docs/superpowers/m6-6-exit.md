@@ -46,7 +46,10 @@ Branch `m6-6-webhooks` (from `m6` at 1cbef9c). Design: [18](../design/18-webhook
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`: pass.
 - `FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test cargo test --workspace`:
-  see §5 (the final run after the review fixes).
+  the final run after the review fixes passed every test (no `SKIP`) except
+  `import_cli::import_site_a_end_to_end_sqlite`, which starts a node on the default
+  `127.0.0.1:8080`, held on this machine by the user's own running site (environmental;
+  "Address already in use").
 - Store contract tests on both backends (10 webhook tests); core service (18 × 2 backends)
   and emit (10 × 2) tests; transport hostile tests (12); API tests (8 × 2); node tests
   (5 × 2, real runner + local receiver); cluster `two_nodes_deliver_each_attempt_once`
