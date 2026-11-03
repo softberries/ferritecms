@@ -217,9 +217,22 @@ impl ContentService {
         require(actor, Capability::EditOwn)?;
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = self
+        let done = match self
             .translate_in(tx.as_ref(), rules.as_ref(), actor, id, locale)
-            .await;
+            .await
+        {
+            // Here, not in `translate_in`: `seed demo` translates through that (R-M6-6-8).
+            Ok(t) => crate::webhooks::emit_content(
+                tx.as_ref(),
+                rules.as_ref(),
+                "content.created",
+                &t.item,
+                Some(actor.user),
+            )
+            .await
+            .map(|_| t),
+            Err(e) => Err(e),
+        };
         finish(tx, done).await
     }
 
@@ -449,6 +462,14 @@ impl ContentService {
                     }),
                 })
                 .await?;
+            crate::webhooks::emit_content(
+                repos,
+                rules.as_ref(),
+                "content.updated",
+                &saved,
+                Some(actor.user),
+            )
+            .await?;
             Ok(saved)
         }
         .await;

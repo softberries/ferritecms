@@ -116,6 +116,8 @@ The body (UTF-8 JSON, `Content-Type: application/json`):
     "status": "published",
     "title": "Hello",
     "slug": "hello",
+    "locale": "en",
+    "translation_group": "0193f1d2-…",
     "path": "/2026/11/hello/",
     "url": "https://example.com/2026/11/hello/",
     "author": "0193…",
@@ -136,14 +138,19 @@ The body (UTF-8 JSON, `Content-Type: application/json`):
   `GET /api/v1/content/{id}` with a token, which is audited and scoped. Titles are cut at
   300 characters.
 - `data` per group:
-  - content: `id, type, status, title, slug, path, url, author, parent, version,
-    published_at, modified_at, actor` (+ `scheduled_at` for `content.scheduled`). `path`
+  - content: `id, type, status, title, slug, locale, translation_group, path, url, author,
+    parent, version, published_at, modified_at, actor` (+ `scheduled_at` for
+    `content.scheduled`). `path`
     is the permalink path computed in the write's `Tx` with the pinned permalink rules;
     `url` is `site.url` + `path`, added at delivery. `url` is `null` and `path` is the
     would-be path for items that are not public (drafts, pending, trashed). `actor` is the
-    acting user id, `null` for system writes (scheduled publishing). After M6-1 lands,
-    content and terms carry `locale` and `translation_group` (whichever of M6-1 and M6-6
-    merges second adds them; additive, so still version 1).
+    acting user id, `null` for system writes (scheduled publishing). `locale` is the item's
+    locale tag, `translation_group` the id of its translation group's original (M6-1,
+    added in version 1: additive). Making a translation (`POST
+    /content/{type}/{id}/translations`) emits `content.created`; moving an item to another
+    locale or group emits `content.updated`. There are no term events, so translating a
+    term emits nothing, and import writes emit only `import.finished` (joining imported
+    translations included).
   - media: `id, title, alt, mime, bytes, width, height, original_name, actor`. No file
     URL (the variant keys belong to the media module; receivers call `GET /media/{id}`).
   - comment: `id, item: {id, type}, parent, status, author_name, user, body, created_at,

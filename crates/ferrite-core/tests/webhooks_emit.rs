@@ -564,6 +564,7 @@ async fn payload_has_no_body_fields_or_email(db: &TestDb) {
             "actor",
             "author",
             "id",
+            "locale",
             "modified_at",
             "parent",
             "path",
@@ -572,6 +573,7 @@ async fn payload_has_no_body_fields_or_email(db: &TestDb) {
             "slug",
             "status",
             "title",
+            "translation_group",
             "type",
             "version"
         ]
@@ -593,4 +595,64 @@ backend_tests!(
     import_finished_once,
     content_types_filter,
     payload_has_no_body_fields_or_email,
+    translations_emit_created_and_updated,
 );
+
+/// M6-1: making a translation is `content.created` (with its locale and group), moving
+/// an item to another locale or group `content.updated`; a localized create emits too.
+async fn translations_emit_created_and_updated(db: &TestDb) {
+    let s = site(db).await;
+    s.store
+        .read()
+        .options()
+        .set(
+            "site.locales",
+            &json!([{"tag": "en", "label": "English"}, {"tag": "de", "label": "Deutsch"}]),
+            true,
+        )
+        .await
+        .unwrap();
+    s.hook(&["content.*"], None).await;
+    let en = s
+        .content
+        .create(&s.admin, draft("post", "Hello"))
+        .await
+        .unwrap();
+    let de = s
+        .content
+        .translate(&s.admin, en.id, "de")
+        .await
+        .unwrap()
+        .item;
+    let other = s
+        .content
+        .create_localized(&s.admin, draft("post", "Andere"), Some("de".into()), None)
+        .await
+        .unwrap();
+    s.content
+        .relocate(
+            &s.admin,
+            other.id,
+            other.version,
+            ferrite_core::Relocation {
+                locale: Some("en".into()),
+                translation_of: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        s.kinds().await,
+        [
+            "content.created",
+            "content.created",
+            "content.created",
+            "content.updated"
+        ]
+    );
+    let events = s.events().await;
+    assert_eq!(events[1].data["locale"], "de");
+    assert_eq!(events[1].data["id"], de.id.to_string());
+    assert_eq!(events[1].data["translation_group"], en.id.to_string());
+    assert_eq!(events[3].data["locale"], "en");
+}

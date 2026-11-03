@@ -200,14 +200,24 @@ impl ContentService {
                 None => None,
                 Some(of) => Some(join_target(tx.as_ref(), actor, of, &draft.kind).await?),
             };
-            self.create_in(
+            let saved = self
+                .create_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    draft,
+                    Placement { locale, group },
+                )
+                .await?;
+            crate::webhooks::emit_content(
                 tx.as_ref(),
                 rules.as_ref(),
-                actor,
-                draft,
-                Placement { locale, group },
+                "content.created",
+                &saved,
+                Some(actor.user),
             )
-            .await
+            .await?;
+            Ok(saved)
         }
         .await;
         finish(tx, done).await

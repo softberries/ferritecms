@@ -157,6 +157,8 @@ fn content_data(item: &ContentItem, path: String, actor: Option<UserId>) -> Valu
         "status": item.status.as_str(),
         "title": cut(&item.title, MAX_TITLE),
         "slug": item.slug,
+        "locale": item.locale,
+        "translation_group": item.translation_group.to_string(),
         "path": path,
         "public": crate::site::is_public(item, now),
         "author": item.author_id.to_string(),

@@ -65,7 +65,7 @@ webhook-id: 0193f1d2-7c3a-7b40-9e1a-2c0d5f6e8a11
 webhook-timestamp: 1793614530
 webhook-signature: v1,K5tH3mq8QZ0p2u6pRrN6d1o3J8l2yZbqk4wqk6wB1nE=
 
-{"data":{"actor":"0193…","author":"0193…","id":"0193…","modified_at":"2026-11-02T10:15:30.000000Z","parent":null,"path":"/2026/11/hello/","published_at":"2026-11-02T10:15:30.000000Z","slug":"hello","status":"published","title":"Hello","type":"post","url":"https://example.com/2026/11/hello/","version":7},"id":"0193f1d2-7c3a-7b40-9e1a-2c0d5f6e8a11","site":{"url":"https://example.com"},"timestamp":"2026-11-02T10:15:30.123456Z","type":"content.published","version":1}
+{"data":{"actor":"0193…","author":"0193…","id":"0193…","locale":"en","modified_at":"2026-11-02T10:15:30.000000Z","parent":null,"path":"/2026/11/hello/","published_at":"2026-11-02T10:15:30.000000Z","slug":"hello","status":"published","title":"Hello","translation_group":"0193…","type":"post","url":"https://example.com/2026/11/hello/","version":7},"id":"0193f1d2-7c3a-7b40-9e1a-2c0d5f6e8a11","site":{"url":"https://example.com"},"timestamp":"2026-11-02T10:15:30.123456Z","type":"content.published","version":1}
 ```
 
 The payload is **thin**: ids and the fields a receiver routes on (type, status, title,
@@ -73,7 +73,9 @@ slug, path and URL), never the body, custom fields, SEO fields, e-mail addresses
 passwords. A receiver that needs more calls the [REST API](../03-developers/03-rest-api.md)
 with a token, for example `GET /api/v1/content/{id}`. Comment events carry the comment
 text (at most 2 000 characters) but never the commenter's e-mail address or URL. `url` is
-`null` for items that are not public (drafts, trashed items).
+`null` for items that are not public (drafts, trashed items). Content events also carry
+the item's `locale` and `translation_group` (see
+[Multilingual sites](10-multilingual.md)); making a translation is a `content.created`.
 
 Receivers must ignore fields and event types they do not know: new ones are added without
 changing `version`.
