@@ -148,7 +148,7 @@ async fn exchange_code(api: &Api, client_id: &str, code: &str) -> Resp {
     .await
 }
 
-async fn refresh(api: &Api, client_id: &str, token: &str) -> Resp {
+pub(crate) async fn refresh(api: &Api, client_id: &str, token: &str) -> Resp {
     post_form(
         api,
         "/oauth/token",

@@ -10,6 +10,7 @@
 //! [`FerriteMcp::audit`]; reads are not audited.
 
 pub mod appearance;
+pub mod changes;
 pub mod comments;
 pub mod content;
 pub mod media;

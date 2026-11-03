@@ -6,7 +6,7 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 # MCP tools
 
 These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
-57 of them, in 13 areas. To connect an assistant, see
+58 of them, in 14 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 How to read the tables:
@@ -25,7 +25,9 @@ How to read the tables:
   `![alt](ferrite:media/<id>)`, and anything Markdown cannot express travels as a
   `ferrite-block` fence that the assistant keeps as it is. Updates take the `version` the
   assistant read, so a change made meanwhile by someone else is never overwritten.
-- Successful writes are recorded in the audit log as `mcp.<tool>` under the app's name.
+- Successful writes are recorded in the audit log as `mcp.<tool>` under the app's name,
+  and as change sets with the object before and after, which you review and undo in the
+  admin under **AI activity** ([AI assistants](../02-guides/08-ai-assistants.md)).
 - Each user can make 120 tool calls a minute.
 
 Installing or removing plugins and themes, managing users, tokens, sessions and connected
@@ -156,6 +158,12 @@ the admin or the CLI: no tool does them.
 | `system_status` | Reports versions, mode, backends, schema state, job counts and nodes. | `system:read` | read |
 | `jobs_list` | Lists background jobs, with filters by state and kind. | `system:read` | read |
 | `audit_list` | Reads the audit log, with filters by actor, action and target. | `system:read` | read |
+
+## Your changes
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `changes_list` | Lists this connection's own recent change sets with each change and a link where you review and undo them; never the before/after content. | none (its own changes only) | read |
 
 ## Resources and prompts
 

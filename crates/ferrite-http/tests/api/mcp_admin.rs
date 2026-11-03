@@ -76,7 +76,7 @@ async fn option(api: &Api, key: &str) -> Option<Value> {
 }
 
 /// Installs and enables plugin `name` through the REST API (the MCP tools cannot).
-async fn install_plugin(api: &Api, name: &str) {
+pub(crate) async fn install_plugin(api: &Api, name: &str) {
     let mut c = api.logged_in("ada").await;
     let manifest = plugin_manifest(name);
     let wasm = plugin_wasm(name);

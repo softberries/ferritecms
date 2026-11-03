@@ -20,6 +20,7 @@ mod jobs;
 mod locales;
 mod mcp;
 mod mcp_admin;
+mod mcp_changes;
 mod mcp_content;
 mod mcp_reference;
 mod mcp_structure;
