@@ -496,7 +496,11 @@ jobs:
           shopt -s nullglob
           # Seven tarballs (six targets and the plugins), SHA256SUMS and its signature, and
           # (M6-2, with the plugin keys set) six per-plugin registry assets and the index.
-          assets=(dist/ferrite-*.tar.gz dist/ferrite-plugin-*.toml dist/ferrite-plugin-*.wasm dist/ferrite-registry-index.json dist/ferrite-registry-index.json.minisig dist/SHA256SUMS dist/SHA256SUMS.minisig)
+          assets=(dist/ferrite-*.tar.gz dist/ferrite-plugin-*.toml dist/ferrite-plugin-*.wasm dist/SHA256SUMS dist/SHA256SUMS.minisig)
+          # nullglob drops only patterns; the fixed index names go in only when present.
+          for f in dist/ferrite-registry-index.json dist/ferrite-registry-index.json.minisig; do
+            if [ -e "$f" ]; then assets+=("$f"); fi
+          done
           gh release upload "$TAG" --clobber "${assets[@]}"
           count=$(gh release view "$TAG" --json assets --jq '.assets | length')
           if [ "$count" -ne "${#assets[@]}" ] || { [ "$count" -ne 9 ] && [ "$count" -ne 17 ]; }; then

@@ -26,8 +26,14 @@ fi
 # M6-2: the signed plugins' registry assets and the registry index, when the release has
 # them (the plugin keys are set), are listed too.
 shopt -s nullglob
-files=(ferrite-*.tar.gz ferrite-plugin-*.toml ferrite-plugin-*.wasm ferrite-registry-index.json ferrite-registry-index.json.minisig)
+files=(ferrite-*.tar.gz ferrite-plugin-*.toml ferrite-plugin-*.wasm)
 shopt -u nullglob
+# nullglob drops only patterns; fixed names are listed only when they exist.
+for f in ferrite-registry-index.json ferrite-registry-index.json.minisig; do
+  if [ -e "$f" ]; then
+    files+=("$f")
+  fi
+done
 if command -v sha256sum >/dev/null; then
   sha256sum "${files[@]}" > SHA256SUMS
 else
