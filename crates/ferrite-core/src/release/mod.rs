@@ -148,6 +148,11 @@ impl ReleaseService {
         }
     }
 
+    /// The permalink rules this service writes with.
+    pub fn permalinks(&self) -> Arc<dyn Permalinks> {
+        self.permalinks.clone()
+    }
+
     /// Reads release `id` through `repos` and checks that `actor` may see it.
     pub(crate) async fn visible(
         repos: &dyn Repos,

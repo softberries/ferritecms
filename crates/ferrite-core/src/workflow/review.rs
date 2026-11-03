@@ -16,6 +16,7 @@ use crate::{
     actor::{Area, Capability, can, require, require_read},
     events,
     jobs::editorial_notify_job,
+    permalink::Permalinks,
     tx::finish,
     webhooks::{self, NewWebhookEvent},
 };
@@ -195,14 +196,20 @@ pub(crate) async fn start_in(
     Ok(Some(review))
 }
 
-/// A pending item goes back to draft (request changes, withdraw: D22).
-async fn back_to_draft(repos: &dyn Repos, item: &ContentItem) -> Result<(), CoreError> {
+/// A pending item goes back to draft (request changes, withdraw: D22), with
+/// `content.updated` (the catalogue has no pending -> draft type; design 18 §3.1).
+async fn back_to_draft(
+    repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
+    actor: &Actor,
+    item: &ContentItem,
+) -> Result<(), CoreError> {
     if item.status != ContentStatus::Pending {
         return Ok(());
     }
     let mut next = item.clone();
     next.status = ContentStatus::Draft;
-    repos.content().update(&next).await?;
+    let saved = repos.content().update(&next).await?;
     repos
         .events()
         .append(&events::invalidate([
@@ -210,17 +217,26 @@ async fn back_to_draft(repos: &dyn Repos, item: &ContentItem) -> Result<(), Core
             events::archive_key(&item.kind),
         ]))
         .await?;
+    webhooks::emit_content(
+        repos,
+        permalinks,
+        "content.updated",
+        &saved,
+        Some(actor.user),
+    )
+    .await?;
     Ok(())
 }
 
 /// Reviews: decisions, assignees, withdrawal, the queue.
 pub struct ReviewService {
     store: Arc<dyn Store>,
+    permalinks: Arc<dyn Permalinks>,
 }
 
 impl ReviewService {
-    pub fn new(store: Arc<dyn Store>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn Store>, permalinks: Arc<dyn Permalinks>) -> Self {
+        Self { store, permalinks }
     }
 
     /// Whether `actor` may see `review` of `item`: editors and admins, the submitter,
@@ -295,6 +311,7 @@ impl ReviewService {
     ) -> Result<Review, CoreError> {
         require(actor, Capability::EditOthers)?;
         let comment = check_text("comment", comment)?;
+        let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
             let (mut review, item) = Self::load(tx.as_ref(), actor, id).await?;
@@ -353,7 +370,7 @@ impl ReviewService {
                     review.status = ReviewStatus::ChangesRequested;
                     review.decided_at = Some(now);
                     if matches!(review.target, ReviewTarget::Item(_)) {
-                        back_to_draft(tx.as_ref(), &item).await?;
+                        back_to_draft(tx.as_ref(), rules.as_ref(), actor, &item).await?;
                     }
                     ("review.changes_requested", Some("review.changes_requested"))
                 }
@@ -435,6 +452,7 @@ impl ReviewService {
         version: i64,
     ) -> Result<Review, CoreError> {
         require(actor, Capability::EditOwn)?;
+        let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
             let (mut review, item) = Self::load(tx.as_ref(), actor, id).await?;
@@ -452,7 +470,7 @@ impl ReviewService {
             review.status = ReviewStatus::Withdrawn;
             review.decided_at = Some(Timestamp::now());
             if matches!(review.target, ReviewTarget::Item(_)) {
-                back_to_draft(tx.as_ref(), &item).await?;
+                back_to_draft(tx.as_ref(), rules.as_ref(), actor, &item).await?;
             }
             Ok(tx.reviews().update(&review).await?)
         }

@@ -58,9 +58,9 @@ async fn site(db: &TestDb) -> Site {
     let rules = Arc::new(PermalinkRules::default());
     let content = Arc::new(ContentService::new(store.clone(), rules.clone()));
     let s = Site {
-        releases: ReleaseService::new(store.clone(), rules, content.clone()),
+        releases: ReleaseService::new(store.clone(), rules.clone(), content.clone()),
         workflows: WorkflowService::new(store.clone()),
-        reviews: ReviewService::new(store.clone()),
+        reviews: ReviewService::new(store.clone(), rules),
         admin: actor(store.as_ref(), Role::Admin).await,
         editor: actor(store.as_ref(), Role::Editor).await,
         editor2: actor(store.as_ref(), Role::Editor).await,
@@ -930,4 +930,87 @@ backend_tests!(
     save_marks_review_stale,
     entry_edit_marks_entry_review_stale,
     notify_job_enqueued_in_same_tx,
+    withdraw_and_request_changes_emit_content_updated,
 );
+
+/// A `content.*` endpoint; the `content.updated` events written so far.
+async fn content_hook(s: &Site) -> ferrite_core::webhooks::WebhookService {
+    let hooks = ferrite_core::webhooks::WebhookService::new(
+        s.store.clone(),
+        ferrite_core::auth::SiteKey::from_hex(&"ab".repeat(32)).unwrap(),
+        ferrite_core::webhooks::UrlPolicy {
+            local_targets: false,
+            allow_ip: |_| true,
+        },
+    );
+    hooks
+        .create(
+            &s.admin,
+            ferrite_core::webhooks::WebhookInput {
+                name: "content".into(),
+                url: "https://hooks.example.com/x".into(),
+                events: vec!["content.*".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    hooks
+}
+
+async fn updated_events(s: &Site, item: &ContentItem) -> Vec<serde_json::Value> {
+    let w = s.store.read().webhooks();
+    let endpoint = &w.list_endpoints().await.unwrap()[0];
+    let page = w
+        .list_deliveries(
+            endpoint.id,
+            &ferrite_domain::DeliveryQuery {
+                limit: 200,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    for l in page.items {
+        let ev = w.get_event(l.delivery.event_id).await.unwrap().unwrap();
+        if ev.kind == "content.updated" && ev.data["id"] == item.id.to_string() {
+            out.push(ev.data);
+        }
+    }
+    out
+}
+
+async fn withdraw_and_request_changes_emit_content_updated(db: &TestDb) {
+    let s = site(db).await;
+    let _hooks = content_hook(&s).await;
+    // Withdraw.
+    let it = s.submitted(&s.author, "w").await;
+    let r = s.open_review(&it).await;
+    s.reviews
+        .withdraw(&s.author, r.id, r.version)
+        .await
+        .unwrap();
+    let now = s.get(&it).await;
+    assert_eq!(now.status, ContentStatus::Draft);
+    let got = updated_events(&s, &it).await;
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0]["status"], "draft");
+    assert_eq!(got[0]["version"], now.version);
+    assert_eq!(got[0]["locale"], now.locale);
+    assert_eq!(
+        got[0]["translation_group"],
+        now.translation_group.to_string()
+    );
+    // Request changes.
+    let it = s.submitted(&s.author, "rc").await;
+    let r = s.open_review(&it).await;
+    s.reviews
+        .decide(&s.editor, r.id, r.version, Decision::RequestChanges, None)
+        .await
+        .unwrap();
+    let got = updated_events(&s, &it).await;
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0]["status"], "draft");
+    assert_eq!(got[0]["actor"], s.editor.user.to_string());
+}

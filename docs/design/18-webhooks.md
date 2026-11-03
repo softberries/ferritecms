@@ -64,7 +64,7 @@ every write in the system (§3.4 lists what is left out); MCP tools for webhooks
 | Type | Fired by (core, in the write's `Tx`) | `data` |
 |---|---|---|
 | `content.created` | `ContentService::create` (also `content_create` over MCP) | content (§3.2) |
-| `content.updated` | `ContentService::update`, revision restore | content |
+| `content.updated` | `ContentService::update`, revision restore, a review withdrawn or sent back with changes requested (pending → draft, M6-3) | content |
 | `content.published` | every transition to `published`: publish (`transition_item`), scheduled publish (`publish_one`); not an upload (media, below) | content |
 | `content.unpublished` | unpublish (published → draft) | content |
 | `content.scheduled` | schedule | content + `scheduled_at` |

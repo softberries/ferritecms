@@ -59,10 +59,10 @@ impl EditorialApi {
         preview_links: Arc<PreviewLinkService>,
     ) -> Self {
         Self {
+            reviews: Arc::new(ReviewService::new(store.clone(), releases.permalinks())),
             releases,
             preview_links,
-            workflows: Arc::new(WorkflowService::new(store.clone())),
-            reviews: Arc::new(ReviewService::new(store)),
+            workflows: Arc::new(WorkflowService::new(store)),
         }
     }
 }
