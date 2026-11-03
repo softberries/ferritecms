@@ -154,7 +154,13 @@ async fn contributor_creates_and_stages_own_draft(db: &TestDb) {
     let it = s.item(&c, "post", "Mine").await;
     let r = s.release(&c).await;
     let r = s
-        .stage(&c, &r, it.id, EntryTransition::None, Some(change("Changed")))
+        .stage(
+            &c,
+            &r,
+            it.id,
+            EntryTransition::None,
+            Some(change("Changed")),
+        )
         .await
         .unwrap();
     assert_eq!(r.version, 2);
@@ -174,7 +180,10 @@ async fn cannot_stage_others_item_without_edit_others(db: &TestDb) {
         .stage(&a, &r, theirs.id, EntryTransition::None, Some(change("x")))
         .await
         .unwrap_err();
-    assert!(matches!(err, CoreError::Forbidden("edit_others")), "{err:?}");
+    assert!(
+        matches!(err, CoreError::Forbidden("edit_others")),
+        "{err:?}"
+    );
 }
 
 async fn publish_entry_needs_publish_right(db: &TestDb) {
@@ -186,7 +195,10 @@ async fn publish_entry_needs_publish_right(db: &TestDb) {
         .stage(&c, &r, it.id, EntryTransition::Publish, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, CoreError::Forbidden("publish_own")), "{err:?}");
+    assert!(
+        matches!(err, CoreError::Forbidden("publish_own")),
+        "{err:?}"
+    );
 }
 
 async fn publish_entry_refused_for_published_or_scheduled_item(db: &TestDb) {
@@ -199,7 +211,13 @@ async fn publish_entry_refused_for_published_or_scheduled_item(db: &TestDb) {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, CoreError::InvalidField { field: "transition", .. }),
+        matches!(
+            err,
+            CoreError::InvalidField {
+                field: "transition",
+                ..
+            }
+        ),
         "{err:?}"
     );
     let it = s.item(&e, "post", "Later").await;
@@ -313,7 +331,10 @@ async fn rebase_bumps_entry_version(db: &TestDb) {
     let r = s.releases.rebase(&e, r.id, r.version, it.id).await.unwrap();
     let view = s.releases.get_for(&e, r.id).await.unwrap();
     let entry = &view.entries[0].entry;
-    assert_eq!((entry.base_version, entry.entry_version), (moved.version, 2));
+    assert_eq!(
+        (entry.base_version, entry.entry_version),
+        (moved.version, 2)
+    );
     assert!(!view.entries[0].conflict);
     assert_eq!(entry.changes.as_ref().unwrap().title, "staged");
 }
@@ -426,7 +447,11 @@ async fn apply_is_all_or_nothing(db: &TestDb) {
     p.status = ContentStatus::Trash;
     s.store.read().content().update(&p).await.unwrap();
     let before = s.store.read().events().max_seq().await.unwrap();
-    let err = s.releases.apply(&e, r.id, r.version, None).await.unwrap_err();
+    let err = s
+        .releases
+        .apply(&e, r.id, r.version, None)
+        .await
+        .unwrap_err();
     match err {
         CoreError::ReleaseConflict(entries) => {
             assert_eq!(entries.len(), 1);
@@ -437,7 +462,10 @@ async fn apply_is_all_or_nothing(db: &TestDb) {
     }
     for it in &items {
         let now = s.get(it.id).await;
-        assert_eq!((now.version, now.status), (it.version, ContentStatus::Draft));
+        assert_eq!(
+            (now.version, now.status),
+            (it.version, ContentStatus::Draft)
+        );
     }
     assert_eq!(s.store.read().events().max_seq().await.unwrap(), before);
     assert_eq!(s.stored(r.id).await.status, ReleaseStatus::Open);
@@ -532,7 +560,11 @@ async fn conflict_blocks_apply_and_lists_entries(db: &TestDb) {
         .update(&e, b.id, b.version, draft("post", "B moved"))
         .await
         .unwrap();
-    let err = s.releases.apply(&e, r.id, r.version, None).await.unwrap_err();
+    let err = s
+        .releases
+        .apply(&e, r.id, r.version, None)
+        .await
+        .unwrap_err();
     match err {
         CoreError::ReleaseConflict(entries) => {
             assert_eq!(entries.len(), 1);
@@ -643,7 +675,9 @@ async fn schedule_requires_clean_check_and_locks(db: &TestDb) {
         .unwrap();
     assert!(jobs.items.iter().any(|j| j.kind == RELEASE_APPLY_KIND));
     assert!(matches!(
-        s.content.update(&e, a.id, a2.version, draft("post", "x")).await,
+        s.content
+            .update(&e, a.id, a2.version, draft("post", "x"))
+            .await,
         Err(CoreError::Locked { .. })
     ));
     // In the past: refused.
@@ -750,7 +784,10 @@ async fn failed_release_is_unlocked_with_report_and_notify_job(db: &TestDb) {
         .rebase(&e, r.id, failed.version, a.id)
         .await
         .unwrap();
-    s.releases.apply(&e, r.id, fixed.version, None).await.unwrap();
+    s.releases
+        .apply(&e, r.id, fixed.version, None)
+        .await
+        .unwrap();
 }
 
 async fn job_and_periodic_race_apply_once(db: &TestDb) {

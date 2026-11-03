@@ -12,8 +12,9 @@ use uuid::Uuid;
 
 use super::gate::workflow_of;
 use crate::{
-    Actor, CoreError, events,
+    Actor, CoreError,
     actor::{Area, Capability, can, require, require_read},
+    events,
     jobs::editorial_notify_job,
     tx::finish,
     webhooks::{self, NewWebhookEvent},
@@ -107,7 +108,12 @@ pub(crate) async fn mark_stale_item(repos: &dyn Repos, item: ContentId) -> Resul
     Ok(())
 }
 
-fn review_event(kind: &'static str, review: &Review, item: &ContentItem, by: UserId) -> NewWebhookEvent {
+fn review_event(
+    kind: &'static str,
+    review: &Review,
+    item: &ContentItem,
+    by: UserId,
+) -> NewWebhookEvent {
     NewWebhookEvent {
         kind,
         content_type: None,
@@ -181,7 +187,11 @@ pub(crate) async fn start_in(
             target.release(),
         ))
         .await?;
-    webhooks::emit(repos, review_event("review.submitted", &review, item, actor.user)).await?;
+    webhooks::emit(
+        repos,
+        review_event("review.submitted", &review, item, actor.user),
+    )
+    .await?;
     Ok(Some(review))
 }
 
@@ -252,7 +262,11 @@ impl ReviewService {
     }
 
     /// The review queue. Without `edit_others` only the actor's own submissions.
-    pub async fn list(&self, actor: &Actor, mut query: ReviewQuery) -> Result<Page<Review>, CoreError> {
+    pub async fn list(
+        &self,
+        actor: &Actor,
+        mut query: ReviewQuery,
+    ) -> Result<Page<Review>, CoreError> {
         require_read(actor, Area::Content)?;
         if !can(actor.role, Capability::EditOthers) {
             query.submitted_by = Some(actor.user);
@@ -290,7 +304,9 @@ impl ReviewService {
                 });
             }
             if review.status != ReviewStatus::InReview {
-                return Err(CoreError::Invalid("the review is not open for decisions".into()));
+                return Err(CoreError::Invalid(
+                    "the review is not open for decisions".into(),
+                ));
             }
             let step = review
                 .steps
@@ -402,7 +418,12 @@ impl ReviewService {
 
     /// Withdraws an open review (the submitter or `edit_others`); a pending item goes
     /// back to draft.
-    pub async fn withdraw(&self, actor: &Actor, id: ReviewId, version: i64) -> Result<Review, CoreError> {
+    pub async fn withdraw(
+        &self,
+        actor: &Actor,
+        id: ReviewId,
+        version: i64,
+    ) -> Result<Review, CoreError> {
         require(actor, Capability::EditOwn)?;
         let tx = self.store.begin().await?;
         let done = async {
@@ -441,7 +462,11 @@ impl ReviewService {
         require(actor, Capability::EditOwn)?;
         let tx = self.store.begin().await?;
         let done = async {
-            let r = tx.releases().get(release).await?.ok_or(CoreError::NotFound)?;
+            let r = tx
+                .releases()
+                .get(release)
+                .await?
+                .ok_or(CoreError::NotFound)?;
             if !crate::release::may_see(actor, &r) {
                 return Err(CoreError::NotFound);
             }

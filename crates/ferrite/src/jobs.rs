@@ -10,6 +10,7 @@
 //! [`PUBLISH_DUE_KIND`] job now, so one node runs it per period.
 
 mod backup;
+mod editorial;
 mod gc;
 mod import;
 pub(crate) mod media;
@@ -38,6 +39,11 @@ use tokio::sync::Semaphore;
 pub(crate) use backup::backup_location;
 pub use backup::{
     SITE_BACKUP_KIND, SITE_BACKUP_MAX_ATTEMPTS, SITE_BACKUP_TIMEOUT, SiteBackupHandler, site_backup,
+};
+pub use editorial::{
+    EditorialNotifyHandler, PREVIEW_LINKS_PRUNE_EVERY, PreviewLinksPruneHandler,
+    RELEASE_APPLY_DUE_EVERY, ReleaseApplyDueHandler, ReleaseApplyHandler,
+    preview_links_prune_periodic, release_apply_due_periodic,
 };
 pub use gc::{
     ARTIFACTS_GC_EVERY, ARTIFACTS_GC_KIND, ARTIFACTS_GC_OFFSET, ARTIFACTS_GC_TIMEOUT,
@@ -360,13 +366,16 @@ pub fn handlers(
 
 /// The periodics `serve` schedules besides `ferrite-cluster`'s built-ins:
 /// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`],
-/// [`artifacts_gc_periodic`] and [`webhooks_prune_periodic`].
+/// [`artifacts_gc_periodic`], [`webhooks_prune_periodic`], [`release_apply_due_periodic`]
+/// and [`preview_links_prune_periodic`].
 pub fn core_periodics() -> Vec<Periodic> {
     vec![
         publish_due_periodic(),
         plugin_purge_sweep_periodic(),
         artifacts_gc_periodic(),
         webhooks_prune_periodic(),
+        release_apply_due_periodic(),
+        preview_links_prune_periodic(),
     ]
 }
 

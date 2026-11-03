@@ -33,11 +33,17 @@ const MAX_SCHEDULE_AHEAD_MICROS: i64 = 366 * 24 * 3600 * 1_000_000;
 pub enum EntryOutcome {
     Ok,
     /// The item moved since the entry's base (D4).
-    Conflict { current_version: i64 },
+    Conflict {
+        current_version: i64,
+    },
     /// The type has a workflow and the entry (or item) has no current approval.
-    NeedsApproval { step: Option<String> },
+    NeedsApproval {
+        step: Option<String>,
+    },
     /// The actor lacks a right the entry needs.
-    Forbidden { capability: String },
+    Forbidden {
+        capability: String,
+    },
     /// The staged change or the transition is refused (a slug taken since, …).
     Invalid {
         field: Option<String>,
@@ -229,7 +235,10 @@ fn audit(actor: Option<&Actor>, action: &str, r: &Release, details: Value) -> Ne
 
 /// Whether `e` is permanent for a scheduled apply (retrying cannot help).
 fn permanent(e: &CoreError) -> bool {
-    !matches!(e, CoreError::Store(_) | CoreError::Unavailable(_) | CoreError::Random)
+    !matches!(
+        e,
+        CoreError::Store(_) | CoreError::Unavailable(_) | CoreError::Random
+    )
 }
 
 impl ReleaseService {
@@ -260,7 +269,11 @@ impl ReleaseService {
         self.finish_apply(tx, done).await
     }
 
-    async fn finish_apply<T>(&self, tx: ApplyTx, done: Result<T, CoreError>) -> Result<T, CoreError> {
+    async fn finish_apply<T>(
+        &self,
+        tx: ApplyTx,
+        done: Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
         let done = match done {
             Ok(v) => match tx.flush_invalidation().await {
                 Ok(()) => Ok(v),
@@ -415,9 +428,16 @@ impl ReleaseService {
             let mut out = Vec::with_capacity(entries.len());
             for e in &entries {
                 let nested = tx.begin_nested().await?;
-                let res =
-                    apply_entry(nested.as_ref(), rules.as_ref(), &self.content, actor, &r, e, opts)
-                        .await;
+                let res = apply_entry(
+                    nested.as_ref(),
+                    rules.as_ref(),
+                    &self.content,
+                    actor,
+                    &r,
+                    e,
+                    opts,
+                )
+                .await;
                 let outcome = match res {
                     Ok(a) => {
                         nested.commit().await?;
@@ -582,8 +602,13 @@ impl ReleaseService {
             None => None,
         };
         let Some(user) = scheduler.filter(|u| u.status == UserStatus::Active) else {
-            self.fail(id, at, "the user who scheduled it is gone or disabled", None)
-                .await?;
+            self.fail(
+                id,
+                at,
+                "the user who scheduled it is gone or disabled",
+                None,
+            )
+            .await?;
             return Ok(false);
         };
         let actor = Actor::new(user.id, user.role);

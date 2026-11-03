@@ -550,6 +550,11 @@ async fn boot(
 
     // The API's services; `content` also runs the scheduled-publishing jobs.
     let content = Arc::new(ContentService::new(store.clone(), dyn_permalinks.clone()));
+    let releases = Arc::new(ferrite_core::release::ReleaseService::new(
+        store.clone(),
+        dyn_permalinks.clone(),
+        content.clone(),
+    ));
     // The node's import service (M3-2): enqueues and reads imports, checks the job's
     // importer and stores run reports in the media store. The `import.wordpress` job
     // and the API share it.
@@ -722,6 +727,25 @@ async fn boot(
     )));
     handlers.push(Arc::new(jobs::WebhooksPruneHandler {
         service: webhooks.clone(),
+    }));
+    // M6-3: releases, editorial mail, preview-link pruning.
+    handlers.push(Arc::new(jobs::ReleaseApplyHandler {
+        releases: releases.clone(),
+    }));
+    handlers.push(Arc::new(jobs::ReleaseApplyDueHandler {
+        store: store.clone(),
+        releases: releases.clone(),
+    }));
+    handlers.push(Arc::new(jobs::PreviewLinksPruneHandler {
+        store: store.clone(),
+    }));
+    handlers.push(Arc::new(jobs::EditorialNotifyHandler {
+        store: store.clone(),
+        mailer: mail
+            .clone()
+            .map(|q| q as Arc<dyn ferrite_core::mail::Mailer>),
+        site_url: url::Url::parse(config.site.url.as_str()).context("site.url")?,
+        site_title: config.site.title.clone(),
     }));
     handlers.push(Arc::new(jobs::ArtifactsGcHandler::new(
         store.clone(),

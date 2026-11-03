@@ -397,7 +397,10 @@ impl ContentService {
         let mut out = HashMap::new();
         for item in items {
             if workflows.iter().any(|w| w.type_name == item.kind) {
-                out.insert(item.id, crate::workflow::state_of(repos, actor, item).await?);
+                out.insert(
+                    item.id,
+                    crate::workflow::state_of(repos, actor, item).await?,
+                );
             }
         }
         Ok(out)

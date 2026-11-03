@@ -214,7 +214,10 @@ pub async fn allowed_actions_follow_token_scopes(db: &TestDb) {
     let reader =
         admin.with_scopes(ferrite_core::Scopes::from_strs(&["content:read".to_owned()]).unwrap());
     let it = item(db, &svc, &admin, ContentStatus::Draft).await;
-    assert_eq!(allowed_actions(&reader, &it, &Default::default()), AllowedActions::default());
+    assert_eq!(
+        allowed_actions(&reader, &it, &Default::default()),
+        AllowedActions::default()
+    );
     assert!(matches!(
         svc.publish(&reader, it.id, it.version).await,
         Err(CoreError::Forbidden(_))

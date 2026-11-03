@@ -16,9 +16,7 @@ use crate::{
 };
 
 pub use gate::{MAX_OVERRIDE_REASON, ReviewSummary, WorkflowState, state_of};
-pub use review::{
-    MAX_ASSIGNEES, MAX_REVIEW_TEXT, ReviewDetail, ReviewService, SubmitInput,
-};
+pub use review::{MAX_ASSIGNEES, MAX_REVIEW_TEXT, ReviewDetail, ReviewService, SubmitInput};
 pub(crate) use review::{mark_stale_item, start_in};
 
 /// Most steps per workflow.
@@ -102,9 +100,9 @@ impl WorkflowService {
                 version: version.unwrap_or(0),
             };
             match tx.workflows().put(&w, version).await {
-                Err(StoreError::UniqueViolation { .. }) => {
-                    Err(CoreError::Invalid("the type has a workflow: send If-Match".into()))
-                }
+                Err(StoreError::UniqueViolation { .. }) => Err(CoreError::Invalid(
+                    "the type has a workflow: send If-Match".into(),
+                )),
                 other => Ok(other?),
             }
         }
@@ -113,7 +111,12 @@ impl WorkflowService {
     }
 
     /// Removes the workflow of `type_name` at `version`; its open reviews are withdrawn.
-    pub async fn delete(&self, actor: &Actor, type_name: &str, version: i64) -> Result<(), CoreError> {
+    pub async fn delete(
+        &self,
+        actor: &Actor,
+        type_name: &str,
+        version: i64,
+    ) -> Result<(), CoreError> {
         require(actor, Capability::ManageSettings)?;
         let tx = self.store.begin().await?;
         let done = async {
@@ -153,8 +156,7 @@ pub(crate) async fn validate_steps(
         let n = i + 1;
         let key_ok = !s.key.is_empty()
             && s.key.len() <= MAX_STEP_KEY
-            && s
-                .key
+            && s.key
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
         if !key_ok {
@@ -177,8 +179,7 @@ pub(crate) async fn validate_steps(
         if s.required == 0 || s.required > MAX_REQUIRED {
             return Err(bad(format!("step {n}: 1 to {MAX_REQUIRED} approvals")));
         }
-        if s
-            .approvers
+        if s.approvers
             .roles
             .iter()
             .any(|r| !matches!(r, Role::Editor | Role::Admin))

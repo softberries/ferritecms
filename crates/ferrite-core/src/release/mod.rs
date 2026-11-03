@@ -296,7 +296,12 @@ impl ReleaseService {
     }
 
     /// Deletes an open or failed release with its entries, reviews and preview links.
-    pub async fn delete(&self, actor: &Actor, id: ReleaseId, version: i64) -> Result<(), CoreError> {
+    pub async fn delete(
+        &self,
+        actor: &Actor,
+        id: ReleaseId,
+        version: i64,
+    ) -> Result<(), CoreError> {
         require(actor, Capability::EditOwn)?;
         let tx = self.store.begin().await?;
         let done = async {
@@ -442,7 +447,10 @@ async fn check_entry(
         _ => {}
     }
     if item.kind == ferrite_domain::MEDIA_KIND {
-        return Err(CoreError::invalid_field("item_id", "media cannot be staged"));
+        return Err(CoreError::invalid_field(
+            "item_id",
+            "media cannot be staged",
+        ));
     }
     match input.transition {
         EntryTransition::None => {
@@ -464,7 +472,10 @@ async fn check_entry(
             }
         }
         EntryTransition::Unpublish => {
-            if !matches!(item.status, ContentStatus::Published | ContentStatus::Private) {
+            if !matches!(
+                item.status,
+                ContentStatus::Published | ContentStatus::Private
+            ) {
                 return Err(CoreError::invalid_field(
                     "transition",
                     "only a published or private item can be unpublished",

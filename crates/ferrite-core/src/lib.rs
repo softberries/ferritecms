@@ -24,7 +24,6 @@ mod options;
 pub mod permalink;
 mod redirects;
 pub mod release;
-pub mod workflow;
 pub mod seed;
 pub mod settings;
 pub mod site;
@@ -35,6 +34,7 @@ mod tx;
 mod types;
 mod users;
 pub mod webhooks;
+pub mod workflow;
 
 /// Longest parent chain (content items and terms) walked anywhere in core.
 pub const MAX_PARENT_DEPTH: usize = 64;
