@@ -12,7 +12,8 @@ use ferrite_core::{
 };
 use ferrite_domain::plugin_registry::{RegistryIndex, RegistryPublisher, RevokedKey};
 use ferrite_domain::plugin_trust::{
-    InstallSource, KeyId, KeySource, OwnerId, RegistryCacheRow, Revocation, SignaturePolicy,
+    InstallSource, KeyId, KeySource, OwnerId, PublisherKey, RegistryCacheRow, Revocation,
+    SignaturePolicy,
 };
 use ferrite_domain::{
     Artifact, ArtifactHash, ArtifactKind, AuditQuery, InstalledPlugin, NewUser, Role, Timestamp,
@@ -344,7 +345,7 @@ pub async fn policy_trusted_refuses_new_key(db: &TestDb) {
         "signature"
     );
     // An operator key passes.
-    svc.trust_key(&key(1), "ops").await.unwrap();
+    svc.trust_key(&key(1), "ops", None).await.unwrap();
     let d = install(&svc, "seo", 1, &t).await.unwrap();
     assert_eq!(d.signer.unwrap().source, SignerSource::Operator);
 }
@@ -374,7 +375,7 @@ pub async fn revoked_key_refuses_install(db: &TestDb) {
         "signature"
     );
     // The operator re-trusts it.
-    svc.trust_key(&key(1), "back").await.unwrap();
+    svc.trust_key(&key(1), "back", None).await.unwrap();
     install(&svc, "seo", 1, &signed(1, "x")).await.unwrap();
 }
 
@@ -571,13 +572,19 @@ pub async fn unbind_keeps_data(db: &TestDb) {
 pub async fn serial_rollback_refused(db: &TestDb) {
     let svc = ExtensionService::new(db.shared_store());
     let i = index(5, &[1], &[]);
-    let r = svc.store_registry(&cache_row(5, "five"), &i).await.unwrap();
+    let r = svc
+        .store_registry(&cache_row(5, "five"), &i, None)
+        .await
+        .unwrap();
     assert_eq!(r.stored, RegistryStored::Stored);
-    let r = svc.store_registry(&cache_row(5, "five"), &i).await.unwrap();
+    let r = svc
+        .store_registry(&cache_row(5, "five"), &i, None)
+        .await
+        .unwrap();
     assert_eq!(r.stored, RegistryStored::Unchanged);
     assert_eq!(
         field(
-            svc.store_registry(&cache_row(4, "four"), &i)
+            svc.store_registry(&cache_row(4, "four"), &i, None)
                 .await
                 .unwrap_err()
         ),
@@ -587,17 +594,22 @@ pub async fn serial_rollback_refused(db: &TestDb) {
         svc.registry_cache(REG_URL).await.unwrap().unwrap().serial,
         5
     );
-    let r = svc.store_registry(&cache_row(6, "six"), &i).await.unwrap();
+    let r = svc
+        .store_registry(&cache_row(6, "six"), &i, None)
+        .await
+        .unwrap();
     assert_eq!(r.stored, RegistryStored::Stored);
 }
 
 pub async fn same_serial_other_bytes_refused(db: &TestDb) {
     let svc = ExtensionService::new(db.shared_store());
     let i = index(5, &[1], &[]);
-    svc.store_registry(&cache_row(5, "five"), &i).await.unwrap();
+    svc.store_registry(&cache_row(5, "five"), &i, None)
+        .await
+        .unwrap();
     assert_eq!(
         field(
-            svc.store_registry(&cache_row(5, "FIVE"), &i)
+            svc.store_registry(&cache_row(5, "FIVE"), &i, None)
                 .await
                 .unwrap_err()
         ),
@@ -628,7 +640,7 @@ pub async fn registry_revocations_applied_once(db: &TestDb) {
     svc.set_plugin_enabled("seo", true).await.unwrap();
     let two = index(2, &[], &[(1, true)]);
     let r = svc
-        .store_registry(&cache_row(2, "two"), &two)
+        .store_registry(&cache_row(2, "two"), &two, None)
         .await
         .unwrap();
     assert_eq!(r.disabled, ["seo"]);
@@ -638,7 +650,7 @@ pub async fn registry_revocations_applied_once(db: &TestDb) {
     // Seen again (enabled again by an admin meanwhile): not disabled a second time.
     svc.set_plugin_enabled("seo", true).await.unwrap();
     let r = svc
-        .store_registry(&cache_row(3, "three"), &index(3, &[], &[(1, true)]))
+        .store_registry(&cache_row(3, "three"), &index(3, &[], &[(1, true)]), None)
         .await
         .unwrap();
     assert!(r.disabled.is_empty());
@@ -773,6 +785,174 @@ pub async fn existing_rows_without_owner_are_unsigned_owned(db: &TestDb) {
     assert_eq!(o.source, InstallSource::Upload);
 }
 
+// ---- M6-2 review fixes ------------------------------------------------------------------
+
+/// A key with key `n`'s id but other key bytes (anyone can pick a key id).
+fn forged(n: u64) -> PublisherKey {
+    use base64::Engine;
+    let real = key(n);
+    let mut bin = base64::engine::general_purpose::STANDARD
+        .decode(&real.base64)
+        .unwrap();
+    bin[20] ^= 0xff;
+    let k =
+        PublisherKey::from_base64(&base64::engine::general_purpose::STANDARD.encode(bin)).unwrap();
+    assert_eq!(k.key_id, real.key_id);
+    k
+}
+
+fn signed_by(k: &PublisherKey, claim: &str) -> InstallTrust {
+    InstallTrust {
+        signer: Some(SignerInput {
+            key: k.clone(),
+            signature: "untrusted comment: forged\n".into(),
+        }),
+        ..InstallTrust::unsigned(claim)
+    }
+}
+
+/// CRITICAL: a TOFU-approved key with the registry key's id but other bytes never gets
+/// the registry identity, and with the index cached it is refused outright.
+pub async fn forged_key_with_registry_key_id_is_not_the_registry(db: &TestDb) {
+    let svc = ExtensionService::new(db.shared_store());
+    // Before the index is fetched: an admin approves the forged key for `foo`.
+    let d = install(&svc, "foo", 1, &signed_by(&forged(1), "ferritecms.dev"))
+        .await
+        .unwrap();
+    assert_eq!(d.next_owner, Some(OwnerId::Key(key(1).key_id)));
+    // With the index cached, the forged key is refused for any name, whatever the claim.
+    let idx = index(1, &[1], &[]);
+    for (name, claim) in [("bar", "ferritecms.dev"), ("foo", "ferritecms.dev")] {
+        let err = install(
+            &svc,
+            name,
+            2,
+            &with_registry(signed_by(&forged(1), claim), &idx),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(field(err), "signature", "{name}");
+    }
+    // A name bound to the registry publisher by the genuine key cannot be updated by it.
+    install(
+        &svc,
+        "seo",
+        3,
+        &with_registry(signed(1, "ferritecms.dev"), &idx),
+    )
+    .await
+    .unwrap_err(); // the site row under that id holds the forged key: refused too
+}
+
+/// Refresh removes a colliding site key, disables what it signed and audits it; the
+/// genuine registry key works afterwards.
+pub async fn refresh_removes_colliding_key_and_disables_its_plugins(db: &TestDb) {
+    let store = db.store();
+    let svc = ExtensionService::new(db.shared_store());
+    install(&svc, "foo", 1, &signed_by(&forged(1), "ferritecms.dev"))
+        .await
+        .unwrap();
+    svc.set_plugin_enabled("foo", true).await.unwrap();
+    let idx = index(1, &[1], &[]);
+    let r = svc
+        .store_registry(&cache_row(1, "one"), &idx, None)
+        .await
+        .unwrap();
+    assert_eq!(r.collisions, [key(1).key_id]);
+    assert_eq!(r.disabled, ["foo"]);
+    assert!(svc.get_key(&key(1).key_id).await.unwrap().is_none());
+    let row = store.read().plugins().get("foo").await.unwrap().unwrap();
+    assert!(!row.enabled);
+    assert!(
+        row.disabled_reason
+            .unwrap()
+            .contains("has the id of the registry's key")
+    );
+    let audit = store
+        .read()
+        .audit()
+        .list(&AuditQuery {
+            action: Some("plugin.publisher.collision".into()),
+            limit: 5,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(audit.items.len(), 1);
+    // The genuine key now installs another plugin with the registry identity.
+    let d = install(
+        &svc,
+        "seo",
+        2,
+        &with_registry(signed(1, "ferritecms.dev"), &idx),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(d.next_owner, Some(OwnerId::Registry { .. })));
+}
+
+/// The operator cannot trust a key whose id the cached index lists under other bytes.
+pub async fn trust_key_refuses_a_registry_id_collision(db: &TestDb) {
+    let svc = ExtensionService::new(db.shared_store());
+    let idx = index(1, &[1], &[]);
+    let err = svc
+        .trust_key(&forged(1), "ops", Some(&idx))
+        .await
+        .unwrap_err();
+    assert_eq!(field(err), "key");
+    svc.trust_key(&key(1), "ops", Some(&idx)).await.unwrap();
+}
+
+/// MINOR 1: `trusted` refuses a key an admin approved earlier (only registry and operator
+/// keys pass).
+pub async fn policy_trusted_refuses_approved_key(db: &TestDb) {
+    let svc = ExtensionService::new(db.shared_store());
+    install(&svc, "seo", 1, &signed(1, "x")).await.unwrap();
+    let mut t = signed(1, "x");
+    t.policy = SignaturePolicy::Trusted;
+    assert_eq!(
+        field(install(&svc, "seo", 2, &t).await.unwrap_err()),
+        "signature"
+    );
+}
+
+/// MINOR 3: a cached row that does not verify under the current registry key (re-keyed)
+/// gives no serial floor.
+pub async fn stale_cache_is_replaced_without_the_serial_rule(db: &TestDb) {
+    let svc = ExtensionService::new(db.shared_store());
+    let i = index(9, &[1], &[]);
+    svc.store_registry(&cache_row(9, "old-key"), &i, None)
+        .await
+        .unwrap();
+    // Without the stale mark the lower serial is a rollback.
+    assert_eq!(
+        field(
+            svc.store_registry(&cache_row(2, "new-key"), &i, None)
+                .await
+                .unwrap_err()
+        ),
+        "serial"
+    );
+    let r = svc
+        .store_registry(&cache_row(2, "new-key"), &i, Some("old-key"))
+        .await
+        .unwrap();
+    assert_eq!(r.stored, RegistryStored::Stored);
+    assert_eq!(
+        svc.registry_cache(REG_URL).await.unwrap().unwrap().serial,
+        2
+    );
+    // A stale mark naming other bytes than the cached row's changes nothing.
+    assert_eq!(
+        field(
+            svc.store_registry(&cache_row(1, "x"), &i, Some("old-key"))
+                .await
+                .unwrap_err()
+        ),
+        "serial"
+    );
+}
+
 backend_tests!(
     none_signed_binds,
     none_unsigned_binds_unsigned,
@@ -797,6 +977,11 @@ backend_tests!(
     registry_revocations_applied_once,
     audit_install_names_signer,
     existing_rows_without_owner_are_unsigned_owned,
+    forged_key_with_registry_key_id_is_not_the_registry,
+    refresh_removes_colliding_key_and_disables_its_plugins,
+    trust_key_refuses_a_registry_id_collision,
+    policy_trusted_refuses_approved_key,
+    stale_cache_is_replaced_without_the_serial_rule,
 );
 
 backend_tests_spawning!(concurrent_installs_of_two_publishers_one_wins);

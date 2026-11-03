@@ -18,6 +18,8 @@ pub trait PluginTrustRepo: Send + Sync {
     /// revocation. A public key stored under another key id is `UniqueViolation`
     /// (`plugin_publishers_public_key_uq`).
     async fn upsert_key(&self, key: &TrustedKey) -> Result<(), StoreError>;
+    /// Deletes a key row; `false` when it had none.
+    async fn delete_key(&self, key_id: &KeyId) -> Result<bool, StoreError>;
     /// Records a revocation on an existing row; `false` when the key has no row.
     async fn revoke_key(&self, key_id: &KeyId, revocation: &Revocation)
     -> Result<bool, StoreError>;
@@ -63,6 +65,9 @@ pub fn check_plugin_owner(owner: &PluginOwner) -> Result<(), StoreError> {
     validate_text("plugin owner publisher", &owner.publisher)?;
     if let Some(s) = &owner.signature {
         validate_text("plugin owner signature", s)?;
+    }
+    if let Some(k) = &owner.signer_public_key {
+        validate_text("plugin owner signer public key", k)?;
     }
     if let Some(u) = &owner.registry_url {
         validate_text("plugin owner registry url", u)?;

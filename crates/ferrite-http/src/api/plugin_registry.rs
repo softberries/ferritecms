@@ -89,9 +89,14 @@ pub async fn refresh_registry(
     api.extensions
         .authorize_registry_refresh(&who.actor)
         .await?;
-    api.installer.refresh_registry().await?;
-    let view = api.installer.registry_view(None).await?;
-    Ok(Json(view.into()))
+    let refreshed = api.installer.refresh_registry().await?;
+    let mut dto: RegistryDto = api.installer.registry_view(None).await?.into();
+    dto.collisions = refreshed
+        .collisions
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    Ok(Json(dto))
 }
 
 #[utoipa::path(
@@ -163,18 +168,19 @@ pub async fn install_registry_plugin(
 /// Every key this site knows: its rows (approved, operator, revocations) and the
 /// cached registry's current keys.
 fn publisher_keys(ctx: &TrustContext) -> Vec<PublisherKeyDto> {
-    let signed_by = |id: &KeyId| -> Vec<String> {
+    // By the whole key: a key id is 8 bytes anyone can choose (M6-2 review).
+    let signed_by = |key: &PublisherKey| -> Vec<String> {
         ctx.owners
             .iter()
-            .filter(|o| o.signer_key.as_ref() == Some(id))
+            .filter(|o| o.signer().as_ref() == Some(key))
             .map(|o| o.plugin.clone())
             .collect()
     };
-    let listed = |id: &KeyId| {
+    let listed = |key: &PublisherKey| {
         ctx.registry.as_ref().and_then(|r| {
             r.index
-                .publisher_of_key(id)
-                .or_else(|| r.index.revocation(id).map(|(p, _)| p))
+                .publisher_of_key(key)
+                .or_else(|| r.index.revocation(key).map(|(p, _)| p))
                 .map(|p| PublisherRefDto {
                     id: p.id.clone(),
                     name: p.name.clone(),
@@ -189,18 +195,18 @@ fn publisher_keys(ctx: &TrustContext) -> Vec<PublisherKeyDto> {
             public_key: k.key.base64.clone(),
             label: k.label.clone(),
             source: k.source.as_str().to_owned(),
-            registry_publisher: listed(&k.key.key_id),
+            registry_publisher: listed(&k.key),
             trusted_at: Some(k.trusted_at.as_datetime()),
             revoked_at: k.revoked.as_ref().map(|r| r.at.as_datetime()),
             revoked_reason: k.revoked.as_ref().map(|r| r.reason.clone()),
             compromised: k.revoked.as_ref().is_some_and(|r| r.compromised),
-            plugins: signed_by(&k.key.key_id),
+            plugins: signed_by(&k.key),
         })
         .collect();
     if let Some(r) = &ctx.registry {
         for p in &r.index.publishers {
             for key in &p.keys {
-                if out.iter().any(|k| k.key_id == key.key_id.to_string()) {
+                if out.iter().any(|k| k.public_key == key.base64) {
                     continue;
                 }
                 out.push(PublisherKeyDto {
@@ -216,7 +222,7 @@ fn publisher_keys(ctx: &TrustContext) -> Vec<PublisherKeyDto> {
                     revoked_at: None,
                     revoked_reason: None,
                     compromised: false,
-                    plugins: signed_by(&key.key_id),
+                    plugins: signed_by(key),
                 });
             }
         }

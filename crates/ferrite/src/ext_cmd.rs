@@ -491,8 +491,11 @@ async fn run_keys(cmd: KeysCommand) -> anyhow::Result<()> {
                 .with_context(|| format!("{} is not a minisign public key", file.display()))?
                 .with_context(|| format!("{} holds no key", file.display()))?;
             with_site(&data.data, async |site| {
+                // Checked against the cached registry: a key with a registry key's id but
+                // other bytes is refused (M6-2 review).
+                let registry = installer(&site)?.registry_context().await?;
                 ExtensionService::new(site.store.clone())
-                    .trust_key(&key, &label)
+                    .trust_key(&key, &label, registry.as_ref().map(|r| r.index.as_ref()))
                     .await?;
                 println!("trusted key {} ({label})", key.key_id);
                 Ok(())
@@ -557,8 +560,14 @@ async fn refresh(installer: &Installer) -> anyhow::Result<()> {
         .refresh_registry()
         .await
         .context("cannot check the plugin registry")?;
+    for id in &r.collisions {
+        eprintln!(
+            "warning: publisher key {id} had the id of a registry key with other key bytes; \
+             it was removed and the plugins it signed disabled"
+        );
+    }
     for name in r.disabled {
-        eprintln!("warning: plugin {name} was disabled: the registry revoked its signing key");
+        eprintln!("warning: plugin {name} was disabled by the registry check");
     }
     Ok(())
 }

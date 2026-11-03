@@ -1,4 +1,5 @@
 -- ferrite:phase expand
+-- ferrite:lossy-down   -- the down drops the owner bindings, trusted keys and revocations
 -- Plugin trust (M6-2, design 14 §6). `plugin_publishers`: the minisign keys this site
 -- trusts on its own (approved at install, added by the operator) and every revocation
 -- (any source; a registry key has a row only once revoked). `plugin_owners`: which
@@ -23,6 +24,7 @@ CREATE TABLE plugin_owners (
     plugin       TEXT CONSTRAINT plugin_owners_pkey PRIMARY KEY NOT NULL,
     owner        TEXT,
     signer_key   TEXT,
+    signer_public_key TEXT,
     signature    TEXT,
     publisher    TEXT NOT NULL,
     source       TEXT NOT NULL CHECK (source IN ('upload', 'folder', 'registry')),

@@ -96,6 +96,32 @@ packs the plugins unsigned; `pages.yml` skips the index with a notice.
 - **R-2-18** `registry` and `publishers` are refused for uploads only; `inspect` and `retained`
   stay refused everywhere, as before.
 
+Review fixes (after the first exit; one critical, four minor):
+
+- **R-2-19** (critical) Key-id confusion. A minisign key id is 8 bytes anyone can choose, so
+  identity is decided by the whole public key: `RegistryIndex::publisher_of_key` and
+  `revocation` take a `&PublisherKey`; `plugin_owners` gains `signer_public_key` (0015,
+  unreleased, so edited in place) and `PluginOwner::signer()` returns it only when its id is
+  the row's `signer_key`; `verify_bundle` refuses two candidates with one id and different
+  bytes (`KeyConflict`); install refuses a signer whose id the cached index lists under other
+  bytes (any claim, any name); `keys trust` refuses one (field `key`); every registry
+  refresh deletes colliding site key rows, disables the enabled plugins they signed (reason
+  names the key and the registry publisher), audits `plugin.publisher.collision` and returns
+  `collisions` (CLI warning, Plugins-screen toast). Until a refresh runs, a site that
+  approved a forged key refuses every bundle signed by the genuine registry key (the site
+  row holds other bytes under that id): fail closed. `update_for` offers an update for a `key:` owner
+  only when that id's stored whole key is the registry publisher's.
+- **R-2-20** `signatures = "trusted"` refuses an approved (TOFU) key as well as a new one.
+- **R-2-21** `plugin_registry` is exported (`Export::Rows`), so `export`/`import-site`/`db copy`
+  carry the url and the serial: the copy keeps its rollback floor. The index is re-verified on
+  use, so a copied row grants nothing by itself.
+- **R-2-22** A refresh verifies the cached row under the current `registry_key` first; a row
+  that does not verify (the key changed) is replaced without the serial rule
+  (`store_registry(.., stale)` matches the exact cached text, so a concurrent newer row is
+  still compared).
+- **R-2-23** 0015 is declared `-- ferrite:lossy-down` (the down drops bindings, trusted keys and
+  revocations); `rollback --schema` past it needs `--allow-lossy`.
+
 ## Verified
 
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
@@ -128,6 +154,25 @@ packs the plugins unsigned; `pages.yml` skips the index with a notice.
   `analytics` folder from the tarball printed the verified publisher; `doctor --offline`
   printed `ok plugins.trust 1 plugins, 1 verified; registry serial 1 checked 0 min ago`. The
   admin's Registry tab and Update chip were exercised by the E2E spec above.
+
+- Review fixes (R-2-19..23), same gates again: fmt, clippy, doc clean; the full workspace run
+  on Postgres 17 gave 4 409 passed, 26 failed. 25 of those were tests that 0015's new
+  lossy-down mark affected (migration round trips naming "migration 10", plain
+  `rollback --schema` with no `--allow-lossy`). Two more were the GET registry body (now has
+  `collisions`) and a registry inspect with a revoked key, which now gets its trust
+  refusal back before the publisher check. After the fixes, `contract` 529/529, `rollback`
+  18/18, `api` 526/526 and `plugins` 289/289 pass. `import_cli` still fails on the busy
+  port 8080, as above. New regression tests: `forged_key_with_registry_key_id_is_not_the_registry`,
+  `refresh_removes_colliding_key_and_disables_its_plugins`,
+  `trust_key_refuses_a_registry_id_collision`, `policy_trusted_refuses_approved_key`,
+  `stale_cache_is_replaced_without_the_serial_rule` (core, both backends),
+  `same_id_other_key_is_not_the_registry_key` (domain), `same_id_two_keys_conflict`
+  (plugin host), `key_delete_and_owner_signer_key` (store contract),
+  `rekeyed_registry_replaces_the_old_cache` (HTTP), `migration_0015_roundtrip` now requires
+  `allow_lossy`, the export tests carry `plugin_registry`, and the Vitest
+  `registry_check_warns_about_key_collisions`. Admin typecheck, lint and Vitest pass
+  (849/849). The E2E specs were not re-run after these fixes. The only admin change is a
+  toast shown when `collisions` is non-empty, and the specs never produce a collision.
 
 ## Not verified
 

@@ -438,21 +438,44 @@ impl RegistryIndex {
         })
     }
 
-    /// The publisher a current (not revoked) key belongs to.
-    pub fn publisher_of_key(&self, id: &KeyId) -> Option<&RegistryPublisher> {
+    /// The publisher a current (not revoked) key belongs to. Matched by the whole public
+    /// key, never by its id alone: a key id is 8 bytes anyone can choose (M6-2 review).
+    pub fn publisher_of_key(&self, key: &PublisherKey) -> Option<&RegistryPublisher> {
         self.publishers
             .iter()
-            .find(|p| p.keys.iter().any(|k| k.key_id == *id))
+            .find(|p| p.keys.iter().any(|k| k == key))
     }
 
-    /// The revocation of a key, with its publisher.
-    pub fn revocation(&self, id: &KeyId) -> Option<(&RegistryPublisher, &RevokedKey)> {
+    /// The revocation of a key (matched by the whole public key), with its publisher.
+    pub fn revocation(&self, key: &PublisherKey) -> Option<(&RegistryPublisher, &RevokedKey)> {
         self.publishers.iter().find_map(|p| {
             p.revoked_keys
                 .iter()
-                .find(|r| r.key.key_id == *id)
+                .find(|r| r.key == *key)
                 .map(|r| (p, r))
         })
+    }
+
+    /// The key (current or revoked) the index lists under `id`, with its publisher. Only
+    /// for collision checks and display: identity decisions use [`publisher_of_key`].
+    ///
+    /// [`publisher_of_key`]: Self::publisher_of_key
+    pub fn key_by_id(&self, id: &KeyId) -> Option<(&RegistryPublisher, &PublisherKey)> {
+        self.publishers.iter().find_map(|p| {
+            p.keys
+                .iter()
+                .chain(p.revoked_keys.iter().map(|r| &r.key))
+                .find(|k| k.key_id == *id)
+                .map(|k| (p, k))
+        })
+    }
+
+    /// Whether `key` collides with the index: the index lists a different public key under
+    /// the same id.
+    pub fn collides(&self, key: &PublisherKey) -> Option<&RegistryPublisher> {
+        self.key_by_id(&key.key_id)
+            .filter(|(_, k)| *k != key)
+            .map(|(p, _)| p)
     }
 
     pub fn publisher(&self, id: &str) -> Option<&RegistryPublisher> {
@@ -580,12 +603,43 @@ pub(crate) mod tests {
         let i = parse(&sample()).unwrap();
         assert_eq!(i.serial, 3);
         assert_eq!(i.plugins[0].versions.len(), 2);
-        let k1 = PublisherKey::from_base64(&key_b64(1)).unwrap().key_id;
-        let k2 = PublisherKey::from_base64(&key_b64(2)).unwrap().key_id;
+        let k1 = PublisherKey::from_base64(&key_b64(1)).unwrap();
+        let k2 = PublisherKey::from_base64(&key_b64(2)).unwrap();
         assert_eq!(i.publisher_of_key(&k1).unwrap().id, "ferritecms.dev");
         assert!(i.publisher_of_key(&k2).is_none());
         assert_eq!(i.revocation(&k2).unwrap().1.reason, "rotated");
         assert_eq!(i.version("seo", "0.2.0").unwrap().version, "0.2.0");
+    }
+
+    /// M6-2 review (critical): a key with a registry key's id but other key bytes is not
+    /// that registry key.
+    #[test]
+    fn same_id_other_key_is_not_the_registry_key() {
+        use base64::Engine;
+        let i = parse(&sample()).unwrap();
+        let real = PublisherKey::from_base64(&key_b64(1)).unwrap();
+        let mut bin = base64::engine::general_purpose::STANDARD
+            .decode(&real.base64)
+            .unwrap();
+        bin[20] ^= 0xff;
+        let forged =
+            PublisherKey::from_base64(&base64::engine::general_purpose::STANDARD.encode(&bin))
+                .unwrap();
+        assert_eq!(forged.key_id, real.key_id);
+        assert!(i.publisher_of_key(&forged).is_none());
+        assert_eq!(i.collides(&forged).unwrap().id, "ferritecms.dev");
+        assert!(i.collides(&real).is_none());
+        assert_eq!(i.key_by_id(&real.key_id).unwrap().1, &real);
+        let revoked = PublisherKey::from_base64(&key_b64(2)).unwrap();
+        let mut rbin = base64::engine::general_purpose::STANDARD
+            .decode(&revoked.base64)
+            .unwrap();
+        rbin[20] ^= 0xff;
+        let forged_rev =
+            PublisherKey::from_base64(&base64::engine::general_purpose::STANDARD.encode(&rbin))
+                .unwrap();
+        assert!(i.revocation(&forged_rev).is_none());
+        assert!(i.revocation(&revoked).is_some());
     }
 
     #[test]

@@ -70,8 +70,12 @@ pub enum RegistryStored {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryRefresh {
     pub stored: RegistryStored,
-    /// Plugins disabled by a newly compromised key the index revokes.
+    /// Plugins disabled by a newly compromised key the index revokes, or by a key
+    /// collision.
     pub disabled: Vec<String>,
+    /// Site keys whose id the index lists under other key bytes: their rows were removed
+    /// and the plugins they signed disabled (M6-2 review).
+    pub collisions: Vec<KeyId>,
 }
 
 /// KV keys deleted per statement by a purge.
@@ -281,8 +285,23 @@ impl ExtensionService {
     }
 
     /// Trusts `key` as an operator key (`ferrite plugin keys trust`), clearing a local
-    /// revocation.
-    pub async fn trust_key(&self, key: &PublisherKey, label: &str) -> Result<(), CoreError> {
+    /// revocation. A key whose id the cached registry `index` lists under other key bytes
+    /// is refused (`InvalidField { field: "key" }`; a key id is 8 bytes anyone can choose).
+    pub async fn trust_key(
+        &self,
+        key: &PublisherKey,
+        label: &str,
+        index: Option<&RegistryIndex>,
+    ) -> Result<(), CoreError> {
+        if let Some(p) = index.and_then(|i| i.collides(key)) {
+            return Err(CoreError::invalid_field(
+                "key",
+                format!(
+                    "key {} has the id of a key the registry lists for {}, but other key bytes",
+                    key.key_id, p.name
+                ),
+            ));
+        }
         let (guard, tx) = self.begin_locked().await?;
         let done = tx
             .plugin_trust()
@@ -316,13 +335,22 @@ impl ExtensionService {
     /// other bytes, is refused (`InvalidField { field: "serial" }`, a rollback) and the
     /// cache stays. Every revoked key of the index gets a revocation row; a newly
     /// compromised one disables the plugins it signed.
+    ///
+    /// `stale`: the cached index text the caller found not to verify under the current
+    /// registry key (the key changed, or the row was tampered with); a cached row with
+    /// exactly that text is replaced without the serial rule.
+    ///
+    /// A site key whose id the index lists under other key bytes (a collision, possible
+    /// for a key approved before the index was fetched) is removed, every installed plugin
+    /// it signed is disabled, and the collision is audited (`plugin.publisher.collision`).
     pub async fn store_registry(
         &self,
         row: &RegistryCacheRow,
         index: &RegistryIndex,
+        stale: Option<&str>,
     ) -> Result<RegistryRefresh, CoreError> {
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_registry(tx.as_ref(), row, index).await;
+        let done = write_registry(tx.as_ref(), row, index, stale).await;
         finish_locked(guard, tx, done).await
     }
 
@@ -797,9 +825,14 @@ async fn write_registry(
     repos: &dyn Repos,
     row: &RegistryCacheRow,
     index: &RegistryIndex,
+    stale: Option<&str>,
 ) -> Result<RegistryRefresh, CoreError> {
     let trust = repos.plugin_trust();
-    let stored = match trust.get_registry(&row.url).await? {
+    let cached = trust
+        .get_registry(&row.url)
+        .await?
+        .filter(|c| stale != Some(c.index_json.as_str()));
+    let stored = match cached {
         Some(cached) if cached.serial > row.serial => {
             return Err(CoreError::invalid_field(
                 "serial",
@@ -830,9 +863,60 @@ async fn write_registry(
         }
     };
     let mut disabled = Vec::new();
+    let mut collisions = Vec::new();
+    for site_key in trust.list_keys().await? {
+        let Some(p) = index.collides(&site_key.key) else {
+            continue;
+        };
+        let id = site_key.key.key_id;
+        let reason = format!(
+            "publisher key {id} has the id of the registry's key for {} but other key bytes",
+            p.name
+        );
+        let mut off = Vec::new();
+        for owner in trust.owners_signed_by(&id).await? {
+            let Some(plugin) = repos.plugins().get_for_update(&owner.plugin).await? else {
+                continue;
+            };
+            if plugin.enabled {
+                repos
+                    .plugins()
+                    .set_enabled(&owner.plugin, false, Some(&reason))
+                    .await?;
+                repos
+                    .events()
+                    .append(&events::plugins_changed(&owner.plugin))
+                    .await?;
+                off.push(owner.plugin);
+            }
+        }
+        trust.delete_key(&id).await?;
+        append_audit(
+            repos,
+            Some(NewAudit {
+                actor_id: None,
+                action: "plugin.publisher.collision".to_owned(),
+                target_kind: "publisher".to_owned(),
+                target_id: Some(id.to_string()),
+                details: json!({
+                    "key_id": id.to_string(),
+                    "registry_publisher": p.id,
+                    "removed_label": site_key.label,
+                    "disabled": off,
+                }),
+            }),
+        )
+        .await?;
+        tracing::warn!(key = %id, publisher = %p.id, disabled = ?off, "{reason}; the site key was removed");
+        disabled.extend(off);
+        collisions.push(id);
+    }
     for publisher in &index.publishers {
         for revoked in &publisher.revoked_keys {
-            let current = trust.get_key(&revoked.key.key_id).await?;
+            let current = trust
+                .get_key(&revoked.key.key_id)
+                .await?
+                .filter(|k| k.key == revoked.key);
             let same = current
                 .as_ref()
                 .and_then(|k| k.revoked.as_ref())
@@ -858,7 +942,11 @@ async fn write_registry(
             );
         }
     }
-    Ok(RegistryRefresh { stored, disabled })
+    Ok(RegistryRefresh {
+        stored,
+        disabled,
+        collisions,
+    })
 }
 
 /// The manifest's `plugin.publisher` text of a stored row (empty when absent).

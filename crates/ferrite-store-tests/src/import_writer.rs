@@ -286,12 +286,21 @@ pub fn rich_site() -> Dump {
             "plugin_owners",
             rows(vec![
                 json!({"plugin": "seo", "owner": "key:0102030405060708",
-                       "signer_key": "0102030405060708", "signature": "untrusted comment: x\n",
+                       "signer_key": "0102030405060708",
+                       "signer_public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                       "signature": "untrusted comment: x\n",
                        "publisher": "example.dev", "source": "upload",
                        "bound_at": T_NOW, "updated_at": T_NOW}),
                 json!({"plugin": "old", "publisher": "x", "source": "folder",
                        "bound_at": T_PRE_1970, "updated_at": T_NOW}),
             ]),
+        ),
+        (
+            "plugin_registry",
+            rows(vec![json!({
+                "url": "file:///srv/registry/index.json", "serial": 7,
+                "index_json": "{}", "signature": "untrusted comment: x\n",
+                "generated_at": T_NOW, "fetched_at": T_NOW, "checked_at": T_NOW})]),
         ),
         (
             "themes",

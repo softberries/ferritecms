@@ -97,7 +97,11 @@ async fn install(c: &mut Client, r: &Router, version: &str) -> Resp {
 async fn get_registry_without_config_is_null(api: Api) -> Api {
     let mut c = admin(&api).await;
     let r = c.get(&api, REGISTRY).await;
-    assert_eq!(r.json(), json!({"registry": null, "plugins": []}), "{r:?}");
+    assert_eq!(
+        r.json(),
+        json!({"registry": null, "plugins": [], "collisions": []}),
+        "{r:?}"
+    );
     let r = c.post_empty(&api, &format!("{REGISTRY}/refresh")).await;
     r.assert_problem(404, "not-found");
     let r = c

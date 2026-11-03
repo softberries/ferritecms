@@ -90,8 +90,16 @@ export function PluginsScreen({ tab = "installed" }: { tab?: "installed" | "regi
   const meta = registry.data?.registry ?? null;
   const check = useMutation({
     mutationFn: refreshRegistry,
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success(t("plugins.registry.checkedToast"));
+      if (data.collisions.length > 0) {
+        toast.warning(
+          t("plugins.registry.collisionToast", {
+            count: data.collisions.length,
+            keys: data.collisions.join(", "),
+          }),
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
       refresh();
     },

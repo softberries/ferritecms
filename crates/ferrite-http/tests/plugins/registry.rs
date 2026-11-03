@@ -28,6 +28,7 @@ profile_tests!(
     yanked_version_not_default_but_installable_by_version,
     other_world_skipped,
     update_available_only_for_same_publisher,
+    rekeyed_registry_replaces_the_old_cache,
 );
 
 fn installer(site: &Site, fx: &FileRegistryFixture) -> Installer {
@@ -330,5 +331,31 @@ async fn update_available_only_for_same_publisher(site: Site) -> Site {
         update_for(&ctx.index, &ctx.registry_key, &row, Some(&other)),
         Some(("0.2.0".into(), false))
     );
+    site
+}
+
+/// M6-2 review (minor 3): after `registry_key` changes, a cached copy that does not verify
+/// under the new key gives no serial floor, so the re-keyed registry's lower serial is
+/// accepted.
+async fn rekeyed_registry_replaces_the_old_cache(site: Site) -> Site {
+    let mut fx = fixture();
+    fx.serial = 9;
+    fx.publish();
+    installer(&site, &fx).refresh_registry().await.unwrap();
+    fx.registry_key = crate::registry_fixture::TestKey::new();
+    fx.serial = 1;
+    fx.publish();
+    let i = installer(&site, &fx);
+    let r = i.refresh_registry().await.unwrap();
+    assert_eq!(r.stored, RegistryStored::Stored);
+    let row = site
+        .store
+        .read()
+        .plugin_trust()
+        .get_registry(&fx.url())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.serial, 1);
     site
 }

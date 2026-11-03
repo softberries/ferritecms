@@ -312,6 +312,8 @@ pub struct PluginOwner {
     pub owner: Option<OwnerId>,
     /// The key that signed the installed version (`None` when unsigned).
     pub signer_key: Option<KeyId>,
+    /// That key's base64 line: a key id alone does not identify a key (M6-2 review).
+    pub signer_public_key: Option<String>,
     /// The installed version's minisig text.
     pub signature: Option<String>,
     /// The manifest's `publisher` text.
@@ -320,6 +322,17 @@ pub struct PluginOwner {
     pub registry_url: Option<String>,
     pub bound_at: Timestamp,
     pub updated_at: Timestamp,
+}
+
+impl PluginOwner {
+    /// The installed version's signing key (`None` when unsigned, or the stored key text
+    /// does not parse).
+    pub fn signer(&self) -> Option<PublisherKey> {
+        self.signer_public_key
+            .as_deref()
+            .and_then(|b| PublisherKey::from_base64(b).ok())
+            .filter(|k| Some(k.key_id) == self.signer_key)
+    }
 }
 
 /// `[plugins] signatures` (design 14 §3.2).

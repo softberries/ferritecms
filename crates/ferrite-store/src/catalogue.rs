@@ -751,8 +751,9 @@ pub static TABLES: &[TableSpec] = &[
         self_ref: None,
         nullable: &[],
         export: Export::Skip,
-    }, // M6-2 (0015): publisher keys and owner bindings move with the site; the registry
-    // cache is refetched.
+    },
+    // M6-2 (0015): publisher keys, owner bindings and the registry cache move with the
+    // site.
     TableSpec {
         name: "plugin_publishers",
         columns: &[
@@ -776,6 +777,7 @@ pub static TABLES: &[TableSpec] = &[
             ("plugin", Text),
             ("owner", Text),
             ("signer_key", Text),
+            ("signer_public_key", Text),
             ("signature", Text),
             ("publisher", Text),
             ("source", Text),
@@ -785,10 +787,17 @@ pub static TABLES: &[TableSpec] = &[
         ],
         key: &["plugin"],
         self_ref: None,
-        nullable: &["owner", "signer_key", "signature", "registry_url"],
+        nullable: &[
+            "owner",
+            "signer_key",
+            "signer_public_key",
+            "signature",
+            "registry_url",
+        ],
         export: Export::Rows,
     },
-    // A cache, refetched.
+    // The verified cache. Exported (M6-2 review): the serial it holds is the copy's
+    // rollback floor, and the index is verified again on every use.
     TableSpec {
         name: "plugin_registry",
         columns: &[
@@ -805,7 +814,7 @@ pub static TABLES: &[TableSpec] = &[
         key: &["url"],
         self_ref: None,
         nullable: &["last_error", "last_error_at"],
-        export: Export::Skip,
+        export: Export::Rows,
     },
 ];
 
@@ -1014,7 +1023,6 @@ mod tests {
                 "rate_limits",
                 "idempotency_keys",
                 "node_metrics",
-                "plugin_registry",
             ]
         );
         assert_eq!(

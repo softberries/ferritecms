@@ -37,6 +37,7 @@ pub(crate) fn owner(plugin: &str, signer: Option<u64>, now: Timestamp) -> Plugin
         plugin: plugin.into(),
         owner: signer.map(|n| OwnerId::Key(key(n).key_id)),
         signer_key: signer.map(|n| key(n).key_id),
+        signer_public_key: signer.map(|n| key(n).base64),
         signature: signer.map(|n| format!("untrusted comment: sig {n}\n")),
         publisher: "example.dev".into(),
         source: InstallSource::Upload,
@@ -283,16 +284,14 @@ pub async fn export_catalogue_lists_owner_and_key_tables(db: &TestDb) {
         .unwrap();
     assert!(spec("plugin_publishers").is_exported());
     assert!(spec("plugin_owners").is_exported());
-    assert!(!catalogue::table("plugin_registry").unwrap().is_exported());
+    // M6-2 review: the registry cache moves too (its serial is the copy's rollback floor).
+    assert!(catalogue::table("plugin_registry").unwrap().is_exported());
     let mut reader = store.export_reader().await.unwrap();
     let keys = dump(reader.as_mut(), spec("plugin_publishers"), 10).await;
     let owners = dump(reader.as_mut(), spec("plugin_owners"), 1).await;
-    assert!(
-        reader
-            .page(spec("plugin_registry"), None, 10)
-            .await
-            .is_err()
-    );
+    let registries = dump(reader.as_mut(), spec("plugin_registry"), 10).await;
+    assert_eq!(registries.len(), 1);
+    assert_eq!(registries[0]["serial"], 1);
     reader.finish().await.unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0]["key_id"], key(1).key_id.to_string());
@@ -300,4 +299,18 @@ pub async fn export_catalogue_lists_owner_and_key_tables(db: &TestDb) {
     let names: Vec<_> = owners.iter().map(|r| r["plugin"].clone()).collect();
     assert_eq!(names, ["plain", "seo"]);
     assert_eq!(owners[0]["owner"], serde_json::Value::Null);
+}
+
+/// M6-2 review: a key row can be removed (a registry collision), and an owner keeps the
+/// whole signing key, not only its id.
+pub async fn key_delete_and_owner_signer_key(db: &TestDb) {
+    let repo = db.store().read().plugin_trust();
+    let now = Timestamp::now();
+    repo.upsert_key(&trusted(1, now)).await.unwrap();
+    assert!(repo.delete_key(&key(1).key_id).await.unwrap());
+    assert!(!repo.delete_key(&key(1).key_id).await.unwrap());
+    assert_eq!(repo.get_key(&key(1).key_id).await.unwrap(), None);
+    repo.put_owner(&owner("seo", Some(3), now)).await.unwrap();
+    let o = repo.get_owner("seo").await.unwrap().unwrap();
+    assert_eq!(o.signer(), Some(key(3)));
 }

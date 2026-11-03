@@ -85,10 +85,13 @@ pub fn update_for(
         None => Some((newest.version.clone(), false)),
         Some(o) if *o == identity => Some((newest.version.clone(), true)),
         // A key of this registry's publisher bound before the key was listed.
-        Some(OwnerId::Key(k))
-            if index
-                .publisher_of_key(k)
-                .is_some_and(|p| p.id == entry.publisher) =>
+        // Matched by the whole signing key, never by its id (M6-2 review).
+        Some(OwnerId::Key(id))
+            if owner
+                .and_then(PluginOwner::signer)
+                .filter(|k| k.key_id == *id)
+                .and_then(|k| index.publisher_of_key(&k).map(|p| p.id.clone()))
+                .is_some_and(|p| p == entry.publisher) =>
         {
             Some((newest.version.clone(), true))
         }
@@ -179,7 +182,26 @@ impl Installer {
                 last_error: None,
                 last_error_at: None,
             };
-            match self.service().store_registry(&row, &parsed).await {
+            // A cached copy that does not verify under the current key (the key was
+            // changed, or the row tampered with) gives no serial floor (M6-2 review).
+            let stale = match self.service().registry_cache(&url).await? {
+                Some(c) => {
+                    let key = target.key.clone();
+                    let (j, sg) = (c.index_json.clone(), c.signature.clone());
+                    let ok = tokio::task::spawn_blocking(move || {
+                        verify_index(&key, j.as_bytes(), &sg).is_ok()
+                    })
+                    .await
+                    .map_err(task_error)?;
+                    (!ok).then_some(c.index_json)
+                }
+                None => None,
+            };
+            match self
+                .service()
+                .store_registry(&row, &parsed, stale.as_deref())
+                .await
+            {
                 Ok(r) => Ok(r),
                 Err(CoreError::InvalidField { message, .. }) => {
                     Err(ExtensionError::RegistryInvalid(message))
@@ -364,9 +386,15 @@ impl Installer {
                 inspected.manifest().plugin.name
             )));
         }
-        let signer = inspected.report().signer;
-        let by_publisher = signer
-            .and_then(|k| ctx.index.publisher_of_key(&k))
+        // A trust refusal (a revoked key, say) is answered as such by the caller.
+        if inspected.decision().is_err() {
+            return Ok(inspected);
+        }
+        let by_publisher = inspected
+            .trust()
+            .signer
+            .as_ref()
+            .and_then(|s| ctx.index.publisher_of_key(&s.key))
             .is_some_and(|p| p.id == publisher);
         if !by_publisher {
             return Err(ExtensionError::RegistryInvalid(format!(

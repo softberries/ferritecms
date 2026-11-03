@@ -1,9 +1,17 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { expect, test } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, test, vi } from "vitest";
 import type { PluginMetricsDto } from "@/api/plugins";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { NODE_A, NODE_B, installedTrust, plugin } from "./fixtures";
 import { PluginsScreen } from "./plugins-list";
+
+const toast = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 const metrics = (failures: { hook: string; count: number }[]): PluginMetricsDto => ({
   window_secs: 86_400,
@@ -144,4 +152,30 @@ test("list_shows_update_chip", async () => {
   const chip = await screen.findByRole("button", { name: "Update seo to 0.3.0" });
   expect(chip).toHaveTextContent("Update 0.3.0");
   expect(within(row("plain")).queryByText(/Update/)).toBeNull();
+});
+
+// M6-2 review: a registry check that removed colliding publisher keys says so.
+test("registry_check_warns_about_key_collisions", async () => {
+  const meta = {
+    url: "https://example.dev/registry/v1/index.json",
+    name: "Test registry",
+    serial: 3,
+    generated_at: null,
+    checked_at: null,
+    last_error: null,
+    last_error_at: null,
+  };
+  stubRoutes({
+    "/api/v1/plugins": () => json({ items: [] }),
+    "/api/v1/plugins/retained": () => json({ items: [] }),
+    "/api/v1/plugins/registry": () => json({ registry: meta, plugins: [], collisions: [] }),
+    "/api/v1/plugins/registry/refresh": () =>
+      json({ registry: meta, plugins: [], collisions: ["0123456789ABCDEF"] }),
+  });
+  renderWithRouter(<PluginsScreen />);
+  await userEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+  await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+  expect(toast.warning.mock.calls[0]?.[0]).toBe(
+    "Publisher key 0123456789ABCDEF had the id of a registry key with other key bytes. It was removed and the plugins it signed were disabled.",
+  );
 });

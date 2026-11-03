@@ -49,6 +49,7 @@ backend_tests!(
     registry_row_replaced_by_url,
     registry_checked_keeps_index,
     export_catalogue_lists_owner_and_key_tables,
+    key_delete_and_owner_signer_key,
 );
 
 backend_tests!(

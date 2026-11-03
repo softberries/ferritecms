@@ -19,7 +19,7 @@ use crate::exec::{map_db_err, run};
 
 const KEY_COLUMNS: &str =
     "key_id, public_key, label, source, trusted_at, revoked_at, revoked_reason, compromised";
-const OWNER_COLUMNS: &str = "plugin, owner, signer_key, signature, publisher, source, \
+const OWNER_COLUMNS: &str = "plugin, owner, signer_key, signer_public_key, signature, publisher, source, \
      registry_url, bound_at, updated_at";
 const REGISTRY_COLUMNS: &str = "url, serial, index_json, signature, generated_at, fetched_at, \
      checked_at, last_error, last_error_at";
@@ -80,6 +80,7 @@ fn owner_row(row: &SqliteRow) -> Result<PluginOwner, StoreError> {
         signer_key: signer
             .map(|k| KeyId::parse(&k).map_err(|_| corrupt("signer key", &k)))
             .transpose()?,
+        signer_public_key: get(row, "signer_public_key")?,
         signature: get(row, "signature")?,
         publisher: get(row, "publisher")?,
         source: InstallSource::parse(&source).ok_or_else(|| corrupt("install source", &source))?,
@@ -147,6 +148,15 @@ impl PluginTrustRepo for SqliteRepos {
         Ok(())
     }
 
+    async fn delete_key(&self, key_id: &KeyId) -> Result<bool, StoreError> {
+        let done = run!(&self.writer, |e| sqlx::query(
+            "DELETE FROM plugin_publishers WHERE key_id = ?"
+        )
+        .bind(key_id.to_string())
+        .execute(e))?;
+        Ok(done.rows_affected() > 0)
+    }
+
     async fn revoke_key(
         &self,
         key_id: &KeyId,
@@ -186,16 +196,19 @@ impl PluginTrustRepo for SqliteRepos {
     async fn put_owner(&self, owner: &PluginOwner) -> Result<(), StoreError> {
         check_plugin_owner(owner)?;
         run!(&self.writer, |e| sqlx::query(
-            "INSERT INTO plugin_owners (plugin, owner, signer_key, signature, publisher, \
-             source, registry_url, bound_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO plugin_owners (plugin, owner, signer_key, signer_public_key, signature, \
+             publisher, source, registry_url, bound_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (plugin) DO UPDATE SET owner = excluded.owner, \
-             signer_key = excluded.signer_key, signature = excluded.signature, \
+             signer_key = excluded.signer_key, signer_public_key = excluded.signer_public_key, \
+             signature = excluded.signature, \
              publisher = excluded.publisher, source = excluded.source, \
              registry_url = excluded.registry_url, updated_at = excluded.updated_at"
         )
         .bind(&owner.plugin)
         .bind(owner.owner.as_ref().map(ToString::to_string))
         .bind(owner.signer_key.map(|k| k.to_string()))
+        .bind(owner.signer_public_key.as_deref())
         .bind(owner.signature.as_deref())
         .bind(&owner.publisher)
         .bind(owner.source.as_str())

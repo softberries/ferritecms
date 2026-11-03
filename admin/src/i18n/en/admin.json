@@ -870,6 +870,8 @@
       "checked": "Registry checked",
       "neverChecked": "Not checked yet",
       "checkedToast": "The registry was checked",
+      "collisionToast_one": "Publisher key {{keys}} had the id of a registry key with other key bytes. It was removed and the plugins it signed were disabled.",
+      "collisionToast_other": "Publisher keys {{keys}} had the ids of registry keys with other key bytes. They were removed and the plugins they signed were disabled.",
       "searchLabel": "Search the registry",
       "searchPlaceholder": "Search plugins",
       "noRegistryTitle": "No plugin registry",

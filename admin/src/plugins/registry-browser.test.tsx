@@ -33,6 +33,7 @@ function registry(over: Partial<RegistryDto> = {}): RegistryDto {
         installed: null,
       },
     ],
+    collisions: [],
     ...over,
   };
 }

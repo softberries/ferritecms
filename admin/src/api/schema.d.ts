@@ -3146,6 +3146,11 @@ export interface components {
         };
         /** @description `GET /plugins/registry`. */
         RegistryDto: {
+            /**
+             * @description Refresh only (empty otherwise): site keys whose id the index lists under other key
+             *     bytes; they were removed and the plugins they signed disabled (M6-2 review).
+             */
+            collisions: string[];
             /** @description The cached index's plugins matching `q`, by name (at most 50). */
             plugins: components["schemas"]["RegistryPluginDto"][];
             registry?: components["schemas"]["RegistryMetaDto"] | null;

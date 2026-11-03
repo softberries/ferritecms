@@ -25,6 +25,10 @@ pub enum TrustError {
     UnknownKey(KeyId),
     #[error("the signature does not match these files")]
     Mismatch,
+    /// Two different public keys with the signature's key id (a key id is 8 bytes anyone
+    /// can choose): refused rather than guessing which one is meant.
+    #[error("two different public keys share the key id {0}; refusing to choose between them")]
+    KeyConflict(KeyId),
     #[error("the signature is larger than {MAX_SIGNATURE_BYTES} bytes")]
     TooLarge,
 }
@@ -87,10 +91,11 @@ pub fn verify_bundle(
     candidates: &[PublisherKey],
 ) -> Result<VerifiedSigner, TrustError> {
     let id = signature_key_id(signature)?;
-    let key = candidates
-        .iter()
-        .find(|k| k.key_id == id)
-        .ok_or(TrustError::UnknownKey(id))?;
+    let mut same_id = candidates.iter().filter(|k| k.key_id == id);
+    let key = same_id.next().ok_or(TrustError::UnknownKey(id))?;
+    if same_id.any(|k| k != key) {
+        return Err(TrustError::KeyConflict(id));
+    }
     verify_minisig(
         key,
         signing_payload(manifest, component).as_bytes(),
@@ -219,6 +224,22 @@ pub(crate) mod tests {
             verify_bundle(b"manifest", b"wasM", &sig, &keys),
             Err(TrustError::Mismatch)
         );
+    }
+
+    /// M6-2 review (critical): two candidates with one id but other bytes are refused.
+    #[test]
+    fn same_id_two_keys_conflict() {
+        let (kp, pk) = throwaway();
+        let sig = sign(&kp, signing_payload(b"m", b"c").as_bytes());
+        let mut bin = STANDARD.decode(&pk.base64).unwrap();
+        bin[20] ^= 0xff;
+        let forged = PublisherKey::from_base64(&STANDARD.encode(&bin)).unwrap();
+        assert_eq!(
+            verify_bundle(b"m", b"c", &sig, &[forged.clone(), pk.clone()]),
+            Err(TrustError::KeyConflict(pk.key_id))
+        );
+        // The same key twice is no conflict.
+        assert!(verify_bundle(b"m", b"c", &sig, &[pk.clone(), pk]).is_ok());
     }
 
     #[test]

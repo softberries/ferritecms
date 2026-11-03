@@ -571,7 +571,7 @@ fn v10_archive(ex: &Exported) -> Vec<u8> {
         reseal(&mut entries, table);
     }
     // Tables added after schema 10 (M6-2's `0015`) are not in a schema-10 archive.
-    const NEWER_TABLES: [&str; 2] = ["plugin_publishers", "plugin_owners"];
+    const NEWER_TABLES: [&str; 3] = ["plugin_publishers", "plugin_owners", "plugin_registry"];
     entries.retain(|(p, _)| {
         !NEWER_TABLES
             .iter()

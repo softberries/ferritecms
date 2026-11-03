@@ -111,7 +111,7 @@ pub async fn up_down_up_roundtrip(db: &TestDb) {
     // 0005's sessions and the audit log): refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(0, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -369,8 +369,9 @@ pub async fn migration_0013_roundtrip(db: &TestDb) {
     let personal = token("personal", None);
     tokens.insert(&personal).await.unwrap();
 
-    // Not lossy: no allow_lossy needed.
-    assert_eq!(store.migrate_down(12, false).await.unwrap(), down_from(12));
+    // Not lossy: no allow_lossy needed once the lossy 0015 above it is reverted.
+    store.migrate_down(13, true).await.unwrap();
+    assert_eq!(store.migrate_down(12, false).await.unwrap(), vec![13]);
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
@@ -431,8 +432,10 @@ pub async fn migration_0012_roundtrip(db: &TestDb) {
         .await
         .unwrap();
     assert_eq!(requests().await, 7);
-    // Not lossy (nor is 0013 above it): no allow_lossy needed.
-    assert_eq!(store.migrate_down(11, false).await.unwrap(), down_from(11));
+    // Not lossy: no allow_lossy needed once the versions above it are reverted (0015 is
+    // lossy; 0013's own test checks it is not).
+    store.migrate_down(12, true).await.unwrap();
+    assert_eq!(store.migrate_down(11, false).await.unwrap(), vec![12]);
     assert!(!has(&db.user_objects().await, "node_metrics"));
     assert_eq!(store.migrate_up(None).await.unwrap().applied, up_from(11));
     // The down dropped the row: the table is empty again and takes new rows.
@@ -532,7 +535,7 @@ pub async fn migration_0006_roundtrip(db: &TestDb) {
     // 0007 and 0008 sit above it and are lossy too; refused first, nothing reverted.
     let err = store.migrate_down(5, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -602,7 +605,7 @@ pub async fn migration_0007_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(6, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "autosaves"));
@@ -655,7 +658,7 @@ pub async fn migration_0008_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(7, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(
@@ -725,7 +728,7 @@ pub async fn migration_0009_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(8, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "import_runs"));
@@ -812,7 +815,7 @@ pub async fn migration_0010_roundtrip(db: &TestDb) {
 
     let err = store.migrate_down(9, false).await.unwrap_err();
     assert!(
-        matches!(&err, StoreError::Migration(m) if m.contains("migration 10 has a lossy down")),
+        matches!(&err, StoreError::Migration(m) if m.contains("has a lossy down")),
         "{err:?}"
     );
     assert_eq!(store.migrate_down(9, true).await.unwrap(), down_from(9));
@@ -917,8 +920,9 @@ pub async fn migrate_up_reports_snapshot(db: &TestDb) {
     );
 }
 
-/// `0015_plugin_publishers` (M6-2): the three trust tables exist, go with the down (not
-/// lossy: plugin rows and data stay) and come back empty.
+/// `0015_plugin_publishers` (M6-2): the three trust tables exist, go with the down (lossy,
+/// M6-2 review: the bindings and revocations go; plugin rows and data stay) and come back
+/// empty.
 pub async fn migration_0015_roundtrip(db: &TestDb) {
     use ferrite_domain::plugin_trust::KeyId;
     const TABLES: [&str; 3] = ["plugin_publishers", "plugin_owners", "plugin_registry"];
@@ -947,8 +951,14 @@ pub async fn migration_0015_roundtrip(db: &TestDb) {
         .await
         .unwrap();
 
-    // Not lossy: no allow_lossy needed; only 0015 (and anything above it) goes.
-    assert_eq!(store.migrate_down(14, false).await.unwrap(), down_from(14));
+    // Lossy: refused without allow_lossy, nothing reverted.
+    let err = store.migrate_down(14, false).await.unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Migration(m) if m.contains("migration 15 has a lossy down")),
+        "{err:?}"
+    );
+    assert!(has(&db.user_objects().await, "plugin_owners"));
+    assert_eq!(store.migrate_down(14, true).await.unwrap(), down_from(14));
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");

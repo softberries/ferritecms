@@ -14225,9 +14225,17 @@
         "type": "object",
         "description": "`GET /plugins/registry`.",
         "required": [
-          "plugins"
+          "plugins",
+          "collisions"
         ],
         "properties": {
+          "collisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Refresh only (empty otherwise): site keys whose id the index lists under other key\nbytes; they were removed and the plugins they signed disabled (M6-2 review)."
+          },
           "plugins": {
             "type": "array",
             "items": {

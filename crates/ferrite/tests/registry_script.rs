@@ -139,7 +139,7 @@ fn script_output_parses_and_verifies() {
         let index = verify_index(&registry_pk, &bytes, &sig).unwrap();
         assert_eq!(index.serial, serial);
         assert_eq!(
-            index.publisher_of_key(&publisher_pk.key_id).unwrap().id,
+            index.publisher_of_key(&publisher_pk).unwrap().id,
             "ferritecms.dev"
         );
     }

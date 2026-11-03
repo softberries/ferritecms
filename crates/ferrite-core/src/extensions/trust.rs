@@ -214,8 +214,19 @@ pub async fn decide(
         }
         Some(s) => {
             let id = s.key.key_id;
+            // A key id is 8 bytes anyone can choose: a key with a registry key's id but
+            // other bytes is refused, never taken for that key (M6-2 review).
             if let Some(reg) = &trust.registry
-                && let Some((_, revoked)) = reg.index.revocation(&id)
+                && let Some(p) = reg.index.collides(&s.key)
+            {
+                return Err(refuse_signature(format!(
+                    "key {id} has the id of a key the registry lists for {}, but other key \
+                     bytes; it is refused",
+                    p.name
+                )));
+            }
+            if let Some(reg) = &trust.registry
+                && let Some((_, revoked)) = reg.index.revocation(&s.key)
             {
                 return Err(refuse_signature(format!(
                     "the signing key {id} was revoked by the registry: {}",
@@ -238,7 +249,7 @@ pub async fn decide(
             }
             let registry_publisher = trust.registry.as_ref().and_then(|reg| {
                 reg.index
-                    .publisher_of_key(&id)
+                    .publisher_of_key(&s.key)
                     .map(|p| (reg.registry_key, p.id.clone(), p.name.clone()))
             });
             identities.push(OwnerId::Key(id));
@@ -271,13 +282,17 @@ pub async fn decide(
                     None => SignerSource::New,
                 }
             };
+            // `trusted`: registry and operator keys only (design 14 §3.2), so neither a new
+            // key nor one an admin approved earlier (M6-2 review).
+            if trust.policy == SignaturePolicy::Trusted
+                && matches!(source, SignerSource::New | SignerSource::Approved)
+            {
+                return Err(refuse_signature(format!(
+                    "key {id} is not a registry or operator key, and this site installs \
+                     plugins signed by those only ([plugins] signatures = \"trusted\")"
+                )));
+            }
             if source == SignerSource::New {
-                if trust.policy == SignaturePolicy::Trusted {
-                    return Err(refuse_signature(format!(
-                        "key {id} is new to this site, and this site installs plugins signed \
-                         by trusted keys only ([plugins] signatures = \"trusted\")"
-                    )));
-                }
                 warnings.push(TrustWarning::NewKey);
             }
             Some(SignerView {
@@ -371,6 +386,7 @@ pub(super) async fn write_trust(
             plugin: name.to_owned(),
             owner: decision.next_owner.clone(),
             signer_key: trust.signer.as_ref().map(|s| s.key.key_id),
+            signer_public_key: trust.signer.as_ref().map(|s| s.key.base64.clone()),
             signature: trust.signer.as_ref().map(|s| s.signature.clone()),
             publisher: trust.publisher_claim.clone(),
             source: trust.source,

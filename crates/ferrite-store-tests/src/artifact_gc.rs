@@ -452,10 +452,9 @@ pub async fn migration_0011_roundtrip(db: &TestDb) {
         .unwrap();
     assert_eq!(orphaned_at(db, 'a').await, Some(t(10)));
 
-    assert_eq!(
-        store.migrate_down(10, false).await.unwrap(),
-        crate::migrations::down_from(10)
-    );
+    // 0011 is not lossy; the versions above it are reverted first (0015 is lossy).
+    store.migrate_down(11, true).await.unwrap();
+    assert_eq!(store.migrate_down(10, false).await.unwrap(), vec![11]);
     let has_index = |objects: &[String]| {
         objects
             .iter()

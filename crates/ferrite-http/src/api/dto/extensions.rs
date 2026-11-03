@@ -385,38 +385,39 @@ impl InstalledTrustDto {
                 update,
             };
         };
-        let listed = |id| registry.and_then(|r| r.index.publisher_of_key(id));
-        let signer = o.signer_key.as_ref().map(|k| {
-            let by_registry = listed(k);
-            SignerDto {
-                key_id: k.to_string(),
-                source: if by_registry.is_some() {
-                    "registry"
-                } else {
-                    match ctx.key(k).map(|t| t.source) {
-                        Some(KeySource::Operator) => "operator",
-                        _ => "approved",
-                    }
+        // By the whole signing key, never its id (M6-2 review).
+        let signer_key = o.signer();
+        let by_registry = signer_key
+            .as_ref()
+            .and_then(|k| registry.and_then(|r| r.index.publisher_of_key(k)));
+        let signer = o.signer_key.as_ref().map(|k| SignerDto {
+            key_id: k.to_string(),
+            source: if by_registry.is_some() {
+                "registry"
+            } else {
+                match ctx.key(k).map(|t| t.source) {
+                    Some(KeySource::Operator) => "operator",
+                    _ => "approved",
                 }
-                .to_owned(),
-                publisher: by_registry.map(|p| PublisherRefDto {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                }),
-                claimed: o.publisher.clone(),
             }
+            .to_owned(),
+            publisher: by_registry.map(|p| PublisherRefDto {
+                id: p.id.clone(),
+                name: p.name.clone(),
+            }),
+            claimed: o.publisher.clone(),
         });
         let state = match (&o.signer_key, &o.owner) {
             (None, _) => "unsigned",
-            (Some(k), _) if ctx.revoked(k) => "revoked",
+            (Some(_), _) if ctx.revoked(o) => "revoked",
             (
-                Some(k),
+                Some(_),
                 Some(OwnerId::Registry {
                     registry_key,
                     publisher,
                 }),
             ) if registry.is_some_and(|r| r.registry_key == *registry_key)
-                && listed(k).is_some_and(|p| p.id == *publisher) =>
+                && by_registry.is_some_and(|p| p.id == *publisher) =>
             {
                 "verified"
             }
@@ -1039,6 +1040,9 @@ pub struct RegistryDto {
     pub registry: Option<RegistryMetaDto>,
     /// The cached index's plugins matching `q`, by name (at most 50).
     pub plugins: Vec<RegistryPluginDto>,
+    /// Refresh only (empty otherwise): site keys whose id the index lists under other key
+    /// bytes; they were removed and the plugins they signed disabled (M6-2 review).
+    pub collisions: Vec<String>,
 }
 
 impl From<crate::extensions::RegistryView> for RegistryDto {
@@ -1096,6 +1100,7 @@ impl From<crate::extensions::RegistryView> for RegistryDto {
                     }
                 })
                 .collect(),
+            collisions: Vec::new(),
         }
     }
 }

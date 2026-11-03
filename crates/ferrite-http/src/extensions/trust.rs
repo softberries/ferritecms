@@ -99,13 +99,18 @@ impl TrustContext {
         self.keys.iter().find(|k| k.key.key_id == *id)
     }
 
-    /// Whether `id` is revoked here or by the registry.
-    pub fn revoked(&self, id: &KeyId) -> bool {
-        self.key(id).is_some_and(|k| k.revoked.is_some())
-            || self
-                .registry
-                .as_ref()
-                .is_some_and(|r| r.index.revocation(id).is_some())
+    /// Whether the key that signed `owner`'s installed version is revoked here or by the
+    /// registry (the registry's revocations matched by the whole key).
+    pub fn revoked(&self, owner: &PluginOwner) -> bool {
+        let Some(id) = owner.signer_key else {
+            return false;
+        };
+        self.key(&id).is_some_and(|k| k.revoked.is_some())
+            || owner.signer().is_some_and(|k| {
+                self.registry
+                    .as_ref()
+                    .is_some_and(|r| r.index.revocation(&k).is_some())
+            })
     }
 }
 
