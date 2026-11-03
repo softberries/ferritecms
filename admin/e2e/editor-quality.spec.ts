@@ -87,11 +87,11 @@ test("gate_blocks_publish_until_suppressed", async ({ as, site, siteKey }) => {
     const item = await editor.create(type, `Gated ${uid()}`, { body: doc([image]) });
 
     // The server refuses a forced publish.
+    const me = (await (await editor.ctx.get("/api/v1/auth/me")).json()) as {
+      csrf_token: string;
+    };
     const res = await editor.ctx.post(`/api/v1/content/${type}/${item.id}/publish`, {
-      headers: {
-        "X-CSRF-Token": (await (await editor.ctx.get("/api/v1/auth/me")).json()).csrf_token,
-        "If-Match": `"${item.version}"`,
-      },
+      headers: { "X-CSRF-Token": me.csrf_token, "If-Match": `"${item.version}"` },
     });
     expect(res.status()).toBe(422);
     const problem = (await res.json()) as { type: string; findings: { rule: string }[] };
