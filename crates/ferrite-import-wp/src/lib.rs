@@ -10,6 +10,7 @@ pub mod acf;
 pub mod convert;
 pub mod error;
 pub mod ir;
+pub mod lang;
 pub mod meta;
 pub mod model;
 pub mod pass;

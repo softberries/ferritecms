@@ -609,7 +609,7 @@ pub async fn failed_run_has_a_partial_report(db: &TestDb) {
     let seen = steps.clone();
     let opts = ImportOptions {
         batch_items: Some(1),
-        fail_after_batches: Some(30),
+        fail_after_batches: Some(31),
         step_hook: Some(StepHook::new(move |s| {
             seen.lock().unwrap().push(s.to_owned());
             Ok(())

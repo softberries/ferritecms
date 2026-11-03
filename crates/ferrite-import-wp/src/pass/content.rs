@@ -506,6 +506,8 @@ struct Context<'a> {
     schema: Option<Schema>,
     admin: UserId,
     session: &'a Session<'a>,
+    /// The site's locales when pass 3 began (M6-1).
+    locales: ferrite_domain::locale::SiteLocales,
 }
 
 /// One item ready to write, and what to report about it.
@@ -553,7 +555,11 @@ pub(crate) async fn import(session: &Session<'_>, report: &mut Report) -> Result
              need the rolled-back items)",
         );
     }
+    let batch = session.batch().await?;
+    let read = batch.locales().await.map_err(ImportError::from);
+    let locales = session.finish_batch(batch, read).await?;
     let mut cx = Context {
+        locales,
         schema,
         links: Links::load(session, &channel).await?,
         authors: ir
@@ -810,6 +816,27 @@ async fn prepare(
             return Ok(None);
         }
     };
+    // The item's language (13 §8.1): one the site lists, else skipped (add it in
+    // Settings → Languages and run again); an invalid one falls back to the default.
+    let locale = match crate::lang::item_language(item) {
+        None => None,
+        Some(Ok(tag)) if cx.locales.contains(&tag) => Some(tag),
+        Some(Ok(tag)) => {
+            report.counts_of(kind).skipped += 1;
+            report.note(format!(
+                "item {} skipped: locale_not_on_site {tag} (add the language in Settings → Languages and run the import again)",
+                item.wp_id
+            ));
+            return Ok(None);
+        }
+        Some(Err(raw)) => {
+            report.note(format!(
+                "item {}: invalid_locale {raw:?}, imported in the default locale",
+                item.wp_id
+            ));
+            None
+        }
+    };
     let mut lines = Vec::new();
     let author = match cx.authors.get(&item.creator_login) {
         Some(wp) => b
@@ -860,7 +887,7 @@ async fn prepare(
         terms,
         seo,
         meta: wp_meta,
-        locale: None,
+        locale,
         translation_group: None,
     };
     content.hash = content_hash(&content)?;

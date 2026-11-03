@@ -28,12 +28,13 @@ pub(crate) async fn run(session: &Session<'_>, report: &mut Report) -> Result<()
         return Ok(());
     }
     let ir = session.ir();
+    let channel = ir.channel().await?;
+    let links = Links::load(session, &channel).await?;
+    translations(session, &links, report).await?;
     let queue = ir.fixups().await?;
     if queue.is_empty() {
         return Ok(());
     }
-    let channel = ir.channel().await?;
-    let links = Links::load(session, &channel).await?;
     let acf = field_defs(ir).await?;
     let mut types: HashMap<String, TypeAcf<'_>> = HashMap::new();
     for wp_id in queue {
@@ -71,6 +72,120 @@ pub(crate) async fn run(session: &Session<'_>, report: &mut Report) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Joins the imported members of each translation group the file describes
+/// ([`crate::lang::groups`]) to the group of the member in the site's default locale
+/// (else the first member), one batch per group. Counts (kind `translations`):
+/// `updated` for an item moved into its group, `unchanged` when it was in it, `kept`
+/// when it was edited here, `skipped` when the group already has an item in its
+/// locale or a member was not imported.
+async fn translations(
+    session: &Session<'_>,
+    links: &Links,
+    report: &mut Report,
+) -> Result<(), ImportError> {
+    let ir = session.ir();
+    let terms = ir.terms().await?;
+    let mut items = Vec::new();
+    {
+        use futures::TryStreamExt;
+        let mut stream = ir.items(&[]);
+        while let Some(item) = stream.try_next().await? {
+            if crate::lang::item_language(&item).is_some()
+                || crate::pass::meta(&item, crate::lang::WPML_GROUP).is_some()
+            {
+                items.push(item);
+            }
+        }
+    }
+    let (groups, notes) = crate::lang::groups(&terms, &items);
+    for note in notes {
+        report.note(note);
+    }
+    for members in groups {
+        let written: Vec<(i64, ContentId)> = members
+            .iter()
+            .filter_map(|wp| {
+                links
+                    .written
+                    .get(wp)
+                    .map(|(id, _)| (*wp, ContentId::from_uuid(*id)))
+            })
+            .collect();
+        if written.len() < 2 {
+            report.counts_of("translations").skipped += written.len() as u64;
+            continue;
+        }
+        let mut batch = session.batch().await?;
+        let joined = join(&mut batch, &written).await;
+        match session.finish_batch(batch, joined).await {
+            Ok(outcomes) => {
+                for (wp_id, outcome) in outcomes {
+                    let c = report.counts_of("translations");
+                    match outcome {
+                        Joined::Moved => c.updated += 1,
+                        Joined::Already => c.unchanged += 1,
+                        Joined::Kept => {
+                            c.kept += 1;
+                            report.note(format!(
+                                "item {wp_id} was edited here; its translation group was kept"
+                            ));
+                        }
+                        Joined::Refused(why) => {
+                            c.skipped += 1;
+                            report.note(format!(
+                                "item {wp_id} not joined to its translations: {why}"
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// What happened to one member of a group.
+enum Joined {
+    Moved,
+    Already,
+    Kept,
+    Refused(String),
+}
+
+async fn join(
+    b: &mut ImportBatch<'_>,
+    members: &[(i64, ContentId)],
+) -> Result<Vec<(i64, Joined)>, ImportError> {
+    let default = b.locales().await?.default.tag;
+    let mut root = None;
+    for (_, id) in members {
+        if let Some(item) = b.get_item(*id).await? {
+            if item.locale == default {
+                root = Some(item.translation_group);
+                break;
+            }
+            root.get_or_insert(item.translation_group);
+        }
+    }
+    let Some(group) = root else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (wp_id, id) in members {
+        let outcome = match b.join_group(*id, *wp_id, group).await {
+            Ok(true) => Joined::Moved,
+            Ok(false) => Joined::Already,
+            Err(CoreError::Conflict { .. }) => Joined::Kept,
+            Err(CoreError::InUse(why)) => Joined::Refused(why),
+            Err(CoreError::NotFound) => Joined::Refused("no longer this import's".into()),
+            Err(e) => return Err(e.into()),
+        };
+        out.push((*wp_id, outcome));
+    }
+    Ok(out)
 }
 
 async fn fix(
