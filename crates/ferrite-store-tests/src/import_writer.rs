@@ -355,6 +355,64 @@ pub fn rich_site() -> Dump {
                        "created_at": T_NOW, "updated_at": T_NOW}),
             ]),
         ),
+        // M6-3 (0017): a scheduled release with a staged change, its lock, a workflow,
+        // an entry review with a decision and an assignee.
+        (
+            "releases",
+            rows(vec![
+                json!({"id": uid(0xb01), "title": "Spring", "description": "d",
+                       "status": "scheduled", "scheduled_at": T_NOW,
+                       "scheduled_by": uid(U1), "override_reason": "urgent",
+                       "failure": {"reason": "x"}, "created_by": uid(U1),
+                       "created_at": T_PRE_1970, "updated_at": T_NOW,
+                       "applied_at": T_EDGE, "applied_by": uid(U2), "version": 3}),
+                json!({"id": uid(0xb02), "title": "Open", "status": "open",
+                       "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
+            "release_items",
+            rows(vec![json!({
+                "release_id": uid(0xb01), "item_id": uid(POST), "position": 1,
+                "transition": "publish",
+                "changes": {"title": "New", "body": [], "fields": {}, "terms": []},
+                "base_version": 2, "entry_version": 4, "added_by": uid(U2),
+                "updated_at": T_NOW})]),
+        ),
+        (
+            "release_locks",
+            rows(vec![
+                json!({"item_id": uid(POST), "release_id": uid(0xb01)}),
+            ]),
+        ),
+        (
+            "workflows",
+            rows(vec![json!({
+                "type": "post",
+                "steps": [{"key": "copy", "label": "Copy", "approvers": {"roles": ["editor"], "users": []}, "required": 1}],
+                "updated_by": uid(U1), "updated_at": T_NOW, "version": 2})]),
+        ),
+        (
+            "reviews",
+            rows(vec![json!({
+                "id": uid(0xb11), "target": format!("entry:{}:{}", uid(0xb01), uid(POST)),
+                "item_id": uid(POST), "release_id": uid(0xb01), "entry_version": 4,
+                "status": "in_review", "step": 0,
+                "steps": [{"key": "copy", "label": "Copy", "approvers": {"roles": ["editor"], "users": []}, "required": 1}],
+                "note": "n", "submitted_by": uid(U2), "submitted_at": T_NOW, "version": 1})]),
+        ),
+        (
+            "review_decisions",
+            rows(vec![json!({
+                "id": uid(0xb21), "review_id": uid(0xb11), "step": 0, "user_id": uid(U1),
+                "decision": "approve", "comment": "ok", "at": T_NOW})]),
+        ),
+        (
+            "review_assignees",
+            rows(vec![
+                json!({"review_id": uid(0xb11), "step": 0, "user_id": uid(U1)}),
+            ]),
+        ),
         (
             "import_runs",
             rows(vec![json!({

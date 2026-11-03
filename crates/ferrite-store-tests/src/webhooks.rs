@@ -125,13 +125,18 @@ pub async fn migration_0016_roundtrip(db: &TestDb) {
     let e = endpoint("roundtrip", &install, now);
     store.read().webhooks().insert_endpoint(&e).await.unwrap();
 
-    // Down to 0015 (lossy, M6-2), which stays applied.
+    // Later migrations (0017 is lossy) go first; then down to 0015 (lossy, M6-2), which
+    // stays applied.
+    store.migrate_down(16, true).await.unwrap();
     assert_eq!(store.migrate_down(15, false).await.unwrap(), vec![16]);
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");
     }
-    assert_eq!(store.migrate_up(None).await.unwrap().applied, vec![16]);
+    assert_eq!(
+        store.migrate_up(None).await.unwrap().applied,
+        crate::migrations::up_from(15)
+    );
     let w = store.read().webhooks();
     assert_eq!(
         w.count_endpoints().await.unwrap(),

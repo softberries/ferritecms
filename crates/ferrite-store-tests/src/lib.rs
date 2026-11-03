@@ -17,6 +17,7 @@ pub mod comment_threads;
 pub mod constraints;
 pub mod content;
 pub mod counting;
+pub mod editorial;
 pub mod event;
 pub mod export;
 pub mod failing_options;

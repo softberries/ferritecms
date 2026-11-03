@@ -241,6 +241,18 @@ impl Repos for CountingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.inner.read().releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.inner.read().workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.inner.read().reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.inner.read().preview_links()
+    }
 }
 
 #[async_trait]
@@ -736,6 +748,18 @@ impl Repos for CountingTx {
 
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.tx.plugin_trust()
+    }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.tx.releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.tx.workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.tx.reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.tx.preview_links()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

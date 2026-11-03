@@ -189,6 +189,18 @@ impl Repos for FailingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.store.read().plugin_trust()
     }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.store.read().releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.store.read().workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.store.read().reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.store.read().preview_links()
+    }
 }
 
 #[async_trait]

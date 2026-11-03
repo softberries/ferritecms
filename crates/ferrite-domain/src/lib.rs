@@ -3,6 +3,7 @@
 mod auth;
 mod comment;
 mod content;
+mod editorial;
 mod event;
 mod hex;
 pub mod html;
@@ -38,6 +39,11 @@ pub use content::{
     Autosave, ContentItem, ContentOrder, ContentQuery, ContentStatus, ContentType, MEDIA_KIND,
     MediaKind, NewContent, ParentFilter, ReadableBy, Revision,
 };
+pub use editorial::{
+    Approvers, Decision, EntryTransition, MAX_RELEASE_ENTRIES, PreviewLink, PreviewTarget,
+    PreviewTargetKind, Release, ReleaseEntry, ReleaseQuery, ReleaseStatus, Review, ReviewDecision,
+    ReviewQuery, ReviewStatus, ReviewTarget, StagedChange, Workflow, WorkflowStep,
+};
 pub use event::{Event, NewEvent};
 pub use hex::to_hex;
 pub use ids::{
@@ -45,6 +51,7 @@ pub use ids::{
     NodeId, OAuthGrantId, OAuthRequestId, RedirectId, RevisionId, TermId, UserId,
 };
 pub use ids::{DeliveryId, WebhookEventId, WebhookId};
+pub use ids::{PreviewLinkId, ReleaseId, ReviewId};
 pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};

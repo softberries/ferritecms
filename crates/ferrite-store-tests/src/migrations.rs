@@ -1313,6 +1313,8 @@ pub async fn migration_0015_roundtrip(db: &TestDb) {
         .await
         .unwrap();
 
+    // Later migrations (0017 is lossy) go first.
+    store.migrate_down(15, true).await.unwrap();
     // Lossy: refused without allow_lossy, nothing reverted.
     let err = store.migrate_down(14, false).await.unwrap_err();
     assert!(
@@ -1320,7 +1322,7 @@ pub async fn migration_0015_roundtrip(db: &TestDb) {
         "{err:?}"
     );
     assert!(has(&db.user_objects().await, "plugin_owners"));
-    assert_eq!(store.migrate_down(14, true).await.unwrap(), down_from(14));
+    assert_eq!(store.migrate_down(14, true).await.unwrap(), vec![15]);
     let objects = db.user_objects().await;
     for name in TABLES {
         assert!(!has(&objects, name), "{name} left: {objects:?}");

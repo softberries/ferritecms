@@ -4,6 +4,7 @@ mod auth;
 mod autosave;
 mod comment;
 mod content;
+mod editorial;
 mod event;
 mod idempotency;
 mod import;
@@ -33,8 +34,9 @@ use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
     NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    PluginTrustRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
-    SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, WebhookRepo,
+    PluginTrustRepo, PreviewLinkRepo, RateLimitRepo, RedirectRepo, ReleaseRepo, Repos, ReviewRepo,
+    RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo, StoreError, TaxonomyRepo, TermRepo,
+    ThemeRepo, Tx, UserRepo, WebhookRepo, WorkflowRepo,
 };
 use sqlx::PgPool;
 
@@ -162,6 +164,18 @@ impl Repos for PgRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self
     }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -252,4 +266,8 @@ delegate_repos!(
     locales: LocaleRepo,
     webhooks: WebhookRepo,
     plugin_trust: PluginTrustRepo,
+    releases: ReleaseRepo,
+    workflows: WorkflowRepo,
+    reviews: ReviewRepo,
+    preview_links: PreviewLinkRepo,
 );

@@ -927,6 +927,152 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &["last_error", "last_error_at"],
         export: Export::Rows,
     },
+    // M6-3 (0017, design 15 §8, D37): releases, entries, locks, workflows and reviews move
+    // with the site (a scheduled release has no job on the target; `release.apply_due`
+    // picks it up); preview links are skipped like sessions (short-lived tokens bound to
+    // a site).
+    TableSpec {
+        name: "releases",
+        columns: &[
+            ("id", Id),
+            ("title", Text),
+            ("description", Text),
+            ("status", Text),
+            ("scheduled_at", Ts),
+            ("scheduled_by", Id),
+            ("override_reason", Text),
+            ("failure", Json),
+            ("created_by", Id),
+            ("created_at", Ts),
+            ("updated_at", Ts),
+            ("applied_at", Ts),
+            ("applied_by", Id),
+            ("version", Int),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &[
+            "scheduled_at",
+            "scheduled_by",
+            "override_reason",
+            "failure",
+            "created_by",
+            "applied_at",
+            "applied_by",
+        ],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "release_items",
+        columns: &[
+            ("release_id", Id),
+            ("item_id", Id),
+            ("position", Int),
+            ("transition", Text),
+            ("changes", Json),
+            ("base_version", Int),
+            ("entry_version", Int),
+            ("added_by", Id),
+            ("updated_at", Ts),
+        ],
+        key: &["release_id", "item_id"],
+        self_ref: None,
+        nullable: &["changes", "added_by"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "release_locks",
+        columns: &[("item_id", Id), ("release_id", Id)],
+        key: &["item_id"],
+        self_ref: None,
+        nullable: &[],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "workflows",
+        columns: &[
+            ("type", Text),
+            ("steps", Json),
+            ("updated_by", Id),
+            ("updated_at", Ts),
+            ("version", Int),
+        ],
+        key: &["type"],
+        self_ref: None,
+        nullable: &["updated_by"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "reviews",
+        columns: &[
+            ("id", Id),
+            ("target", Text),
+            ("item_id", Id),
+            ("release_id", Id),
+            ("revision_id", Id),
+            ("entry_version", Int),
+            ("status", Text),
+            ("step", Int),
+            ("steps", Json),
+            ("note", Text),
+            ("submitted_by", Id),
+            ("submitted_at", Ts),
+            ("decided_at", Ts),
+            ("version", Int),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &[
+            "release_id",
+            "revision_id",
+            "entry_version",
+            "note",
+            "submitted_by",
+            "decided_at",
+        ],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "review_decisions",
+        columns: &[
+            ("id", Id),
+            ("review_id", Id),
+            ("step", Int),
+            ("user_id", Id),
+            ("decision", Text),
+            ("comment", Text),
+            ("at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["user_id", "comment"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "review_assignees",
+        columns: &[("review_id", Id), ("step", Int), ("user_id", Id)],
+        key: &["review_id", "step", "user_id"],
+        self_ref: None,
+        nullable: &[],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "preview_links",
+        columns: &[
+            ("id", Id),
+            ("token_hash", Text),
+            ("target_kind", Text),
+            ("target_id", Id),
+            ("created_by", Id),
+            ("created_at", Ts),
+            ("expires_at", Ts),
+            ("last_used_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["last_used_at"],
+        export: Export::Skip,
+    },
 ];
 
 /// The catalogue entry of table `name`.
@@ -1108,7 +1254,7 @@ mod tests {
                 assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 46);
+        assert_eq!(TABLES.len(), 54);
     }
 
     #[test]
@@ -1137,6 +1283,7 @@ mod tests {
                 "webhook_events",
                 "webhook_deliveries",
                 "webhook_attempts",
+                "preview_links",
             ]
         );
         assert_eq!(

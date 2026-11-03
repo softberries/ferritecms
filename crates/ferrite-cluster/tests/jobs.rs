@@ -705,6 +705,18 @@ impl Repos for FaultyRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.inner.read().releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.inner.read().workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.inner.read().reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.inner.read().preview_links()
+    }
 }
 
 #[async_trait]

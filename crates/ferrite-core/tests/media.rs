@@ -909,6 +909,18 @@ impl Repos for FailingTx {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.plugin_trust()
     }
+    fn releases(&self) -> &dyn ferrite_store::ReleaseRepo {
+        self.inner.releases()
+    }
+    fn workflows(&self) -> &dyn ferrite_store::WorkflowRepo {
+        self.inner.workflows()
+    }
+    fn reviews(&self) -> &dyn ferrite_store::ReviewRepo {
+        self.inner.reviews()
+    }
+    fn preview_links(&self) -> &dyn ferrite_store::PreviewLinkRepo {
+        self.inner.preview_links()
+    }
 }
 
 #[async_trait]

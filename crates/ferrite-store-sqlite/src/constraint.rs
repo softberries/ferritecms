@@ -104,6 +104,28 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("webhook_deliveries.id", "webhook_deliveries_pkey"),
     ("webhook_endpoints.id", "webhook_endpoints_pkey"),
     ("webhook_events.id", "webhook_events_pkey"),
+    // 0017_releases_workflows.
+    ("releases.id", "releases_pkey"),
+    (
+        "release_items.release_id, release_items.item_id",
+        "release_items_pkey",
+    ),
+    ("release_locks.item_id", "release_locks_pkey"),
+    ("workflows.type", "workflows_pkey"),
+    ("reviews.id", "reviews_pkey"),
+    // The partial unique index "at most one open review per target".
+    ("reviews.target", "reviews_open_target_uq"),
+    ("review_decisions.id", "review_decisions_pkey"),
+    (
+        "review_decisions.review_id, review_decisions.step, review_decisions.user_id",
+        "review_decisions_step_user_uq",
+    ),
+    (
+        "review_assignees.review_id, review_assignees.step, review_assignees.user_id",
+        "review_assignees_pkey",
+    ),
+    ("preview_links.id", "preview_links_pkey"),
+    ("preview_links.token_hash", "preview_links_token_hash_uq"),
 ];
 
 /// The neutral name for the text after `UNIQUE constraint failed: `.

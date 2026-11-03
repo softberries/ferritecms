@@ -1,6 +1,7 @@
 //! Backend-neutral storage traits, errors and migration compatibility logic.
 
 pub mod catalogue;
+mod editorial;
 mod error;
 mod export;
 mod import;
@@ -20,6 +21,11 @@ mod session;
 mod text;
 mod webhook;
 
+pub use editorial::{
+    MAX_RELEASES_OF, PreviewLinkRepo, RELEASE_CURSOR_TAG, REVIEW_CURSOR_TAG, ReleaseRepo,
+    ReviewRepo, WorkflowRepo, check_release, check_review, check_steps, encode_release_cursor,
+    encode_review_cursor, micros_cursor,
+};
 pub use error::StoreError;
 pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
 pub use import::{check_import_map, check_import_run, token_from_db, token_to_db};

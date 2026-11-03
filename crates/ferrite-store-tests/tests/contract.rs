@@ -1,4 +1,5 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
+use ferrite_store_tests::editorial::*;
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
@@ -465,4 +466,34 @@ backend_tests!(
     prune_keeps_events_with_pending_deliveries,
     nul_in_text_is_invalid,
     fail_stale_pending_only_old_pending,
+);
+
+// M6-3: releases, workflows, reviews and preview links (0017).
+backend_tests!(
+    migration_0017_roundtrip,
+    release_version_conflict,
+    put_entry_replaces_and_bumps_entry_version,
+    entries_in_position_order,
+    deleting_item_drops_its_entries_and_lock,
+    lock_is_exclusive_per_item,
+    unlock_all_frees_items,
+    due_lists_scheduled_releases_by_time,
+    list_filters_and_pages,
+    deleting_user_keeps_release,
+    workflow_version_conflict,
+    deleting_type_deletes_workflow,
+    one_open_review_per_target,
+    closed_reviews_do_not_block_a_new_one,
+    mark_stale_item_closes_only_open_item_reviews,
+    mark_stale_entry,
+    decision_once_per_step_and_user,
+    assignees_replace_per_step,
+    deleting_release_entry_cascades_its_reviews,
+    item_review_ignores_release_fk,
+    withdraw_for_type,
+    counts_for_user,
+    preview_link_by_hash,
+    prune_removes_expired_links,
+    delete_for_target,
+    deleting_user_deletes_links,
 );
