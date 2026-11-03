@@ -74,7 +74,38 @@ This branch fixes the rest, each with a failing test first:
 
 ## 3. Gates (run on `m6-final`)
 
-GATES_PLACEHOLDER
+All run in the `m6-final` worktree with
+`FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test` (rustc 1.99.1 after
+`rustup update stable`).
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | pass |
+| `cargo test --workspace --no-fail-fast` (twice; the second after the last fix) | pass: 5,417 tests, 0 failed, both runs (the first with another server holding 127.0.0.1:8080) |
+| Plugin workspace | not run: `git diff develop...HEAD -- plugins` is empty, M6 did not touch it |
+| OpenAPI snapshot (`openapi_snapshot_is_current`) | pass |
+| `pnpm -C admin api:check`, `typecheck`, `lint`, `test`, `build`, `bundle:check` | pass (Vitest 156 files, 955 tests; one earlier run under full cargo load failed and passed on rerun, test not identified) |
+| `pnpm -C admin e2e:all` (chromium-sqlite, chromium-pg, firefox-sqlite, webkit-sqlite, public-themes-chromium) | first run 870 passed, 8 failed (fixed below); final run 877 passed, 1 failed: a flake |
+| `cargo test -p ferrite --test docs_site` | pass |
+
+The first E2E run's failures were all outside Chromium:
+
+- **Real defect:** `live-preview.spec.ts` (3 tests, Firefox and WebKit): the sandboxed
+  preview frame (origin `null`) loads the theme stylesheet in CORS mode there, and
+  `/_theme/` sent no `Access-Control-Allow-Origin`, so the preview was unstyled. Theme
+  assets now send `Access-Control-Allow-Origin: *` (public, immutable, no credentials);
+  test in `ferrite-http/tests/app/assets.rs`. This also settles M6-3's "not verified" note
+  about the CORS error in the trace. Commit 31a134a8.
+- **Test fixes:** `styleguide_touch_targets` (Firefox) matched two "Clear search" buttons
+  once the empty result rendered; the probe is now scoped to the field.
+  `editor-safety` `screens` (WebKit) went offline while the M6-4 editor check was in
+  flight; the offline step now allows that request to fail, as it does the autosave.
+- **Flake:** `design.spec.ts` `compact_density_switches_the_variables` (WebKit, final run):
+  `page.reload` never reached `load` and the test timed out. It passed in the first full
+  run and 3 of 3 with `--repeat-each 3`; cause not found (the machine ran 4 projects in
+  parallel).
 
 ## 4. Not verified
 
