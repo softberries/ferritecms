@@ -570,7 +570,10 @@ this design:
 - **Write paths (§3.3)** gained M6-1's: `content_translate` (op `content.translate`, a
   create: revert trashes), `create_localized`/`create_localized_term` (as creates) and
   `update_and_relocate` (one `content.update` change covering the edit and the move). The
-  guard test covers all 31 MCP write tools; none is excluded.
+  guard test `every_write_tool_records_a_change` covers the 38 MCP write tools: 33 record a
+  change, 5 are excluded because they change nothing a change set holds (`release_create`,
+  `release_stage`, `release_unstage`, `release_preview_link`, `content_preview_link`).
+  `release_schedule` records a `release` entry (ruling P8a, final review 2026-11-03).
 - **Revert (§7)**: conflicts are found by simulating the object hashes newest first (all
   of them listed up front), then each object gets **one** reverse write to the
   before-image of its oldest selected change, objects in the order of their newest
@@ -586,6 +589,7 @@ this design:
   `idle_since` for the open filter; `NewChangeSet` carries `idle_since`/`max_changes`, so
   `open` closes only a stale or full set; `changes_since` feeds the dashboard. Both tables
   are appended at the end of the export catalogue.
-- **MCP (§10)**: 58 tools (M6-1 made 57); `changes_list` needs no scope.
+- **MCP (§10)**: 58 tools when M6-5 landed (M6-1 made 57; 70 after all of M6);
+  `changes_list` needs no scope.
 - **Admin (§11)**: the dashboard count sums the first list page's sets touched in the
   last 24 hours; Activity links show on every grant and token.

@@ -254,6 +254,10 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Content quality (M6-4) | `content_check` (an item or a draft: findings with rule, severity, WCAG criteria, a sentence, a fix, and the type's gate), `health_report` (the newest content health run and a page of its findings; `edit_others`); both read-only, no tool suppresses or starts a run (design 16 §10, D16) |
 | Releases and reviews (M6-3, design 15 §12) | `releases_list`, `release_get`, `release_create`, `release_stage`, `release_unstage`, `release_check`, `release_schedule`, `release_apply`, `release_preview_link`, `reviews_list`; `content_submit_for_review` takes `reviewers` and `note`, `content_preview_link` returns a signed link (`expires_in_hours`) |
 
+After M6 (2026-11-03) the server lists **70 tools** (38 that write, 32 read-only by their
+`readOnlyHint`), 2 resources, 1 resource template and 5 prompts; the test
+`mcp_reference::catalogue_counts_are_pinned` pins these numbers.
+
 ### 5.3 Markdown out
 
 A new `ferrite_core::blocks::markdown` serializer turns a body's blocks into CommonMark:

@@ -105,11 +105,15 @@ contributions through CLA assistant (`CONTRIBUTING.md`), the docs site on GitHub
 (`.github/workflows/pages.yml`, `site/export-static.sh` + `site/rewrite-static.py`). What is
 still open is under "Before v0.1.0" (the unchecked items) and "Later" in the roadmap. M5 (AI
 assistants over MCP) is done and released in `v0.2.0` (2026-11-02; `m5-exit.md`; the current release; `v0.1.0` was the first): every site
-serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) with 56 tools,
-2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
+serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless; 56 tools and
+4 prompts in `v0.2.0`, 70 tools, 2 resources, 1 resource template and 5 prompts after M6), a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
-card; migration `0013_oauth`; design 12, roadmap "M5". M6-6 (outgoing webhooks) is built
+card; migration `0013_oauth`; design 12, roadmap "M5". M6 (the editorial platform) is done
+(`m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
+the parts' exits are `m6-1-exit.md` … `m6-6-exit.md`; designs 13–18; migrations
+`0014`–`0019`; not released yet). Its six parts:
+M6-6 (outgoing webhooks) is done
 (`m6-6-exit.md`): `ferrite_core::webhooks` (catalogue, Standard Webhooks signing, sealed
 rotating secrets, `WebhookService`, `emit` from the content, media, comment, user and import
 writes in their `Tx`), the `webhook.deliver` (one job per attempt, 8-step schedule,
@@ -118,7 +122,7 @@ jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[
 local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
 OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
 `0016_webhooks`; design 18.
-M6-4 (accessibility and content health, design 16, `m6-4-exit.md`) is built:
+M6-4 (accessibility and content health, design 16, `m6-4-exit.md`) is done:
 `ferrite_core::quality` (the rule catalogue `RULES`, iterative capped document checks,
 media facts, `gate::check` the per-type publish gate (`content_types.quality_gate`
 `off`|`errors`; ruling P4: M6-3 releases call it per item), `QualityService` (check,
@@ -130,21 +134,24 @@ render, cache, counters or plugins) and `link_check::LinkChecker` (SSRF-checked,
 default ports), the `content.health` job (`crates/ferrite/src/jobs/health.rs`, daily 04:00
 UTC, lock `content.health`), the REST `POST /content/{type}/check`,
 `/content/{type}/{id}/suppressions`, `/health/summary|findings|runs` and `422
-content-quality`, MCP `content_check` and `health_report` (60 tools), the settings
+content-quality`, MCP `content_check` and `health_report`, the settings
 `health.external_links` and `health.stale_days`, the webhook event `health.completed`, the
 admin's editor checks (marks, the panel's Checks, the publish dialog, the Decorative image
 switch), Content health screen (`g h`), dashboard card, type gate switch and Settings →
 Content health; migration `0019_content_health`. Try it: `POST /api/v1/content/post/check`
 with `{"body": {...}}`; `POST /api/v1/health/runs` then `GET /api/v1/health/findings`
 (`serve` runs the job).
-M6-5 (AI change sets) is built
+M6-5 (AI change sets) is done
 (`m6-5-exit.md`): `ferrite_core::changes` (`Actor.agent` set only by the MCP guard, typed
 canonical snapshots, zstd images, `Capture` in every public write path the MCP write tools
 use, `ChangeSetService` with list, detail, images and revert as the person), the
 `mcp.change_sets_days` setting and the `change_sets.prune` job, `/api/v1/change-sets`
-(revert session only), MCP `changes_list` (58 tools), the admin's AI activity screens
-(`/admin/ai-activity`); migration `0018_change_sets`; design 17.
-M6-3 (editing, design 15) is built (`m6-3-exit.md`): `ferrite_core::release` (`ReleaseService`:
+(revert session only), MCP `changes_list`, the admin's AI activity screens
+(`/admin/ai-activity`); migration `0018_change_sets`; design 17. A revert runs every check
+a person's own write gets (the release lock, workflow approval and staging, the publish
+gate), and an assistant's `release_schedule` is a `release` entry whose revert unschedules
+it (final review, ruling P8a).
+M6-3 (editing, design 15) is done (`m6-3-exit.md`): `ferrite_core::release` (`ReleaseService`:
 staged changes as JSON snapshots, item locks, apply in one transaction through `ApplyTx`
 with one merged `invalidate` event, check and whole-site preview in a rolled-back sandbox
 (`SandboxStore`), scheduled apply as the scheduler with `release.apply` + the 30 s
@@ -154,13 +161,14 @@ steps, assignees and `editorial.notify` mail; P7: approvers edit live items in p
 audit `review.bypassed`), `ferrite_core::preview_link` (`ferp_` tokens, 1–168 h, daily
 `preview_links.prune`), `ferrite-http` `app/preview.rs` (`/_preview/link/<token>`, the
 preview cookie, `/_preview/exit`, the core preview bar, `AppState::preview_view`),
-`/api/v1/releases`, `/preview-links`, `/workflows`, `/reviews`, MCP release tools, the
+`/api/v1/releases`, `/preview-links`, `/workflows` (with `/workflows/{type}/approvers` for
+the reviewer pickers), `/reviews`, MCP release tools, the
 admin's live preview pane, Releases (`g r`), Reviews (`g v`) and the Workflow section of
 a content type; migration `0017_releases_workflows`. Try it: `POST /api/v1/releases`,
 `POST /api/v1/releases/{id}/items` (`If-Match`), then `POST …/preview-links` and open
 the `url`.
 M6-2 (plugin trust, design 14,
-`m6-2-exit.md`) is built: minisign-signed plugins (`ferrite-plugin.minisig`,
+`m6-2-exit.md`) is done: minisign-signed plugins (`ferrite-plugin.minisig`,
 `ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the
 signer), plugin data bound to its publisher (`plugin_owners`), the signed static registry
 (`[plugins] registry|registry_key|signatures|registry_check`, off-by-default daily check per
@@ -176,7 +184,7 @@ and menus, `/de/…` prefixes in permalinks and the router, locale-scoped site r
 `translations()`, `locale_links()`, `t()` with `[strings.<tag>]` and a switcher in the three
 starter themes, `seed demo --profile multilingual`, the API (`locale`, `translation_of`,
 `POST /content/{type}/{id}/translations`, `POST /terms/{id}/translations`, `?locale=`, `/meta`
-locales), MCP `content_translate` and the `translate` prompt (57 tools, 5 prompts), the
+locales), MCP `content_translate` and the `translate` prompt, the
 admin's Settings → Languages, list filter and column and editor Translations, the
 WordPress (Polylang/WPML shapes) and Markdown (`locale`, `translation_of`, `--locale`)
 imports. Work top-down in
@@ -191,7 +199,9 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
 `doctor/` (`ferrite doctor`'s checks); M6-2: `registry` (the configured registry and the
-embedded `registry.pub`), `jobs/registry.rs` (`plugins.registry_check`), `doctor/plugins.rs`) -> `ferrite-http` (public site, router, head,
+embedded `registry.pub`), `jobs/registry.rs` (`plugins.registry_check`), `doctor/plugins.rs`;
+M6: `jobs/{editorial,health,webhooks}.rs` (release apply, editorial mail and preview-link
+prune; `content.health`; `webhook.deliver`, `webhooks.prune`), `doctor/webhooks.rs`) -> `ferrite-http` (public site, router, head,
 previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
 plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
 `extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
@@ -201,8 +211,12 @@ OpenAPI snapshot `openapi.json`; M5: `mcp/` (the MCP endpoint: `auth` guard, `se
 `tools/` one file per area, `resources`, `prompts`, `results`), `oauth.rs` (the OAuth
 endpoints and the off-switch gate), `oauth_fetch.rs` (the SSRF-checked Client ID Metadata
 Document fetch), `api/oauth.rs` (the consent API); M6-2: `registry_fetch` (the SSRF-checked
-registry fetcher, file registries), `extensions/{trust,registry}.rs`, `api/plugin_registry.rs`) -> `ferrite-import-wp` (the WordPress importer: WXR
-parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
+registry fetcher, file registries), `extensions/{trust,registry}.rs`, `api/plugin_registry.rs`;
+M6: `app/preview.rs` (preview links, the preview cookie and bar), `quality_probe` and
+`link_check` (content health), `webhook_send` (`WebhookClient`), `api/{releases,reviews,
+quality,change_sets,webhooks}.rs`, `mcp/tools/{releases,quality,changes}.rs`) -> `ferrite-import-wp` (the WordPress importer: WXR
+parser, IR, conversion, passes, report, `ZipSource`; M6-1: `lang` (Polylang/WPML); ->
+`ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter (M5: `markdown_to_body`, used by the MCP
 content tools), `run` over `ImportService`; ->
@@ -217,7 +231,12 @@ renderer; M4-3b: `page_tree`), `ferrite-core` (services, permalinks, `SiteReader
 `blocks/markdown.rs` (blocks to Markdown), `UserService`, content types, settings allowlist,
 roles + token scopes, `import` (`ImportService`/`ImportBatch`: the import's write path; the
 import jobs, run reads and report artifacts), `seed` (`DemoBatch`: `seed demo` in one
-transaction)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
+transaction); M6: `locales` and `content/translate.rs` (M6-1), `release/` (`ReleaseService`,
+`ApplyTx`, `SandboxStore`), `workflow/` (`WorkflowService`, `gate`, `ReviewService`),
+`preview_link` (M6-3), `quality/` (rules, checks, `gate`, `QualityService`, `HealthRunner`;
+M6-4), `changes/` (`Capture`, snapshots, `ChangeSetService`, `restore`; M6-5), `webhooks/`
+(catalogue, signing, secrets, `emit`, `WebhookService`, delivery; M6-6),
+`extensions/trust.rs` (M6-2)), `ferrite-media` (`strip`: EXIF/XMP removal; store listing, copy and the owner
 marker), `ferrite-plugin-host` (grants, permission report;
 -> `ferrite-domain`);
 `ferrite` also -> `ferrite-import-wp` (`import_cmd`, the `import.wordpress` job in

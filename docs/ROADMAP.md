@@ -468,7 +468,7 @@ rulings" R-b1–R-b17). M4-3 as a whole: [`m4-3-exit.md`](superpowers/m4-3-exit.
 - [x] Example plugins: SEO, privacy-friendly analytics, contact form (M4-3a P42–P47: `plugins/examples/{seo,analytics,contact-form}` with a README each, SDK helpers, one host change for `options.get("site.url"|"site.title")` (X1), core percent-encoding of `request.served` paths (X5), analytics' two storage tiers under the 10 MiB KV quota (`detail_days`, X7, from the final review); shipped as the release asset `ferrite-plugins-<version>.tar.gz` made by `.github/scripts/package-plugins.sh`; 05 §10 and §12, 09 §7).
 - [x] Starter themes `docs`, `business`, with the template helpers a docs theme needs (page tree, previous/next, heading anchors, TOC) and Markdown import (M4-3b P54–P62: heading ids by GitHub's rule and `post.toc`; `SiteReader::tree` and the `page_tree()` helper with breadcrumbs and previous/next; `query(order="menu")`; `themes/docs` and `themes/business`, each under 150 KB; `seed demo --profile business`; `ferrite import markdown` in the new crate `ferrite-import-md`; code blocks as `<pre tabindex="0">` (R-b17); 06 §4 and §8, 08 §8, 09 §8).
 - [x] Docs site (built with FerriteCMS itself; M4-3b P63: `site/content/` (26 pages), `site/build.sh`, `site/VERIFIED.md` with every claim and how it was checked, `crates/ferrite/tests/docs_site.rs`; axe checks on all three starter themes, P64, in the `public-themes-chromium` Playwright project). Hosting it is the user's decision (`m4-3b-exit.md` "For the user").
-- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order (26 with M6-6's `webhooks.endpoints`), exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
+- [x] `ferrite doctor`: validates connectivity, permissions, clock skew and versions (M4-3a P48–P53, X2–X4: `ferrite doctor --data DIR [--offline]`, 25 checks in a fixed order (27 with M6-6's `webhooks.endpoints` and M6-2's `plugins.trust`), exit 0/2/1/3, nothing written locally (S3: one probe object); 09 §8). `ferrite plugin new` (a plugin crate scaffold) is planned for later in 09 §8, not for M4.
 
 ### M4-4 — follow-ups (done)
 
@@ -573,9 +573,12 @@ Follow-ups (not in M5):
 What the competitor review of 2026-11-02
 ([`research/2026-11-02-cms-competitors.md`](superpowers/research/2026-11-02-cms-competitors.md))
 found missing here, plus what no product offers well and FerriteCMS can build on what it
-has (revisions, the audit log, grant-bound tokens, the job queue, the axe checks). Design:
-13 (to write). Not estimated yet. Migrations are numbered from `0014` in the order the
-parts land. Left out on purpose: a page builder and e-commerce (BRIEF §4), GraphQL (REST
+has (revisions, the audit log, grant-bound tokens, the job queue, the axe checks).
+
+Done (2026-11-03; exit [`m6-exit.md`](superpowers/m6-exit.md), parts in `m6-1-exit.md` …
+`m6-6-exit.md`; designs 13–18; rulings `rulings/m6.md`; migrations `0014`–`0019`). After M6
+the MCP server lists 70 tools (38 write, 32 read-only), 2 resources, 1 resource template
+and 5 prompts. The unticked items below are follow-ups that stay open. Left out on purpose: a page builder and e-commerce (BRIEF §4), GraphQL (REST
 with OpenAPI and MCP cover headless use).
 
 ### M6-1 — Multilingual content
@@ -647,8 +650,10 @@ M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
 - [x] Approval workflows: configurable steps per content type, required approvals before
   publishing, reviewer assignment and mail notifications (extends submit-for-review; P7:
   approvers may edit live items in place, audited).
-- Later (M6-3 follow-ups): an endpoint listing eligible approvers for non-admins (the
-  reviewer pickers show only with `manage_users`); `GET /workflows/{type}` 404 for a type
+- [x] Eligible approvers for the reviewer pickers without `manage_users`:
+  `GET /workflows/{type}/approvers` (final review, 2026-11-03).
+- Later (M6-3 follow-ups): sharing the `?working=1` / `?release=` preview modes with other
+  people (they stay bound to the link creator's session, ruling P8b); `GET /workflows/{type}` 404 for a type
   without a workflow is logged by browsers; change mode keeps no local backup and its
   "Back to the item" skips the leave guard; the working preview's SEO patch is not applied
   to the head; scroll position across preview reloads (the sandboxed frame is opaque);

@@ -20,6 +20,7 @@ api_tests!(
     reference_rows_match_annotations_and_scopes,
     no_tool_installs_or_deletes_extensions_or_users,
     prompts_name_only_existing_tools,
+    catalogue_counts_are_pinned,
 );
 
 const PAGE: &str = "site/content/05-reference/02-mcp-tools.md";
@@ -285,5 +286,29 @@ async fn prompts_name_only_existing_tools(api: Api) -> Api {
     // A tool that was already called works through the same server.
     let r = tool(&api, &t.0, "site_overview", json!({})).await;
     assert_eq!(r["isError"], false, "{r}");
+    api
+}
+
+/// The counts the docs state (CLAUDE.md, design 12, the roadmap): 70 tools, 2 resources,
+/// 1 resource template and 5 prompts. A change here must update them.
+async fn catalogue_counts_are_pinned(api: Api) -> Api {
+    let t = token(&api).await;
+    assert_eq!(tools(&api, &t).await.len(), 70);
+    let count = |method: &'static str, key: &'static str| {
+        let (api, t) = (&api, &t);
+        async move {
+            let (_, body) = mcp_call(api, &t.0, method, json!({})).await;
+            body["result"][key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{body}"))
+                .len()
+        }
+    };
+    assert_eq!(count("resources/list", "resources").await, 2);
+    assert_eq!(
+        count("resources/templates/list", "resourceTemplates").await,
+        1
+    );
+    assert_eq!(count("prompts/list", "prompts").await, 5);
     api
 }
