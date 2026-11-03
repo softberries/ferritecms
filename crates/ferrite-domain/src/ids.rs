@@ -68,7 +68,8 @@ uuid_id!(
     OAuthGrantId,
     WebhookId,
     WebhookEventId,
-    DeliveryId
+    DeliveryId,
+    ChangeSetId
 );
 
 uuid_id!(

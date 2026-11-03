@@ -212,6 +212,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_change_sets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_change_set"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}/changes/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_change_set_change"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revert_change_set"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/comments": {
         parameters: {
             query?: never;
@@ -1913,6 +1977,112 @@ export interface components {
          * @enum {string}
          */
         CategoryDto: "accessibility" | "links" | "media" | "site" | "freshness";
+        /** @description One change with its images. */
+        ChangeDetailDto: {
+            /** @description The object after (`null`: deleted, hidden or too large). */
+            after?: unknown;
+            /** @description The object before (`null`: it did not exist, or hidden, or too large). */
+            before?: unknown;
+            change: components["schemas"]["ChangeDto"];
+            /**
+             * @description `shown`, or `hidden` when you may not read the object's area now.
+             * @example shown
+             */
+            images: string;
+        };
+        /** @description One change. */
+        ChangeDto: {
+            /** Format: date-time */
+            at: string;
+            /** @description The write created the object. */
+            created: boolean;
+            /** @description The write deleted the object. */
+            deleted: boolean;
+            /** @description Reverted over a later edit. */
+            forced: boolean;
+            object: components["schemas"]["ChangeObjectDto"];
+            /** @example content.update */
+            op: string;
+            /** @description `false` when an image was too large to keep. */
+            revertable: boolean;
+            /** Format: date-time */
+            reverted_at?: string | null;
+            /** Format: uuid */
+            reverted_by?: string | null;
+            /** Format: int32 */
+            seq: number;
+        };
+        /** @description The object a change touched. */
+        ChangeObjectDto: {
+            /** @description The admin screen of the object when it still exists (relative to `/admin`). */
+            admin_path?: string | null;
+            id: string;
+            /**
+             * @description `content`, `media`, `term`, `menu`, `type`, `redirect`, `comment`, `option`,
+             *     `theme` or `plugin`.
+             */
+            kind: string;
+            /** @description Its title or name at write time. */
+            label: string;
+        };
+        /** @description The connection that wrote. */
+        ChangeSetAgentDto: {
+            /** @description The client's name when the set opened. */
+            client: string;
+            /** @description Whether the grant or token still exists. */
+            connected: boolean;
+            /**
+             * Format: uuid
+             * @description The grant or token id.
+             */
+            id: string;
+            /**
+             * @description `oauth` (a connected app) or `token` (a personal API token).
+             * @example oauth
+             */
+            kind: string;
+        };
+        ChangeSetDetailDto: {
+            /** @description Newest first. */
+            changes: components["schemas"]["ChangeDto"][];
+            set: components["schemas"]["ChangeSetDto"];
+        };
+        /** @description One change set. */
+        ChangeSetDto: {
+            agent: components["schemas"]["ChangeSetAgentDto"];
+            /** Format: int32 */
+            changes: number;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_at: string;
+            /** @description Whether the assistant's next write still lands here. */
+            open: boolean;
+            /**
+             * Format: int32
+             * @description How many changes are reverted.
+             */
+            reverted: number;
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * @description `open`, `closed`, `reverted` or `partly_reverted`.
+             * @example open
+             */
+            status: string;
+            user?: components["schemas"]["ChangeSetUserDto"] | null;
+        };
+        ChangeSetList: {
+            items: components["schemas"]["ChangeSetDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description Who a set belongs to. */
+        ChangeSetUserDto: {
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            login: string;
+        };
         /** @description `POST /content/{type}/check`: the editor's working draft. */
         CheckRequestDto: {
             /** @description The block tree. */
@@ -3869,6 +4039,29 @@ export interface components {
         RetainedPluginList: {
             items: components["schemas"]["RetainedPluginDto"][];
         };
+        /** @description `POST /change-sets/{id}/revert`. */
+        RevertInput: {
+            /** @description The seqs to revert (at most 500); omitted: every change not reverted yet. */
+            changes?: number[] | null;
+            /** @description Check and report only; nothing is written. */
+            dry_run?: boolean;
+            /** @description Overwrite later edits. */
+            force?: boolean;
+        };
+        RevertNoteDto: {
+            /** Format: int32 */
+            seq: number;
+            text: string;
+        };
+        /** @description What a revert did (or, with `dry_run`, would do). */
+        RevertReportDto: {
+            dry_run: boolean;
+            forced: number[];
+            notes: components["schemas"]["RevertNoteDto"][];
+            /** @description Newest first. */
+            reverted: number[];
+            skipped: number[];
+        };
         /** @description One revision: the saved title, excerpt, body and fields. */
         RevisionDto: {
             /** @description Who saved it (`author_id` resolved). */
@@ -4148,6 +4341,12 @@ export interface components {
              *     3650, default 365).
              */
             "health.stale_days"?: number | null;
+            /**
+             * Format: int64
+             * @description 1..=365 (default 90): how many days AI change sets are kept (M6-5). Not
+             *     writable over MCP.
+             */
+            "mcp.change_sets_days"?: number | null;
             /**
              * @description Whether the MCP endpoint (`/mcp`) and the OAuth authorization server answer
              *     (default `true`); when off they answer `404` and existing connections stay.
@@ -4827,6 +5026,14 @@ export type SchemaAutosaveDto = components['schemas']['AutosaveDto'];
 export type SchemaAutosaveInput = components['schemas']['AutosaveInput'];
 export type SchemaCacheStatsDto = components['schemas']['CacheStatsDto'];
 export type SchemaCategoryDto = components['schemas']['CategoryDto'];
+export type SchemaChangeDetailDto = components['schemas']['ChangeDetailDto'];
+export type SchemaChangeDto = components['schemas']['ChangeDto'];
+export type SchemaChangeObjectDto = components['schemas']['ChangeObjectDto'];
+export type SchemaChangeSetAgentDto = components['schemas']['ChangeSetAgentDto'];
+export type SchemaChangeSetDetailDto = components['schemas']['ChangeSetDetailDto'];
+export type SchemaChangeSetDto = components['schemas']['ChangeSetDto'];
+export type SchemaChangeSetList = components['schemas']['ChangeSetList'];
+export type SchemaChangeSetUserDto = components['schemas']['ChangeSetUserDto'];
 export type SchemaCheckRequestDto = components['schemas']['CheckRequestDto'];
 export type SchemaCheckResponseDto = components['schemas']['CheckResponseDto'];
 export type SchemaClientKindDto = components['schemas']['ClientKindDto'];
@@ -4963,6 +5170,9 @@ export type SchemaRegistryPluginDto = components['schemas']['RegistryPluginDto']
 export type SchemaRegistryVersionDto = components['schemas']['RegistryVersionDto'];
 export type SchemaRetainedPluginDto = components['schemas']['RetainedPluginDto'];
 export type SchemaRetainedPluginList = components['schemas']['RetainedPluginList'];
+export type SchemaRevertInput = components['schemas']['RevertInput'];
+export type SchemaRevertNoteDto = components['schemas']['RevertNoteDto'];
+export type SchemaRevertReportDto = components['schemas']['RevertReportDto'];
 export type SchemaRevisionDto = components['schemas']['RevisionDto'];
 export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
@@ -5675,6 +5885,250 @@ export interface operations {
                 };
             };
             /** @description `validation`: TOTP is already on */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_change_sets: {
+        parameters: {
+            query?: {
+                /** @description Another user's sets (`manage_users`), or `all` for every user's. */
+                user?: string;
+                /** @description Only one connection's (a grant or token id). */
+                agent?: string;
+                /** @description Only open (`true`) or closed (`false`) sets. */
+                open?: boolean;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Change sets, newest last change first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetList"];
+                };
+            };
+            /** @description `malformed-query` or `invalid-cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`; another user's or `all`: `manage_users`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`limit`, `user`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_change_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The set and its changes, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` (also another user's set without `manage_users`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_change_set_change: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The change with its before and after images (`images: hidden` without your read right on the object's area; plugin secrets as `{"secret": "set"}`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`read_admin`, `users:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    revert_change_set: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevertInput"];
+            };
+        };
+        responses: {
+            /** @description Reverted (or, with `dry_run`, what would be) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevertReportDto"];
+                };
+            };
+            /** @description `malformed-json` or `malformed-header` (`Idempotency-Key`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (a token, not a session; or a reverse write's missing capability, `report.change` naming the change), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `change-conflict` (`report.conflicts`), or an `Idempotency-Key` still in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`changes`: unknown seq or more than 500; or a reverse write's own error, `report.change` naming the change) */
             422: {
                 headers: {
                     [name: string]: unknown;

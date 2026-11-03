@@ -280,6 +280,53 @@ impl JobHandler for NodeMetricsPrune {
     }
 }
 
+/// `change_sets.prune` (M6-5, design 17 §12): deletes AI change sets whose last change is
+/// older than the site option `mcp.change_sets_days` (1..=365; unset or unreadable: 90),
+/// with their changes.
+pub struct ChangeSetsPrune(pub Arc<dyn Store>);
+
+/// The retention of change sets when the option is unset or unreadable.
+pub const CHANGE_SETS_DAYS_DEFAULT: u64 = 90;
+
+/// The days `value` names: an integer in 1..=365, else the default.
+pub fn change_sets_days(value: Option<&serde_json::Value>) -> u64 {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|d| (1..=365).contains(d))
+        .unwrap_or(CHANGE_SETS_DAYS_DEFAULT)
+}
+
+#[async_trait]
+impl JobHandler for ChangeSetsPrune {
+    fn kind(&self) -> &'static str {
+        "change_sets.prune"
+    }
+
+    async fn run(&self, _job: &Job) -> Result<(), JobError> {
+        let stored = match self
+            .0
+            .read()
+            .options()
+            .get(ferrite_domain::CHANGE_SETS_DAYS_OPTION)
+            .await
+        {
+            Ok(entry) => entry.map(|e| e.value),
+            Err(e) => {
+                tracing::warn!(error = %e, "change set retention unreadable; using the default");
+                None
+            }
+        };
+        let days = change_sets_days(stored.as_ref());
+        let before = db_now_minus(self.0.as_ref(), Duration::from_secs(days * 24 * 3600)).await?;
+        let sets = self.0.read().change_sets();
+        prune_batches("change_sets", PRUNE_BUDGET, || {
+            sets.prune(before, MAX_PRUNE_BATCH)
+        })
+        .await?;
+        Ok(())
+    }
+}
+
 /// The built-in handlers, on `store`; plugin failure buckets are kept for
 /// `failure_retention` (from [`failure_retention`]).
 pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<dyn JobHandler>> {
@@ -292,7 +339,8 @@ pub fn handlers(store: Arc<dyn Store>, failure_retention: Duration) -> Vec<Arc<d
             retention: failure_retention,
         }),
         Arc::new(SessionsPrune(store.clone())),
-        Arc::new(NodeMetricsPrune(store)),
+        Arc::new(NodeMetricsPrune(store.clone())),
+        Arc::new(ChangeSetsPrune(store)),
     ]
 }
 
@@ -305,6 +353,7 @@ pub fn periodics() -> Vec<Periodic> {
         "plugin_failures.prune",
         "sessions.prune",
         "node_metrics.prune",
+        "change_sets.prune",
     ]
     .into_iter()
     .map(|kind| Periodic {
@@ -328,6 +377,16 @@ mod tests {
     fn builtin_offsets_fit_their_periods() {
         for p in periodics() {
             assert!(p.offset_fits(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn change_sets_days_default_and_range() {
+        use serde_json::json;
+        assert_eq!(change_sets_days(None), 90);
+        assert_eq!(change_sets_days(Some(&json!(30))), 30);
+        for bad in [json!(0), json!(366), json!("30"), json!(-1), json!(1.5)] {
+            assert_eq!(change_sets_days(Some(&bad)), 90, "{bad}");
         }
     }
 
@@ -409,6 +468,7 @@ mod tests {
             "plugin_failures.prune",
             "sessions.prune",
             "node_metrics.prune",
+            "change_sets.prune",
         ]
         .into();
         assert_eq!(periodic, expected);

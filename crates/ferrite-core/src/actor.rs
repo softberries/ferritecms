@@ -1,6 +1,8 @@
 //! Who is acting, what their role allows (07 §1), and which token scopes narrow it (P6).
 
-use ferrite_domain::{ContentItem, ContentStatus, Role, Timestamp, UserId};
+use ferrite_domain::{
+    ApiTokenId, ContentItem, ContentStatus, OAuthGrantId, Role, Timestamp, UserId,
+};
 
 use crate::CoreError;
 
@@ -12,21 +14,42 @@ pub struct Actor {
     pub user: UserId,
     pub role: Role,
     pub scopes: Scopes,
+    /// The AI assistant connection acting, set only by the MCP guard (design 17 §3.1):
+    /// its writes are recorded as change sets. `None` for sessions, REST tokens, the CLI
+    /// and jobs.
+    pub agent: Option<Agent>,
+}
+
+/// An assistant's connection over MCP: an OAuth grant (stable across token rotation) or
+/// a personal API token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Agent {
+    OAuth(OAuthGrantId),
+    Token(ApiTokenId),
 }
 
 impl Actor {
-    /// An actor holding every scope (a session, or a system test fixture).
+    /// An actor holding every scope (a session, or a system test fixture), no agent.
     pub fn new(user: UserId, role: Role) -> Self {
         Self {
             user,
             role,
             scopes: Scopes::ALL,
+            agent: None,
         }
     }
 
-    /// The same actor narrowed (or widened) to `scopes`.
+    /// The same actor narrowed (or widened) to `scopes`; the agent stays.
     pub fn with_scopes(self, scopes: Scopes) -> Self {
         Self { scopes, ..self }
+    }
+
+    /// The same actor marked as acting through `agent` (the MCP guard only).
+    pub fn with_agent(self, agent: Agent) -> Self {
+        Self {
+            agent: Some(agent),
+            ..self
+        }
     }
 }
 

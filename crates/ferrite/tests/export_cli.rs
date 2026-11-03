@@ -575,13 +575,15 @@ fn v10_archive(ex: &Exported) -> Vec<u8> {
         entry.1 = lines;
         reseal(&mut entries, table);
     }
-    // Tables added after schema 10 (M6-2's `0015`, M6-6's `0016`) are not in a schema-10
-    // archive.
-    const NEWER_TABLES: [&str; 4] = [
+    // Tables added after schema 10 (M6-2's `0015`, M6-6's `0016`, M6-5's `0018`) are not in
+    // a schema-10 archive.
+    const NEWER_TABLES: [&str; 6] = [
         "plugin_publishers",
         "plugin_owners",
         "plugin_registry",
         "webhook_endpoints",
+        "change_sets",
+        "change_set_changes",
     ];
     entries.retain(|(p, _)| {
         !NEWER_TABLES

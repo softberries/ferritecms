@@ -24,7 +24,9 @@ use super::ContentService;
 use crate::{
     Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
-    blocks, events, jobs,
+    blocks,
+    changes::{Capture, ObjectRef, Op},
+    events, jobs,
     permalink::{Permalinks, load_input},
     redirects::{delete_redirects_from, emit_redirects_changed},
     tx::finish,
@@ -34,7 +36,7 @@ use crate::{
 const DUE_BATCH: u32 = 100;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum Action {
+pub(crate) enum Action {
     Publish,
     /// Publish by the scheduler: the item must be scheduled.
     PublishDue,
@@ -303,32 +305,40 @@ impl ContentService {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = match transition_in(
-            tx.as_ref(),
-            rules.as_ref(),
-            actor,
-            id,
-            expected_version,
-            action,
-        )
-        .await
-        {
+        let done = async {
+            // An assistant's transition is recorded (design 17 §3.3).
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                capture_op(action),
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
+            let saved = transition_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                id,
+                expected_version,
+                action,
+            )
+            .await?;
+            // The publish gate (M6-4), after the transition's own checks.
+            gate(tx.as_ref(), action, &saved).await?;
             // Here, not in `transition_item`: `seed demo` and uploads publish through
             // that and emit nothing (design 18 §3.4).
-            Ok(saved) => match gate(tx.as_ref(), action, &saved).await {
-                Err(e) => Err(e),
-                Ok(()) => crate::webhooks::emit_content(
-                    tx.as_ref(),
-                    rules.as_ref(),
-                    webhook_type(action),
-                    &saved,
-                    Some(actor.user),
-                )
-                .await
-                .map(|_| saved),
-            },
-            Err(e) => Err(e),
-        };
+            crate::webhooks::emit_content(
+                tx.as_ref(),
+                rules.as_ref(),
+                webhook_type(action),
+                &saved,
+                Some(actor.user),
+            )
+            .await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
+        }
+        .await;
         finish(tx, done).await
     }
 }
@@ -348,7 +358,7 @@ async fn gate(repos: &dyn Repos, action: Action, item: &ContentItem) -> Result<(
     crate::quality::gate::check(repos, item, &ty).await
 }
 
-async fn transition_in(
+pub(crate) async fn transition_in(
     repos: &dyn Repos,
     permalinks: &dyn Permalinks,
     actor: &Actor,
@@ -406,7 +416,7 @@ async fn transition_item(
 }
 
 /// The webhook event type of a transition (design 18 §3.1).
-fn webhook_type(action: Action) -> &'static str {
+pub(crate) fn webhook_type(action: Action) -> &'static str {
     match action {
         Action::Publish | Action::PublishDue => "content.published",
         Action::Unpublish => "content.unpublished",
@@ -414,6 +424,18 @@ fn webhook_type(action: Action) -> &'static str {
         Action::Submit => "content.submitted",
         Action::Trash => "content.trashed",
         Action::Restore => "content.restored",
+    }
+}
+
+/// The change-set op of a transition (design 17 §3.3).
+fn capture_op(action: Action) -> Op {
+    match action {
+        Action::Publish | Action::PublishDue => Op::ContentPublish,
+        Action::Unpublish => Op::ContentUnpublish,
+        Action::Schedule(_) => Op::ContentSchedule,
+        Action::Submit => Op::ContentSubmit,
+        Action::Trash => Op::ContentTrash,
+        Action::Restore => Op::ContentRestore,
     }
 }
 

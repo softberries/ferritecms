@@ -166,6 +166,16 @@ export const qk = {
     delivery: (id: string, delivery: string) =>
       ["webhooks", "item", id, "delivery", delivery] as const,
   },
+  /** AI change sets (M6-5). `all` covers the lists, every set and its changes. */
+  changeSets: {
+    all: ["changeSets"] as const,
+    list: (filter: { user?: string; agent?: string; open?: boolean }) =>
+      ["changeSets", "list", filter] as const,
+    item: (id: string) => ["changeSets", "item", id] as const,
+    change: (id: string, seq: number) => ["changeSets", "item", id, "change", seq] as const,
+    /** The dashboard's count of the last 24 hours. */
+    recent: ["changeSets", "recent"] as const,
+  },
   /** The content health report (M6-4). `all` covers the summary and every page. */
   health: {
     all: ["health"] as const,

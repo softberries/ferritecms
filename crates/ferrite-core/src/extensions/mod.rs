@@ -42,6 +42,8 @@ use ferrite_domain::{
 use ferrite_store::{LOCK_EXTENSIONS, LockGuard, Repos, Store, Tx, lock};
 use serde_json::{Value, json};
 
+use crate::Actor;
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     CoreError, events,
     jobs::{
@@ -141,7 +143,7 @@ impl ExtensionService {
         theme: &InstalledTheme,
         activate: bool,
     ) -> Result<(), CoreError> {
-        self.install_theme_with(artifact, theme, activate, None)
+        self.install_theme_with(artifact, theme, activate, None, None)
             .await
     }
 
@@ -151,6 +153,7 @@ impl ExtensionService {
         theme: &InstalledTheme,
         activate: bool,
         audit: Option<NewAudit>,
+        by: Option<&Actor>,
     ) -> Result<(), CoreError> {
         check_artifact(artifact, ArtifactKind::Theme, &theme.artifact_hash)?;
         // Activation goes through `activate` only, so the one-active index never trips.
@@ -159,7 +162,25 @@ impl ExtensionService {
             ..theme.clone()
         };
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_install_theme(tx.as_ref(), artifact, &row, activate, audit).await;
+        let done = async {
+            // An assistant's activation is recorded (design 17 §3.3); an install alone
+            // is not a change a revert could undo.
+            let cap = match by.filter(|_| activate) {
+                Some(actor) => {
+                    Capture::begin(
+                        tx.as_ref(),
+                        actor,
+                        Op::ThemeActivate,
+                        &[ObjectRef::ActiveTheme],
+                    )
+                    .await?
+                }
+                None => Capture::inert(),
+            };
+            write_install_theme(tx.as_ref(), artifact, &row, activate, audit).await?;
+            cap.finish(tx.as_ref()).await
+        }
+        .await;
         finish_locked(guard, tx, done).await
     }
 
@@ -175,7 +196,7 @@ impl ExtensionService {
         name: &str,
         expected: &ferrite_domain::ArtifactHash,
     ) -> Result<(), CoreError> {
-        self.activate_theme_with(name, expected, None).await
+        self.activate_theme_with(name, expected, None, None).await
     }
 
     pub(crate) async fn activate_theme_with(
@@ -183,9 +204,26 @@ impl ExtensionService {
         name: &str,
         expected: &ferrite_domain::ArtifactHash,
         audit: Option<NewAudit>,
+        by: Option<&Actor>,
     ) -> Result<(), CoreError> {
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_activate_theme(tx.as_ref(), name, expected, audit).await;
+        let done = async {
+            let cap = match by {
+                Some(actor) => {
+                    Capture::begin(
+                        tx.as_ref(),
+                        actor,
+                        Op::ThemeActivate,
+                        &[ObjectRef::ActiveTheme],
+                    )
+                    .await?
+                }
+                None => Capture::inert(),
+            };
+            write_activate_theme(tx.as_ref(), name, expected, audit).await?;
+            cap.finish(tx.as_ref()).await
+        }
+        .await;
         finish_locked(guard, tx, done).await
     }
 
@@ -396,7 +434,8 @@ impl ExtensionService {
     /// so old failures cannot disable it again at once. Emits `plugins.changed` with its
     /// name.
     pub async fn set_plugin_enabled(&self, name: &str, enabled: bool) -> Result<(), CoreError> {
-        self.set_plugin_enabled_with(name, enabled, None).await
+        self.set_plugin_enabled_with(name, enabled, None, None)
+            .await
     }
 
     pub(crate) async fn set_plugin_enabled_with(
@@ -404,9 +443,24 @@ impl ExtensionService {
         name: &str,
         enabled: bool,
         audit: Option<NewAudit>,
+        by: Option<&Actor>,
     ) -> Result<(), CoreError> {
         let (guard, tx) = self.begin_locked().await?;
-        let done = write_plugin_enabled(tx.as_ref(), name, enabled, audit).await;
+        let done = async {
+            let op = if enabled {
+                Op::PluginEnable
+            } else {
+                Op::PluginDisable
+            };
+            let object = [ObjectRef::Plugin(name.to_owned())];
+            let cap = match by {
+                Some(actor) => Capture::begin(tx.as_ref(), actor, op, &object).await?,
+                None => Capture::inert(),
+            };
+            write_plugin_enabled(tx.as_ref(), name, enabled, audit).await?;
+            cap.finish(tx.as_ref()).await
+        }
+        .await;
         finish_locked(guard, tx, done).await
     }
 
@@ -745,7 +799,7 @@ async fn write_install_theme(
     append_audit(repos, audit).await
 }
 
-async fn write_activate_theme(
+pub(crate) async fn write_activate_theme(
     repos: &dyn Repos,
     name: &str,
     expected: &ferrite_domain::ArtifactHash,
@@ -958,7 +1012,7 @@ pub(crate) fn manifest_publisher(manifest: &Value) -> String {
         .to_owned()
 }
 
-async fn write_plugin_enabled(
+pub(crate) async fn write_plugin_enabled(
     repos: &dyn Repos,
     name: &str,
     enabled: bool,

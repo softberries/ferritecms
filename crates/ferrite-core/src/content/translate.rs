@@ -15,6 +15,7 @@ use super::{
     ContentDraft, ContentService, Placement, RootNamespace, dedup, invalidation_keys, record_moves,
     root_namespace, seo::Seo, seo::SeoPatch, set_terms,
 };
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError,
     actor::{Capability, can_edit, can_read, require},
@@ -217,22 +218,25 @@ impl ContentService {
         require(actor, Capability::EditOwn)?;
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = match self
-            .translate_in(tx.as_ref(), rules.as_ref(), actor, id, locale)
-            .await
-        {
+        let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::ContentTranslate, &[]).await?;
+            let t = self
+                .translate_in(tx.as_ref(), rules.as_ref(), actor, id, locale)
+                .await?;
             // Here, not in `translate_in`: `seed demo` translates through that (R-M6-6-8).
-            Ok(t) => crate::webhooks::emit_content(
+            crate::webhooks::emit_content(
                 tx.as_ref(),
                 rules.as_ref(),
                 "content.created",
                 &t.item,
                 Some(actor.user),
             )
-            .await
-            .map(|_| t),
-            Err(e) => Err(e),
-        };
+            .await?;
+            cap.created(ObjectRef::Content(t.item.id));
+            cap.finish(tx.as_ref()).await?;
+            Ok(t)
+        }
+        .await;
         finish(tx, done).await
     }
 
@@ -381,6 +385,13 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::ContentUpdate,
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
             let saved = self
                 .update_in(
                     tx.as_ref(),
@@ -394,18 +405,21 @@ impl ContentService {
                     },
                 )
                 .await?;
-            if change == Relocation::default() {
-                return Ok(saved);
-            }
-            relocate_in(
-                tx.as_ref(),
-                rules.as_ref(),
-                actor,
-                id,
-                saved.version,
-                change,
-            )
-            .await
+            let saved = if change == Relocation::default() {
+                saved
+            } else {
+                relocate_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    id,
+                    saved.version,
+                    change,
+                )
+                .await?
+            };
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
         }
         .await;
         finish(tx, done).await

@@ -1,6 +1,6 @@
 # 17 — AI change sets
 
-Status: **design for M6-5** · Date: 2026-11-02 · Roadmap: "M6-5 — AI change sets" ·
+Status: **built (M6-5; see §17 As built)** · Date: 2026-11-02 · Roadmap: "M6-5 — AI change sets" ·
 Builds on 12 (MCP), assumes M6-1's locale model (wave B).
 
 An assistant connected over MCP (design 12) changes the live site as soon as a tool
@@ -551,3 +551,31 @@ opens a set (M6-6 webhooks can follow `mcp.*` audit rows later).
 - **D17** Retention is a site option (`mcp.change_sets_days`, default 90), changeable only
   in the admin; change sets are exported and backed up like the audit log.
 - **D18** A revert closes the set, so later assistant writes start a new one.
+
+## 17. As built (M6-5, 2026-11-03)
+
+Execution decisions are R-M6-5-n in `docs/superpowers/m6-5-exit.md`; the ones that change
+this design:
+
+- **Write paths (§3.3)** gained M6-1's: `content_translate` (op `content.translate`, a
+  create: revert trashes), `create_localized`/`create_localized_term` (as creates) and
+  `update_and_relocate` (one `content.update` change covering the edit and the move). The
+  guard test covers all 31 MCP write tools; none is excluded.
+- **Revert (§7)**: conflicts are found by simulating the object hashes newest first (all
+  of them listed up front), then each object gets **one** reverse write to the
+  before-image of its oldest selected change, objects in the order of their newest
+  change, site settings last in one `set_many_in`. Same end state as one write per
+  change, fewer revisions. A pending → draft target goes through trash and restore (the
+  lifecycle has no such transition); a `private` target is left with a note; a locale or
+  translation-group difference is left with a note.
+- **Images** are redacted in core (any `{"sealed": …}` object becomes `{"secret": "set"}`)
+  for every reader, not only the REST DTOs.
+- **Events (§7.4)**: `change_set.reverted` goes through `webhooks::emit` only (ruling P2);
+  no events-table row is written.
+- **Store (§5)**: `ChangeSetQuery` has no `all_users` (core passes `user: None`) and carries
+  `idle_since` for the open filter; `NewChangeSet` carries `idle_since`/`max_changes`, so
+  `open` closes only a stale or full set; `changes_since` feeds the dashboard. Both tables
+  are appended at the end of the export catalogue.
+- **MCP (§10)**: 58 tools (M6-1 made 57); `changes_list` needs no scope.
+- **Admin (§11)**: the dashboard count sums the first list page's sets touched in the
+  last 24 hours; Activity links show on every grant and token.

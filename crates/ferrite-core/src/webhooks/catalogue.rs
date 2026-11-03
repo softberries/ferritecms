@@ -89,6 +89,12 @@ pub const EVENT_TYPES: &[EventTypeInfo] = &[
     t("user.updated", "user", "A user account changed."),
     t("user.deleted", "user", "A user account was deleted."),
     t("import.finished", "import", "An import run finished."),
+    // M6-5 (design 17 §7.4, ruling P2).
+    t(
+        "change_set.reverted",
+        "change_set",
+        "A person reverted changes an AI assistant made.",
+    ),
     t(
         "health.completed",
         "health",

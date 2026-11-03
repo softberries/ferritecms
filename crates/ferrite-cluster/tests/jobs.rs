@@ -705,6 +705,9 @@ impl Repos for FaultyRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
     fn quality(&self) -> &dyn ferrite_store::QualityRepo {
         self.inner.read().quality()
     }
@@ -1183,12 +1186,12 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     .unwrap()
     .spawn(stop.clone());
     let jobs = store.read().jobs();
-    wait_for(Duration::from_secs(5), "six prune jobs done", || async {
+    wait_for(Duration::from_secs(5), "seven prune jobs done", || async {
         let counts = jobs.counts().await.unwrap();
-        // Once the old fixture job is pruned: the fresh one plus the six prune jobs.
+        // Once the old fixture job is pruned: the fresh one plus the seven prune jobs.
         let gone = jobs.get(old_job).await.unwrap().is_none()
             && jobs.get(old_dead).await.unwrap().is_none();
-        (gone && counts[&JobStatus::Done] == 7).then_some(())
+        (gone && counts[&JobStatus::Done] == 8).then_some(())
     })
     .await;
     stop.cancel();
@@ -1238,8 +1241,8 @@ pub async fn builtin_prune_jobs_delete_by_age(db: Arc<TestDb>) {
     let counts = jobs.counts().await.unwrap();
     assert_eq!(
         counts[&JobStatus::Done],
-        7,
-        "fresh fixture + six prune jobs"
+        8,
+        "fresh fixture + seven prune jobs (M6-5 adds change_sets.prune)"
     );
     assert_eq!(counts[&JobStatus::Dead], 1, "the 10-day-old dead job");
 }

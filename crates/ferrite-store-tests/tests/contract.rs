@@ -1,4 +1,5 @@
 use ferrite_store::{Phase, expand_lint, parse_directives};
+use ferrite_store_tests::change_sets::*;
 use ferrite_store_tests::{
     artifact_gc::*, audit::*, auth::*, autosave::*, backend_tests, backend_tests_spawning,
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
@@ -467,6 +468,21 @@ backend_tests!(
     nul_in_text_is_invalid,
     fail_stale_pending_only_old_pending,
 );
+
+backend_tests!(
+    migration_0018_roundtrip,
+    extend_open_returns_consecutive_seqs,
+    idle_set_is_not_extended,
+    full_set_is_not_extended,
+    open_closes_the_stale_set_and_starts_a_new_one,
+    images_round_trip_bytes_and_hashes,
+    list_is_newest_first_with_cursor_and_filters,
+    reverted_counts_in_list,
+    deleting_user_nulls_user_and_reverted_by,
+    prune_deletes_old_sets_and_their_changes,
+);
+
+backend_tests_spawning!(concurrent_open_meets_in_one_set);
 
 backend_tests!(
     migration_0019_roundtrip,

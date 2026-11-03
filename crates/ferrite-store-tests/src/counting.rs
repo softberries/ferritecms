@@ -241,6 +241,9 @@ impl Repos for CountingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
     fn quality(&self) -> &dyn ferrite_store::QualityRepo {
         self.inner.read().quality()
     }
@@ -739,6 +742,9 @@ impl Repos for CountingTx {
 
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.tx.plugin_trust()
+    }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.tx.change_sets()
     }
     fn quality(&self) -> &dyn ferrite_store::QualityRepo {
         self.tx.quality()

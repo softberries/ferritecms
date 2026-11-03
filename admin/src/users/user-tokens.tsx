@@ -7,6 +7,7 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { qk } from "@/api/keys";
 import { type TokenDto, tokensQuery } from "@/api/tokens";
+import { ActivityLink } from "@/account/connected-apps-card";
 import { ScopeChips } from "@/account/token-dialog";
 import { Expiry, RevokeDialog } from "@/account/tokens-card";
 import { ErrorState } from "@/components/kit/error-state";
@@ -75,6 +76,7 @@ export function UserTokens({ userId, own = false }: { userId: string; own?: bool
                   </span>
                 </span>
               </div>
+              <ActivityLink agent={token.id} own={own} name={token.name} />
               <Button
                 variant="ghost"
                 size="icon"

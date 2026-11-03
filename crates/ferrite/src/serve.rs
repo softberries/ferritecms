@@ -561,6 +561,10 @@ async fn boot(
         ImportService::new(store.clone(), dyn_permalinks.clone())
             .with_artifacts(Arc::new(MediaArtifacts::new(media.clone()))),
     );
+    let change_sets = Arc::new(ferrite_core::changes::ChangeSetService::new(
+        store.clone(),
+        dyn_permalinks.clone(),
+    ));
     let media_service = Arc::new(MediaService::new(
         store.clone(),
         content.clone(),
@@ -648,6 +652,7 @@ async fn boot(
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
             webhooks: webhooks.clone(),
+            change_sets,
             quality: Arc::new(ferrite_core::quality::QualityService::new(
                 store.clone(),
                 state.config.site_url.clone(),

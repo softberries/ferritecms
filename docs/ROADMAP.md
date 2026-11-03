@@ -655,11 +655,12 @@ M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
 
 ### M6-5 — AI change sets
 
-- [ ] Writes through an OAuth grant or a personal token over MCP are grouped into change
+- [x] Writes through an OAuth grant or a personal token over MCP are grouped into change
   sets (per grant and session window), with before-images for what has no revisions
-  (terms, menus, settings, redirects).
-- [ ] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
-  one change, refusing where a later edit conflicts.
+  (terms, menus, settings, redirects) (M6-5, [`m6-5-exit.md`](superpowers/m6-5-exit.md);
+  migration `0018_change_sets`; design 17).
+- [x] Admin: a change-set view (what changed, with diffs) and a revert of a whole set or of
+  one change, refusing where a later edit conflicts (M6-5; MCP `changes_list` read-only).
 
 ### M6-6 — Outgoing webhooks
 

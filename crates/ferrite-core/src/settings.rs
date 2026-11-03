@@ -18,6 +18,7 @@
 //! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
 //! | `comments.per_page` | integer 1..=100 (default 50, [`COMMENTS_PER_PAGE_DEFAULT`](crate::comments::COMMENTS_PER_PAGE_DEFAULT)): top-level comment threads per public page |
 //! | `mcp.enabled` | boolean (default `true`, [`MCP_ENABLED_DEFAULT`]): the MCP endpoint, the OAuth endpoints and their metadata documents (design 12 §2) |
+//! | `mcp.change_sets_days` | integer 1..=365 (default 90, [`CHANGE_SETS_DAYS_DEFAULT`]): how long AI change sets are kept (design 17 §12) |
 //! | `health.external_links` | boolean (default `false`, [`HEALTH_EXTERNAL_LINKS_DEFAULT`]): the content health run checks external links (design 16 §6.3; the server contacts the linked sites) |
 //! | `health.stale_days` | integer 30..=3650 (default 365, [`HEALTH_STALE_DAYS_DEFAULT`]): items not edited for longer are `stale` (design 16 §6.5) |
 //!
@@ -150,6 +151,10 @@ pub const SETTINGS: &[SettingDef] = &[
         kind: SettingKind::Bool,
     },
     SettingDef {
+        key: ferrite_domain::CHANGE_SETS_DAYS_OPTION,
+        kind: SettingKind::Integer { min: 1, max: 365 },
+    },
+    SettingDef {
         key: HEALTH_EXTERNAL_LINKS,
         kind: SettingKind::Bool,
     },
@@ -158,6 +163,9 @@ pub const SETTINGS: &[SettingDef] = &[
         kind: SettingKind::Integer { min: 30, max: 3650 },
     },
 ];
+
+/// [`CHANGE_SETS_DAYS_OPTION`](ferrite_domain::CHANGE_SETS_DAYS_OPTION) when unset.
+pub const CHANGE_SETS_DAYS_DEFAULT: i64 = 90;
 
 /// Whether the content health run checks external links (M6-4, design 16 §6.3).
 pub const HEALTH_EXTERNAL_LINKS: &str = "health.external_links";

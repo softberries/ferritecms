@@ -118,6 +118,13 @@ jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[
 local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
 OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
 `0016_webhooks`; design 18.
+M6-5 (AI change sets) is built
+(`m6-5-exit.md`): `ferrite_core::changes` (`Actor.agent` set only by the MCP guard, typed
+canonical snapshots, zstd images, `Capture` in every public write path the MCP write tools
+use, `ChangeSetService` with list, detail, images and revert as the person), the
+`mcp.change_sets_days` setting and the `change_sets.prune` job, `/api/v1/change-sets`
+(revert session only), MCP `changes_list` (58 tools), the admin's AI activity screens
+(`/admin/ai-activity`); migration `0018_change_sets`; design 17.
 M6-2 (plugin trust, design 14,
 `m6-2-exit.md`) is built: minisign-signed plugins (`ferrite-plugin.minisig`,
 `ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the

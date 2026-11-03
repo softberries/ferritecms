@@ -201,6 +201,9 @@ impl Repos for HookRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn change_sets(&self) -> &dyn ferrite_store::ChangeSetRepo {
+        self.inner.read().change_sets()
+    }
     fn quality(&self) -> &dyn ferrite_store::QualityRepo {
         self.inner.read().quality()
     }

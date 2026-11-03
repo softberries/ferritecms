@@ -6,6 +6,7 @@ mod harness;
 
 mod auth;
 mod autosave;
+mod change_sets;
 mod comments;
 mod comments_admin;
 mod content;
@@ -20,6 +21,7 @@ mod jobs;
 mod locales;
 mod mcp;
 mod mcp_admin;
+mod mcp_changes;
 mod mcp_content;
 mod mcp_quality;
 mod mcp_reference;

@@ -11,6 +11,7 @@ pub mod audit;
 pub mod auth;
 pub mod autosave;
 pub mod batch;
+pub mod change_sets;
 pub mod comment;
 pub mod comment_counts;
 pub mod comment_threads;

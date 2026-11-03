@@ -11,10 +11,11 @@
 
 use std::sync::Arc;
 
-use ferrite_domain::{Taxonomy, Term, TermId, Timestamp, UserId};
+use ferrite_domain::{ContentId, Taxonomy, Term, TermId, Timestamp, UserId};
 use ferrite_store::{MAX_CONTENT_KINDS, Repos, Store, StoreError, Tx};
 use serde_json::json;
 
+use crate::changes::{Capture, ObjectRef, Op};
 use crate::{
     Actor, CoreError, MAX_PARENT_DEPTH,
     actor::{Area, Capability, require, require_read},
@@ -222,6 +223,7 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
             let (saved, keys) = create_term_in(
                 tx.as_ref(),
                 taxonomy,
@@ -233,6 +235,8 @@ impl TaxonomyService {
             )
             .await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -253,6 +257,7 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
+            let mut cap = Capture::begin(tx.as_ref(), actor, Op::TermCreate, &[]).await?;
             let (saved, keys) = create_term_in(
                 tx.as_ref(),
                 &input.taxonomy,
@@ -264,6 +269,8 @@ impl TaxonomyService {
             )
             .await?;
             tx.events().append(&events::invalidate(keys)).await?;
+            cap.created(ObjectRef::Term(saved.id));
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -411,34 +418,11 @@ impl TaxonomyService {
         let explicit = slug.as_deref().map(slug::validate).transpose()?;
         let tx = self.store.begin().await?;
         let done = async {
-            let current = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
-            let tax = get_taxonomy(tx.as_ref(), &current.taxonomy).await?;
-            check_flat(&tax, parent)?;
-            if let Some(new_parent) = parent
-                && parent != current.parent_id
-            {
-                check_parent_taxonomy(tx.as_ref(), &current.taxonomy, new_parent).await?;
-                check_cycle(tx.as_ref(), id, new_parent).await?;
-            }
-            let base = explicit.unwrap_or_else(|| current.slug.clone());
-            let old_slug = current.slug.clone();
-            let next = Term {
-                name,
-                description: description.to_owned(),
-                parent_id: parent,
-                ..current
-            };
-            let saved = save_with_free_slug(tx.as_ref(), next, &base, true).await?;
-            if saved.slug != old_slug {
-                let new_path = term_path(&tax.name, &saved.slug);
-                if had_archive(tx.as_ref(), &tax, id).await? {
-                    // Also clears the redirects from the new path.
-                    record_move(tx.as_ref(), &term_path(&tax.name, &old_slug), &new_path).await?;
-                } else {
-                    clear_redirects_from(tx.as_ref(), &new_path).await?;
-                }
-            }
-            emit(tx.as_ref(), &tax, &saved).await?;
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermUpdate, &[ObjectRef::Term(id)]).await?;
+            let saved =
+                update_term_in(tx.as_ref(), id, name, explicit, parent, description).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(saved)
         }
         .await;
@@ -451,19 +435,103 @@ impl TaxonomyService {
         require(actor, Capability::ManageTerms)?;
         let tx = self.store.begin().await?;
         let done = async {
-            let term = tx.terms().get(id).await?.ok_or(CoreError::NotFound)?;
-            let tax = get_taxonomy(tx.as_ref(), &term.taxonomy).await?;
-            let siblings = tx.terms().list(&term.taxonomy, None).await?;
-            if siblings.iter().any(|t| t.parent_id == Some(id)) {
-                return Err(CoreError::Invalid("has children".into()));
-            }
-            tx.terms().delete(id).await?;
-            emit(tx.as_ref(), &tax, &term).await?;
+            let cap =
+                Capture::begin(tx.as_ref(), actor, Op::TermDelete, &[ObjectRef::Term(id)]).await?;
+            delete_term_in(tx.as_ref(), id).await?;
+            cap.finish(tx.as_ref()).await?;
             Ok(())
         }
         .await;
         finish(tx, done).await
     }
+}
+
+/// [`TaxonomyService::update_term`] inside the caller's `repos`, without the capability
+/// check: `slug` is the validated caller slug (`None` keeps the current one).
+pub(crate) async fn update_term_in(
+    tx: &dyn Tx,
+    id: TermId,
+    name: String,
+    slug: Option<String>,
+    parent: Option<TermId>,
+    description: &str,
+) -> Result<Term, CoreError> {
+    let repos: &dyn Repos = tx;
+    let current = repos.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+    let tax = get_taxonomy(repos, &current.taxonomy).await?;
+    check_flat(&tax, parent)?;
+    if let Some(new_parent) = parent
+        && parent != current.parent_id
+    {
+        check_parent_taxonomy(repos, &current.taxonomy, new_parent).await?;
+        check_cycle(repos, id, new_parent).await?;
+    }
+    let base = slug.unwrap_or_else(|| current.slug.clone());
+    let old_slug = current.slug.clone();
+    let next = Term {
+        name,
+        description: description.to_owned(),
+        parent_id: parent,
+        ..current
+    };
+    let saved = save_with_free_slug(tx, next, &base, true).await?;
+    if saved.slug != old_slug {
+        let new_path = term_path(&tax.name, &saved.slug);
+        if had_archive(repos, &tax, id).await? {
+            // Also clears the redirects from the new path.
+            record_move(repos, &term_path(&tax.name, &old_slug), &new_path).await?;
+        } else {
+            clear_redirects_from(repos, &new_path).await?;
+        }
+    }
+    emit(repos, &tax, &saved).await?;
+    Ok(saved)
+}
+
+/// [`TaxonomyService::delete_term`] inside the caller's `repos`, without the capability
+/// check (a term with child terms is `Invalid("has children")`).
+pub(crate) async fn delete_term_in(repos: &dyn Repos, id: TermId) -> Result<(), CoreError> {
+    let term = repos.terms().get(id).await?.ok_or(CoreError::NotFound)?;
+    let tax = get_taxonomy(repos, &term.taxonomy).await?;
+    let siblings = repos.terms().list(&term.taxonomy, None).await?;
+    if siblings.iter().any(|t| t.parent_id == Some(id)) {
+        return Err(CoreError::Invalid("has children".into()));
+    }
+    repos.terms().delete(id).await?;
+    emit(repos, &tax, &term).await
+}
+
+/// Re-inserts a deleted `term` with its id (design 17 §7.3), then links each of `items`
+/// that still exists to it. Emits the term's keys and each linked item's `post:` key.
+pub(crate) async fn reinsert_term_in(
+    repos: &dyn Repos,
+    term: &Term,
+    items: &[ContentId],
+) -> Result<(), CoreError> {
+    let tax = get_taxonomy(repos, &term.taxonomy).await?;
+    repos.terms().insert(term).await?;
+    let mut keys = Vec::new();
+    for item in items {
+        if repos.content().get(*item).await?.is_none() {
+            continue;
+        }
+        let mut linked: Vec<TermId> = repos
+            .terms()
+            .for_item(*item)
+            .await?
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        if !linked.contains(&term.id) {
+            linked.push(term.id);
+            repos.terms().set_for_item(*item, &linked).await?;
+        }
+        keys.push(events::post_key(*item));
+    }
+    if !keys.is_empty() {
+        repos.events().append(&events::invalidate(keys)).await?;
+    }
+    emit(repos, &tax, term).await
 }
 
 /// The pure checks of [`TaxonomyService::create_taxonomy`]: the name rules, no

@@ -11,6 +11,7 @@ import {
   BlocksIcon,
   FileTextIcon,
   FilesIcon,
+  HistoryIcon,
   ImageIcon,
   ImportIcon,
   LayoutDashboardIcon,
@@ -83,6 +84,8 @@ const SCREENS = {
   plugins: { section: "admin", show: (can: Can) => can("manage_plugins"), shortcut: "g l" },
   // Outgoing webhooks (M6-6, design 18 §10.1), after Plugins; `g w` is free in 11 §6.
   webhooks: { section: "admin", show: (can: Can) => can("manage_webhooks"), shortcut: "g w" },
+  // What AI assistants changed (M6-5, design 17 §11): every role with the admin sees its own.
+  activity: { section: "admin", show: (can: Can) => can("read_admin") },
   // The WordPress import (M3-2 P32); `g i` is free in 11 §6.
   import: { section: "admin", show: (can: Can) => can("import"), shortcut: "g i" },
   settings: { section: "admin", show: (can: Can) => can("manage_settings"), shortcut: "g s" },
@@ -126,6 +129,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
   { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: PlugIcon },
   { screen: "webhooks", to: "/webhooks", label: "nav.webhooks", icon: WebhookIcon },
+  { screen: "activity", to: "/ai-activity", label: "nav.aiActivity", icon: HistoryIcon },
   { screen: "import", to: "/import", label: "nav.import", icon: ImportIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
   { screen: "system", to: "/system", label: "nav.system", icon: ServerCogIcon },

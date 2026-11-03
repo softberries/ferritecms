@@ -7,7 +7,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Link } from "@tanstack/react-router";
-import { ExternalLinkIcon, PlugZapIcon, SparklesIcon } from "lucide-react";
+import { ExternalLinkIcon, HistoryIcon, PlugZapIcon, SparklesIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -139,6 +139,7 @@ export function ConnectedApps({ userId, own, userName, empty, rowClassName }: Co
           <GrantRow
             key={grant.id}
             grant={grant}
+            own={own}
             className={rowClassName}
             onDisconnect={() => setDisconnecting(grant)}
           />
@@ -162,10 +163,12 @@ export function ConnectedApps({ userId, own, userName, empty, rowClassName }: Co
 
 function GrantRow({
   grant,
+  own,
   className,
   onDisconnect,
 }: {
   grant: GrantDto;
+  own: boolean;
   className?: string;
   onDisconnect: () => void;
 }) {
@@ -198,6 +201,7 @@ function GrantRow({
           </span>
         </span>
       </div>
+      <ActivityLink agent={grant.id} own={own} name={name} />
       <Button
         variant="outline"
         aria-label={t("apps.disconnectLabel", { name })}
@@ -207,6 +211,26 @@ function GrantRow({
         {t("apps.disconnect")}
       </Button>
     </li>
+  );
+}
+
+/**
+ * "Activity": the AI activity of one connection (design 17 §11). Another user's needs
+ * every user's sets (`all`, the administrator's view).
+ */
+export function ActivityLink({ agent, own, name }: { agent: string; own: boolean; name: string }) {
+  const { t } = useTranslation("ai");
+  return (
+    <Button asChild variant="ghost" className="shrink-0">
+      <Link
+        to="/ai-activity"
+        search={own ? { agent } : { agent, all: true }}
+        aria-label={t("activity.linkLabel", { name })}
+      >
+        <HistoryIcon data-icon="inline-start" />
+        {t("activity.link")}
+      </Link>
+    </Button>
   );
 }
 

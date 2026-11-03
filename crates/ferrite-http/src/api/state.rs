@@ -65,6 +65,8 @@ pub struct ApiParts {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
     /// Content checks and suppressions (M6-4).
     pub quality: Arc<ferrite_core::quality::QualityService>,
     /// The node's internal link probe for checks (`None`: links are not probed).
@@ -116,6 +118,8 @@ pub struct ApiState {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// AI change sets (M6-5).
+    pub change_sets: Arc<ferrite_core::changes::ChangeSetService>,
     /// Content checks and suppressions (M6-4).
     pub quality: Arc<ferrite_core::quality::QualityService>,
     /// The node's internal link probe for checks (`None`: links are not probed).
@@ -160,6 +164,7 @@ impl ApiState {
             site_url,
             site_title,
             webhooks,
+            change_sets,
             quality,
             probe,
         } = parts;
@@ -190,6 +195,7 @@ impl ApiState {
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
             webhooks,
+            change_sets,
             quality,
             probe,
             origin,

@@ -20,6 +20,7 @@
     "appearance": "Appearance",
     "plugins": "Plugins",
     "webhooks": "Webhooks",
+    "aiActivity": "AI activity",
     "import": "Import",
     "settings": "Settings",
     "system": "System",

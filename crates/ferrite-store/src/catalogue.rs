@@ -928,6 +928,58 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &["last_error", "last_error_at"],
         export: Export::Rows,
     },
+    // AI change sets (M6-5, design 17 §5): site history like `audit_log`, so they travel
+    // with the site (D17); the images as bytes.
+    TableSpec {
+        name: "change_sets",
+        columns: &[
+            ("id", Id),
+            ("user_id", Id),
+            ("agent_kind", Text),
+            ("agent_id", Id),
+            ("client", Text),
+            ("open_key", Text),
+            ("started_at", Ts),
+            ("last_at", Ts),
+            ("changes", Int),
+            ("reverted_at", Ts),
+            ("reverted_by", Id),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["user_id", "open_key", "reverted_at", "reverted_by"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "change_set_changes",
+        columns: &[
+            ("set_id", Id),
+            ("seq", Int),
+            ("at", Ts),
+            ("op", Text),
+            ("object_kind", Text),
+            ("object_id", Text),
+            ("label", Text),
+            ("before_image", Bytes),
+            ("before_hash", Text),
+            ("after_image", Bytes),
+            ("after_hash", Text),
+            ("reverted_at", Ts),
+            ("reverted_by", Id),
+            ("revert_forced", Bool),
+        ],
+        key: &["set_id", "seq"],
+        self_ref: None,
+        nullable: &[
+            "before_image",
+            "before_hash",
+            "after_image",
+            "after_hash",
+            "reverted_at",
+            "reverted_by",
+        ],
+        export: Export::Rows,
+    },
     // M6-4 (0019): suppressions are a person's judgement and travel with the site; the
     // health runs, their findings and the link cache are derived (the next run rebuilds
     // them).
@@ -1189,7 +1241,7 @@ mod tests {
                 assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 50);
+        assert_eq!(TABLES.len(), 52);
     }
 
     #[test]

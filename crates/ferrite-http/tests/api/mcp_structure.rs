@@ -41,7 +41,7 @@ api_tests!(
 const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 /// A file that sniffs as PNG, `len` bytes long.
-fn png(tag: &str, len: usize) -> Vec<u8> {
+pub(crate) fn png(tag: &str, len: usize) -> Vec<u8> {
     let mut v = PNG_MAGIC.to_vec();
     v.extend_from_slice(b"\0\0\0\rIHDR");
     v.extend_from_slice(tag.as_bytes());
@@ -49,7 +49,7 @@ fn png(tag: &str, len: usize) -> Vec<u8> {
     v
 }
 
-fn b64(bytes: &[u8]) -> String {
+pub(crate) fn b64(bytes: &[u8]) -> String {
     use base64::{Engine, engine::general_purpose::STANDARD};
     STANDARD.encode(bytes)
 }

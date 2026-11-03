@@ -40,6 +40,7 @@ tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 ferrite-core = { path = ".", features = ["test-seams"] }
