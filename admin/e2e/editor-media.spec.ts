@@ -242,9 +242,9 @@ test("edit_image_alt", async ({ as, site, siteKey, expectAccessible }) => {
     await openItem(page, "post", item.id);
     const figure = body(page).locator("[data-slot=editor-image]");
     await expect(figure).toHaveAttribute("data-state", "ready");
-    // Without alt text the image is decorative, and the button says so.
+    // Without alt text and not marked decorative (M6-4 P3), the button says so.
     const button = figure.getByRole("button", { name: /Edit the alt text/ });
-    await expect(button).toHaveText("Decorative");
+    await expect(button).toHaveText("No alt text");
     await button.click();
     const field = page.getByRole("textbox", { name: "Alternative text" });
     await expect(field).toBeFocused();

@@ -8,6 +8,7 @@
 import type { Page } from "@playwright/test";
 import { ContentApi } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { png } from "./support/files";
 import { uid } from "./support/uid";
 
 const typeName = () => uid("q").slice(0, 32);
@@ -16,7 +17,11 @@ const checks = (page: Page) => page.locator("[data-slot=panel-quality]");
 const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: true });
 
 const doc = (content: unknown[]) => ({ type: "doc", content });
-const image = { type: "image", attrs: { src: "/favicon.ico" } };
+/** An image node for the test's own upload, without alt text. */
+async function image(api: ContentApi): Promise<unknown> {
+  const media = await api.upload(png(`q-${uid()}.png`, 320, 200));
+  return { type: "image", attrs: { src: `ferrite:media/${media.id}` } };
+}
 const vague = {
   type: "paragraph",
   content: [
@@ -36,7 +41,9 @@ test("checks_flag_fix_and_decorative", async ({ as, site, siteKey, expectAccessi
   const type = typeName();
   try {
     await admin.createType(type, `Checks ${type.slice(-6)}`);
-    const item = await admin.create(type, `Lake ${uid()}`, { body: doc([image, vague]) });
+    const item = await admin.create(type, `Lake ${uid()}`, {
+      body: doc([await image(admin), vague]),
+    });
     const page = await as("admin");
     await openItem(page, type, item.id);
 
@@ -84,7 +91,7 @@ test("gate_blocks_publish_until_suppressed", async ({ as, site, siteKey }) => {
   try {
     await admin.createType(type, `Gated ${type.slice(-6)}`);
     await admin.patchType(type, { quality_gate: "errors" });
-    const item = await editor.create(type, `Gated ${uid()}`, { body: doc([image]) });
+    const item = await editor.create(type, `Gated ${uid()}`, { body: doc([await image(editor)]) });
 
     // The server refuses a forced publish.
     const me = (await (await editor.ctx.get("/api/v1/auth/me")).json()) as {

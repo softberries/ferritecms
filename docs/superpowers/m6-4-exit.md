@@ -91,7 +91,25 @@ See §4 for the commands and their results.
 
 ## 4. Gates
 
-Filled in at the end of the branch (commands in the final report).
+Run on the branch after the merge of `m6` (M6-5); `PG` =
+`FERRITE_TEST_PG_URL=postgres://ferrite@localhost:54329/ferrite_test`.
+
+| Gate | Command | Result |
+|---|---|---|
+| Format | `cargo fmt --all -- --check` | pass |
+| Clippy | `cargo clippy --workspace --all-targets -- -D warnings` | pass |
+| Rustdoc | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | pass |
+| Workspace tests | `PG cargo test --workspace --no-fail-fast` | pass except `import_cli::import_site_a_end_to_end_sqlite` (environment, §5); the tests fixed after the merge were rerun on their own |
+| OpenAPI | `FERRITE_UPDATE_OPENAPI=1 cargo test -p ferrite-http --test api openapi`, then without the variable | current |
+| Admin | `pnpm -C admin typecheck`, `lint`, `test` | pass (907 tests) |
+| New E2E specs | `PG pnpm -C admin e2e e2e/editor-quality.spec.ts e2e/health.spec.ts` (Chromium, SQLite and Postgres) | pass, also with `--repeat-each=2` |
+| Chromium E2E | `PG pnpm -C admin e2e --project chromium-sqlite --project chromium-pg` | 413 passed, 3 failed: `shortcut_sheet_lists_bindings` (the sheet's list lacked Webhooks and Content health; fixed, passes), `failed_backup_restore_says_so_and_keeps_the_backup` on Postgres once (passes on rerun; not touched here) |
+
+Test fixes outside the new code: `editor-media.spec.ts` `edit_image_alt` (a blank alt now reads
+"No alt text", P3), the webhook sink closes idle connections on stop and
+`webhook_end_to_end` polls for the scheduled attempt (both raced under load). The health
+periodic runs once at node start, so older tests that wait for "no event" ignore
+`health.completed` (`tests/node.rs`).
 
 ## 5. Not verified
 

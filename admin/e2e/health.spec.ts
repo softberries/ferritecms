@@ -5,13 +5,16 @@
 // are the test's own; the run covers the whole shared site, so rows are found by title.
 
 import { ContentApi } from "./support/content-api";
+import { png } from "./support/files";
 import { expect, test } from "./support/fixtures";
+import { chord } from "./support/keys";
 import { uid } from "./support/uid";
 
 test("run_now_lists_findings_by_tab", async ({ as, site, siteKey, expectAccessible }) => {
   const admin = await ContentApi.as(siteKey, site.url, "admin");
   const tag = uid("h");
   const broken = await admin.createIn("post", `Broken ${tag}`, "published");
+  const media = await admin.upload(png(`${tag}.png`, 320, 200));
   const withLink = await admin.patch(broken, {
     body: {
       type: "doc",
@@ -26,7 +29,7 @@ test("run_now_lists_findings_by_tab", async ({ as, site, siteKey, expectAccessib
             },
           ],
         },
-        { type: "image", attrs: { src: "/favicon.ico" } },
+        { type: "image", attrs: { src: `ferrite:media/${media.id}` } },
       ],
     },
   });
@@ -39,15 +42,14 @@ test("run_now_lists_findings_by_tab", async ({ as, site, siteKey, expectAccessib
   ]) {
     const r = await ctx.post("/api/v1/redirects", {
       headers: { "X-CSRF-Token": me.csrf_token },
-      data: { source_path: source, target, code: 301 },
+      data: { source, target, code: 301 },
     });
     expect(r.ok(), await r.text()).toBe(true);
   }
 
   const page = await as("admin");
   await page.goto("/admin/");
-  await page.keyboard.press("g");
-  await page.keyboard.press("h");
+  await chord(page, "g", "h");
   await expect(page).toHaveURL(/\/admin\/health/);
   await expect(page.getByRole("heading", { name: "Content health", level: 1 })).toBeVisible();
 
@@ -82,7 +84,8 @@ test("run_now_lists_findings_by_tab", async ({ as, site, siteKey, expectAccessib
   ).toBeVisible();
   await page.getByRole("tab", { name: "Site" }).click();
   await expect(table.locator("tr", { hasText: `Orphan ${tag}` })).toBeVisible();
-  await expect(table.locator("tr", { hasText: `/${tag}-a/` })).toBeVisible();
+  // The chain starts at `-a/`; its hop `-b/` may be listed too, with `-a/` in its context.
+  await expect(table.locator("tr", { hasText: `/${tag}-a/` }).first()).toBeVisible();
   await expectAccessible(page);
   await page.emulateMedia({ colorScheme: "dark" });
   await expectAccessible(page);
