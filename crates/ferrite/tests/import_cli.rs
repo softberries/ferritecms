@@ -42,10 +42,12 @@ struct Site {
 
 impl Site {
     /// A SQLite site made by `ferrite init`, with an admin from `ferrite user create`.
+    /// `init` writes the listen address of `SITE_URL` (port 8080); the served node takes a
+    /// free port instead, so a site running on 8080 does not fail the test (R-final-1).
     async fn sqlite() -> Site {
         let site = Site {
             dir: tempfile::tempdir().unwrap(),
-            env: Vec::new(),
+            env: vec![("FERRITE_SERVER__LISTEN".into(), "127.0.0.1:0".into())],
             _db: None,
         };
         let data = site.data().to_owned();
