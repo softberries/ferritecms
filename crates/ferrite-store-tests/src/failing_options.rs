@@ -181,6 +181,14 @@ impl Repos for FailingRepos {
     fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
         self.store.read().locales()
     }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.store.read().webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.store.read().plugin_trust()
+    }
 }
 
 #[async_trait]

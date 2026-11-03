@@ -42,6 +42,7 @@ pub mod meta;
 pub mod multipart;
 pub mod oauth;
 pub mod openapi;
+pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
 pub mod redirects;
@@ -52,6 +53,7 @@ pub mod taxonomies;
 pub mod themes;
 pub mod types;
 pub mod users;
+pub mod webhooks;
 
 use std::sync::Arc;
 
@@ -201,6 +203,12 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         ))
         .routes(routes!(plugins::list_retained_plugins))
         .routes(routes!(plugins::purge_plugin))
+        .routes(routes!(plugin_registry::get_registry))
+        .routes(routes!(plugin_registry::refresh_registry))
+        .routes(routes!(plugin_registry::inspect_registry_plugin))
+        .routes(routes!(plugin_registry::install_registry_plugin))
+        .routes(routes!(plugin_registry::list_publishers))
+        .routes(routes!(plugin_registry::revoke_publisher))
         .routes(routes!(plugins::get_plugin, plugins::delete_plugin))
         .routes(routes!(plugins::enable_plugin))
         .routes(routes!(plugins::disable_plugin))
@@ -255,6 +263,19 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             routes!(oauth::delete_oauth_grant),
             oauth::MAX_OAUTH_BODY,
         ))
+        .routes(routes!(webhooks::list_webhooks, webhooks::create_webhook))
+        .routes(routes!(webhooks::list_webhook_events))
+        .routes(routes!(
+            webhooks::get_webhook,
+            webhooks::update_webhook,
+            webhooks::delete_webhook
+        ))
+        .routes(routes!(webhooks::rotate_webhook_secret))
+        .routes(routes!(webhooks::test_webhook))
+        .routes(routes!(webhooks::list_webhook_deliveries))
+        .routes(routes!(webhooks::get_webhook_delivery))
+        .routes(routes!(webhooks::redeliver_webhook_delivery))
+        .routes(routes!(webhooks::redeliver_webhook))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

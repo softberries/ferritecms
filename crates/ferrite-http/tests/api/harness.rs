@@ -353,6 +353,7 @@ impl Api {
                 }),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
             })
             .expect("api state"),
         );
@@ -466,6 +467,23 @@ impl Api {
         (router, uploader)
     }
 
+    /// The whole site again, with the same store and services but an installer with
+    /// `trust` (M6-2: a signature policy, a registry).
+    pub fn router_with_trust(&self, trust: ferrite_http::extensions::TrustSettings) -> Router {
+        self.router_with(ApiParts {
+            installer: Arc::new(
+                Installer::new(
+                    self.store.clone(),
+                    self.api.media.clone(),
+                    HostConfig::default(),
+                )
+                .expect("installer")
+                .with_trust(trust),
+            ),
+            ..self.same_parts()
+        })
+    }
+
     /// Every file under the media store's root (artifacts and staging objects alike).
     pub fn stored_files(&self) -> Vec<PathBuf> {
         fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -520,6 +538,7 @@ impl Api {
             mail: a.mail.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
+            webhooks: a.webhooks.clone(),
         }
     }
 
@@ -575,6 +594,7 @@ impl Api {
                 mail: self.api.mail.clone(),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
             })
             .expect("api state"),
         );
@@ -915,6 +935,22 @@ impl Client {
         self.send_on(&api.router, req).await
     }
 
+    /// [`multipart`](Self::multipart) on another router of the site.
+    pub async fn multipart_on(
+        &mut self,
+        router: &Router,
+        path: &str,
+        parts: &[(&str, &[u8])],
+    ) -> Resp {
+        let (content_type, body) = multipart_body(parts);
+        let req = self
+            .builder(Method::POST, path)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send_on(router, req).await
+    }
+
     /// `POST path` with `body` as `Content-Type: content_type`.
     pub async fn raw(&mut self, api: &Api, path: &str, content_type: &str, body: Vec<u8>) -> Resp {
         let req = self
@@ -1118,4 +1154,20 @@ macro_rules! api_tests {
             }
         }
     )*};
+}
+
+/// The webhook service of the API tests: any address allowed (the transport is a fake
+/// or not used), so URLs like `https://hooks.example.com/` pass.
+pub fn webhook_service(store: Arc<dyn Store>) -> Arc<ferrite_core::webhooks::WebhookService> {
+    fn any(_: std::net::IpAddr) -> bool {
+        true
+    }
+    Arc::new(ferrite_core::webhooks::WebhookService::new(
+        store,
+        SiteKey::from_hex(&"cd".repeat(32)).expect("key"),
+        ferrite_core::webhooks::UrlPolicy {
+            local_targets: false,
+            allow_ip: any,
+        },
+    ))
 }

@@ -23,7 +23,7 @@ WordPress plugins and themes do not run here.
   each attachment page) whose address changed;
 - each item's language from Polylang or WPML's "Export and Import" add-on, with its
   translations linked, for the languages the site lists (see
-  [Multilingual sites](09-multilingual.md#import)).
+  [Multilingual sites](10-multilingual.md#import)).
 
 Gutenberg blocks, the classic editor's HTML and the common shortcodes (`[caption]`,
 `[gallery]`, `[embed]`, `[video]`, `[audio]`) are converted to the editor's blocks.

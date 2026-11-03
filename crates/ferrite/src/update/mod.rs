@@ -319,7 +319,7 @@ async fn fetch_and_verify(
     client: &Client,
     release: &Release,
     asset_name: &str,
-    key: &minisign_verify::PublicKey,
+    key: &ferrite_domain::plugin_trust::PublisherKey,
     work: &Path,
     deadline: Duration,
 ) -> Result<PathBuf> {

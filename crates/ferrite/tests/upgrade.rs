@@ -20,7 +20,9 @@ use ferrite::{
 use ferrite_config::DatabaseConfig;
 use ferrite_domain::{Secret, Timestamp};
 use ferrite_store::{SCHEMA_META_LAST_BINARY, Store};
-use ferrite_store_sqlite::{SqliteOptions, SqliteStore, latest_schema_version};
+use ferrite_store_sqlite::{
+    SqliteOptions, SqliteStore, latest_schema_version, schema_version_below,
+};
 use ferrite_store_tests::{TestDb, backend_tests};
 
 fn dbconf() -> DatabaseConfig {
@@ -124,7 +126,10 @@ pub async fn upgrade_json_written_on_migration(db: &TestDb) {
     let store = db.store();
     let bin = binary_version().unwrap();
     let l = latest(store).await;
-    store.migrate_down(l - 2, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(2), true)
+        .await
+        .unwrap();
 
     startup_check(store, &bin, &dbconf(), data.path(), "en")
         .await
@@ -133,7 +138,10 @@ pub async fn upgrade_json_written_on_migration(db: &TestDb) {
     let rec = upgrade::load(data.path()).unwrap().expect("upgrade.json");
     assert_eq!(rec.from, None, "no last_binary_version stored yet");
     assert_eq!(rec.to, bin.to_string());
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(2), l)
+    );
     // TestDb's SQLite file is outside `data`, so its snapshot path stays absolute there;
     // the relative form is checked in `sqlite_snapshot_is_relative_to_the_data_folder`.
     assert_eq!(rec.snapshot.is_some(), db.is_sqlite());
@@ -143,14 +151,20 @@ pub async fn upgrade_json_written_on_migration(db: &TestDb) {
     assert_eq!(last_binary(store).await, Some(bin.to_string()));
 
     // Same binary, migrations again: the record is replaced.
-    store.migrate_down(l - 1, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(1), true)
+        .await
+        .unwrap();
     startup_check(store, &bin, &dbconf(), data.path(), "en")
         .await
         .unwrap()
         .expect("a record");
     let rec = upgrade::load(data.path()).unwrap().expect("upgrade.json");
     assert_eq!(rec.from.as_deref(), Some(bin.to_string().as_str()));
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 1, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(1), l)
+    );
 }
 
 /// Same binary, nothing pending: no record, and an old one is left as it is.
@@ -176,7 +190,10 @@ pub async fn binary_rollback_round_trip_keeps_the_record(db: &TestDb) {
     let b = binary_version().unwrap();
     let a = semver::Version::new(0, 0, 1);
     let l = latest(store).await;
-    store.migrate_down(l - 1, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(1), true)
+        .await
+        .unwrap();
     set_last_binary(store, &a.to_string()).await;
 
     let moved = startup_check(store, &b, &dbconf(), data.path(), "en")
@@ -184,7 +201,10 @@ pub async fn binary_rollback_round_trip_keeps_the_record(db: &TestDb) {
         .unwrap()
         .expect("A→B recorded");
     assert_eq!(moved.from.as_deref(), Some("0.0.1"));
-    assert_eq!((moved.schema_from, moved.schema_to), (l - 1, l));
+    assert_eq!(
+        (moved.schema_from, moved.schema_to),
+        (schema_version_below(1), l)
+    );
     assert_eq!(moved.snapshot.is_some(), db.is_sqlite());
 
     // A (older) starts on the newer schema: the file is kept, only the key changes.
@@ -220,8 +240,10 @@ async fn sqlite_snapshot_is_relative_to_the_data_folder() {
     let data = tempfile::tempdir().unwrap();
     let store = sqlite_in(data.path()).await;
     let bin = binary_version().unwrap();
-    let l = latest(&store).await;
-    store.migrate_up(Some(l - 2)).await.unwrap();
+    store
+        .migrate_up(Some(schema_version_below(2)))
+        .await
+        .unwrap();
     set_last_binary(&store, "0.0.1").await;
 
     let rec = startup_check(&store, &bin, &dbconf(), data.path(), "en")
@@ -236,7 +258,7 @@ async fn sqlite_snapshot_is_relative_to_the_data_folder() {
     let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(json["v"], 1);
     assert_eq!(json["from"], "0.0.1");
-    assert_eq!(json["schema_from"], l - 2);
+    assert_eq!(json["schema_from"], schema_version_below(2));
     assert_eq!(json["snapshot"], snap.to_str().unwrap());
     assert!(json["at"].as_str().unwrap().ends_with('Z'), "{raw}");
 }
@@ -272,11 +294,11 @@ async fn retry_keeps_the_record_of_this_move() {
         v: 1,
         from: Some("0.0.1".into()),
         to: bin.to_string(),
-        schema_from: l - 2,
+        schema_from: schema_version_below(2),
         schema_to: l,
         snapshot: Some(PathBuf::from(format!(
             "backups/pre-{}-to-{l}-20261030T000000Z.db",
-            l - 2
+            schema_version_below(2)
         ))),
         at: Timestamp::now(),
     };
@@ -301,7 +323,10 @@ async fn crash_after_migrate_keeps_the_move_and_its_snapshot() {
     let bin = binary_version().unwrap();
     store.migrate_up(None).await.unwrap();
     let l = latest(&store).await;
-    store.migrate_down(l - 1, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(1), true)
+        .await
+        .unwrap();
     set_last_binary(&store, "0.0.1").await;
 
     let e = upgrade::seams::fail_after_migrate(startup_check(
@@ -318,7 +343,10 @@ async fn crash_after_migrate_keeps_the_move_and_its_snapshot() {
     assert_eq!(latest(&store).await, l);
     let provisional = upgrade::load(data.path()).unwrap().expect("provisional");
     assert_eq!(provisional.from.as_deref(), Some("0.0.1"));
-    assert_eq!((provisional.schema_from, provisional.schema_to), (l - 1, l));
+    assert_eq!(
+        (provisional.schema_from, provisional.schema_to),
+        (schema_version_below(1), l)
+    );
     assert_eq!(provisional.snapshot, None);
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
 
@@ -327,9 +355,12 @@ async fn crash_after_migrate_keeps_the_move_and_its_snapshot() {
         .unwrap()
         .expect("finalised");
     assert_eq!(rec.from.as_deref(), Some("0.0.1"));
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 1, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(1), l)
+    );
     assert!(
-        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", l - 1)),
+        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", schema_version_below(1))),
         "{rec:?}"
     );
     let snap = data.path().join(rec.snapshot.as_ref().unwrap());
@@ -350,16 +381,22 @@ async fn incomplete_attempt_keeps_its_start() {
     let bin = binary_version().unwrap();
     store.migrate_up(None).await.unwrap();
     let l = latest(&store).await;
-    store.migrate_down(l - 1, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(1), true)
+        .await
+        .unwrap();
     set_last_binary(&store, "0.0.1").await;
-    let first = PathBuf::from(format!("backups/pre-{}-to-{l}-20261030T000000Z.db", l - 2));
+    let first = PathBuf::from(format!(
+        "backups/pre-{}-to-{l}-20261030T000000Z.db",
+        schema_version_below(2)
+    ));
     upgrade::write(
         data.path(),
         &UpgradeRecord {
             v: 1,
             from: Some("0.0.1".into()),
             to: bin.to_string(),
-            schema_from: l - 2,
+            schema_from: schema_version_below(2),
             schema_to: l,
             snapshot: Some(first.clone()),
             at: Timestamp::now(),
@@ -371,7 +408,10 @@ async fn incomplete_attempt_keeps_its_start() {
         .await
         .unwrap()
         .expect("a record");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(2), l)
+    );
     assert_eq!(rec.snapshot, Some(first));
 }
 
@@ -386,8 +426,10 @@ async fn failed_migration_restores_the_previous_record() {
     let store = sqlite_in(data.path()).await;
     let bin = binary_version().unwrap();
     store.migrate_up(None).await.unwrap();
-    let l = latest(&store).await;
-    store.migrate_down(l - 1, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(1), true)
+        .await
+        .unwrap();
     set_last_binary(&store, "0.0.1").await;
     // The pre-migration snapshot cannot be written: migrate_up fails before applying.
     let backups = data.path().join("backups");
@@ -406,12 +448,12 @@ async fn failed_migration_restores_the_previous_record() {
         v: 1,
         from: Some("0.0.0".into()),
         to: "0.0.1".into(),
-        schema_from: l - 2,
-        schema_to: l - 1,
+        schema_from: schema_version_below(2),
+        schema_to: schema_version_below(1),
         snapshot: Some(PathBuf::from(format!(
             "backups/pre-{}-to-{}-20261030T000000Z.db",
-            l - 2,
-            l - 1
+            schema_version_below(2),
+            schema_version_below(1)
         ))),
         at: Timestamp::now(),
     };
@@ -420,7 +462,7 @@ async fn failed_migration_restores_the_previous_record() {
         .await
         .unwrap_err();
     assert_eq!(upgrade::load(data.path()).unwrap(), Some(previous));
-    assert_eq!(latest_applied(&store).await, l - 1);
+    assert_eq!(latest_applied(&store).await, schema_version_below(1));
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
     std::fs::set_permissions(&backups, perms(0o700)).unwrap();
 }
@@ -441,7 +483,10 @@ async fn unfinished_earlier_move_is_carried_into_the_next() {
     let store = sqlite_in(data.path()).await;
     store.migrate_up(None).await.unwrap();
     let l = latest(&store).await;
-    store.migrate_down(l - 2, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(2), true)
+        .await
+        .unwrap();
     set_last_binary(&store, "0.0.1").await;
     let b = semver::Version::new(0, 0, 2);
     let c = semver::Version::new(0, 0, 3);
@@ -450,11 +495,11 @@ async fn unfinished_earlier_move_is_carried_into_the_next() {
         &store,
         data.path(),
         &b,
-        Migrate::UpTo(Some(l - 1)),
+        Migrate::UpTo(Some(schema_version_below(1))),
     ))
     .await
     .unwrap_err();
-    assert_eq!(latest_applied(&store).await, l - 1);
+    assert_eq!(latest_applied(&store).await, schema_version_below(1));
     assert_eq!(last_binary(&store).await.as_deref(), Some("0.0.1"));
 
     let rec = startup_check(&store, &c, &dbconf(), data.path(), "en")
@@ -463,9 +508,16 @@ async fn unfinished_earlier_move_is_carried_into_the_next() {
         .expect("a record");
     assert_eq!(rec.from.as_deref(), Some("0.0.1"));
     assert_eq!(rec.to, "0.0.3");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(2), l)
+    );
     assert!(
-        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{}-", l - 2, l - 1)),
+        snapshot_name(&rec).starts_with(&format!(
+            "pre-{}-to-{}-",
+            schema_version_below(2),
+            schema_version_below(1)
+        )),
         "{rec:?}"
     );
     assert!(data.path().join(rec.snapshot.unwrap()).is_file());
@@ -480,18 +532,29 @@ async fn finished_move_kept_by_a_rollback_is_not_carried() {
     let store = sqlite_in(data.path()).await;
     store.migrate_up(None).await.unwrap();
     let l = latest(&store).await;
-    store.migrate_down(l - 2, true).await.unwrap();
+    store
+        .migrate_down(schema_version_below(2), true)
+        .await
+        .unwrap();
     let a = semver::Version::new(0, 0, 1);
     let b = semver::Version::new(0, 0, 2);
     let c = semver::Version::new(0, 0, 3);
     set_last_binary(&store, &a.to_string()).await;
 
     // A→B to l-1, finished.
-    let (_, ab) = upgrade::migrate_and_record(&store, data.path(), &b, Migrate::UpTo(Some(l - 1)))
-        .await
-        .unwrap();
+    let (_, ab) = upgrade::migrate_and_record(
+        &store,
+        data.path(),
+        &b,
+        Migrate::UpTo(Some(schema_version_below(1))),
+    )
+    .await
+    .unwrap();
     let ab = ab.expect("A→B recorded");
-    assert_eq!((ab.schema_from, ab.schema_to), (l - 2, l - 1));
+    assert_eq!(
+        (ab.schema_from, ab.schema_to),
+        (schema_version_below(2), schema_version_below(1))
+    );
     assert!(ab.snapshot.is_some());
     // Binary rollback: A starts on l-1, which is its own or a newer schema, so it migrates
     // nothing (this test binary embeds l, so the start is driven without migrating); the
@@ -510,9 +573,12 @@ async fn finished_move_kept_by_a_rollback_is_not_carried() {
         .expect("A→C recorded");
     assert_eq!(rec.from.as_deref(), Some("0.0.1"));
     assert_eq!(rec.to, "0.0.3");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 1, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(1), l)
+    );
     assert!(
-        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", l - 1)),
+        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", schema_version_below(1))),
         "{rec:?}"
     );
 }
@@ -581,12 +647,15 @@ fn migrate_up_writes_upgrade_json() {
     migrate_up(&data);
     assert!(!data.join(UPGRADE_FILE).exists(), "nothing changed");
 
-    migrate_down(&data, l - 2);
+    migrate_down(&data, schema_version_below(2));
     migrate_up(&data);
     let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
     let bin = binary_version().unwrap().to_string();
     assert_eq!(rec.from.as_deref(), Some(bin.as_str()), "init stored it");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(2), l)
+    );
     let snap = rec.snapshot.expect("snapshot");
     assert!(data.join(&snap).is_file(), "{}", snap.display());
 }
@@ -616,7 +685,7 @@ fn prune_keeps_snapshot_named_in_upgrade_json() {
     )
     .unwrap();
 
-    migrate_down(&data, l - 1);
+    migrate_down(&data, schema_version_below(1));
     migrate_up(&data);
 
     let names = pre_snapshots(&backups);
@@ -629,7 +698,7 @@ fn prune_keeps_snapshot_named_in_upgrade_json() {
     // The new record names the new snapshot.
     let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
     assert!(
-        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", l - 1)),
+        snapshot_name(&rec).starts_with(&format!("pre-{}-to-{l}-", schema_version_below(1))),
         "{rec:?}"
     );
 }
@@ -652,12 +721,15 @@ fn unreadable_upgrade_json_keeps_all_snapshots_and_is_moved_aside() {
         .arg(&data)
         .assert()
         .success();
-    migrate_down(&data, l - 1);
+    migrate_down(&data, schema_version_below(1));
     migrate_up(&data);
 
     assert_eq!(pre_snapshots(&backups).len(), before + 1, "nothing pruned");
     let rec = upgrade::load(&data).unwrap().expect("a new valid record");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 1, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(1), l)
+    );
     let aside: Vec<PathBuf> = std::fs::read_dir(&data)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -702,10 +774,10 @@ async fn crash_loop_keeps_the_pre_upgrade_snapshot() {
     let data = tmp.path().join("site");
     let l = latest_schema_version();
     init(&data);
-    migrate_down(&data, l - 2);
+    migrate_down(&data, schema_version_below(2));
     always_fail_migration(&data, l).await;
     let backups = data.join("backups");
-    let first_prefix = format!("pre-{}-to-{l}-", l - 2);
+    let first_prefix = format!("pre-{}-to-{l}-", schema_version_below(2));
 
     for attempt in 0..7 {
         let out = ferrite()
@@ -723,7 +795,10 @@ async fn crash_loop_keeps_the_pre_upgrade_snapshot() {
         assert!(names.len() <= 6, "attempt {attempt}: {names:?}");
     }
     let rec = upgrade::load(&data).unwrap().expect("upgrade.json");
-    assert_eq!((rec.schema_from, rec.schema_to), (l - 2, l));
+    assert_eq!(
+        (rec.schema_from, rec.schema_to),
+        (schema_version_below(2), l)
+    );
     assert!(snapshot_name(&rec).starts_with(&first_prefix), "{rec:?}");
     assert!(data.join(rec.snapshot.unwrap()).is_file());
 }

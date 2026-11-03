@@ -26,7 +26,7 @@ WordPress import) was built and tested against hand-written files only.
 | MCP | `content_translate` (57 tools), the `translate` prompt (5 prompts), `locale` on `content_list`/`content_create`/`content_update`, locales in `site_overview`; reference page and design 12 updated |
 | Admin | Settings → Languages (add by tag in core's spelling, labels, make default with a confirmation, remove; the server's `409` shown); content list language filter and Language column; editor Translations section (links, "Translate into …"); hidden on a one-locale site |
 | Imports | WordPress: Polylang `language` terms and `post_translations` groups, WPML Export and Import meta; language taxonomies not registered; unlisted languages skipped and reported; groups joined in the fix-up. Markdown: `locale`, `translation_of` front matter, `--locale` |
-| Docs | guide `02-guides/09-multilingual.md` (checked against the demo, rows in `site/VERIFIED.md`), links from Themes, Import from WordPress, Import Markdown, AI assistants, REST API, MCP tools; design 00, 01, 02, 07, 08, 12, 13 (§14 "As built"); the rollback runbook; README; CLAUDE.md |
+| Docs | guide `02-guides/10-multilingual.md` (checked against the demo, rows in `site/VERIFIED.md`), links from Themes, Import from WordPress, Import Markdown, AI assistants, REST API, MCP tools; design 00, 01, 02, 07, 08, 12, 13 (§14 "As built"); the rollback runbook; README; CLAUDE.md |
 
 ## Verified
 

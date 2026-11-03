@@ -275,6 +275,34 @@ pub fn rich_site() -> Dump {
             ]),
         ),
         (
+            "plugin_publishers",
+            rows(vec![json!({
+                "key_id": "0102030405060708",
+                "public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                "label": "example.dev", "source": "approved", "trusted_at": T_NOW,
+                "revoked_at": T_EDGE, "revoked_reason": "rotated", "compromised": false})]),
+        ),
+        (
+            "plugin_owners",
+            rows(vec![
+                json!({"plugin": "seo", "owner": "key:0102030405060708",
+                       "signer_key": "0102030405060708",
+                       "signer_public_key": "RWQIBwYFBAMCAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB",
+                       "signature": "untrusted comment: x\n",
+                       "publisher": "example.dev", "source": "upload",
+                       "bound_at": T_NOW, "updated_at": T_NOW}),
+                json!({"plugin": "old", "publisher": "x", "source": "folder",
+                       "bound_at": T_PRE_1970, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
+            "plugin_registry",
+            rows(vec![json!({
+                "url": "file:///srv/registry/index.json", "serial": 7,
+                "index_json": "{}", "signature": "untrusted comment: x\n",
+                "generated_at": T_NOW, "fetched_at": T_NOW, "checked_at": T_NOW})]),
+        ),
+        (
             "themes",
             rows(vec![json!({
                 "name": "blog", "version": "0.1.0", "artifact_hash": h('d'),
@@ -308,6 +336,24 @@ pub fn rich_site() -> Dump {
                 "title": "Hello!", "excerpt": null, "slug": "hello-2",
                 "parent_id": uid(P1), "menu_order": 2, "terms": [uid(T3)], "body": [],
                 "fields": {}, "saved_at": T_NOW, "seo": {"title": "x"}})]),
+        ),
+        (
+            "webhook_endpoints",
+            rows(vec![
+                json!({"id": uid(0xa01), "name": "deploy", "url": "https://hooks.example/x?t=1",
+                       "events": ["content.*"], "content_types": ["post"], "enabled": true,
+                       "install_id": "install-rich", "secret_sealed": "sealed",
+                       "previous_secret_sealed": "old",
+                       "previous_secret_expires_at": T_NOW, "payload_version": 1,
+                       "failing_since": T_NOW, "consecutive_failures": 2,
+                       "last_success_at": T_PRE_1970, "last_failure_at": T_NOW,
+                       "created_by": uid(U1), "created_at": T_NOW, "updated_at": T_NOW}),
+                json!({"id": uid(0xa02), "name": "gone", "url": "https://other.example/",
+                       "events": ["*"], "content_types": null, "enabled": false,
+                       "disabled_reason": "gone", "disabled_at": T_NOW,
+                       "install_id": "install-rich", "secret_sealed": "sealed2",
+                       "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
         ),
         (
             "import_runs",

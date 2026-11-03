@@ -112,7 +112,7 @@ pub const BACKEND_SPECIFIC: &[&str] = &["search_docs"];
 
 use ColType::{Bool, Bytes, Id, Int, Json, Text, Timestamp as Ts};
 
-/// Every table of the latest schema (migrations 0001–0014), in foreign-key order: each
+/// Every table of the latest schema (migrations 0001–0016), in foreign-key order: each
 /// table comes after the tables it references. Not listed: SQLite's FTS5 `search_fts`
 /// and its shadow tables, and sqlx's `_sqlx_migrations`.
 pub static TABLES: &[TableSpec] = &[
@@ -766,6 +766,166 @@ pub static TABLES: &[TableSpec] = &[
         self_ref: None,
         nullable: &[],
         export: Export::Skip,
+    }, // Outgoing webhooks (M6-6, design 18 §7). The endpoints are configuration and travel
+    // with their sealed secrets (paused on the target: another install id); the event,
+    // delivery and attempt rows are a log.
+    TableSpec {
+        name: "webhook_endpoints",
+        columns: &[
+            ("id", Id),
+            ("name", Text),
+            ("url", Text),
+            ("events", Json),
+            ("content_types", Json),
+            ("enabled", Bool),
+            ("disabled_reason", Text),
+            ("disabled_at", Ts),
+            ("install_id", Text),
+            ("secret_sealed", Text),
+            ("previous_secret_sealed", Text),
+            ("previous_secret_expires_at", Ts),
+            ("payload_version", Int),
+            ("failing_since", Ts),
+            ("consecutive_failures", Int),
+            ("last_success_at", Ts),
+            ("last_failure_at", Ts),
+            ("created_by", Id),
+            ("created_at", Ts),
+            ("updated_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &[
+            "content_types",
+            "disabled_reason",
+            "disabled_at",
+            "previous_secret_sealed",
+            "previous_secret_expires_at",
+            "failing_since",
+            "last_success_at",
+            "last_failure_at",
+            "created_by",
+        ],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "webhook_events",
+        columns: &[
+            ("id", Id),
+            ("type", Text),
+            ("data", Json),
+            ("created_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &[],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "webhook_deliveries",
+        columns: &[
+            ("id", Id),
+            ("endpoint_id", Id),
+            ("event_id", Id),
+            ("status", Text),
+            ("attempts", Int),
+            ("next_attempt_at", Ts),
+            ("last_status_code", Int),
+            ("last_error", Text),
+            ("redelivery_of", Id),
+            ("created_at", Ts),
+            ("finished_at", Ts),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &[
+            "next_attempt_at",
+            "last_status_code",
+            "last_error",
+            "redelivery_of",
+            "finished_at",
+        ],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "webhook_attempts",
+        columns: &[
+            ("delivery_id", Id),
+            ("attempt", Int),
+            ("started_at", Ts),
+            ("duration_ms", Int),
+            ("status_code", Int),
+            ("error", Text),
+            ("response_excerpt", Text),
+        ],
+        key: &["delivery_id", "attempt"],
+        self_ref: None,
+        nullable: &["status_code", "error", "response_excerpt"],
+        export: Export::Skip,
+    },
+    // M6-2 (0015): publisher keys, owner bindings and the registry cache move with the
+    // site.
+    TableSpec {
+        name: "plugin_publishers",
+        columns: &[
+            ("key_id", Text),
+            ("public_key", Text),
+            ("label", Text),
+            ("source", Text),
+            ("trusted_at", Ts),
+            ("revoked_at", Ts),
+            ("revoked_reason", Text),
+            ("compromised", Bool),
+        ],
+        key: &["key_id"],
+        self_ref: None,
+        nullable: &["revoked_at", "revoked_reason"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "plugin_owners",
+        columns: &[
+            ("plugin", Text),
+            ("owner", Text),
+            ("signer_key", Text),
+            ("signer_public_key", Text),
+            ("signature", Text),
+            ("publisher", Text),
+            ("source", Text),
+            ("registry_url", Text),
+            ("bound_at", Ts),
+            ("updated_at", Ts),
+        ],
+        key: &["plugin"],
+        self_ref: None,
+        nullable: &[
+            "owner",
+            "signer_key",
+            "signer_public_key",
+            "signature",
+            "registry_url",
+        ],
+        export: Export::Rows,
+    },
+    // The verified cache. Exported (M6-2 review): the serial it holds is the copy's
+    // rollback floor, and the index is verified again on every use.
+    TableSpec {
+        name: "plugin_registry",
+        columns: &[
+            ("url", Text),
+            ("serial", Int),
+            ("index_json", Text),
+            ("signature", Text),
+            ("generated_at", Ts),
+            ("fetched_at", Ts),
+            ("checked_at", Ts),
+            ("last_error", Text),
+            ("last_error_at", Ts),
+        ],
+        key: &["url"],
+        self_ref: None,
+        nullable: &["last_error", "last_error_at"],
+        export: Export::Rows,
     },
 ];
 
@@ -948,7 +1108,7 @@ mod tests {
                 assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 39);
+        assert_eq!(TABLES.len(), 46);
     }
 
     #[test]
@@ -974,6 +1134,9 @@ mod tests {
                 "rate_limits",
                 "idempotency_keys",
                 "node_metrics",
+                "webhook_events",
+                "webhook_deliveries",
+                "webhook_attempts",
             ]
         );
         assert_eq!(

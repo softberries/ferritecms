@@ -175,6 +175,14 @@ function pluginParts(files: PluginFiles, approve?: string): FormData {
   const form = new FormData();
   form.append("manifest", files.manifest, fileName(files.manifest, "ferrite-plugin.toml"));
   form.append("component", files.component, fileName(files.component, "plugin.wasm"));
+  if (files.signature)
+    form.append("signature", files.signature, fileName(files.signature, "ferrite-plugin.minisig"));
+  if (files.publisherKey)
+    form.append(
+      "publisher_key",
+      files.publisherKey,
+      fileName(files.publisherKey, "ferrite-plugin.pub"),
+    );
   if (approve !== undefined) form.append("approve", approve);
   return form;
 }

@@ -27,6 +27,7 @@ mod node_metrics;
 mod oauth;
 mod plugin;
 mod plugin_failure;
+mod plugin_trust;
 
 pub use comment::comment_list_sql;
 pub use idempotency::PRUNE_IDEMPOTENCY_SQL;
@@ -35,14 +36,15 @@ mod search;
 mod site;
 mod taxonomy;
 mod user;
+mod webhook;
 
 use async_trait::async_trait;
 use ferrite_store::{
     ApiTokenRepo, ArtifactRepo, AuditRepo, AutosaveRepo, CommentRepo, ContentRepo, ContentTypeRepo,
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, LocaleRepo, MediaRepo, MenuRepo, MetaRepo,
     NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
-    RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    PluginTrustRepo, RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo,
+    SessionRepo, StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, WebhookRepo,
 };
 use sqlx::SqlitePool;
 
@@ -161,6 +163,12 @@ impl Repos for SqliteRepos {
     fn locales(&self) -> &dyn LocaleRepo {
         self
     }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        self
+    }
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on the writer connection; dropping it
@@ -246,4 +254,6 @@ delegate_repos!(
     node_metrics: NodeMetricsRepo,
     oauth: OAuthRepo,
     locales: LocaleRepo,
+    webhooks: WebhookRepo,
+    plugin_trust: PluginTrustRepo,
 );

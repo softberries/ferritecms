@@ -113,6 +113,10 @@ pub(crate) fn sqlite_side_file(db: &Path, suffix: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+/// A webhook endpoint as `ferrite doctor` reads it (see
+/// [`SqliteReadOnly::webhook_endpoints`]).
+pub(crate) type WebhookRow = (String, String, bool, Option<String>, String, Option<i64>);
+
 /// A read-only view of a SQLite database, for `ferrite doctor` (M4-3a P49/P50, X3) and for
 /// `rollback --restore-snapshot`'s look at the snapshot's schema (M4-4 P73): one connection that takes no data-folder lock, opens no writer, runs no migration and
 /// creates no file, so it works while `serve` holds the store and takes no lock that would
@@ -191,6 +195,82 @@ impl SqliteReadOnly {
     ) -> anyhow::Result<MigrationStatus> {
         let mut conn = self.conn.lock().await;
         Ok(ferrite_store_sqlite::status_from(&mut conn, binary).await?)
+    }
+
+    /// Every webhook endpoint as (name, url, enabled, disabled_reason, install_id,
+    /// failing_since micros); empty without the table (a schema before `0016`).
+    pub(crate) async fn webhook_endpoints(&self) -> anyhow::Result<Vec<WebhookRow>> {
+        let mut conn = self.conn.lock().await;
+        if !ferrite_store_sqlite::table_exists(&mut conn, "webhook_endpoints").await? {
+            return Ok(Vec::new());
+        }
+        Ok(sqlx::query_as(
+            "SELECT name, url, enabled, disabled_reason, install_id, failing_since \
+             FROM webhook_endpoints ORDER BY CAST(name AS BLOB), id",
+        )
+        .fetch_all(&mut *conn)
+        .await?)
+    }
+
+    /// What doctor's `plugins.trust` reads (M6-2); `None` before `0015`.
+    pub(crate) async fn trust_facts(
+        &self,
+        url: Option<&str>,
+    ) -> anyhow::Result<Option<crate::doctor::TrustFactsRef>> {
+        use crate::doctor::{KeyFactsRef, PluginFactsRef, RegistryFactsRef, TrustFactsRef};
+        let mut conn = self.conn.lock().await;
+        if !ferrite_store_sqlite::table_exists(&mut conn, "plugin_owners").await? {
+            return Ok(None);
+        }
+        let plugins: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p.name, o.owner, o.signer_key FROM plugins p \
+             LEFT JOIN plugin_owners o ON o.plugin = p.name ORDER BY p.name",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        let keys: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+            "SELECT key_id, source, revoked_at FROM plugin_publishers ORDER BY key_id",
+        )
+        .fetch_all(&mut *conn)
+        .await?;
+        let registry = match url {
+            None => None,
+            Some(url) => {
+                let row: Option<(i64, i64, Option<String>)> = sqlx::query_as(
+                    "SELECT serial, checked_at, last_error FROM plugin_registry WHERE url = ?",
+                )
+                .bind(url)
+                .fetch_optional(&mut *conn)
+                .await?;
+                match row {
+                    None => None,
+                    Some((serial, checked_at, last_error)) => Some(RegistryFactsRef {
+                        serial,
+                        checked_at: ferrite_domain::Timestamp::from_micros(checked_at)?,
+                        last_error,
+                    }),
+                }
+            }
+        };
+        Ok(Some(TrustFactsRef {
+            plugins: plugins
+                .into_iter()
+                .map(|(name, owner, signer)| PluginFactsRef {
+                    name,
+                    owner,
+                    signer,
+                })
+                .collect(),
+            keys: keys
+                .into_iter()
+                .map(|(key_id, source, revoked_at)| KeyFactsRef {
+                    key_id,
+                    source,
+                    revoked: revoked_at.is_some(),
+                })
+                .collect(),
+            registry,
+        }))
     }
 
     /// A `schema_meta` value (`None` without the table or the key).

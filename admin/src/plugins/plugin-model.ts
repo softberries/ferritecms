@@ -111,3 +111,31 @@ export function forgetPlugin(queryClient: QueryClient, name: string): void {
   void queryClient.invalidateQueries({ queryKey: qk.plugins, exact: true });
   void queryClient.invalidateQueries({ queryKey: qk.pluginsRetained });
 }
+
+/** Which input a dropped file belongs to, by its name. */
+export function slotOf(fileName: string): "manifest" | "component" | "signature" | "key" | null {
+  const name = fileName.toLowerCase();
+  if (name.endsWith(".minisig")) return "signature";
+  if (name.endsWith(".pub")) return "key";
+  if (name.endsWith(".toml")) return "manifest";
+  if (name.endsWith(".wasm")) return "component";
+  return null;
+}
+
+/** The publisher of an installed plugin, as words: verified, signed, unsigned, revoked. */
+export function publisherText(t: TFunction<"admin">, p: PluginDto): string {
+  const trust = p.trust;
+  const name = trust.signer?.publisher?.name ?? p.publisher ?? trust.signer?.claimed ?? "";
+  switch (trust.state) {
+    case "verified":
+      return t("plugins.trust.list.verified", { publisher: name });
+    case "signed":
+      return t("plugins.trust.list.signed", { publisher: name });
+    case "revoked":
+      return t("plugins.trust.list.revoked", { publisher: name });
+    default:
+      return name
+        ? t("plugins.trust.list.unsigned", { publisher: name })
+        : t("plugins.trust.list.unsignedNoName");
+  }
+}

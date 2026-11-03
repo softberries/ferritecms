@@ -89,6 +89,66 @@ impl Database {
         .await
     }
 
+    /// What `plugins.trust` reads (M6-2): the installed plugins with their owner rows,
+    /// the key rows and the cache row of registry `url`. `None` before `0015`.
+    pub(super) async fn trust_facts(
+        &self,
+        url: Option<&str>,
+    ) -> Result<Option<super::plugins::TrustFacts>, String> {
+        use super::plugins::{KeyFacts, PluginFacts, RegistryFacts, TrustFacts};
+        self.read(async {
+            match self {
+                Database::Sqlite(db) => db.trust_facts(url).await,
+                Database::Postgres { store, .. } => {
+                    let read = store.read();
+                    let owners = read.plugin_trust().list_owners().await?;
+                    let plugins = read
+                        .plugins()
+                        .list()
+                        .await?
+                        .into_iter()
+                        .map(|p| {
+                            let o = owners.iter().find(|o| o.plugin == p.name);
+                            PluginFacts {
+                                owner: o.and_then(|o| o.owner.as_ref().map(ToString::to_string)),
+                                signer: o.and_then(|o| o.signer_key.map(|k| k.to_string())),
+                                name: p.name,
+                            }
+                        })
+                        .collect();
+                    let keys = read
+                        .plugin_trust()
+                        .list_keys()
+                        .await?
+                        .into_iter()
+                        .map(|k| KeyFacts {
+                            key_id: k.key.key_id.to_string(),
+                            source: k.source.as_str().to_owned(),
+                            revoked: k.revoked.is_some(),
+                        })
+                        .collect();
+                    let registry =
+                        match url {
+                            None => None,
+                            Some(url) => read.plugin_trust().get_registry(url).await?.map(|r| {
+                                RegistryFacts {
+                                    serial: r.serial,
+                                    checked_at: r.checked_at,
+                                    last_error: r.last_error,
+                                }
+                            }),
+                        };
+                    Ok(Some(TrustFacts {
+                        plugins,
+                        keys,
+                        registry,
+                    }))
+                }
+            }
+        })
+        .await
+    }
+
     /// The Postgres store (the node registry and the database clock live there).
     pub(super) fn postgres(&self) -> Option<&dyn Store> {
         match self {

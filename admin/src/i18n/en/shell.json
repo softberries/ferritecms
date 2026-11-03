@@ -19,6 +19,7 @@
     "users": "Users",
     "appearance": "Appearance",
     "plugins": "Plugins",
+    "webhooks": "Webhooks",
     "import": "Import",
     "settings": "Settings",
     "system": "System",
@@ -33,7 +34,8 @@
     "content": "Content",
     "new": "New",
     "untitled": "Untitled",
-    "connect": "Connect an app"
+    "connect": "Connect an app",
+    "publishers": "Publisher keys"
   },
   "topBar": {
     "search": "Search or jump to…",

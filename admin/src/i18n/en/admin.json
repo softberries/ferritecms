@@ -197,7 +197,8 @@
         "redirects": "Redirects",
         "extensions": "Extensions",
         "import": "Import",
-        "system": "System"
+        "system": "System",
+        "webhooks": "Webhooks"
       },
       "expires": "Expires",
       "expiry": {
@@ -717,7 +718,7 @@
         "done": "Installed"
       },
       "drop": "Drop ferrite-plugin.toml and the .wasm file here",
-      "dropHint": "Or choose each file. The component may be up to 32 MiB.",
+      "dropHint": "Or choose each file. The component may be up to 32 MiB. A signed plugin also has ferrite-plugin.minisig and maybe ferrite-plugin.pub.",
       "overlay": "Drop to pick these files",
       "manifest": "Manifest (ferrite-plugin.toml)",
       "component": "Component (.wasm)",
@@ -745,7 +746,13 @@
       "open": "Open {{name}}",
       "close": "Close",
       "installed": "Plugin {{name}} installed",
-      "enabled": "{{name}} is enabled"
+      "enabled": "{{name}} is enabled",
+      "signature": "Signature (ferrite-plugin.minisig)",
+      "publisherKey": "Publisher key (ferrite-plugin.pub)",
+      "chooseSignature": "Choose signature",
+      "choosePublisherKey": "Choose key",
+      "optional": "Optional",
+      "refused": "This upload is refused: {{message}}"
     },
     "list": "Installed plugins",
     "rowMenu": "Actions for {{name}}",
@@ -852,6 +859,102 @@
       "erased": "The data of {{name}} was erased",
       "erasedOn": "Erased after {{date}}",
       "alreadyErased": "The data of {{name}} was already erased"
+    },
+    "trust": {
+      "label": "Publisher",
+      "verified": "Verified publisher",
+      "unsigned": "Unsigned plugin: nothing confirms who made it",
+      "unsignedBody": "Install it only if you trust where the files came from.",
+      "newKey": "New publisher key",
+      "newKeyBody": "Approving trusts this key for this plugin's updates.",
+      "signed": "Signed by a key this site trusts",
+      "refused": "This plugin cannot be installed",
+      "key": "Key",
+      "claim": "This plugin's existing data will be bound to {{owner}}: from now on only updates from that publisher use it.",
+      "bind": "Its data will belong to {{owner}}.",
+      "unsignedReadsData": "It is unsigned and gets the data of the plugin installed under this name before.",
+      "policy": "Signature policy: {{policy}} ([plugins] signatures in ferrite.toml).",
+      "list": {
+        "verified": "{{publisher}} · Verified",
+        "signed": "{{publisher}} · Signed",
+        "revoked": "{{publisher}} · Key revoked",
+        "unsigned": "{{publisher}} · Unsigned",
+        "unsignedNoName": "Unsigned"
+      },
+      "update": "Update {{version}}",
+      "updateLabel": "Update {{name}} to {{version}}",
+      "publisherSection": "Publisher",
+      "arrived": {
+        "upload": "Uploaded",
+        "folder": "Installed from a folder",
+        "registry": "Installed from the registry"
+      },
+      "owner": "Its data belongs to",
+      "noOwner": "Its data is not bound to a publisher (unsigned).",
+      "updateUnbound": "The registry's {{name}} is published by its registry publisher; updating binds this plugin's data to it."
+    },
+    "registry": {
+      "tab": "Registry",
+      "installedTab": "Installed",
+      "tabsLabel": "Plugin views",
+      "check": "Check for updates",
+      "checking": "Checking…",
+      "checked": "Registry checked",
+      "neverChecked": "Not checked yet",
+      "checkedToast": "The registry was checked",
+      "collisionToast_one": "Publisher key {{keys}} had the id of a registry key with other key bytes. It was removed and the plugins it signed were disabled.",
+      "collisionToast_other": "Publisher keys {{keys}} had the ids of registry keys with other key bytes. They were removed and the plugins they signed were disabled.",
+      "searchLabel": "Search the registry",
+      "searchPlaceholder": "Search plugins",
+      "noRegistryTitle": "No plugin registry",
+      "noRegistryBody": "Set [plugins] registry and registry_key in ferrite.toml to browse and update plugins here.",
+      "notFetchedTitle": "The registry has not been checked yet",
+      "notFetchedBody": "Check for updates to fetch its list of plugins.",
+      "failed": "The last check failed: {{error}}",
+      "emptyTitle": "No plugins match",
+      "emptyBody": "Try another search.",
+      "install": "Install",
+      "update": "Update",
+      "installed": "Installed",
+      "latest": "Latest {{version}}",
+      "by": "by {{publisher}}",
+      "list": "Registry plugins",
+      "installTitle": "Install {{name}} from the registry",
+      "installDescription": "Fetched from the registry and checked against its signed index. You see what it asks for before anything is installed."
+    },
+    "publishers": {
+      "title": "Publisher keys",
+      "description": "The keys that sign plugins on this site: approved at an install, added by the operator, or listed by the registry.",
+      "link": "Publisher keys",
+      "list": "Publisher keys",
+      "columns": {
+        "key": "Key",
+        "source": "Source",
+        "plugins": "Plugins",
+        "state": "State"
+      },
+      "source": {
+        "approved": "Approved at install",
+        "operator": "Operator",
+        "registry": "Registry"
+      },
+      "active": "Trusted",
+      "revoked": "Revoked: {{reason}}",
+      "compromised": "Revoked, compromised: {{reason}}",
+      "none": "None",
+      "empty": "No publisher keys yet. A signed plugin's key appears here once it is installed.",
+      "policy": "Signature policy: {{policy}}. It is set in ferrite.toml ([plugins] signatures), not here.",
+      "revoke": "Revoke",
+      "revokeLabel": "Revoke key {{key}}",
+      "revokeTitle": "Revoke key {{key}}",
+      "revokeBody": "Plugins signed by this key can no longer be installed or updated. Only the operator can trust it again.",
+      "reason": "Reason",
+      "compromisedLabel": "The key was stolen or leaked (disables its plugins)",
+      "confirm": "Revoke key",
+      "revoking": "Revoking…",
+      "revokedToast": "Key {{key}} revoked",
+      "reasonRequired": "Give a reason.",
+      "emptyTitle": "No publisher keys yet"
     }
   },
   "system": {
@@ -1144,6 +1247,17 @@
           "create": "Created a taxonomy",
           "update": "Changed a taxonomy",
           "delete": "Deleted a taxonomy"
+        },
+        "webhook": {
+          "create": "Created a webhook",
+          "update": "Changed a webhook",
+          "enable": "Enabled a webhook",
+          "disable": "Disabled a webhook",
+          "delete": "Deleted a webhook",
+          "rotate_secret": "Rotated a webhook's secret",
+          "test": "Sent a test delivery",
+          "redeliver": "Redelivered webhook deliveries",
+          "auto_disabled": "Disabled a failing webhook automatically"
         }
       },
       "areas": {
@@ -1157,7 +1271,8 @@
         "plugin": "plugin",
         "theme": "theme",
         "type": "content type",
-        "taxonomy": "taxonomy"
+        "taxonomy": "taxonomy",
+        "webhook": "webhook"
       },
       "areaTitles": {
         "user": "Users",
@@ -1170,7 +1285,8 @@
         "plugin": "Plugins",
         "theme": "Themes",
         "type": "Content types",
-        "taxonomy": "Taxonomies"
+        "taxonomy": "Taxonomies",
+        "webhook": "Webhooks"
       },
       "targets": {
         "user": "User",
@@ -1180,7 +1296,8 @@
         "plugin": "Plugin",
         "theme": "Theme",
         "type": "Content type",
-        "taxonomy": "Taxonomy"
+        "taxonomy": "Taxonomy",
+        "webhook": "Webhook"
       }
     }
   }

@@ -15,6 +15,8 @@ mod metrics;
 mod node;
 mod page;
 mod plugin;
+pub mod plugin_registry;
+pub mod plugin_trust;
 mod search;
 mod secret;
 mod setting;
@@ -23,6 +25,7 @@ mod taxonomy;
 mod time;
 mod url;
 mod user;
+mod webhook;
 
 pub use auth::{
     ApiToken, AuditEntry, AuditQuery, ClientKind, IDEMPOTENCY_RETENTION, IDEMPOTENCY_STALE,
@@ -41,6 +44,7 @@ pub use ids::{
     ApiTokenId, ArtifactHash, AuditId, CommentId, ContentId, ImportRunId, JobId, MenuItemId,
     NodeId, OAuthGrantId, OAuthRequestId, RedirectId, RevisionId, TermId, UserId,
 };
+pub use ids::{DeliveryId, WebhookEventId, WebhookId};
 pub use import::{ImportMapKind, ImportMapRow, ImportRun, ImportRunState};
 pub use job::{DEFAULT_MAX_ATTEMPTS, Job, JobLease, JobQuery, JobStatus, NewJob};
 pub use menu::{Menu, MenuItem, MenuItemKind};
@@ -65,6 +69,10 @@ pub use taxonomy::{Taxonomy, Term};
 pub use time::Timestamp;
 pub use url::{MAX_WEB_URL, is_web_url};
 pub use user::{NewUser, Role, User, UserQuery, UserStatus};
+pub use webhook::{
+    Attempt, Delivery, DeliveryCounts, DeliveryListed, DeliveryQuery, DeliveryStatus,
+    DeliveryUpdate, DisabledReason, WebhookEndpoint, WebhookEventRow,
+};
 
 /// Maximum page size accepted by list queries.
 pub const MAX_PAGE: u32 = 200;

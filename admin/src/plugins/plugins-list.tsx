@@ -4,11 +4,16 @@
 // stored manifest or grant no longer parses, H-P2), its failures over 24 hours (every
 // node's buckets) and a dot per live node; row actions Enable or Disable, Settings and
 // Delete; Install plugin (the three-step flow); and Retained data below (P47).
+// M6-2: the publisher as words (verified, signed, unsigned, key revoked) and an Update
+// chip when the registry offers a newer version (the same report step, fed by the
+// registry).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
 import {
+  ArrowUpCircleIcon,
+  KeyRoundIcon,
   MoreHorizontalIcon,
   PlugIcon,
   PlusIcon,
@@ -27,7 +32,12 @@ import {
   enablePlugin,
   pluginMetricsQuery,
   pluginsQuery,
+  refreshRegistry,
+  registryQuery,
 } from "@/api/plugins";
+import { reportApiError } from "@/api/client";
+import { RelativeTime } from "@/components/kit/relative-time";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataTable } from "@/components/kit/data-table";
 import { type DataTableColumn, dataTableColumns } from "@/components/kit/data-table-features";
 import { EmptyState } from "@/components/kit/empty-state";
@@ -43,12 +53,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { uiLocale } from "@/lib/locale";
 import { DeletePluginDialog } from "./delete-plugin-dialog";
-import { InstallPluginDialog } from "./install-flow";
+import { InstallPluginDialog, type RegistrySource } from "./install-flow";
 import { failureCount, forgetPlugin, pluginState } from "./plugin-model";
 import { NodeDots, PluginStateBadge } from "./plugin-parts";
+import { RegistryBrowser } from "./registry-browser";
 import { RetainedData } from "./retained-data";
+import { PublisherLine } from "./trust-summary";
 
-export function PluginsScreen() {
+export function PluginsScreen({ tab = "installed" }: { tab?: "installed" | "registry" }) {
   const { t } = useTranslation("admin");
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -58,6 +70,7 @@ export function PluginsScreen() {
     [plugins.data],
   );
   const [installing, setInstalling] = useState(false);
+  const [fromRegistry, setFromRegistry] = useState<RegistrySource | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: qk.plugins });
@@ -73,7 +86,31 @@ export function PluginsScreen() {
     },
   });
   const open = (p: PluginDto) => void navigate({ to: "/plugins/$name", params: { name: p.name } });
-  const columns = useColumns();
+  const registry = useQuery(registryQuery(""));
+  const meta = registry.data?.registry ?? null;
+  const check = useMutation({
+    mutationFn: refreshRegistry,
+    onSuccess: (data) => {
+      toast.success(t("plugins.registry.checkedToast"));
+      if (data.collisions.length > 0) {
+        toast.warning(
+          t("plugins.registry.collisionToast", {
+            count: data.collisions.length,
+            keys: data.collisions.join(", "),
+          }),
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+      refresh();
+    },
+    onError: (error) => {
+      reportApiError(error);
+      void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+    },
+  });
+  const columns = useColumns((p) => {
+    if (p.trust.update) setFromRegistry({ name: p.name, version: p.trust.update.version });
+  });
 
   return (
     <div data-slot="plugins-screen" className="mx-auto flex w-full max-w-6xl flex-col gap-8">
@@ -82,84 +119,150 @@ export function PluginsScreen() {
           title={t("plugins.title")}
           description={t("plugins.description")}
           actions={
-            <Button onClick={() => setInstalling(true)}>
-              <PlusIcon data-icon="inline-start" />
-              {t("plugins.install.action")}
-            </Button>
+            <>
+              <Button variant="ghost" asChild className="pointer-coarse:min-h-11">
+                <Link to="/plugins/publishers">
+                  <KeyRoundIcon data-icon="inline-start" />
+                  {t("plugins.publishers.link")}
+                </Link>
+              </Button>
+              {meta ? (
+                <Button
+                  variant="outline"
+                  data-slot="registry-check"
+                  disabled={check.isPending}
+                  aria-busy={check.isPending || undefined}
+                  onClick={() => check.mutate()}
+                >
+                  {check.isPending ? t("plugins.registry.checking") : t("plugins.registry.check")}
+                </Button>
+              ) : null}
+              <Button onClick={() => setInstalling(true)}>
+                <PlusIcon data-icon="inline-start" />
+                {t("plugins.install.action")}
+              </Button>
+            </>
           }
         />
-        {plugins.isError && !plugins.data ? (
-          <ErrorState error={plugins.error} retry={() => void plugins.refetch()} />
-        ) : (
-          <DataTable
-            label={t("plugins.list")}
-            columns={columns}
-            data={list}
-            getRowId={(p) => p.name}
-            onRowOpen={open}
-            loading={plugins.isPending}
-            animateRows
-            rowActions={(p) => (
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("plugins.rowMenu", { name: p.name })}
-                  >
-                    <MoreHorizontalIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  {pluginState(p) === "broken" ? null : (
-                    <DropdownMenuItem disabled={toggle.isPending} onSelect={() => toggle.mutate(p)}>
-                      {p.enabled ? <PowerOffIcon /> : <PowerIcon />}
-                      {p.enabled ? t("plugins.disable") : t("plugins.enable")}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void navigate({
-                        to: "/plugins/$name",
-                        params: { name: p.name },
-                        hash: "settings",
-                      })
-                    }
-                  >
-                    <SlidersHorizontalIcon />
-                    {t("plugins.settings.action")}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(p.name)}>
-                    <Trash2Icon />
-                    {t("plugins.delete.action")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+        {meta ? (
+          <p data-slot="registry-checked" className="-mt-2 text-xs text-muted-foreground">
+            {meta.checked_at ? (
+              <>
+                {t("plugins.registry.checked")} <RelativeTime at={meta.checked_at} />
+              </>
+            ) : (
+              t("plugins.registry.neverChecked")
             )}
-            columnClassName={{
-              plugin: "w-full max-w-0 md:w-[46%]",
-              state: "hidden sm:table-cell",
-              failures: "hidden text-right md:table-cell",
-              nodes: "hidden lg:table-cell",
-            }}
-            empty={
-              <EmptyState
-                icon={PlugIcon}
-                title={t("plugins.empty.title")}
-                body={t("plugins.empty.body")}
-                action={
-                  <Button variant="outline" onClick={() => setInstalling(true)}>
-                    {t("plugins.install.action")}
-                  </Button>
+          </p>
+        ) : null}
+        <Tabs
+          value={tab}
+          onValueChange={(v) =>
+            void navigate({ to: "/plugins", search: v === "registry" ? { tab: "registry" } : {} })
+          }
+          className="min-w-0 gap-4"
+        >
+          <TabsList aria-label={t("plugins.registry.tabsLabel")} className="w-max">
+            <TabsTrigger value="installed" className="px-3 pointer-coarse:min-h-11">
+              {t("plugins.registry.installedTab")}
+            </TabsTrigger>
+            <TabsTrigger value="registry" className="px-3 pointer-coarse:min-h-11">
+              {t("plugins.registry.tab")}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="registry">
+            <RegistryBrowser />
+          </TabsContent>
+          <TabsContent value="installed" className="flex flex-col gap-8">
+            {plugins.isError && !plugins.data ? (
+              <ErrorState error={plugins.error} retry={() => void plugins.refetch()} />
+            ) : (
+              <DataTable
+                label={t("plugins.list")}
+                columns={columns}
+                data={list}
+                getRowId={(p) => p.name}
+                onRowOpen={open}
+                loading={plugins.isPending}
+                animateRows
+                rowActions={(p) => (
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("plugins.rowMenu", { name: p.name })}
+                      >
+                        <MoreHorizontalIcon />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      {pluginState(p) === "broken" ? null : (
+                        <DropdownMenuItem
+                          disabled={toggle.isPending}
+                          onSelect={() => toggle.mutate(p)}
+                        >
+                          {p.enabled ? <PowerOffIcon /> : <PowerIcon />}
+                          {p.enabled ? t("plugins.disable") : t("plugins.enable")}
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          void navigate({
+                            to: "/plugins/$name",
+                            params: { name: p.name },
+                            hash: "settings",
+                          })
+                        }
+                      >
+                        <SlidersHorizontalIcon />
+                        {t("plugins.settings.action")}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(p.name)}>
+                        <Trash2Icon />
+                        {t("plugins.delete.action")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                columnClassName={{
+                  plugin: "w-full max-w-0 md:w-[46%]",
+                  state: "hidden sm:table-cell",
+                  failures: "hidden text-right md:table-cell",
+                  nodes: "hidden lg:table-cell",
+                }}
+                empty={
+                  <EmptyState
+                    icon={PlugIcon}
+                    title={t("plugins.empty.title")}
+                    body={t("plugins.empty.body")}
+                    action={
+                      <Button variant="outline" onClick={() => setInstalling(true)}>
+                        {t("plugins.install.action")}
+                      </Button>
+                    }
+                    className="border-0"
+                  />
                 }
-                className="border-0"
               />
-            }
-          />
-        )}
+            )}
+            <RetainedData />
+          </TabsContent>
+        </Tabs>
       </div>
-      <RetainedData />
+      <InstallPluginDialog
+        open={fromRegistry !== null}
+        onOpenChange={(o) => {
+          if (!o) setFromRegistry(null);
+        }}
+        registry={fromRegistry}
+        onInstalled={(p) => {
+          toast.success(t("plugins.install.installed", { name: p.name }));
+          refresh();
+          void queryClient.invalidateQueries({ queryKey: qk.pluginRegistryAll });
+        }}
+      />
       <InstallPluginDialog
         open={installing}
         onOpenChange={setInstalling}
@@ -208,7 +311,30 @@ function FailureCell({ name }: { name: string }) {
   );
 }
 
-function useColumns(): DataTableColumn<PluginDto>[] {
+/** The Update chip: the registry offers a newer version of this plugin. */
+export function UpdateChip({ plugin, onUpdate }: { plugin: PluginDto; onUpdate: () => void }) {
+  const { t } = useTranslation("admin");
+  const update = plugin.trust.update;
+  if (!update) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      data-slot="plugin-update"
+      className="h-7 w-fit gap-1 rounded-full px-2.5 text-xs pointer-coarse:min-h-11"
+      aria-label={t("plugins.trust.updateLabel", { name: plugin.name, version: update.version })}
+      onClick={(e) => {
+        e.stopPropagation();
+        onUpdate();
+      }}
+    >
+      <ArrowUpCircleIcon aria-hidden="true" className="size-3.5" />
+      {t("plugins.trust.update", { version: update.version })}
+    </Button>
+  );
+}
+
+function useColumns(onUpdate: (p: PluginDto) => void): DataTableColumn<PluginDto>[] {
   const { t } = useTranslation("admin");
   return useMemo(() => {
     const col = dataTableColumns<PluginDto>();
@@ -218,7 +344,6 @@ function useColumns(): DataTableColumn<PluginDto>[] {
         header: () => t("plugins.columns.plugin"),
         cell: (c) => {
           const p = c.row.original;
-          const by = p.publisher ? t("plugins.by", { publisher: p.publisher }) : null;
           return (
             <div className="flex min-w-0 flex-col gap-0.5 py-2">
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
@@ -240,15 +365,8 @@ function useColumns(): DataTableColumn<PluginDto>[] {
                   {p.description}
                 </span>
               ) : null}
-              {by ? (
-                <span
-                  data-slot="plugin-publisher"
-                  className="truncate text-xs text-muted-foreground"
-                  title={by}
-                >
-                  {by}
-                </span>
-              ) : null}
+              <PublisherLine plugin={p} />
+              {p.trust.update ? <UpdateChip plugin={p} onUpdate={() => onUpdate(p)} /> : null}
               {/* Below `sm` the State column is hidden: the badge goes here. */}
               <span className="mt-1 sm:hidden">
                 <PluginStateBadge plugin={p} />
@@ -293,5 +411,5 @@ function useColumns(): DataTableColumn<PluginDto>[] {
         cell: (c) => <NodeDots plugin={c.row.original} />,
       }),
     ];
-  }, [t]);
+  }, [t, onUpdate]);
 }

@@ -62,6 +62,13 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
         "plugin_failures_pkey",
     ),
     ("plugin_kv.plugin, plugin_kv.key", "plugin_kv_pkey"),
+    ("plugin_owners.plugin", "plugin_owners_pkey"),
+    ("plugin_publishers.key_id", "plugin_publishers_pkey"),
+    (
+        "plugin_publishers.public_key",
+        "plugin_publishers_public_key_uq",
+    ),
+    ("plugin_registry.url", "plugin_registry_pkey"),
     ("plugins.name", "plugins_pkey"),
     ("rate_limits.bucket", "rate_limits_pkey"),
     ("redirects.id", "redirects_pkey"),
@@ -90,6 +97,13 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("users.email_key", "users_email_uq"),
     ("users.id", "users_pkey"),
     ("users.login", "users_login_uq"),
+    (
+        "webhook_attempts.delivery_id, webhook_attempts.attempt",
+        "webhook_attempts_pkey",
+    ),
+    ("webhook_deliveries.id", "webhook_deliveries_pkey"),
+    ("webhook_endpoints.id", "webhook_endpoints_pkey"),
+    ("webhook_events.id", "webhook_events_pkey"),
 ];
 
 /// The neutral name for the text after `UNIQUE constraint failed: `.

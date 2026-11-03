@@ -13,10 +13,12 @@ mod migrate;
 mod node_metrics;
 mod notify;
 mod paging;
+mod plugin_trust;
 mod repos;
 mod search;
 mod session;
 mod text;
+mod webhook;
 
 pub use error::StoreError;
 pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
@@ -57,6 +59,9 @@ pub use paging::{
     grant_cursor, idempotency_status, job_backoff, job_cursor, like_contains, media_kind_sql,
     rate_hit, sanitize_job_error, slug_has_prefix, slug_prefix_bounds, sort_claimed, text_cursor,
 };
+pub use plugin_trust::{
+    PluginTrustRepo, check_plugin_owner, check_registry_row, check_trusted_key,
+};
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
     ContentRepo, ContentTypeRepo, EventRepo, FileBound, IdempotencyRepo, ImportRepo, JobRepo,
@@ -72,6 +77,10 @@ pub use search::{
 };
 pub use session::session_public_id;
 pub use text::{email_key, validate_text};
+pub use webhook::{
+    MAX_WEBHOOK_ENDPOINTS_READ, WEBHOOK_DELIVERY_CURSOR_TAG, WebhookRepo, check_webhook_attempt,
+    check_webhook_endpoint, encode_webhook_delivery_cursor, webhook_delivery_cursor,
+};
 
 /// Attempts a job gets by default.
 pub use ferrite_domain::DEFAULT_MAX_ATTEMPTS;

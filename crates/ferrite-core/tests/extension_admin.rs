@@ -358,6 +358,10 @@ pub async fn writes_are_audited(db: &TestDb) {
             "version": "0.1.0",
             "artifact": p.hash.as_str(),
             "granted": granted,
+            // M6-2: an unsigned upload.
+            "signer": null,
+            "owner": null,
+            "source": "upload",
         })
     );
     assert_eq!(

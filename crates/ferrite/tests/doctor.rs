@@ -172,6 +172,8 @@ const ORDER: &[&str] = &[
     "db.connect",
     "db.schema",
     "db.identity",
+    "webhooks.endpoints",
+    "plugins.trust",
     "upgrade.record",
     "media.store",
     "media.owner",
@@ -210,6 +212,9 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         ("db.connect", "ok"),
         ("db.schema", "ok"),
         ("db.identity", "ok"),
+        ("webhooks.endpoints", "ok"),
+        // M6-2: no plugins, and this build has no key for the default registry.
+        ("plugins.trust", "info"),
         ("upgrade.record", "ok"),
         // The local probe is not a network check: it runs offline too.
         ("media.store", "ok"),
@@ -238,7 +243,7 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         "every check is wired: {}",
         out.stdout
     );
-    assert_eq!(out.summary, "doctor: 11 ok, 0 warn, 0 error, 6 skip");
+    assert_eq!(out.summary, "doctor: 12 ok, 0 warn, 0 error, 6 skip");
     // The lock is not held, and SQLite has no clock or cluster to compare.
     assert!(
         out.detail("db.lock_state").contains("no node"),
@@ -2005,7 +2010,7 @@ impl PgSchema {
                         id: ferrite_domain::NodeId::new(),
                         name,
                         version,
-                        schema_version: 13,
+                        schema_version: 16,
                         meta,
                     })
                     .await
@@ -2208,4 +2213,255 @@ fn postgres_password_is_never_printed() {
     for text in [&out.stdout, &out.stderr] {
         assert!(!text.contains("pg-hunter2"), "{text}");
     }
+}
+
+/// An endpoint row for `webhook_endpoints` (M6-6): `extra` sets the columns that differ.
+fn webhook_row(name: &str, install: &str, enabled: bool, extra: &str) -> String {
+    let id = uuid::Uuid::now_v7().simple().to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    format!(
+        "INSERT INTO webhook_endpoints (id, name, url, events, enabled, install_id, \
+         secret_sealed, created_at, updated_at{cols}) VALUES (X'{id}', '{name}', \
+         'https://hooks.example.com/build?token=s3cr3t-token', '[\"*\"]', {e}, '{install}', \
+         'v1.sealed-value', {now}, {now}{vals})",
+        e = i32::from(enabled),
+        cols = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", extra.split('=').next().unwrap())
+        },
+        vals = if extra.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", extra.split('=').nth(1).unwrap())
+        },
+    )
+}
+
+#[test]
+fn webhooks_endpoints_warns_on_disabled_failing_paused_and_local_targets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let db = tmp.path().join("ferrite.db");
+    // None: ok.
+    assert_eq!(offline(tmp.path()).detail("webhooks.endpoints"), "none");
+    let install = sqlite_meta(&db, "install_id");
+    // One healthy endpoint: ok with counts.
+    sqlite_exec(&db, &[&webhook_row("Healthy", &install, true, "")]);
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "ok", "{}", out.stdout);
+    assert_eq!(out.detail("webhooks.endpoints"), "1 endpoints, 1 active");
+    // Auto-disabled (gone), failing for two days, and paused: one warning each.
+    let two_days_ago = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros()
+        - 2 * 86_400_000_000;
+    sqlite_exec(
+        &db,
+        &[
+            &webhook_row("Gone", &install, false, "disabled_reason='gone'"),
+            &webhook_row(
+                "Slow",
+                &install,
+                true,
+                &format!("failing_since={two_days_ago}"),
+            ),
+            &webhook_row("Copied", "another-install", true, ""),
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "warn", "{}", out.stdout);
+    assert_eq!(out.code, 2);
+    let detail = out.detail("webhooks.endpoints");
+    for needle in [
+        "\"Gone\" (hooks.example.com) was disabled automatically (gone)",
+        "\"Slow\" (hooks.example.com) has been failing for more than 24 hours",
+        "\"Copied\" (hooks.example.com) is paused",
+    ] {
+        assert!(detail.contains(needle), "{needle}: {detail}");
+    }
+    assert!(!detail.contains("Healthy"), "{detail}");
+    // Names and hosts only: no path, query or sealed secret anywhere.
+    for leaked in ["s3cr3t", "/build", "sealed-value", "token="] {
+        assert!(!out.stdout.contains(leaked), "{leaked}: {}", out.stdout);
+    }
+}
+
+#[test]
+fn webhooks_local_targets_warns() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let mut cmd = ferrite();
+    cmd.args(["doctor", "--offline", "--data"])
+        .arg(tmp.path())
+        .env("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true");
+    let out = run(cmd);
+    assert_eq!(out.status("webhooks.endpoints"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("webhooks.endpoints").contains("local_targets"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn webhooks_without_a_database_skips() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    std::fs::remove_file(tmp.path().join("ferrite.db")).unwrap();
+    let out = offline(tmp.path());
+    assert_eq!(out.status("webhooks.endpoints"), "skip", "{}", out.stdout);
+}
+
+// ---- plugins.trust (M6-2) ---------------------------------------------------------------
+
+const TRUST_KEY: &str = "RWRloJt7IFEgQ3QWSMCPZT0k6xJ8KEMme02/HBySQSajqZ9ld96QHy9a";
+
+/// A plugin row `name` (with its artifact) and, with `signer`, an owner row signed by it.
+fn trust_plugin(dir: &Path, name: &str, owner: Option<&str>, signer: Option<&str>) {
+    let hash = format!("{:0>64}", name.len());
+    let mut sql = vec![
+        format!(
+            "INSERT OR IGNORE INTO artifacts (hash, kind, bytes, mime, created_at) \
+             VALUES ('{hash}', 'plugin', 1, 'application/wasm', 0)"
+        ),
+        format!(
+            "INSERT INTO plugins (name, version, artifact_hash, manifest, granted, enabled, \
+             installed_at, updated_at) VALUES ('{name}', '0.1.0', '{hash}', '{{}}', '{{}}', 1, 0, 0)"
+        ),
+    ];
+    if signer.is_some() || owner.is_some() {
+        let q = |v: Option<&str>| v.map_or("NULL".to_owned(), |v| format!("'{v}'"));
+        sql.push(format!(
+            "INSERT INTO plugin_owners (plugin, owner, signer_key, publisher, source, bound_at, \
+             updated_at) VALUES ('{name}', {}, {}, 'x', 'upload', 0, 0)",
+            q(owner),
+            q(signer)
+        ));
+    }
+    let refs: Vec<&str> = sql.iter().map(String::as_str).collect();
+    sqlite_exec(&dir.join("ferrite.db"), &refs);
+}
+
+fn append_config(dir: &Path, text: &str) {
+    let path = dir.join("ferrite.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    // `[plugins]` exists in the generated file: add the keys under it.
+    let config = config.replacen("[plugins]\n", &format!("[plugins]\n{text}"), 1);
+    std::fs::write(&path, config).unwrap();
+}
+
+#[test]
+fn trust_info_registry_off() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "info", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust").contains("registry off"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.detail("plugins.trust").contains("0 plugins"));
+}
+
+#[test]
+fn trust_ok() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(
+        tmp.path(),
+        &format!(
+            "registry = \"file:///srv/registry/index.json\"\nregistry_key = \"{TRUST_KEY}\"\n"
+        ),
+    );
+    trust_plugin(
+        tmp.path(),
+        "seo",
+        Some("reg:432051207B9BA065:ferritecms.dev"),
+        Some("0102030405060708"),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[
+            "INSERT INTO plugin_registry (url, serial, index_json, signature, generated_at, \
+           fetched_at, checked_at) VALUES ('file:///srv/registry/index.json', 3, '{}', 's', 0, 0, \
+           (CAST(strftime('%s','now') AS INTEGER) * 1000000))",
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "ok", "{}", out.stdout);
+    let detail = out.detail("plugins.trust");
+    assert!(detail.contains("1 plugins, 1 verified"), "{detail}");
+    assert!(detail.contains("registry serial 3"), "{detail}");
+}
+
+#[test]
+fn trust_warns_unsigned_under_signed_policy() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(tmp.path(), "signatures = \"signed\"\n");
+    trust_plugin(tmp.path(), "plain", None, None);
+    let out = offline(tmp.path());
+    assert_eq!(out.code, 2, "{}", out.stdout);
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(out.detail("plugins.trust").contains("plain is unsigned"));
+}
+
+#[test]
+fn trust_warns_revoked_signer() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    trust_plugin(
+        tmp.path(),
+        "seo",
+        Some("key:0102030405060708"),
+        Some("0102030405060708"),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[&format!(
+            "INSERT INTO plugin_publishers (key_id, public_key, label, source, trusted_at, \
+             revoked_at, revoked_reason, compromised) VALUES ('0102030405060708', '{TRUST_KEY}', \
+             'x', 'approved', 0, 1, 'leaked', 1)"
+        )],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust")
+            .contains("revoked key 0102030405060708"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
+fn trust_warns_stale_check() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    append_config(
+        tmp.path(),
+        &format!(
+            "registry = \"file:///srv/registry/index.json\"\nregistry_key = \"{TRUST_KEY}\"\nregistry_check = \"daily\"\n"
+        ),
+    );
+    sqlite_exec(
+        &tmp.path().join("ferrite.db"),
+        &[
+            "INSERT INTO plugin_registry (url, serial, index_json, signature, generated_at, \
+           fetched_at, checked_at) VALUES ('file:///srv/registry/index.json', 3, '{}', 's', 0, 0, 0)",
+        ],
+    );
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "warn", "{}", out.stdout);
+    assert!(
+        out.detail("plugins.trust").contains("last checked"),
+        "{}",
+        out.stdout
+    );
 }

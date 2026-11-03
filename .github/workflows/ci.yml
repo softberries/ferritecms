@@ -287,6 +287,24 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-wasip2
+      # M6-2: the signing path of release.yml with throwaway keys: the payload script, the
+      # signed tarball and assets, the registry index (twice: serial 1, then 2 on top).
+      - name: signed plugins and registry index (throwaway keys)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          cargo build --release --locked --target wasm32-wasip2 --manifest-path plugins/Cargo.toml -p seo -p analytics -p contact-form
+          k="$RUNNER_TEMP/keys"
+          mkdir -p "$k"
+          minisign -G -W -p "$k/plugins.pub" -s "$k/plugins.key"
+          minisign -G -W -p "$k/registry.pub" -s "$k/registry.key"
+          EXTRA_KEY="$k/plugins.pub" .github/scripts/sign-plugins.sh "$version" "$RUNNER_TEMP/signed1" \
+            "$k/plugins.key" "$k/plugins.pub" "$k/registry.key" "$k/registry.pub" -
+          EXTRA_KEY="$k/plugins.pub" .github/scripts/sign-plugins.sh "$version" "$RUNNER_TEMP/signed2" \
+            "$k/plugins.key" "$k/plugins.pub" "$k/registry.key" "$k/registry.pub" \
+            "$RUNNER_TEMP/signed1/ferrite-registry-index.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["serial"] == 2' "$RUNNER_TEMP/signed2/ferrite-registry-index.json"
       - name: plugins asset
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')

@@ -23,9 +23,14 @@ if [ "$count" -ne "$expected" ]; then
   echo "::error::expected $expected assets, found $count"
   exit 1
 fi
+# M6-2: the signed plugins' registry assets and the registry index, when the release has
+# them (the plugin keys are set), are listed too.
+shopt -s nullglob
+files=(ferrite-*.tar.gz ferrite-plugin-*.toml ferrite-plugin-*.wasm ferrite-registry-index.json ferrite-registry-index.json.minisig)
+shopt -u nullglob
 if command -v sha256sum >/dev/null; then
-  sha256sum ferrite-*.tar.gz > SHA256SUMS
+  sha256sum "${files[@]}" > SHA256SUMS
 else
-  shasum -a 256 ferrite-*.tar.gz > SHA256SUMS
+  shasum -a 256 "${files[@]}" > SHA256SUMS
 fi
 cat SHA256SUMS

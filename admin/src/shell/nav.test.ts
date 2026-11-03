@@ -468,3 +468,21 @@ test("admin_section_by_role", () => {
     .filter((k) => k !== undefined);
   expect(new Set(chords).size).toBe(chords.length);
 });
+
+test("nav_entry_only_for_manage_webhooks", () => {
+  // M6-6 registers Webhooks under Administration, after Plugins: only `manage_webhooks`
+  // sees it, with `g w`.
+  const admin = navFor(me("admin", ["read_admin", "manage_plugins", "manage_webhooks"]), TYPES);
+  const section = admin.find((s) => s.id === "admin");
+  expect(section?.items.map((i) => [i.id, i.label, i.to, i.shortcut])).toEqual([
+    ["plugins", "Plugins", "/plugins", "g l"],
+    ["webhooks", "Webhooks", "/webhooks", "g w"],
+  ]);
+  expect(navItemAt(admin, "/webhooks")?.id).toBe("webhooks");
+  const others = me("admin", ["read_admin", "manage_system", "manage_settings"]);
+  expect(
+    navFor(others, TYPES)
+      .flatMap((s) => s.items)
+      .some((i) => i.id === "webhooks"),
+  ).toBe(false);
+});

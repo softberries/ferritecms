@@ -88,7 +88,8 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   on an update they are never in `added` and they do not change the fingerprint.
   The `fingerprint` is the lowercase hex SHA-256 of the compact JSON `{"artifact",
   "grant", "plugin", "version"}` (`grant` = `Grant::of(manifest).to_json()`; serde_json
-  maps are sorted and a unit test pins one value). `POST /plugins` and `ferrite plugin
+  maps are sorted and a unit test pins one value), plus `"signer": "<KEY_ID>"` when the
+  bundle is signed (M6-2, design 14 §3.5: unsigned fingerprints are unchanged). `POST /plugins` and `ferrite plugin
   install` install only when the approval is the fingerprint of *this* upload, so an
   approval never covers other bytes or another grant; a mismatch is `422 validation`
   with `errors[0].field = "approve"` and the upload's report, and nothing changes.
@@ -141,13 +142,16 @@ upload .wasm + manifest ──► POST /plugins/inspect: validate manifest, insp
   whose plugin is not installed, with `purge_after`; `POST /plugins/{name}/purge` erases
   that plugin's KV, every stored `plugin.<name>.settings.*` option and the marker at once
   (audited `plugin.purge`; `422` while a plugin of that name is installed; 07 §1).
-- **Plugin data is bound to the plugin name only (R22).** KV, settings and sealed secrets
-  (sealed under `plugin-setting:<plugin>:<key>`) belong to the name in `plugin.name`; the
-  manifest's `publisher` is unverified text, and nothing compares it on an update or a
-  reinstall. A component from another publisher installed under the same name (an update,
-  or a reinstall within the 30 days) reads the earlier plugin's data and secrets, and the
-  report shows no publisher change. Approve an update or a reinstall only from the source
-  you installed from; signed plugins with a publisher identity are an M4 item (ROADMAP).
+- **Plugin data is bound to its publisher (M6-2, design 14 §4; replaces R22's "bound to
+  the plugin name only").** KV, settings and sealed secrets stay keyed by the plugin name,
+  and the table `plugin_owners` records which publisher identity the name's data belongs
+  to (`reg:<registry key>:<publisher>`, `key:<key id>`, or unsigned). A signed install binds
+  a free (or unsigned-owned) name; a later install of that name must be signed by the same
+  identity, or it is refused (`422`, `errors[0].field = "publisher"`) until the data is
+  erased (`POST /plugins/{name}/purge`, the purge job) or the operator runs `ferrite plugin
+  unbind`. Unsigned installs of an unsigned-owned name behave as before. Signatures are
+  minisign signatures over `ferrite-plugin-signature/1` + the two files' SHA-256 (design 14
+  §2); a bad signature refuses the install, it is never treated as unsigned.
 
 ## 3. Manifest (`ferrite-plugin.toml`)
 

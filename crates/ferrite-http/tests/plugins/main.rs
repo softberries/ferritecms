@@ -10,9 +10,14 @@ mod contact_form;
 mod egress;
 mod install;
 mod mail;
+mod registry;
+mod registry_fetch;
+#[path = "../support/registry_fixture.rs"]
+mod registry_fixture;
 mod reload;
 mod seo;
 mod settings;
+mod webhook_send;
 
 use common::{HOUR, SITE_URL, Site};
 use ferrite_core::{

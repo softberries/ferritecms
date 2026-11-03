@@ -15,8 +15,9 @@
 //! This module holds the runner, the status and the report; `fs.rs` and `backup.rs` the file
 //! checks, `db.rs` the database checks (read-only: SQLite without its lock, Postgres only
 //! once its schema is known to exist), `media.rs` the media probe and owner marker,
-//! `cluster.rs` the clock and node-registry checks, and `net.rs` SMTP, the ACME directory,
-//! the running node's endpoints and the release lookup.
+//! `cluster.rs` the clock and node-registry checks, `net.rs` SMTP, the ACME directory,
+//! the running node's endpoints and the release lookup, and `webhooks.rs` the webhook
+//! endpoints (M6-6).
 
 mod backup;
 mod cluster;
@@ -24,6 +25,13 @@ mod db;
 mod fs;
 mod media;
 mod net;
+mod plugins;
+mod webhooks;
+
+pub(crate) use plugins::{
+    KeyFacts as KeyFactsRef, PluginFacts as PluginFactsRef, RegistryFacts as RegistryFactsRef,
+    TrustFacts as TrustFactsRef,
+};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -259,6 +267,8 @@ async fn run(data: &Path, offline: bool, release_api: Option<&str>) -> Report {
     let (schema, incompatible) = db::schema(database, config).await;
     findings.push(schema);
     findings.push(db::identity(database, config).await);
+    findings.push(webhooks::endpoints_check(database, config).await);
+    findings.push(plugins::trust(database, config).await);
     findings.push(fs::upgrade_record(data, config));
     let (media_store, media) = media::store(config, offline).await;
     findings.push(media_store);

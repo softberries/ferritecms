@@ -79,6 +79,7 @@ use ferrite_cluster::{
 };
 use ferrite_config::{Config, LoggedInCache, MediaSection, PluginsConfig, TlsConfig};
 use ferrite_core::mail::MailQueue;
+use ferrite_core::webhooks::{NoTransport, UrlPolicy, WebhookService, WebhookTransport};
 use ferrite_core::{
     AuthService, ContentService, ContentTypeService, ExtensionAdmin, ExtensionService,
     MediaService, MenuService, OptionService, Permalinks, RedirectService, SiteReader,
@@ -102,6 +103,7 @@ use ferrite_http::{
     metrics::{Metrics, metrics_router},
     oauth_fetch::{NoFetcher, OAuthFetcher},
     plugins::egress::Egress,
+    webhook_send::{WebhookClient, webhook_ip_rule},
 };
 use ferrite_media::MediaStore;
 use ferrite_plugin_host::{HostConfig, PluginHost};
@@ -201,6 +203,16 @@ pub struct NodeOptions {
     /// Test seam: the TLS listener's (extra ACME roots, or a fixed certificate).
     #[cfg(feature = "test-seams")]
     pub tls: crate::tls::TlsSeams,
+    /// Test seam: the webhook retry schedule (default design 18 §4.3's).
+    #[cfg(feature = "test-seams")]
+    pub webhook_schedule: Option<Vec<Duration>>,
+    /// Test seam: what webhooks are sent through (default the SSRF-checked client).
+    #[cfg(feature = "test-seams")]
+    pub webhook_transport: Option<Arc<dyn ferrite_core::webhooks::WebhookTransport>>,
+    /// Test seam: where the webhook auto-disable notice goes (default the `[mail]`
+    /// queue, when configured).
+    #[cfg(feature = "test-seams")]
+    pub webhook_mailer: Option<Arc<dyn ferrite_core::mail::Mailer>>,
 }
 
 /// The node side of a boot pause (test seam; see [`NodeOptions::boot_barrier`]).
@@ -560,7 +572,8 @@ async fn boot(
     // One install pipeline per node: its compile slots bound the node (P8).
     let installer = Arc::new(
         Installer::new(store.clone(), media.clone(), host_config(&config.plugins))
-            .context("cannot start the plugin installer")?,
+            .context("cannot start the plugin installer")?
+            .with_trust(crate::registry::trust_settings(&config.plugins.trust)?),
     );
     // The OAuth authorization server (design 12 §3.2): its issuer is `site.url`; client
     // metadata documents come through the SSRF-checked egress rules.
@@ -571,6 +584,28 @@ async fn boot(
         metadata_fetcher(OAuthFetcher::new(env!("CARGO_PKG_VERSION"))),
         issuer,
     ));
+    // Outgoing webhooks (design 18): one service per node, the SSRF-checked client (or
+    // one that sends nothing when no TLS client can be built; boot goes on).
+    let local_targets = config.webhooks.local_targets;
+    let webhooks = WebhookService::new(
+        store.clone(),
+        keys::site_key(config)?,
+        UrlPolicy {
+            local_targets,
+            allow_ip: webhook_ip_rule(local_targets),
+        },
+    );
+    #[cfg(feature = "test-seams")]
+    let webhooks = match opts.webhook_schedule.clone() {
+        Some(schedule) => webhooks.with_schedule(schedule),
+        None => webhooks,
+    };
+    let webhooks = Arc::new(webhooks);
+    if local_targets {
+        tracing::warn!(
+            "[webhooks] local_targets is on: webhooks may call http and private addresses"
+        );
+    }
     let api = Arc::new(
         ApiState::new(ApiParts {
             store: store.clone(),
@@ -594,7 +629,7 @@ async fn boot(
             options: Arc::new(OptionService::new(store.clone())),
             redirects: Arc::new(RedirectService::new(store.clone())),
             extensions: Arc::new(ExtensionAdmin::new(store.clone(), site_key)),
-            installer,
+            installer: installer.clone(),
             media: media.clone(),
             media_service: media_service.clone(),
             uploader,
@@ -608,9 +643,27 @@ async fn boot(
                 }),
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
+            webhooks: webhooks.clone(),
         })
         .context("site.url")?,
     );
+    let webhook_transport: Arc<dyn WebhookTransport> = match WebhookClient::new(
+        env!("CARGO_PKG_VERSION"),
+        local_targets,
+    ) {
+        Ok(client) => Arc::new(client),
+        Err(e) => {
+            tracing::error!(error = %e, "webhooks cannot be sent from this node: the outbound client could not be built");
+            Arc::new(NoTransport)
+        }
+    };
+    #[cfg(feature = "test-seams")]
+    let webhook_transport = opts.webhook_transport.clone().unwrap_or(webhook_transport);
+    let webhook_mailer: Option<Arc<dyn ferrite_core::mail::Mailer>> = mail
+        .clone()
+        .map(|q| q as Arc<dyn ferrite_core::mail::Mailer>);
+    #[cfg(feature = "test-seams")]
+    let webhook_mailer = opts.webhook_mailer.clone().or(webhook_mailer);
     let mut handlers = builtin::handlers(store.clone(), builtin::failure_retention(failure_window));
     let extensions = Arc::new(ExtensionService::new(store.clone()));
     let action_slots =
@@ -656,11 +709,35 @@ async fn boot(
         #[cfg(feature = "test-seams")]
         fail_after_batches: opts.import_fail_after_batches,
     }));
+    handlers.push(Arc::new(jobs::WebhookDeliverHandler::new(
+        webhooks.clone(),
+        webhook_transport,
+        url::Url::parse(config.site.url.as_str()).context("site.url")?,
+        jobs::webhook_slots(config.cluster.workers),
+        webhook_mailer.map(|mailer| jobs::WebhookNotice {
+            mailer,
+            store: store.clone(),
+            site_title: config.site.title.clone(),
+        }),
+    )));
+    handlers.push(Arc::new(jobs::WebhooksPruneHandler {
+        service: webhooks.clone(),
+    }));
     handlers.push(Arc::new(jobs::ArtifactsGcHandler::new(
         store.clone(),
         media.clone(),
         crate::gc::grace_days(config.uploads.gc_grace_days),
     )));
+    // `plugins.registry_check` (M6-2, ruling P5): the handler always (a check is a
+    // job like any other), the daily periodic only with `registry_check = "daily"` and
+    // a registry.
+    handlers.push(Arc::new(jobs::RegistryCheckHandler {
+        installer: installer.clone(),
+    }));
+    let registry_periodic = (config.plugins.trust.registry_check
+        == ferrite_config::RegistryCheck::Daily
+        && installer.trust_settings().registry.is_some())
+    .then(jobs::registry_check_periodic);
     // `[backup]` (P15): nothing is registered while the schedule is off.
     let backup_periodic = match jobs::site_backup(config, store.clone(), media.clone())
         .context("cannot set up the scheduled backup ([backup])")?
@@ -690,6 +767,7 @@ async fn boot(
     let mut periodics = builtin::periodics();
     periodics.extend(jobs::core_periodics());
     periodics.extend(backup_periodic);
+    periodics.extend(registry_periodic);
     let tick = SCHEDULER_TICK;
     #[cfg(feature = "test-seams")]
     let (periodics, tick) = (
@@ -1344,6 +1422,7 @@ mod tests {
             max_concurrent_calls: 5,
             render_budget_ms: 300,
             volatile_ttl_secs: 60,
+            trust: Default::default(),
         };
         let h = host_config(&p);
         assert_eq!(h.max_concurrent_calls, 5);

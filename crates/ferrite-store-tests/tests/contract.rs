@@ -4,8 +4,8 @@ use ferrite_store_tests::{
     batch::*, comment::*, comment_counts::*, comment_threads::*, constraints::*, content::*,
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*,
     locale::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
-    node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, pool::*, search::*,
-    semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, plugin_trust::*, pool::*,
+    search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*, webhooks::*,
 };
 
 backend_tests!(
@@ -22,6 +22,7 @@ backend_tests!(
     migration_0010_roundtrip,
     migration_0012_roundtrip,
     migration_0013_roundtrip,
+    migration_0015_roundtrip,
     migrate_up_reports_snapshot,
     migration_0014_roundtrip,
     backfill_uses_site_locale_option,
@@ -59,6 +60,18 @@ backend_tests!(
     delete_codes_for_user_leaves_used_and_foreign_codes,
     export_leaves_out_oauth_tokens,
     import_refuses_oauth_token_rows,
+);
+
+backend_tests!(
+    owner_round_trip_with_null_owner,
+    owner_outlives_plugin_row,
+    owners_signed_by_finds_current_signer,
+    key_upsert_and_revoke,
+    public_key_unique,
+    registry_row_replaced_by_url,
+    registry_checked_keeps_index,
+    export_catalogue_lists_owner_and_key_tables,
+    key_delete_and_owner_signer_key,
 );
 
 backend_tests!(
@@ -438,4 +451,17 @@ backend_tests!(
     import_writer_rollback_leaves_nothing,
     import_writer_self_refs_any_order,
     import_writer_site_id_batches_refusals,
+);
+
+backend_tests!(
+    migration_0016_roundtrip,
+    endpoint_crud_and_cascade,
+    active_for_emit_needs_enabled_and_install_id,
+    record_attempt_is_single_use,
+    set_status_only_from_pending,
+    deliveries_page_newest_first,
+    delivery_counts_by_status_since,
+    prune_keeps_events_with_pending_deliveries,
+    nul_in_text_is_invalid,
+    fail_stale_pending_only_old_pending,
 );

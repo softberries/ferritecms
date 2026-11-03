@@ -200,6 +200,9 @@ pub trait Repos: Send + Sync {
     fn node_metrics(&self) -> &dyn NodeMetricsRepo;
     fn oauth(&self) -> &dyn OAuthRepo;
     fn locales(&self) -> &dyn LocaleRepo;
+    fn webhooks(&self) -> &dyn crate::WebhookRepo;
+    /// Plugin trust (M6-2): publisher keys, owners, the registry cache.
+    fn plugin_trust(&self) -> &dyn crate::PluginTrustRepo;
 }
 
 /// Most translation groups one `group_members` call takes.

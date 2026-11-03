@@ -109,7 +109,25 @@ serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) 
 2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
-card; migration `0013_oauth`; design 12, roadmap "M5". M6-1 (multilingual content) is done
+card; migration `0013_oauth`; design 12, roadmap "M5". M6-6 (outgoing webhooks) is built
+(`m6-6-exit.md`): `ferrite_core::webhooks` (catalogue, Standard Webhooks signing, sealed
+rotating secrets, `WebhookService`, `emit` from the content, media, comment, user and import
+writes in their `Tx`), the `webhook.deliver` (one job per attempt, 8-step schedule,
+auto-disable at 5 days + 10 failures or a `410`, mail to admins) and hourly `webhooks.prune`
+jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[webhooks]
+local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
+OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
+`0016_webhooks`; design 18.
+M6-2 (plugin trust, design 14,
+`m6-2-exit.md`) is built: minisign-signed plugins (`ferrite-plugin.minisig`,
+`ferrite-plugin.pub`; the report names the verified publisher, the fingerprint covers the
+signer), plugin data bound to its publisher (`plugin_owners`), the signed static registry
+(`[plugins] registry|registry_key|signatures|registry_check`, off-by-default daily check per
+ruling P5), publisher keys and revocation, `ferrite plugin search|install NAME|update|digest|keys|unbind`,
+doctor `plugins.trust`, the admin's Registry tab and Publisher keys; migration
+`0015_plugin_publishers`; the real signing keys are the user's to create (09 §7 "Plugin keys";
+`crates/ferrite/registry.pub` is a placeholder).
+M6-1 (multilingual content) is done
 (`m6-1-exit.md`; design 13; migration `0014_locales`): `site.locales` (`{tag, label}`, the
 default first, settled at startup), a locale and a translation group on content items, terms
 and menus, `/de/…` prefixes in permalinks and the router, locale-scoped site reads,
@@ -131,7 +149,8 @@ copy), `backup/` (`repo`, `restore`, `target`), `gc`, `media_cmd`, `media_url`,
 `jobs/{gc,backup}.rs`; M4-2: `update/` (`mod` self-update, `release`, `verify`, `swap`,
 `rollback`), `upgrade` (`upgrade.json`, `last_binary_version`), `tls` (ACME), `node_metrics`
 (the minute writer), `build.rs` (target triple), `release.pub` (embedded key); M4-3a:
-`doctor/` (`ferrite doctor`'s checks)) -> `ferrite-http` (public site, router, head,
+`doctor/` (`ferrite doctor`'s checks); M6-2: `registry` (the configured registry and the
+embedded `registry.pub`), `jobs/registry.rs` (`plugins.registry_check`), `doctor/plugins.rs`) -> `ferrite-http` (public site, router, head,
 previews and logged-in requests, plugin wiring, plugin reloader, shared failure counters,
 plugin routes, `request.served` buffer, SMTP mailer, the extension install pipeline
 `extensions::Installer`, `import_fetch` (the importer's SSRF-checked `--fetch-media`
@@ -140,7 +159,8 @@ source), `import_blobs` (import reports over the media store), `metrics` (the re
 OpenAPI snapshot `openapi.json`; M5: `mcp/` (the MCP endpoint: `auth` guard, `server`,
 `tools/` one file per area, `resources`, `prompts`, `results`), `oauth.rs` (the OAuth
 endpoints and the off-switch gate), `oauth_fetch.rs` (the SSRF-checked Client ID Metadata
-Document fetch), `api/oauth.rs` (the consent API)) -> `ferrite-import-wp` (the WordPress importer: WXR
+Document fetch), `api/oauth.rs` (the consent API); M6-2: `registry_fetch` (the SSRF-checked
+registry fetcher, file registries), `extensions/{trust,registry}.rs`, `api/plugin_registry.rs`) -> `ferrite-import-wp` (the WordPress importer: WXR
 parser, IR, conversion, passes, report, `ZipSource`; -> `ferrite-core`, `ferrite-media`),
 `ferrite-import-md` (M4-3b: the Markdown importer: folder scan, front matter, Markdown to
 blocks through `ferrite-import-wp`'s HTML converter (M5: `markdown_to_body`, used by the MCP
@@ -209,13 +229,19 @@ Claude.ai/Desktop connectors and ChatGPT connect from the vendor's cloud and nee
 public HTTPS. Probe it with curl: `POST /mcp` with `Authorization: Bearer …`, `Content-Type:
 application/json`, `Accept: application/json, text/event-stream` and a JSON-RPC body
 (`tools/list`, `tools/call`); a missing token answers `401` with the `resource_metadata`
-challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`). `cargo run -p ferrite -- migrate status
+challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`).
+Webhooks (M6-6): admin → Webhooks (`/admin/webhooks`) or `POST /api/v1/webhooks` with `{name,
+url, events: ["content.*"]}` (the `201` shows the `whsec_` secret once); deliveries need
+`serve` running (the job runner sends them). To try them against a local receiver, start
+`serve` with `FERRITE_WEBHOOKS__LOCAL_TARGETS=true` (allows `http` and loopback; otherwise
+only public `https` targets) and point a webhook at e.g. `http://127.0.0.1:9000/`; guide
+`site/content/02-guides/09-webhooks.md`. `cargo run -p ferrite -- migrate status
 --data /tmp/site` exits 0 ok, 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`
 and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…`, exit 1 lists
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
@@ -228,7 +254,15 @@ the admin's Appearance and Plugins screens. The example plugins: unpack the rele
 inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
-Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
+Signed plugins and the registry (M6-2, design 14): a folder may hold `ferrite-plugin.minisig`
+(`ferrite plugin digest --dir DIR` prints the payload to sign with `minisign -S`) and
+`ferrite-plugin.pub`; the API takes them as the multipart parts `signature` and `publisher_key`.
+`ferrite plugin search|install NAME[@VERSION]|update [--check]` use `[plugins] registry` (+
+`registry_key`; `file:///abs/index.json` works for local tests) and fetch it first;
+`ferrite plugin keys list|trust|revoke`, `ferrite plugin unbind NAME` (operator only). API:
+`/api/v1/plugins/registry` (+ `/refresh`, `/inspect`, `/install`), `/api/v1/plugins/publishers`
+(+ `/{key_id}/revoke`).
+Check a site: `ferrite doctor --data DIR [--offline]` (27 checks that write nothing locally,
 S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
 runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
 3 schema incompatible; 09 §8).
@@ -252,7 +286,7 @@ wanted; `202` gives the job, `Location: /api/v1/import/jobs/{job_id}` (poll it),
 Add a language locally: Settings → Languages in the admin, or `PATCH /api/v1/settings` with
 `{"site.locales": [{"tag": "en"}, {"tag": "de", "label": "Deutsch"}]}` (the default first;
 removing a locale that holds content is `409`); `seed demo --profile multilingual` writes a
-German translation of part of the demo (`/de/`). Guide: `site/content/02-guides/09-multilingual.md`.
+German translation of part of the demo (`/de/`). Guide: `site/content/02-guides/10-multilingual.md`.
 Import a folder of Markdown files as pages (09 §8, 08 §8): `cargo run -p ferrite -- import
 markdown DIR --data /tmp/site [--as LOGIN] [--type page] [--front-page] [--dry-run]
 [--source NAME] [--locale TAG] [--takeover]` (TOML front matter between `+++` lines; `index.md`/`README.md` is a

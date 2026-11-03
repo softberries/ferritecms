@@ -61,6 +61,14 @@ pub(crate) const OAUTH_TOKEN_PER_IP: u32 = 30;
 /// MCP tool calls per user and [`WINDOW`] (design 12 §5.1).
 pub(crate) const MCP_PER_USER: u32 = 120;
 
+/// Registry refreshes per site and [`WINDOW`] (M6-2, design 14 §7.3).
+pub(crate) const REGISTRY_REFRESH_PER_SITE: u32 = 1;
+
+/// `plugins:registry-refresh`: one bucket for the whole site.
+pub(crate) fn registry_refresh() -> String {
+    "plugins:registry-refresh".to_owned()
+}
+
 /// Subkey label for the login bucket ids.
 const LOGIN_BUCKET_LABEL: &str = "ferrite:login-bucket:v1";
 /// Subkey label for the password-reset bucket ids.
@@ -117,6 +125,14 @@ pub(crate) fn oauth_token_ip(key: &SiteKey, ip: Option<IpAddr>) -> String {
 /// `mcp:user:<id>`.
 pub(crate) fn mcp_user(user: UserId) -> String {
     format!("mcp:user:{user}")
+}
+
+/// Webhook test deliveries per user and [`WINDOW`] (design 18 §4.5).
+pub(crate) const WEBHOOK_TEST_PER_USER: u32 = 10;
+
+/// `webhook-test:user:<id>`.
+pub(crate) fn webhook_test_user(user: UserId) -> String {
+    format!("webhook-test:user:{user}")
 }
 
 /// `token:ip:<hash>`.

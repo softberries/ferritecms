@@ -555,3 +555,58 @@ multilingual`, `serve` with `FERRITE_SERVER__LISTEN=127.0.0.1:8097`, then `curl`
 | multilingual, ai-assistants, mcp-tools | `site_overview` lists the languages, `content_list` takes `locale`, the tool `content_translate` and the prompt `translate`; 57 tools | test `mcp_translate_then_update` (`crates/ferrite-http/tests/api/locales.rs`); the reference test `mcp_reference` (every tool listed) | Verified |
 | multilingual | `seed demo --profile multilingual`: three newest posts, About and Contact in German, a German category and menu | `crates/ferrite/src/seed.rs` `write_german`; run: `/de/welcome-to-ferritecms/` (Willkommen bei FerriteCMS), `/de/category/nachrichten/` 200 | Verified |
 | solo-upgrade runbook | Rolling back across `0014_locales` needs `--allow-lossy` (or `--restore-snapshot`) | `0014_locales.up.sql` header `-- ferrite:lossy-down`; `crates/ferrite/src/update/rollback.rs` (`is_lossy_refusal`) | Verified against code; not run |
+## Webhooks, M6-6 (2026-11-03)
+
+Runs on 2026-11-03 with a release build of branch `m6-6-webhooks` (the scripts and their
+output are in the exit's §4), a fresh site at `http://127.0.0.1:8197`, `serve` with
+`FERRITE_WEBHOOKS__LOCAL_TARGETS=true` and a Python receiver on `127.0.0.1:9197`.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| webhooks | Webhooks need `manage_webhooks`, held by administrators only | `crates/ferrite-core/src/actor.rs` (`can`, `webhooks_are_admin_only_and_never_oauth`); `tests/webhooks.rs` `editor_and_scoped_tokens_refused`; API `non_admin_and_scopes_refused` | Verified |
+| webhooks | Screen under Administration, `g` then `w`; New webhook, name, URL, events by group, content types with content events, secret shown once, Send test | `admin/src/shell/nav.ts`; `webhooks.test.tsx`; E2E `webhook_end_to_end` (Chromium SQLite and Postgres, Firefox, WebKit) | Verified |
+| webhooks | At most 20 webhooks | `MAX_ENDPOINTS`; tests `twentieth_plus_one_is_refused`, `twenty_one_is_422` | Verified |
+| webhooks | The event table (types and when they fire); not sent for terms, menus, settings, page views, import items, `seed demo` | `crates/ferrite-core/src/webhooks/catalogue.rs`; `tests/webhooks_emit.rs` (one test per group); run: `media.uploaded`, `user.created`, `content.created`, `content.published`, `comment.created` received | Verified |
+| webhooks | Request headers `content-type`, `user-agent: ferrite/<v> webhooks`, `webhook-id`, `webhook-timestamp`, `webhook-signature`; body fields `id`, `type`, `timestamp`, `version`, `site.url`, `data` | run (headers of one hit printed); `render_body`; `deliver_success_records_attempt` | Verified (the sample in the page has made-up ids and signature, as it says) |
+| webhooks | Thin payload: no body, fields, SEO, e-mail; comment text at most 2 000 characters, no e-mail or URL; title 300; `url` null when not public | `payload_has_no_body_fields_or_email`, `comment_submit_moderate_delete`, `user_create_update_delete`; run: the comment hit held no `email` | Verified |
+| webhooks | Signature `v1,` + base64 HMAC-SHA256 of `<id>.<timestamp>.<body>` with the base64-decoded key after `whsec_` | `signature_known_answer` (the Standard Webhooks libraries' vector); `local_receiver_verifies_signature` (independent HMAC) | Verified |
+| webhooks | The by-hand Node.js and Python snippets verify a real delivery | run: the page's two functions (`verify.mjs`, `verify.py`) on every hit: all `true` | Verified |
+| webhooks | The `standardwebhooks` JS and Python snippets | Not run: the libraries were not installed (no downloads in this run); the calls follow the libraries' documented API | Not verified |
+| webhooks | Rotation: 24 hours, two signatures, current first | `rotation_signs_with_both`; E2E (both verified with the sink's own HMAC) | Verified |
+| webhooks | `2xx` success; redirects not followed; 15 s timeout | `result_of`; `redirect_not_followed`, `slow_headers_time_out` (with a short seam), `WEBHOOK_TIMEOUT` | Verified (15 s itself only by constant) |
+| webhooks | Retries after 5 s, 5 min, 30 min, 2, 5, 10, 14 h with jitter: 8 attempts, about 31.5 h; `Retry-After` on 429/503, at most a day | `schedule_and_jitter_bounds`, `retry_after_raises_but_caps_24h`; run: attempt 1 at +0.5 s, attempt 2 at +6.5 s, next at +5 min | Verified (first two steps run; the rest by unit test) |
+| webhooks | At least once, no order; same `webhook-id` on retries and redeliveries | run: both attempts carried one id; `receiver_down_retries_on_schedule`, `redeliver_and_since_cap` | Verified |
+| webhooks | `410` disables at once; 5 days and 10 failures disable; admins are mailed; banner; doctor warns | `gone_disables_at_once`, `five_days_and_ten_failures_auto_disable`, `gone_disables_and_mails_admins` (a recording mailer); run: `state disabled reason gone`, audit `webhook.auto_disabled` with the host, doctor `warn … was disabled automatically (gone)` | Verified (the mail through a real SMTP server not run) |
+| webhooks | The log keeps 30 days | `RETENTION`, `prune_deletes_old_events` | Verified |
+| webhooks | A copy made with `import-site` (and `restore`, `db copy`) is paused | run: `export` + `import-site` into a fresh folder, doctor `… is paused: this database was copied or restored`; `paused_copy_skips` | Verified for `import-site`; `restore` and `db copy` by the install-id rule (M4-1), not run |
+| webhooks | Only public `https` targets; `local_targets` allows `http`, loopback and private, never link-local or metadata; `config check` prints `webhooks=local`; doctor warns | `tests/plugins/webhook_send.rs` (12 hostile cases), `local_rule_keeps_metadata_refused`; run: doctor `webhooks=local` and the warning | Verified |
+| webhooks | Netlify, Vercel and Cloudflare Pages offer deploy hooks that build on a `POST` | General knowledge of those hosts; no hook was called | Not verified |
+| rest-api | Area `webhooks`; `system:write`/`settings:write` do not include it | `SCOPE_NAMES`; API `non_admin_and_scopes_refused` | Verified |
+| monitoring, cli | 26 doctor checks, `webhooks.endpoints` in the database group | `tests/doctor.rs` `ORDER`; run | Verified |
+| configuration | `[webhooks] local_targets`, default `false`, env `FERRITE_WEBHOOKS__LOCAL_TARGETS` | `ferrite-config` `webhooks_local_targets` | Verified |
+| upgrades | Old nodes in a rolling upgrade emit no webhook events and claim no delivery jobs | design 18 §10.4; the runner claims only handled kinds (`ferrite-cluster`) | Not run (no mixed-version cluster with webhooks) |
+
+## Plugin trust (M6-2, 2026-11-03)
+
+Checked on branch `m6-2-plugin-trust` with a release build, against the tests named and the
+manual run recorded in `docs/superpowers/m6-2-exit.md` ("Manual end-to-end check"), with
+throwaway keys only.
+
+| Page | Claim | Checked against (file:line, test name, or command run) | Result |
+|---|---|---|---|
+| plugins | A signed folder also holds `ferrite-plugin.minisig` and optionally `ferrite-plugin.pub` | `crates/ferrite/src/ext_cmd.rs` (`read_package`), `plugin_trust_cli::install_dir_with_signature_records_owner`; the manual run installed the signed `seo` folder | Verified |
+| plugins | The report says Verified publisher, New publisher key or Unsigned | `admin/src/plugins/trust-summary.test.tsx`, `plugin_trust_cli::check_prints_verified_publisher`, `plugins_trust::signed_upload_reports_new_key_and_installs`, `e2e/plugins-trust.spec.ts` | Verified |
+| plugins | A signature that does not match, or an unknown key without its `.pub`, is refused, never treated as unsigned | `plugins_trust::swapped_component_signature_mismatch`, `unknown_key_without_key_part_refused`, `garbage_key_part_422` | Verified |
+| plugins | The data belongs to the first signed publisher; an update from another key, or unsigned, is refused until the data is erased | `ferrite-core/tests/plugin_trust.rs` (`stripped_signature_after_signed_owner_refused`, `other_key_same_name_refused_even_if_approved_new`, `erase_frees_name`), `plugin_trust_cli::install_dir_stripped_signature_refused_exit_1`, the E2E refusal step | Verified |
+| plugins | An unsigned plugin keeps working; the first signed version takes over its data | `existing_rows_without_owner_are_unsigned_owned`, `signed_over_unsigned_claims`, `registry::registry_install_claims_unsigned_owner` | Verified |
+| plugins, configuration | `[plugins] signatures` is `any` (default), `signed` or `trusted`; the admin only shows it | `ferrite-config` `plugin_trust::signatures_values`, `trust_defaults`; `policy_signed_refuses_unsigned`, `policy_trusted_refuses_new_key`; no API writes it (`api/plugin_registry.rs`) | Verified |
+| plugins, cli | `search`, `install NAME`, `update` fetch the registry first; `update --check` exits 2 with updates, 0 without | `plugin_trust_cli::{search_lists_matches, install_name_from_file_registry, update_check_exits_2_with_updates_0_without}`; the manual run | Verified |
+| plugins | Check for updates, the Registry tab and the Update chip in the admin | `e2e/plugins-trust.spec.ts` (Chromium, SQLite and Postgres), `registry-browser.test.tsx`, `plugins-list.test.tsx::list_shows_update_chip` | Verified |
+| plugins, configuration | The registry is fetched only on demand unless `registry_check = "daily"` | `serve.rs` (the periodic only with `daily`), `jobs/registry.rs::periodic_is_daily` (not in `core_periodics`) | Verified |
+| plugins | The official registry is not published yet; a build without its key has it off until `registry_key` is set | `crates/ferrite/registry.pub` is the placeholder; `registry::tests::placeholder_means_off_for_the_default_url`; doctor `trust_info_registry_off` | Verified |
+| plugins, cli | Publisher keys page, `keys list|trust|revoke`, compromised revocation disables the plugins | `plugin_trust_cli::keys_trust_list_revoke`, `plugin_registry::revoke_compromised_disables_plugin`, the E2E revocation step, `publishers_revoke_dialog_requires_reason` | Verified |
+| plugins, cli | `unbind` frees a name and keeps its data | `plugin_trust_cli::unbind_then_other_publisher_installs`, `unbind_keeps_data` | Verified |
+| plugin-authoring | `ferrite plugin digest` needs no data folder and prints what `minisign -S` signs; a folder signed with the minisign CLI installs | `plugin_trust_cli::digest_matches_payload`, `tests/plugin_payload.rs`; the manual run signed with the `minisign` CLI 0.12 (`.github/scripts/sign-plugins.sh`) and installed | Verified |
+| cli | The command list and the output formats | `ferrite plugin --help`, `ferrite plugin keys --help` run on the release build | Verified |
+| configuration | `registry` (default URL, `""` off, https or `file:///`), `registry_key` required for another registry, cluster nodes need the same values | `ferrite-config` `plugin_trust::*` tests; design 14 §13 for the cluster rule (not run on two nodes) | Verified (the cluster rule from the design only) |
+| mcp-tools | `plugins_list` carries the publisher and an offered update | `plugin_registry::mcp_plugins_list_includes_trust` | Verified |

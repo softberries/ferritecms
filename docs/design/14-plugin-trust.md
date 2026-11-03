@@ -1,6 +1,7 @@
 # 14 — Plugin trust: signed plugins, publisher-bound data, the registry
 
-Status: **design for M6-2** · Date: 2026-11-02
+Status: **built in M6-2** (ruling P5 applied; execution notes `R-2-*` in
+`docs/superpowers/m6-2-exit.md`) · Date: 2026-11-02
 
 Today a plugin is two files, `ferrite-plugin.toml` and a `.wasm`, and nothing says who
 made them. The manifest's `publisher` is unverified text, and plugin data (KV, settings,
@@ -111,7 +112,17 @@ workspace and into `ferrite-plugin-host`):
 - `verify_minisig(key, data, signature_text) -> Result<(), TrustError>`: prehashed only.
 - `verify_bundle(manifest_bytes, wasm, minisig, candidates) -> Result<VerifiedSigner,
   TrustError>`: decodes the minisig, picks the candidate key whose id matches the
-  signature's (no match: `UnknownKey(key_id)`), verifies the payload.
+  signature's (no match: `UnknownKey(key_id)`; two candidates with that id but different
+  key bytes: `KeyConflict(key_id)`), verifies the payload.
+- **A key id never identifies a key.** It is 8 bytes the key's maker chooses, so anyone can
+  make a key with the registry key's id. Wherever identity is decided (the registry's
+  publisher of a key, its revocations, the update offer, the Publishers list) keys are
+  compared by their whole public key; `plugin_owners.signer_public_key` keeps the installed
+  version's whole key for that. A signer whose id the cached index lists under other key
+  bytes is refused at install; the operator cannot trust such a key; a registry check finds
+  site keys that collide with the index, deletes their rows, disables the enabled plugins
+  they signed and audits `plugin.publisher.collision` (the refresh answer lists them in
+  `collisions`, the Plugins screen warns). M6-2 review, exit R-2-19.
 - `crates/ferrite/src/update/verify.rs` keeps `listed_sha256` and calls `PublisherKey::parse`
   and `verify_minisig` for the release check, so there is one minisign path (D5).
 
@@ -175,7 +186,8 @@ or part `publisher_key`) that matches the signature, is reported as **new key**:
 key 5A1C3D… (claims: example.dev). This key is new to this site: approving trusts it for
 updates of this plugin." Approving the report (its fingerprint covers the key id, §3.5)
 records the key (`source = approved`) in the install transaction. Under `trusted` the
-report is a refusal instead.
+report is a refusal instead, and so is a key approved this way earlier: `trusted` accepts
+registry and operator keys only (exit R-2-20).
 
 ### 3.4 Revocation (D10)
 
@@ -368,6 +380,7 @@ Validation (`RegistryIndex::parse`, every rule a unit test with a hostile index)
 registry = "https://softberries.github.io/ferritecms/registry/v1/index.json"  # default; "" = off
 registry_key = "RWQ…"   # required for any other registry; default: the embedded key
 signatures = "any"      # any | signed | trusted (§3.2)
+registry_check = "off"  # off (default) | daily (ruling P5, D18)
 ```
 
 - The default URL uses the key embedded from `crates/ferrite/registry.pub` (like
@@ -412,7 +425,8 @@ fetches (§8). A refresh that fails keeps the previous copy and records the erro
 ## 6. Storage (migration `0015_plugin_publishers`)
 
 Expand-only, both backends (`-- ferrite:phase expand`, `.down.sql` drops the three
-tables), contract tests on both. Timestamps as in the other tables (SQLite INTEGER unix
+tables; declared `-- ferrite:lossy-down`, since the bindings, trusted keys and revocations
+go with them, so `rollback --schema` past it needs `--allow-lossy`, exit R-2-23), contract tests on both. Timestamps as in the other tables (SQLite INTEGER unix
 micros, Postgres `timestamptz`); Postgres text keys `COLLATE "C"` (R8).
 
 - `plugin_publishers(key_id TEXT PK, public_key TEXT NOT NULL UNIQUE, label TEXT NOT NULL,
@@ -420,8 +434,8 @@ micros, Postgres `timestamptz`); Postgres text keys `COLLATE "C"` (R8).
   revoked_at NULL, revoked_reason TEXT NULL, compromised BOOL NOT NULL DEFAULT false)` —
   keys this site trusts on its own (approved at install, added by the operator), and every
   revocation (any source; a registry key appears here only once revoked).
-- `plugin_owners(plugin TEXT PK, owner TEXT NULL, signer_key TEXT NULL, signature TEXT
-  NULL, publisher TEXT NOT NULL, source TEXT NOT NULL CHECK (source IN
+- `plugin_owners(plugin TEXT PK, owner TEXT NULL, signer_key TEXT NULL, signer_public_key
+  TEXT NULL, signature TEXT NULL, publisher TEXT NOT NULL, source TEXT NOT NULL CHECK (source IN
   ('upload','folder','registry')), registry_url TEXT NULL, bound_at, updated_at)` — the
   identity the name's data belongs to (`owner`, `NULL` = unsigned) and how its current
   version arrived: the signing key and minisig text of the installed version (`NULL` when
@@ -432,7 +446,7 @@ micros, Postgres `timestamptz`); Postgres text keys `COLLATE "C"` (R8).
   last_error_at NULL)`.
 
 Store: one new repo on `Repos`, `plugin_trust() -> &dyn PluginTrustRepo`:
-`get_key`, `list_keys`, `upsert_key`, `revoke_key(key_id, at, reason, compromised)`,
+`get_key`, `list_keys`, `upsert_key`, `delete_key`, `revoke_key(key_id, at, reason, compromised)`,
 `get_owner`, `list_owners`, `put_owner`, `delete_owner`, `owners_signed_by(key_id)`,
 `get_registry(url)`, `put_registry(&RegistryCacheRow)`, `registry_checked(url, at,
 error: Option<&str>)`. Implemented on both backends and on `CountingStore` /
@@ -440,7 +454,8 @@ error: Option<&str>)`. Implemented on both backends and on `CountingStore` /
 
 Export catalogue (`crates/ferrite-store/src/catalogue.rs`): `plugin_publishers` and
 `plugin_owners` are exported rows (a moved or restored site keeps its bindings and
-revocations); `plugin_registry` is `Export::Skip` (a cache, refetched).
+revocations); `plugin_registry` is exported too (exit R-2-21): its serial is the copy's
+rollback floor, and the index is verified again on every use.
 
 Domain types (`ferrite-domain/src/plugin_trust.rs`): `PublisherKey`, `KeyId`,
 `KeySource`, `TrustedKey`, `OwnerId` (parse/format of `reg:` and `key:`), `PluginOwner`,
@@ -513,9 +528,12 @@ tool; the MCP reference page notes it.
 
 ## 8. Update checks
 
-- **Job `plugins.registry_check`** (daily periodic, `core_periodics()`), handler in
+- **Job `plugins.registry_check`** (daily periodic only with `registry_check = "daily"`,
+  ruling P5; not in `core_periodics()`), handler in
   `crates/ferrite/src/jobs/registry.rs`: when a registry is configured, fetch the index and
-  signature, verify, check the serial, store the cache row, then **apply revocations**
+  signature, verify, check the serial (against a cached row that verifies under the current
+  `registry_key`; a row that does not, after a re-key, is replaced: exit R-2-22), store the
+  cache row, remove colliding site keys (§2.3), then **apply revocations**
   (`ExtensionService::apply_registry_revocations`: insert missing revocation rows, disable
   plugins signed by newly compromised keys, one transaction under the `extensions` lock),
   then record `checked_at`. A failed fetch records `last_error` and is not retried before
@@ -530,10 +548,13 @@ tool; the MCP reference page notes it.
   published by FerriteCMS; updating binds this plugin's data to it").
 - Nothing installs by itself. An update is an install with its own report and approval.
 
-- **D18. Daily check on by default, nothing automatic.** Revocations must arrive without an
-  admin looking; automatic installs would skip the permission report (P3). The daily fetch
-  tells GitHub Pages the site's address once a day, like WordPress's update check; `registry
-  = ""` turns it off.
+- **D18 (changed by ruling P5). The daily check is off by default, nothing is automatic.**
+  A site makes no outbound request it was not configured for (as with `self-update
+  --check`): `[plugins] registry_check = "daily"` schedules the job (04:00 UTC, after the
+  artifacts GC); otherwise the index is fetched only on demand: the Plugins screen's "Check
+  for updates" (`POST /plugins/registry/refresh`) and every CLI `search|install NAME|update`.
+  Revocations therefore arrive at the next check, scheduled or on demand. Automatic
+  installs would skip the permission report (P3). `registry = ""` turns the registry off.
 
 ## 9. CLI and doctor
 
@@ -554,12 +575,13 @@ tool; the MCP reference page notes it.
 Exit codes: 0 done, 1 error (refusals included), 2 only for `update --check`. `install`
 with both `NAME` and `--dir` is a usage error.
 
-`ferrite doctor` gains one check, `plugins.trust` (database only, no network; works with
-`--offline`): `warn` when an installed plugin does not meet `plugins.signatures`, when an
-installed plugin is signed by a revoked key, or when the configured registry's last check
-failed or is older than 3 days; `info` "registry off" when none is configured; else `ok`
-("3 plugins, 3 verified; registry serial 3 checked 5 h ago"). Doctor's check count becomes
-26.
+`ferrite doctor` gains one check, `plugins.trust` (after `db.identity`; database only, no
+network; works with `--offline`): `warn` when an installed plugin does not meet
+`plugins.signatures`, when an installed plugin is signed by a revoked key, or when the
+configured registry's last check failed, or (with `registry_check = "daily"`, ruling P5) its
+last successful check is older than 3 days or never happened; `info` "registry off" when none
+is configured (or this build has no key for the default registry); else `ok` ("3 plugins, 3
+verified; registry serial 3 checked 5 h ago"). Doctor's check count becomes 26.
 
 ## 10. Admin
 
@@ -605,7 +627,15 @@ D19), in Chromium on both backends; the axe check of the new screens.
 
 ## 11. Publishing the official plugins (CI)
 
-Keys (made once by the user, like the release key; secrets of the `release` environment):
+Keys (made once by the user, like the release key; secrets of the `release` environment).
+Ruling P5: until they exist, `crates/ferrite/registry.pub` is a comment-only placeholder,
+`registry/publishers.json` lists no key, and `plugins-sign` packs the plugins unsigned and
+publishes no index (a notice says so); every test uses throwaway keys. As built, the
+signing steps are `.github/scripts/sign-plugins.sh` (payload, `minisign -S`, the tarball and
+per-plugin assets through `package-plugins.sh` with `SIGNATURES_DIR` and `ASSETS=1`, the
+index through `registry-index.py`, then every signature verified with
+`.github/scripts/verify-file.sh`), shared by `plugins-sign`, `plugins-sign-dry-run` and the CI
+`packaging` job:
 
 - `PLUGINS_SECRET_KEY` / `PLUGINS_PASSWORD`: the publisher key of `ferritecms.dev`, which
   signs the three example plugins. Its public half is `registry/publishers.json`'s key.

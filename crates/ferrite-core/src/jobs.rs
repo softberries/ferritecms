@@ -389,6 +389,56 @@ pub(crate) fn after(at: Timestamp, d: Duration) -> Timestamp {
         .map_or(at, Timestamp::from)
 }
 
+/// Makes one delivery attempt of a webhook (design 18 §4.2); payload [`WebhookDeliver`].
+/// Enqueued by `webhooks::emit` in the write's `Tx` (attempt 1) and by the handler for
+/// each retry, one job per attempt.
+pub const WEBHOOK_DELIVER_KIND: &str = "webhook.deliver";
+
+/// Current version of the [`WebhookDeliver`] payload.
+pub const WEBHOOK_DELIVER_VERSION: u32 = 1;
+
+/// Runner attempts of a [`WEBHOOK_DELIVER_KIND`] job: retries of infrastructure
+/// failures (a store error), not delivery attempts.
+pub const WEBHOOK_DELIVER_ATTEMPTS: i32 = 3;
+
+/// Priority of delivery jobs: below the core jobs, like plugin actions.
+pub const WEBHOOK_DELIVER_PRIORITY: i32 = -1;
+
+/// Priority of a test delivery (`webhook.ping`): ahead of the queue, someone is waiting.
+pub const WEBHOOK_TEST_PRIORITY: i32 = 10;
+
+/// Payload of a [`WEBHOOK_DELIVER_KIND`] job: `{"v":1,"delivery":"<uuid>","attempt":n}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebhookDeliver {
+    pub v: u32,
+    pub delivery: ferrite_domain::DeliveryId,
+    pub attempt: u32,
+}
+
+/// The job for attempt `attempt` of `delivery`: unique key
+/// `webhook.deliver:<delivery>:<attempt>` (a re-run cannot double it),
+/// [`WEBHOOK_DELIVER_ATTEMPTS`] runner attempts, due at `run_at` (`None`: now).
+pub fn webhook_deliver_job(
+    delivery: ferrite_domain::DeliveryId,
+    attempt: u32,
+    run_at: Option<Timestamp>,
+    priority: i32,
+) -> NewJob {
+    let mut payload = Map::new();
+    payload.insert("v".into(), Value::from(WEBHOOK_DELIVER_VERSION));
+    payload.insert("delivery".into(), Value::String(delivery.to_string()));
+    payload.insert("attempt".into(), Value::from(attempt));
+    let mut job = NewJob::new(WEBHOOK_DELIVER_KIND, Value::Object(payload));
+    job.unique_key = Some(format!("{WEBHOOK_DELIVER_KIND}:{delivery}:{attempt}"));
+    job.run_at = run_at;
+    job.priority = priority;
+    job.max_attempts = WEBHOOK_DELIVER_ATTEMPTS;
+    job
+}
+
+/// Deletes delivery-log events older than the retention (design 18 §4.6), hourly.
+pub const WEBHOOKS_PRUNE_KIND: &str = "webhooks.prune";
+
 /// Same form as `Timestamp`'s serde (chrono's RFC 3339 with `Z`).
 fn rfc3339(at: Timestamp) -> String {
     at.as_datetime()

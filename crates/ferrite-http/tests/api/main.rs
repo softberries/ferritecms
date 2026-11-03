@@ -27,8 +27,12 @@ mod media_filters;
 mod menu_locations;
 mod metrics_series;
 mod oauth;
+mod plugin_registry;
 mod plugins;
+mod plugins_trust;
 mod redirect_search;
+#[path = "../support/registry_fixture.rs"]
+mod registry_fixture;
 mod reset;
 mod sessions;
 mod settings_ext;
@@ -40,3 +44,4 @@ mod themes;
 mod types;
 mod users;
 mod users_admin;
+mod webhooks;

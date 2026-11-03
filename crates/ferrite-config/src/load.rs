@@ -62,6 +62,7 @@ pub fn load(
     let (auth, key_given) = parse_auth(&mut cx, &mut table);
     let mail = parse_mail(&mut cx, &mut table);
     let backup = parse_backup(&mut cx, &mut table);
+    let webhooks = parse_webhooks(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
@@ -98,6 +99,7 @@ pub fn load(
             auth,
             mail,
             backup,
+            webhooks,
             warnings: cx.warnings,
         }),
         _ => Err(ConfigError {
@@ -966,6 +968,7 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         }
         Some(n) => n,
     };
+    let trust = parse_plugin_trust(cx, &mut t, b);
     cx.unknown(t, b);
     PluginsConfig {
         default_memory,
@@ -977,6 +980,107 @@ fn parse_plugins(cx: &mut Cx, root: &mut Table) -> PluginsConfig {
         max_concurrent_calls,
         render_budget_ms,
         volatile_ttl_secs,
+        trust,
+    }
+}
+
+/// `[plugins] signatures`, `registry`, `registry_key` and `registry_check` (M6-2,
+/// design 14 §3.2 and §5.2; ruling P5).
+fn parse_plugin_trust(cx: &mut Cx, t: &mut Table, b: &str) -> PluginTrustConfig {
+    use ferrite_domain::plugin_trust::{PublisherKey, SignaturePolicy};
+    let signatures = match cx.string(t, b, "signatures") {
+        None => SignaturePolicy::Any,
+        Some(v) => SignaturePolicy::parse(&v).unwrap_or_else(|| {
+            cx.push(
+                "plugins.signatures",
+                "must be \"any\", \"signed\" or \"trusted\"",
+            );
+            SignaturePolicy::Any
+        }),
+    };
+    let registry = match cx.string(t, b, "registry") {
+        None => Some(DEFAULT_REGISTRY_URL.to_owned()),
+        Some(v) if v.is_empty() => None,
+        Some(v) => match check_registry_url(&v) {
+            Ok(()) => Some(v),
+            Err(msg) => {
+                cx.push("plugins.registry", msg);
+                None
+            }
+        },
+    };
+    let key_text = cx.string(t, b, "registry_key");
+    let key_given = key_text.is_some();
+    let registry_key = key_text.and_then(|v| match PublisherKey::parse(&v) {
+        Ok(Some(key)) => Some(key.base64),
+        Ok(None) => {
+            cx.push("plugins.registry_key", "holds no key");
+            None
+        }
+        Err(e) => {
+            cx.push(
+                "plugins.registry_key",
+                format!("is not a minisign public key: {e}"),
+            );
+            None
+        }
+    });
+    if let Some(url) = &registry
+        && url != DEFAULT_REGISTRY_URL
+        && !key_given
+    {
+        cx.push(
+            "plugins.registry_key",
+            "required for a registry other than the default (the minisign public key its \
+             index is signed with)",
+        );
+    }
+    let registry_check = match cx.string(t, b, "registry_check").as_deref() {
+        None | Some("off") => RegistryCheck::Off,
+        Some("daily") => RegistryCheck::Daily,
+        Some(_) => {
+            cx.push("plugins.registry_check", "must be \"off\" or \"daily\"");
+            RegistryCheck::Off
+        }
+    };
+    if registry_check == RegistryCheck::Daily && registry.is_none() {
+        cx.push(
+            "plugins.registry_check",
+            "\"daily\" needs plugins.registry (it is \"\", off)",
+        );
+    }
+    PluginTrustConfig {
+        signatures,
+        registry,
+        registry_key,
+        registry_check,
+    }
+}
+
+/// A registry URL: `https://` with a host and no credentials, or `file:///` with an
+/// absolute path (design 14 §5.2).
+fn check_registry_url(value: &str) -> Result<(), String> {
+    let url = url::Url::parse(value).map_err(|e| format!("is not a URL: {e}"))?;
+    match url.scheme() {
+        "https" => {
+            if url.host_str().is_none_or(str::is_empty) {
+                return Err("needs a host".into());
+            }
+            if !url.username().is_empty() || url.password().is_some() {
+                return Err("must not hold credentials".into());
+            }
+            Ok(())
+        }
+        "file" => {
+            if url.host_str().is_some_and(|h| !h.is_empty()) || !value.starts_with("file:///") {
+                return Err("a file registry is file:///absolute/path/index.json".into());
+            }
+            if url.to_file_path().is_err() {
+                return Err("a file registry needs an absolute path".into());
+            }
+            Ok(())
+        }
+        _ => Err("must be https:// (or file:/// for a local registry)".into()),
     }
 }
 
@@ -1021,6 +1125,24 @@ fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
     });
     cx.unknown(t, "auth");
     (AuthConfig { secret_key }, given)
+}
+
+/// The `[webhooks]` section (M6-6): `local_targets`, with a warning when it is on.
+fn parse_webhooks(cx: &mut Cx, root: &mut Table) -> WebhooksConfig {
+    let mut t = section(cx, root, "webhooks");
+    let local_targets = cx
+        .boolean(&mut t, "webhooks", "local_targets")
+        .unwrap_or(false);
+    cx.unknown(t, "webhooks");
+    if local_targets {
+        cx.warnings.push(ConfigProblem {
+            path: "webhooks.local_targets".to_owned(),
+            message: "on: webhooks may call http URLs and loopback or private addresses; \
+                      for development only"
+                .to_owned(),
+        });
+    }
+    WebhooksConfig { local_targets }
 }
 
 /// The `[backup]` section (M4-1 P15). `to` stays as written (the job resolves it against
@@ -1401,7 +1523,22 @@ pub fn render_default_toml(
     out.push_str(
         "# Plugin calls at once per node (filters, actions, routes); default\n# max(8, 4 x CPU count). Plugin action jobs use at most cluster.workers - 1 of them.\n",
     );
-    out.push_str("# max_concurrent_calls = 32\n\n");
+    out.push_str("# max_concurrent_calls = 32\n");
+    out.push_str(
+        "# Plugin signatures: \"any\" (unsigned plugins allowed, with a warning), \"signed\" or\n# \"trusted\" (only keys from the registry or `ferrite plugin keys trust`).\n",
+    );
+    out.push_str("# signatures = \"any\"\n");
+    out.push_str(
+        "# The plugin registry (\"\" turns it off); another registry needs its registry_key.\n",
+    );
+    out.push_str(
+        "# registry = \"https://softberries.github.io/ferritecms/registry/v1/index.json\"\n",
+    );
+    out.push_str("# registry_key = \"RWQ…\"\n");
+    out.push_str(
+        "# Check the registry for updates and revocations once a day (default: only on demand).\n",
+    );
+    out.push_str("# registry_check = \"daily\"\n\n");
     out.push_str("# [mail]\n");
     out.push_str("# Outgoing mail (password resets, plugin notices to admins). Unset: no mail.\n");
     out.push_str(

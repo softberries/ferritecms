@@ -193,6 +193,14 @@ impl Repos for HookRepos {
     fn locales(&self) -> &dyn ferrite_store::LocaleRepo {
         self.inner.read().locales()
     }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.read().webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.read().plugin_trust()
+    }
 }
 
 #[async_trait]

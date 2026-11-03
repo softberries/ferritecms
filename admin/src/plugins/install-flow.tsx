@@ -7,17 +7,31 @@
 //      (field `approve`) and its new report, which replaces the shown one and must be
 //      approved again. A new plugin arrives disabled; the last step offers Enable.
 // Both requests run over an XHR with a progress bar (the component may be 32 MiB).
+// M6-2: a signed plugin adds `ferrite-plugin.minisig` and, for a key the site does not
+// know, `ferrite-plugin.pub` (two optional inputs; dropped files are matched by name). A
+// refusal on `signature` or `publisher` shows the server's message with the report, and
+// nothing can be approved. With `registry`, the files come from the configured registry
+// (`POST /plugins/registry/inspect`, then `…/install`): the same report step.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import { CheckIcon, FileCodeIcon, FileCogIcon, PackagePlusIcon } from "lucide-react";
+import {
+  CheckIcon,
+  FileCodeIcon,
+  FileCogIcon,
+  FileKeyIcon,
+  FileSignatureIcon,
+  PackagePlusIcon,
+} from "lucide-react";
 import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   type PermissionReportDto,
   type PluginDto,
   enablePlugin,
+  inspectRegistryPlugin,
+  installRegistryPlugin,
   pluginsQuery,
 } from "@/api/plugins";
 import { reportApiError } from "@/api/client";
@@ -38,10 +52,20 @@ import {
 import { formatBytes } from "@/media/format";
 import { problemText } from "@/structure/taxonomies/terms-model";
 import { PermissionReport } from "./permission-report";
+import { slotOf } from "./plugin-model";
+
+/** A registry plugin to install instead of uploaded files. */
+export interface RegistrySource {
+  name: string;
+  /** Default: the newest version this site runs. */
+  version?: string;
+}
 
 export interface InstallPluginDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Install this registry plugin instead of uploaded files. */
+  registry?: RegistrySource | null;
   /** After the install (the plugin as stored: new ones disabled). */
   onInstalled: (plugin: PluginDto) => void;
   /** After Enable on the last step. */
@@ -51,6 +75,7 @@ export interface InstallPluginDialogProps {
 export function InstallPluginDialog({
   open,
   onOpenChange,
+  registry,
   onInstalled,
   onEnabled,
 }: InstallPluginDialogProps) {
@@ -62,12 +87,19 @@ export function InstallPluginDialog({
         className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl"
       >
         <DialogHeader>
-          <DialogTitle>{t("plugins.install.title")}</DialogTitle>
-          <DialogDescription>{t("plugins.install.description")}</DialogDescription>
+          <DialogTitle>
+            {registry
+              ? t("plugins.registry.installTitle", { name: registry.name })
+              : t("plugins.install.title")}
+          </DialogTitle>
+          <DialogDescription>
+            {registry ? t("plugins.registry.installDescription") : t("plugins.install.description")}
+          </DialogDescription>
         </DialogHeader>
         {/* Mounted only while open: a closed dialog forgets the files and aborts. */}
         {open ? (
           <InstallBody
+            registry={registry ?? null}
             onClose={() => onOpenChange(false)}
             onInstalled={onInstalled}
             onEnabled={(p) => {
@@ -83,7 +115,7 @@ export function InstallPluginDialog({
 
 type Step =
   | { kind: "pick" }
-  | { kind: "report"; report: PermissionReportDto; changed: boolean }
+  | { kind: "report"; report: PermissionReportDto; changed: boolean; refused: boolean }
   | { kind: "done"; plugin: PluginDto };
 
 type Failure = { lead: string | null; lines: string[] };
@@ -111,13 +143,26 @@ function changedReport(error: unknown): PermissionReportDto | null {
     : null;
 }
 
+/** The problem's `report` when the upload was refused for its publisher or signature. */
+function refusedReport(error: unknown): PermissionReportDto | null {
+  if (!(error instanceof ApiError) || error.status !== 422) return null;
+  if (!(error.problem.errors ?? []).some((e) => e.field === "signature" || e.field === "publisher"))
+    return null;
+  const report = error.problem.report as Partial<PermissionReportDto> | null | undefined;
+  return report && typeof report.fingerprint === "string" && Array.isArray(report.items)
+    ? (report as PermissionReportDto)
+    : null;
+}
+
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
 
 function InstallBody({
+  registry,
   onClose,
   onInstalled,
   onEnabled,
 }: {
+  registry: RegistrySource | null;
   onClose: () => void;
   onInstalled: (plugin: PluginDto) => void;
   onEnabled: (plugin: PluginDto) => void;
@@ -127,6 +172,8 @@ function InstallBody({
   const installed = useQuery(pluginsQuery);
   const [manifest, setManifest] = useState<File | null>(null);
   const [component, setComponent] = useState<File | null>(null);
+  const [signature, setSignature] = useState<File | null>(null);
+  const [publisherKey, setPublisherKey] = useState<File | null>(null);
   const [step, setStep] = useState<Step>({ kind: "pick" });
   const [progress, setProgress] = useState<number | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -163,23 +210,47 @@ function InstallBody({
     setProgress(total > 0 ? loaded / total : 0);
   };
 
+  const files = () =>
+    manifest && component ? { manifest, component, signature, publisherKey } : null;
+
   const inspect = async () => {
-    if (!manifest || !component || busy) return;
+    const upload = files();
+    if ((!registry && !upload) || busy) return;
     try {
       const report = await run((signal) =>
-        inspectPluginUpload({ manifest, component }, { onProgress, signal }),
+        registry
+          ? inspectRegistryPlugin(registry.name, registry.version)
+          : inspectPluginUpload(upload!, { onProgress, signal }),
       );
-      if (report) setStep({ kind: "report", report, changed: false });
+      if (report) setStep({ kind: "report", report, changed: false, refused: false });
     } catch (error) {
-      if (!isAbort(error)) setFailure(failureOf(error));
+      if (isAbort(error)) return;
+      const refused = refusedReport(error);
+      if (refused) {
+        setStep({ kind: "report", report: refused, changed: false, refused: true });
+        setFailure(failureOf(error));
+      } else setFailure(failureOf(error));
     }
   };
 
+  // A registry source inspects at once (there are no files to choose).
+  const started = useRef(false);
+  useEffect(() => {
+    if (registry && !started.current) {
+      started.current = true;
+      void inspect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registry]);
+
   const install = async (report: PermissionReportDto) => {
-    if (!manifest || !component || busy) return;
+    const upload = files();
+    if ((!registry && !upload) || busy) return;
     try {
       const plugin = await run((signal) =>
-        installPluginUpload({ manifest, component }, report.fingerprint, { onProgress, signal }),
+        registry
+          ? installRegistryPlugin(registry.name, report.version, report.fingerprint)
+          : installPluginUpload(upload!, report.fingerprint, { onProgress, signal }),
       );
       if (plugin) {
         setStep({ kind: "done", plugin });
@@ -188,8 +259,12 @@ function InstallBody({
     } catch (error) {
       if (isAbort(error)) return;
       const fresh = changedReport(error);
-      if (fresh) setStep({ kind: "report", report: fresh, changed: true });
-      else setFailure(failureOf(error));
+      const refused = refusedReport(error);
+      if (fresh) setStep({ kind: "report", report: fresh, changed: true, refused: false });
+      else if (refused) {
+        setStep({ kind: "report", report: refused, changed: false, refused: true });
+        setFailure(failureOf(error));
+      } else setFailure(failureOf(error));
     }
   };
 
@@ -207,22 +282,41 @@ function InstallBody({
     }
   };
 
-  const take = (files: readonly File[]) => {
+  const take = (dropped: readonly File[]) => {
     setFailure(null);
-    for (const f of files) {
-      const name = f.name.toLowerCase();
-      if (name.endsWith(".toml")) setManifest(f);
-      else if (name.endsWith(".wasm")) setComponent(f);
+    for (const f of dropped) {
+      const slot = slotOf(f.name);
+      if (slot === "manifest") setManifest(f);
+      else if (slot === "component") setComponent(f);
+      else if (slot === "signature") setSignature(f);
+      else if (slot === "key") setPublisherKey(f);
     }
   };
 
   let body: ReactNode;
   let footer: ReactNode;
-  if (step.kind === "pick") {
+  if (step.kind === "pick" && registry) {
+    body = null;
+    footer = (
+      <Button variant="outline" onClick={onClose}>
+        {t("plugins.install.cancel")}
+      </Button>
+    );
+  } else if (step.kind === "pick") {
     body = (
       <PickFiles
         manifest={manifest}
         component={component}
+        signature={signature}
+        publisherKey={publisherKey}
+        onSignature={(f) => {
+          setFailure(null);
+          setSignature(f);
+        }}
+        onPublisherKey={(f) => {
+          setFailure(null);
+          setPublisherKey(f);
+        }}
         disabled={busy}
         onManifest={(f) => {
           setFailure(null);
@@ -286,17 +380,27 @@ function InstallBody({
     );
     footer = (
       <>
+        {registry ? (
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            {t("plugins.install.cancel")}
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setFailure(null);
+              setStep({ kind: "pick" });
+            }}
+          >
+            {t("plugins.install.back")}
+          </Button>
+        )}
         <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => {
-            setFailure(null);
-            setStep({ kind: "pick" });
-          }}
+          onClick={() => void install(report)}
+          disabled={busy || step.refused}
+          aria-busy={busy || undefined}
         >
-          {t("plugins.install.back")}
-        </Button>
-        <Button onClick={() => void install(report)} disabled={busy} aria-busy={busy || undefined}>
           {busy ? t("plugins.install.installing") : t("plugins.install.approve")}
         </Button>
       </>
@@ -418,16 +522,24 @@ function InstallBody({
 function PickFiles({
   manifest,
   component,
+  signature,
+  publisherKey,
   disabled,
   onManifest,
   onComponent,
+  onSignature,
+  onPublisherKey,
   onDropFiles,
 }: {
   manifest: File | null;
   component: File | null;
+  signature: File | null;
+  publisherKey: File | null;
   disabled: boolean;
   onManifest: (f: File) => void;
   onComponent: (f: File) => void;
+  onSignature: (f: File) => void;
+  onPublisherKey: (f: File) => void;
   onDropFiles: (files: File[]) => void;
 }) {
   const { t } = useTranslation("admin");
@@ -493,6 +605,28 @@ function PickFiles({
         disabled={disabled}
         onFile={onComponent}
       />
+      <FileSlot
+        slot="plugin-signature-input"
+        icon={FileSignatureIcon}
+        label={t("plugins.install.signature")}
+        choose={t("plugins.install.chooseSignature")}
+        accept=".minisig"
+        file={signature}
+        disabled={disabled}
+        optional
+        onFile={onSignature}
+      />
+      <FileSlot
+        slot="plugin-key-input"
+        icon={FileKeyIcon}
+        label={t("plugins.install.publisherKey")}
+        choose={t("plugins.install.choosePublisherKey")}
+        accept=".pub"
+        file={publisherKey}
+        disabled={disabled}
+        optional
+        onFile={onPublisherKey}
+      />
     </div>
   );
 }
@@ -505,6 +639,7 @@ function FileSlot({
   accept,
   file,
   disabled,
+  optional,
   onFile,
 }: {
   slot: string;
@@ -514,6 +649,7 @@ function FileSlot({
   accept: string;
   file: File | null;
   disabled: boolean;
+  optional?: boolean;
   onFile: (f: File) => void;
 }) {
   const { t } = useTranslation("admin");
@@ -523,7 +659,14 @@ function FileSlot({
     <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border bg-card px-3 py-2.5">
       <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-sm font-medium text-foreground">
+          {label}
+          {optional ? (
+            <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+              {t("plugins.install.optional")}
+            </span>
+          ) : null}
+        </span>
         <span
           data-slot={`${slot}-name`}
           title={summary}

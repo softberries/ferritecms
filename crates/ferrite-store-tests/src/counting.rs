@@ -233,6 +233,14 @@ impl Repos for CountingRepos {
     fn locales(&self) -> &dyn LocaleRepo {
         self.inner.read().locales()
     }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.read().webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.inner.read().plugin_trust()
+    }
 }
 
 #[async_trait]
@@ -720,6 +728,14 @@ impl Repos for CountingTx {
     }
     fn locales(&self) -> &dyn LocaleRepo {
         self.tx.locales()
+    }
+
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.tx.webhooks()
+    }
+
+    fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
+        self.tx.plugin_trust()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

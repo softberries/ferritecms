@@ -67,6 +67,11 @@ ferrite migrate status --data ./mysite
 Migrations add things and do not remove them, unless one is marked as a contract
 migration, so the previous binary normally runs on the newer schema.
 
+Webhooks during a rolling upgrade of a cluster, the first time onto a release with them: nodes still on the older binary
+send no webhook events for the writes they handle (their code has none) and leave the
+delivery jobs to the upgraded nodes. Finish the rollout promptly; the writes made through
+an old node in the meantime are not delivered.
+
 ## Roll back
 
 ### The binary only

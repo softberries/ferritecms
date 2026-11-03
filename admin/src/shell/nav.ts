@@ -2,7 +2,7 @@
 // shows only when `me.capabilities` holds what its API needs; the server still
 // enforces every call, the SPA only hides (constraints: capabilities in core).
 // Screens beyond the content lists (Media, Comments, Structure, and M2b-3's
-// Administration: Users, Appearance, Plugins, Import, Settings, System) each register a
+// Administration: Users, Appearance, Plugins, Webhooks, Import, Settings, System) each register a
 // `ScreenEntry` in `SCREEN_ENTRIES` when their route exists (ruling F-A); who sees an
 // entry, its section and its chord are fixed here in `SCREENS`.
 
@@ -23,6 +23,7 @@ import {
   SignpostIcon,
   TagsIcon,
   UsersIcon,
+  WebhookIcon,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentTypeDto } from "@/api/types";
@@ -77,6 +78,8 @@ const SCREENS = {
   appearance: { section: "admin", show: (can: Can) => can("manage_themes"), shortcut: "g a" },
   // Not `g p`: that is Posts (11 §6).
   plugins: { section: "admin", show: (can: Can) => can("manage_plugins"), shortcut: "g l" },
+  // Outgoing webhooks (M6-6, design 18 §10.1), after Plugins; `g w` is free in 11 §6.
+  webhooks: { section: "admin", show: (can: Can) => can("manage_webhooks"), shortcut: "g w" },
   // The WordPress import (M3-2 P32); `g i` is free in 11 §6.
   import: { section: "admin", show: (can: Can) => can("import"), shortcut: "g i" },
   settings: { section: "admin", show: (can: Can) => can("manage_settings"), shortcut: "g s" },
@@ -118,6 +121,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "users", to: "/users", label: "nav.users", icon: UsersIcon },
   { screen: "appearance", to: "/appearance/themes", label: "nav.appearance", icon: PaletteIcon },
   { screen: "plugins", to: "/plugins", label: "nav.plugins", icon: PlugIcon },
+  { screen: "webhooks", to: "/webhooks", label: "nav.webhooks", icon: WebhookIcon },
   { screen: "import", to: "/import", label: "nav.import", icon: ImportIcon },
   { screen: "settings", to: "/settings", label: "nav.settings", icon: SettingsIcon },
   { screen: "system", to: "/system", label: "nav.system", icon: ServerCogIcon },

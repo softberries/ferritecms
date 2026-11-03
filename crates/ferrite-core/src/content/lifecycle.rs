@@ -163,7 +163,8 @@ impl ContentService {
         expected_version: i64,
     ) -> Result<(), CoreError> {
         let tx = self.store.begin().await?;
-        let done = delete_in(tx.as_ref(), actor, id, expected_version).await;
+        let rules = self.permalinks.pin();
+        let done = delete_in(tx.as_ref(), rules.as_ref(), actor, id, expected_version).await;
         finish(tx, done).await
     }
 
@@ -302,7 +303,7 @@ impl ContentService {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = transition_in(
+        let done = match transition_in(
             tx.as_ref(),
             rules.as_ref(),
             actor,
@@ -310,7 +311,21 @@ impl ContentService {
             expected_version,
             action,
         )
-        .await;
+        .await
+        {
+            // Here, not in `transition_item`: `seed demo` and uploads publish through
+            // that and emit nothing (design 18 §3.4).
+            Ok(saved) => crate::webhooks::emit_content(
+                tx.as_ref(),
+                rules.as_ref(),
+                webhook_type(action),
+                &saved,
+                Some(actor.user),
+            )
+            .await
+            .map(|_| saved),
+            Err(e) => Err(e),
+        };
         finish(tx, done).await
     }
 }
@@ -372,8 +387,21 @@ async fn transition_item(
     Ok(saved)
 }
 
+/// The webhook event type of a transition (design 18 §3.1).
+fn webhook_type(action: Action) -> &'static str {
+    match action {
+        Action::Publish | Action::PublishDue => "content.published",
+        Action::Unpublish => "content.unpublished",
+        Action::Schedule(_) => "content.scheduled",
+        Action::Submit => "content.submitted",
+        Action::Trash => "content.trashed",
+        Action::Restore => "content.restored",
+    }
+}
+
 async fn delete_in(
     repos: &dyn Repos,
+    permalinks: &dyn Permalinks,
     actor: &Actor,
     id: ContentId,
     expected_version: i64,
@@ -392,6 +420,10 @@ async fn delete_in(
     repos.content().update(&current).await?;
     // Read the terms first: the links go with the item.
     let terms = repos.terms().for_item(id).await?;
+    // Before the delete, while the path can still be computed; a refused delete rolls
+    // the event back with the `Tx`.
+    let actor_id = Some(actor.user);
+    crate::webhooks::emit_content(repos, permalinks, "content.deleted", &current, actor_id).await?;
     match repos.content().delete(id).await {
         Err(StoreError::ForeignKey { .. }) => {
             return Err(CoreError::Invalid("has children".into()));
@@ -436,6 +468,8 @@ async fn publish_one(
     let cleared = reclaim_path(repos, permalinks, &saved).await?;
     emit_redirects_changed(repos, cleared).await?;
     enqueue_published(repos, &saved).await?;
+    // A system write: no actor.
+    crate::webhooks::emit_content(repos, permalinks, "content.published", &saved, None).await?;
     emit(repos, &saved).await?;
     Ok(true)
 }

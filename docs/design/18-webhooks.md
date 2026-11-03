@@ -1,6 +1,6 @@
 # 18 — Outgoing webhooks
 
-Status: **design for M6-6** · Date: 2026-11-02
+Status: **built in M6-6** (`docs/superpowers/m6-6-exit.md`; the R-M6-6-n execution rulings there refine §4 and §8 as noted below) · Date: 2026-11-02
 
 An administrator registers HTTPS endpoints that FerriteCMS calls when something happens on
 the site: a post is published, media is uploaded, a comment arrives, a user is created, an
@@ -220,6 +220,11 @@ The `webhook.deliver` handler (`crates/ferrite/src/jobs/webhooks.rs`, registered
    `run_at` = now + delay (§4.3) and unique key `webhook.deliver:<delivery>:<n>`.
 7. Return `Ok` (the job is `done`); a store error anywhere is `JobError::Retry`, so the
    runner tries the same attempt again (its unique key and the step-1 check keep it single).
+
+As built: step 6 re-reads the endpoint with `get_endpoint_for_update` (`FOR UPDATE` on
+Postgres) so a concurrent admin edit and the health update never overwrite each other
+(R-M6-6-4); a test delivery (`webhook.ping`) gets one attempt and no retries (R-M6-6-5);
+the binary takes the slot before calling `deliver` (skips take one too, briefly).
 
 The HTTP request happens between reading and recording, so a node that dies after the
 receiver answered and before step 6 commits sends that attempt again after the job's lease
@@ -508,8 +513,8 @@ session's CSRF token or a bearer token as everywhere. `openapi.json` regenerated
 | `POST /webhooks/{id}/test` | — | `202 {delivery}` (`webhook.ping`, job priority 10; works on a disabled endpoint so it can be checked before enabling, never on a paused copy: `422`); `429` past 10/min |
 | `GET /webhooks/{id}/deliveries` | `status?`, `limit?` (1..=200, 50), `cursor?` | `200 {items: [DeliveryDto], next_cursor}` newest first |
 | `GET /webhooks/{id}/deliveries/{delivery}` | — | `200 DeliveryDetailDto {delivery, event: {id, type, timestamp, data}, attempts: [AttemptDto]}` |
-| `POST /webhooks/{id}/deliveries/{delivery}/redeliver` | — | `202 {delivery}` (a new delivery of the same event) |
-| `POST /webhooks/{id}/redeliver` | `{since, statuses? = ["failed","skipped"]}` | `202 {count}` (≤ 1 000, oldest first) |
+| `POST /webhooks/{id}/deliveries/{delivery}/redeliver` | — | `202 {delivery}` (a new delivery of the same event); as built both redelivers are `422` on a disabled or paused endpoint (enable it first, R-M6-6-6) |
+| `POST /webhooks/{id}/redeliver` | `{since, statuses? = ["failed","skipped"]}` | `202 {count}` (≤ 1 000, oldest first; `pending` in `statuses` is `422` field `statuses`) |
 | `GET /webhooks/events` | — | `200 {version: 1, types: [{type, group, description}]}` |
 
 `WebhookDto`: `id, name, url, events, content_types, enabled, state` (`active` |

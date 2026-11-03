@@ -593,6 +593,32 @@ export class ContentApi {
     );
   }
 
+  /** M6-2: `POST /plugins/registry/refresh` (a `429` within a minute is fine: it is fresh). */
+  async refreshRegistry(): Promise<void> {
+    const res = await this.ctx.post("/api/v1/plugins/registry/refresh", {
+      headers: this.headers(),
+    });
+    expect([200, 429], `refresh registry: ${await res.text()}`).toContain(res.status());
+  }
+
+  /** M6-2: inspect, then install a registry version (`approve` = its fingerprint). */
+  async installFromRegistry(name: string, version: string): Promise<PluginInfo> {
+    const report = await this.ok<{ fingerprint: string }>(
+      await this.ctx.post("/api/v1/plugins/registry/inspect", {
+        headers: this.headers(),
+        data: { name, version },
+      }),
+      "inspect registry plugin",
+    );
+    return this.ok(
+      await this.ctx.post("/api/v1/plugins/registry/install", {
+        headers: this.headers(),
+        data: { name, version, approve: report.fingerprint },
+      }),
+      "install registry plugin",
+    );
+  }
+
   async enablePlugin(name: string): Promise<PluginInfo> {
     return this.ok(
       await this.ctx.post(`/api/v1/plugins/${name}/enable`, { headers: this.headers() }),

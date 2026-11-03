@@ -37,6 +37,7 @@ pub mod notify;
 pub mod oauth;
 pub mod plugin;
 pub mod plugin_failure;
+pub mod plugin_trust;
 pub mod pool;
 pub mod search;
 pub mod semantics;
@@ -45,6 +46,7 @@ pub mod taxonomy;
 pub mod tx;
 pub mod user;
 pub mod user_filters;
+pub mod webhooks;
 pub mod window;
 
 pub use counting::CountingStore;
