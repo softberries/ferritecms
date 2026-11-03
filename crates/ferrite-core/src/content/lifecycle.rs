@@ -24,7 +24,9 @@ use super::ContentService;
 use crate::{
     Actor, CoreError, actions,
     actor::{Capability, can_edit, require},
-    blocks, events, jobs,
+    blocks,
+    changes::{Capture, ObjectRef, Op},
+    events, jobs,
     permalink::{Permalinks, load_input},
     redirects::{delete_redirects_from, emit_redirects_changed},
     tx::finish,
@@ -303,29 +305,38 @@ impl ContentService {
         // One set of rules for the write (R10).
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
-        let done = match transition_in(
-            tx.as_ref(),
-            rules.as_ref(),
-            actor,
-            id,
-            expected_version,
-            action,
-        )
-        .await
-        {
+        let done = async {
+            // An assistant's transition is recorded (design 17 §3.3).
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                capture_op(action),
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
+            let saved = transition_in(
+                tx.as_ref(),
+                rules.as_ref(),
+                actor,
+                id,
+                expected_version,
+                action,
+            )
+            .await?;
             // Here, not in `transition_item`: `seed demo` and uploads publish through
             // that and emit nothing (design 18 §3.4).
-            Ok(saved) => crate::webhooks::emit_content(
+            crate::webhooks::emit_content(
                 tx.as_ref(),
                 rules.as_ref(),
                 webhook_type(action),
                 &saved,
                 Some(actor.user),
             )
-            .await
-            .map(|_| saved),
-            Err(e) => Err(e),
-        };
+            .await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
+        }
+        .await;
         finish(tx, done).await
     }
 }
@@ -396,6 +407,18 @@ fn webhook_type(action: Action) -> &'static str {
         Action::Submit => "content.submitted",
         Action::Trash => "content.trashed",
         Action::Restore => "content.restored",
+    }
+}
+
+/// The change-set op of a transition (design 17 §3.3).
+fn capture_op(action: Action) -> Op {
+    match action {
+        Action::Publish | Action::PublishDue => Op::ContentPublish,
+        Action::Unpublish => Op::ContentUnpublish,
+        Action::Schedule(_) => Op::ContentSchedule,
+        Action::Submit => Op::ContentSubmit,
+        Action::Trash => Op::ContentTrash,
+        Action::Restore => Op::ContentRestore,
     }
 }
 

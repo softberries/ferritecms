@@ -14,7 +14,7 @@ use super::object::ObjectRef;
 use crate::{CoreError, TRASHED_FROM_META, content::Seo};
 
 /// The largest canonical image kept (16 MiB); a bigger one is stored skipped (hash only).
-pub(crate) const MAX_IMAGE: usize = 16 * 1024 * 1024;
+pub const MAX_IMAGE: usize = 16 * 1024 * 1024;
 /// At most this many linked item ids are kept in a term's image.
 pub(crate) const MAX_TERM_ITEMS: usize = 1_000;
 /// zstd level of the images.
@@ -346,7 +346,7 @@ pub(crate) fn hash_snapshot(snapshot: Option<&Value>) -> Option<String> {
 
 /// Opens an image: `Ok(None)` when absent, `Unavailable` when skipped; decompression is
 /// capped at [`MAX_IMAGE`].
-pub(crate) fn open_image(image: &Image) -> Result<Option<Value>, CoreError> {
+pub fn open_image(image: &Image) -> Result<Option<Value>, CoreError> {
     match image {
         Image::Absent => Ok(None),
         Image::Skipped { .. } => Err(CoreError::Unavailable("change image too large to keep")),

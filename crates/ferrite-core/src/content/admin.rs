@@ -22,6 +22,7 @@ use super::{ContentDraft, ContentService, Edit, Seo, SeoPatch, WALKED, check_bod
 use crate::{
     Actor, CoreError, DepKeys,
     actor::{Area, Capability, can, can_edit, can_read, require, require_read, role_can_edit},
+    changes::{Capture, ObjectRef, Op},
     site::{has_public_page, public_paths},
     tx::finish,
 };
@@ -459,6 +460,13 @@ impl ContentService {
         let rules = self.permalinks.pin();
         let tx = self.store.begin().await?;
         let done = async {
+            let cap = Capture::begin(
+                tx.as_ref(),
+                actor,
+                Op::ContentRestoreRevision,
+                &[ObjectRef::Content(id)],
+            )
+            .await?;
             let rev = tx
                 .revisions()
                 .get(rid)
@@ -485,18 +493,21 @@ impl ContentService {
                 terms,
                 seo: None,
             };
-            self.update_in(
-                tx.as_ref(),
-                rules.as_ref(),
-                actor,
-                Edit {
-                    id,
-                    expected_version,
-                    draft,
-                    note: Some(format!("restored from {rid}")),
-                },
-            )
-            .await
+            let saved = self
+                .update_in(
+                    tx.as_ref(),
+                    rules.as_ref(),
+                    actor,
+                    Edit {
+                        id,
+                        expected_version,
+                        draft,
+                        note: Some(format!("restored from {rid}")),
+                    },
+                )
+                .await?;
+            cap.finish(tx.as_ref()).await?;
+            Ok(saved)
         }
         .await;
         finish(tx, done).await

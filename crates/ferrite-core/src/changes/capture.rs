@@ -56,6 +56,11 @@ impl Capture {
         })
     }
 
+    /// A capture that records nothing (a write without an actor).
+    pub(crate) fn inert() -> Self {
+        Self { active: None }
+    }
+
     /// Whether this capture records anything.
     pub(crate) fn is_active(&self) -> bool {
         self.active.is_some()

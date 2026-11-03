@@ -9,4 +9,4 @@ mod snapshot;
 pub(crate) use capture::Capture;
 pub use capture::{IDLE_WINDOW_MICROS, MAX_SET_CHANGES};
 pub(crate) use object::{ObjectRef, Op};
-pub use snapshot::canonical;
+pub use snapshot::{MAX_IMAGE, canonical, open_image};
