@@ -18,6 +18,7 @@
 //! | `comments.moderation` | `"all"` (every guest comment is held) or `"known"` (default, [`COMMENTS_MODERATION_DEFAULT`](crate::comments::COMMENTS_MODERATION_DEFAULT): a commenter with an approved comment posts directly; anyone who knows a regular guest's exact name and e-mail posts unmoderated as them, which `"all"` prevents) |
 //! | `comments.per_page` | integer 1..=100 (default 50, [`COMMENTS_PER_PAGE_DEFAULT`](crate::comments::COMMENTS_PER_PAGE_DEFAULT)): top-level comment threads per public page |
 //! | `mcp.enabled` | boolean (default `true`, [`MCP_ENABLED_DEFAULT`]): the MCP endpoint, the OAuth endpoints and their metadata documents (design 12 §2) |
+//! | `mcp.change_sets_days` | integer 1..=365 (default 90, [`CHANGE_SETS_DAYS_DEFAULT`]): how long AI change sets are kept (design 17 §12) |
 //!
 //! A `null` value (or a missing key in the store) means the default.
 
@@ -147,7 +148,14 @@ pub const SETTINGS: &[SettingDef] = &[
         key: MCP_ENABLED,
         kind: SettingKind::Bool,
     },
+    SettingDef {
+        key: ferrite_domain::CHANGE_SETS_DAYS_OPTION,
+        kind: SettingKind::Integer { min: 1, max: 365 },
+    },
 ];
+
+/// [`CHANGE_SETS_DAYS_OPTION`](ferrite_domain::CHANGE_SETS_DAYS_OPTION) when unset.
+pub const CHANGE_SETS_DAYS_DEFAULT: i64 = 90;
 
 /// The option that switches the MCP endpoint and the OAuth authorization server on and
 /// off (design 12 §2).
