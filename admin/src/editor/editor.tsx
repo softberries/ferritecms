@@ -425,7 +425,7 @@ export function EditorScreen({
   const canPublish =
     doc.readOnly === null &&
     doc.item !== null &&
-    (doc.item.allowed.publish || doc.item.allowed.schedule);
+    (doc.item.allowed.publish || doc.item.allowed.schedule || doc.item.allowed.override);
   const taxonomies = useTypeTaxonomies(type, publishMode !== null);
   const terms = useTermsById(publishMode !== null ? taxonomies : []);
   const site = useQuery({ ...metaQuery, enabled: publishMode !== null });

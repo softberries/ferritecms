@@ -14,7 +14,7 @@ export type Engine = "chromium" | "firefox" | "webkit";
 
 /** The specs that change site-wide state; they run last, one at a time. */
 export const SITE_WIDE_SPECS =
-  /(?:^|[/\\])(?:import|settings|themes|system|plugins-trust|multilingual)\.spec\.ts$/;
+  /(?:^|[/\\])(?:import|settings|themes|system|plugins-trust|multilingual|workflows)\.spec\.ts$/;
 export const SITE_WIDE_SUFFIX = "-site-wide";
 
 export interface SiteProject {

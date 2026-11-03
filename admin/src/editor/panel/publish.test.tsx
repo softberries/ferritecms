@@ -342,6 +342,39 @@ describe("publish", () => {
     expect(vi.mocked(doc.transition).mock.calls[0]?.[0]).toBe("publish");
   });
 
+  test("an_override_needs_a_reason", async () => {
+    // M6-3 §6.5: an admin may publish without the approval, with a reason (the audit's).
+    const item = itemWith("draft", { edit: true, needs_approval: true, override: true });
+    const doc = fakeDoc(item);
+    wrap(
+      <PublishDialog
+        doc={doc}
+        mode="now"
+        onClose={vi.fn()}
+        siteUrl="http://localhost:8080"
+        taxonomies={[]}
+        terms={new Map()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const user = userEvent.setup();
+    const confirm = within(dialog).getByRole("button", { name: "Publish now" });
+    // Without the override the approval is missing: nothing to confirm.
+    expect(confirm).toBeDisabled();
+    expect(dialog).toHaveTextContent("waits for approval");
+    await user.click(within(dialog).getByText("Override approval"));
+    await user.click(within(dialog).getByRole("checkbox", { name: /without the missing/ }));
+    expect(confirm).toBeDisabled();
+    await user.type(within(dialog).getByLabelText("Reason"), "Press embargo lifted");
+    await act(async () => {
+      await user.click(confirm);
+    });
+    expect(vi.mocked(doc.transition).mock.calls[0]).toEqual([
+      "publish",
+      expect.objectContaining({ overrideReason: "Press embargo lifted" }),
+    ]);
+  });
+
   test("rfc3339_keeps_the_wall_clock_time", () => {
     // Winter (CET, +1) and summer (CEST, +2) in Warsaw; New York (-5/-4); UTC; Kolkata (+5:30).
     expect(wallClockToUtc({ date: "2026-11-03", time: "09:30" }, "Europe/Warsaw")).toBe(

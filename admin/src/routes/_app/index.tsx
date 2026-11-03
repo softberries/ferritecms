@@ -19,6 +19,7 @@ import { AiCard } from "@/dashboard/ai-card";
 import { NeedsAttention } from "@/dashboard/needs-attention";
 import { attentionAccess, hasAttention } from "@/dashboard/queries";
 import { RecentDrafts } from "@/dashboard/recent-drafts";
+import { ReviewsCard } from "@/dashboard/reviews-card";
 import { SiteHealth } from "@/dashboard/site-health";
 import { SiteMetrics } from "@/dashboard/site-metrics";
 import { Tiles } from "@/dashboard/tiles";
@@ -63,6 +64,7 @@ function Dashboard() {
         <AiCard me={me.id} canSettings={caps.includes("manage_settings")} />
         <ActivityChart canWrite={canWrite} />
         <RecentDrafts me={me.id} canWrite={canWrite} />
+        {caps.includes("edit_others") ? <ReviewsCard className="lg:col-span-4" /> : null}
         {attention ? (
           <NeedsAttention access={access} className={health ? "lg:col-span-5" : "lg:col-span-12"} />
         ) : null}

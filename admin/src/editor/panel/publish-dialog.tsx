@@ -2,7 +2,10 @@
 // what goes out (title, address, terms, excerpt, unsaved changes that will be saved
 // first), offers "Now" or "Later" (the schedule picker; only when `allowed.schedule`),
 // and confirms with a button that says exactly what will happen. A failure of the
-// transition stays in the dialog; a 412 goes to the editor's conflict handler.
+// transition stays in the dialog; a 412 goes to the editor's conflict handler. In a type
+// with an approval workflow (M6-3 §6.5), an admin whose item still waits for approval
+// (`allowed.needs_approval` and `allowed.override`) gets "Override approval" with a
+// required reason; without it nothing can be confirmed.
 
 import { CalendarClockIcon, ZapIcon } from "lucide-react";
 import { cn } from "cn";
@@ -31,6 +34,13 @@ import {
   wallClockToUtc,
 } from "./publishing";
 import { SchedulePicker } from "./schedule-picker";
+import {
+  NO_OVERRIDE,
+  type OverrideState,
+  overrideIncomplete,
+  overrideReason,
+} from "@/releases/override";
+import { OverrideField } from "@/releases/override-field";
 
 export type PublishMode = "now" | "schedule";
 
@@ -68,8 +78,12 @@ function PublishDialogBody({
 }: PublishDialogProps & { mode: PublishMode }) {
   const { t } = useTranslation("editor");
   const item = doc.item;
-  const canSchedule = item?.allowed.schedule === true;
-  const canNow = item?.allowed.publish === true;
+  // An admin may override a missing approval (the dialog then asks for a reason).
+  const overridable = item?.allowed.needs_approval === true && item.allowed.override;
+  const canSchedule = item?.allowed.schedule === true || overridable;
+  const canNow = item?.allowed.publish === true || overridable;
+  const [override, setOverride] = useState<OverrideState>(NO_OVERRIDE);
+  const blocked = overridable && (!override.on || overrideIncomplete(override));
   const [mode, setMode] = useState<PublishMode>(
     initialMode === "schedule" && canSchedule ? "schedule" : canNow ? "now" : "schedule",
   );
@@ -119,10 +133,12 @@ function PublishDialogBody({
           : "";
       setServerError(detail ? t("publish.failedWith", { detail }) : t("publish.failed"));
     };
+    const reason = overridable ? overrideReason(override) : undefined;
+    const extra = reason ? { overrideReason: reason } : {};
     const next =
       mode === "schedule" && at
-        ? await doc.transition("schedule", { at, onError })
-        : await doc.transition("publish", { onError });
+        ? await doc.transition("schedule", { at, onError, ...extra })
+        : await doc.transition("publish", { onError, ...extra });
     setBusy(false);
     if (!next) return;
     onClose();
@@ -240,6 +256,20 @@ function PublishDialogBody({
           </fieldset>
         ) : null}
 
+        {overridable ? (
+          <div className="flex flex-col gap-2">
+            <p data-slot="publish-needs-approval" className="text-sm text-muted-foreground">
+              {t("publish.needsApproval")}
+            </p>
+            <OverrideField
+              value={override}
+              onChange={setOverride}
+              disabled={busy}
+              checkLabel={t("publish.overrideCheck")}
+            />
+          </div>
+        ) : null}
+
         {mode === "schedule" ? (
           <SchedulePicker
             value={wall}
@@ -265,7 +295,7 @@ function PublishDialogBody({
         <Button
           type="button"
           data-slot="publish-confirm"
-          disabled={busy || (mode === "schedule" && scheduleError !== null)}
+          disabled={busy || blocked || (mode === "schedule" && scheduleError !== null)}
           onClick={() => {
             void confirm();
           }}

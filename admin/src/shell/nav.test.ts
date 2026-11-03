@@ -54,6 +54,7 @@ test("author_sees_posts_pages_and_custom_types", () => {
         ["Media", "/media"],
         // M6-3: releases and the review queue.
         ["Releases", "/releases"],
+        ["Reviews", "/reviews"],
       ],
     ],
   ]);
@@ -66,6 +67,7 @@ test("author_sees_posts_pages_and_custom_types", () => {
     undefined,
     "g m",
     "g r",
+    "g v",
   ]);
 });
 
@@ -323,6 +325,7 @@ test("content_items_name_their_type_and_paths_find_their_item", () => {
     "recipe",
     undefined,
     undefined,
+    undefined,
   ]);
   expect(navItemAt(sections, "/")?.id).toBe("dashboard");
   expect(navItemAt(sections, "/content/page")?.id).toBe("content-page");
@@ -479,13 +482,16 @@ test("admin_section_by_role", () => {
   expect(new Set(chords).size).toBe(chords.length);
 });
 
-test("releases_for_every_writing_role", () => {
-  // M6-3 (design 15 §11.3): Releases (`g r`) after the content screens, for every role
-  // that writes content (`edit_own`).
+test("releases_and_reviews_for_every_writing_role", () => {
+  // M6-3 (design 15 §11.3–11.4): Releases (`g r`) and Reviews (`g v`) after the content
+  // screens, for every role that writes content (`edit_own`).
   for (const who of [AUTHOR, me("contributor", ["read_admin", "edit_own"])]) {
     const content = navFor(who, TYPES).find((s) => s.id === "content");
-    const tail = content?.items.slice(-1).map((i) => [i.id, i.label, i.to, i.shortcut]);
-    expect(tail).toEqual([["releases", "Releases", "/releases", "g r"]]);
+    const tail = content?.items.slice(-2).map((i) => [i.id, i.label, i.to, i.shortcut]);
+    expect(tail).toEqual([
+      ["releases", "Releases", "/releases", "g r"],
+      ["reviews", "Reviews", "/reviews", "g v"],
+    ]);
   }
   const reader = me("reader", ["read_admin"]);
   expect(

@@ -8,6 +8,7 @@
 
 import {
   BlocksIcon,
+  ClipboardCheckIcon,
   FileTextIcon,
   FilesIcon,
   ImageIcon,
@@ -115,6 +116,7 @@ export const SCREEN_ENTRIES: readonly ScreenEntry[] = [
   { screen: "media", to: "/media", label: "nav.media", icon: ImageIcon },
   { screen: "comments", to: "/comments", label: "nav.comments", icon: MessageSquareIcon },
   { screen: "releases", to: "/releases", label: "nav.releases", icon: PackageIcon },
+  { screen: "reviews", to: "/reviews", label: "nav.reviews", icon: ClipboardCheckIcon },
   { screen: "types", to: "/structure/types", label: "nav.contentTypes", icon: BlocksIcon },
   { screen: "taxonomies", to: "/structure/taxonomies", label: "nav.taxonomies", icon: TagsIcon },
   { screen: "menus", to: "/structure/menus", label: "nav.menus", icon: ListTreeIcon },

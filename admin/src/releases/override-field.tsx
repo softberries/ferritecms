@@ -16,10 +16,13 @@ export function OverrideField({
   value,
   onChange,
   disabled,
+  checkLabel,
 }: {
   value: OverrideState;
   onChange: (next: OverrideState) => void;
   disabled?: boolean;
+  /** The checkbox's label (default: applying a release without the approvals). */
+  checkLabel?: string;
 }) {
   const { t } = useTranslation("releases");
   const checkId = useId();
@@ -44,7 +47,7 @@ export function OverrideField({
             disabled={disabled}
             onCheckedChange={(c) => onChange({ ...value, on: c === true })}
           />
-          <Label htmlFor={checkId}>{t("override.check")}</Label>
+          <Label htmlFor={checkId}>{checkLabel ?? t("override.check")}</Label>
         </div>
         {value.on ? (
           <div className="flex flex-col gap-1.5">

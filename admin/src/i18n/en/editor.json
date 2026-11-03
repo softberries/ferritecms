@@ -193,7 +193,9 @@
       "goesLive": "Goes live",
       "published": "Published",
       "author": "Author",
-      "waiting": "Waiting for review. An editor will publish it; you can still make changes."
+      "waiting": "Waiting for review. An editor will publish it; you can still make changes.",
+      "inReview": "In review: {{step}} ({{n}} of {{steps}})",
+      "approved": "Approved: it can be published."
     },
     "actions": {
       "publish": "Publish…",
@@ -249,7 +251,9 @@
       "published": "Published",
       "scheduled": "Scheduled for {{when}}",
       "view": "View"
-    }
+    },
+    "needsApproval": "This item still waits for approval: its workflow has not approved what is saved now.",
+    "overrideCheck": "Publish without the missing approvals"
   },
   "schedule": {
     "time": "Time",

@@ -469,6 +469,10 @@ export interface TransitionOptions {
   /** Handles a failure of the transition itself (not a 412, not the save before it)
    * instead of `onWriteError`; the publish dialog shows it in place. */
   onError?: (error: unknown) => void;
+  /** `publish`/`schedule`: an admin's reason to go without the approval (M6-3 §6.5). */
+  overrideReason?: string;
+  /** `submit` in a workflow type: who should review it, and a note for them. */
+  submit?: { reviewers?: string[]; note?: string };
 }
 
 export interface EditorDocument {
@@ -1469,12 +1473,17 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         }
         if (!current || itemRef.current === null) return null;
         try {
+          const reason = options.overrideReason ? { override_reason: options.overrideReason } : {};
           const next =
             action === "schedule"
               ? await lifecycle(type, current.id, "schedule", current.version, {
                   at: options.at ?? "",
+                  ...reason,
                 })
-              : await lifecycle(type, current.id, action, current.version);
+              : await lifecycle(type, current.id, action, current.version, {
+                  ...reason,
+                  ...(action === "submit" ? (options.submit ?? {}) : {}),
+                });
           baseVersion.current = next.version;
           adopt(next);
           return next;

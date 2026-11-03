@@ -37,6 +37,7 @@ import { useTypeTaxonomies } from "./panel-state";
 import { ParentField } from "./parent-field";
 import { SeoSection } from "./seo-section";
 import { SlugField } from "./slug-field";
+import { ReviewSection } from "@/reviews/review-section";
 import { StatusSection } from "./status-section";
 import { TermsSection } from "./terms-section";
 import { TranslationsSection } from "./translations-section";
@@ -166,6 +167,7 @@ function PanelBody({
   return (
     <div data-slot="panel-body" className="flex flex-col gap-5 px-5 pt-1 pb-8">
       <StatusSection doc={doc} onPublish={onPublish} />
+      <ReviewSection doc={doc} type={type} />
       {onRevisions && doc.item?.allowed.edit ? (
         <RevisionsEntry type={type} id={doc.item.id} onOpen={onRevisions} />
       ) : null}

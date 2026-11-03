@@ -9,6 +9,7 @@ import { type ContentTypeDto, getType } from "@/api/types";
 import { useMe } from "@/auth/session";
 import { ForbiddenState } from "@/components/kit/forbidden-state";
 import { TypeForm } from "@/structure/types/type-form";
+import { WorkflowEditor } from "@/structure/types/workflow-editor";
 
 const NOT_EDITED = new Set(["media"]);
 
@@ -42,6 +43,14 @@ function TypeRoute() {
       </div>
     );
   }
-  // A new copy (another type, or the same one loaded again) starts the form afresh.
-  return <TypeForm key={type.name} initial={type} />;
+  // A new copy (another type, or the same one loaded again) starts the form afresh. The
+  // approval workflow (M6-3) is saved on its own, under the type's settings.
+  return (
+    <div className="flex flex-col gap-6">
+      <TypeForm key={type.name} initial={type} />
+      <div className="mx-auto w-full max-w-6xl">
+        <WorkflowEditor key={type.name} type={type.name} />
+      </div>
+    </div>
+  );
 }

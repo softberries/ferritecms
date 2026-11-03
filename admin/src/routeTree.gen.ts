@@ -29,6 +29,7 @@ import { Route as AppPluginsNameRouteImport } from './routes/_app/plugins.$name'
 import { Route as AppPluginsPublishersRouteImport } from './routes/_app/plugins.publishers'
 import { Route as AppReleasesIndexRouteImport } from './routes/_app/releases.index'
 import { Route as AppReleasesIdRouteImport } from './routes/_app/releases.$id'
+import { Route as AppReviewsIndexRouteImport } from './routes/_app/reviews.index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings.index'
 import { Route as AppSettingsGroupRouteImport } from './routes/_app/settings.$group'
 import { Route as AppStructureRedirectsRouteImport } from './routes/_app/structure.redirects'
@@ -146,6 +147,11 @@ const AppReleasesIdRoute = AppReleasesIdRouteImport.update({
   path: '/releases/$id',
   getParentRoute: () => AppRoute,
 } as any)
+const AppReviewsIndexRoute = AppReviewsIndexRouteImport.update({
+  id: '/reviews/',
+  path: '/reviews/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSettingsIndexRoute = AppSettingsIndexRouteImport.update({
   id: '/settings/',
   path: '/settings/',
@@ -258,6 +264,7 @@ export interface FileRoutesByFullPath {
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
   '/releases/': typeof AppReleasesIndexRoute
+  '/reviews/': typeof AppReviewsIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/system/': typeof AppSystemIndexRoute
   '/users/': typeof AppUsersIndexRoute
@@ -296,6 +303,7 @@ export interface FileRoutesByTo {
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
   '/releases': typeof AppReleasesIndexRoute
+  '/reviews': typeof AppReviewsIndexRoute
   '/settings': typeof AppSettingsIndexRoute
   '/system': typeof AppSystemIndexRoute
   '/users': typeof AppUsersIndexRoute
@@ -336,6 +344,7 @@ export interface FileRoutesById {
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
   '/_app/releases/': typeof AppReleasesIndexRoute
+  '/_app/reviews/': typeof AppReviewsIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/system/': typeof AppSystemIndexRoute
   '/_app/users/': typeof AppUsersIndexRoute
@@ -376,6 +385,7 @@ export interface FileRouteTypes {
     | '/media/'
     | '/plugins/'
     | '/releases/'
+    | '/reviews/'
     | '/settings/'
     | '/system/'
     | '/users/'
@@ -414,6 +424,7 @@ export interface FileRouteTypes {
     | '/media'
     | '/plugins'
     | '/releases'
+    | '/reviews'
     | '/settings'
     | '/system'
     | '/users'
@@ -453,6 +464,7 @@ export interface FileRouteTypes {
     | '/_app/media/'
     | '/_app/plugins/'
     | '/_app/releases/'
+    | '/_app/reviews/'
     | '/_app/settings/'
     | '/_app/system/'
     | '/_app/users/'
@@ -620,6 +632,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppReleasesIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/reviews/': {
+      id: '/_app/reviews/'
+      path: '/reviews'
+      fullPath: '/reviews/'
+      preLoaderRoute: typeof AppReviewsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/settings/': {
       id: '/_app/settings/'
       path: '/settings'
@@ -760,6 +779,7 @@ interface AppRouteChildren {
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
   AppReleasesIndexRoute: typeof AppReleasesIndexRoute
+  AppReviewsIndexRoute: typeof AppReviewsIndexRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppSystemIndexRoute: typeof AppSystemIndexRoute
   AppUsersIndexRoute: typeof AppUsersIndexRoute
@@ -793,6 +813,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,
   AppReleasesIndexRoute: AppReleasesIndexRoute,
+  AppReviewsIndexRoute: AppReviewsIndexRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppSystemIndexRoute: AppSystemIndexRoute,
   AppUsersIndexRoute: AppUsersIndexRoute,

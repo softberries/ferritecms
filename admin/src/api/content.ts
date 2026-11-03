@@ -127,6 +127,16 @@ export function translateContent(
 /** A lifecycle transition; `trash` is `DELETE` (a trashed item is deleted for good elsewhere). */
 export type LifecycleAction = "publish" | "unpublish" | "submit" | "restore" | "schedule" | "trash";
 
+/**
+ * What a transition may carry (M6-3): an admin's `override_reason` for publish and
+ * schedule in a workflow type; the reviewers and a note of a submit.
+ */
+export interface LifecycleExtra {
+  override_reason?: string;
+  reviewers?: string[];
+  note?: string;
+}
+
 export function lifecycle(
   type: string,
   id: string,
@@ -139,28 +149,45 @@ export function lifecycle(
   id: string,
   action: Exclude<LifecycleAction, "schedule">,
   version: number,
+  extra?: LifecycleExtra,
 ): Promise<SchemaContentDto>;
 export function lifecycle(
   type: string,
   id: string,
   action: LifecycleAction,
   version: number,
-  body?: SchemaScheduleRequest,
+  body?: SchemaScheduleRequest | LifecycleExtra,
 ): Promise<SchemaContentDto> {
   const params = { path: { type, id }, header: ifMatch(version) };
+  const extra = (body ?? {}) as LifecycleExtra;
   switch (action) {
     case "publish":
-      return unwrap(api.POST("/api/v1/content/{type}/{id}/publish", { params }));
+      return unwrap(
+        api.POST("/api/v1/content/{type}/{id}/publish", {
+          params,
+          ...(extra.override_reason ? { body: { override_reason: extra.override_reason } } : {}),
+        }),
+      );
     case "unpublish":
       return unwrap(api.POST("/api/v1/content/{type}/{id}/unpublish", { params }));
-    case "submit":
-      return unwrap(api.POST("/api/v1/content/{type}/{id}/submit", { params }));
+    case "submit": {
+      const submit = {
+        ...(extra.reviewers && extra.reviewers.length > 0 ? { reviewers: extra.reviewers } : {}),
+        ...(extra.note ? { note: extra.note } : {}),
+      };
+      return unwrap(
+        api.POST("/api/v1/content/{type}/{id}/submit", {
+          params,
+          ...(Object.keys(submit).length > 0 ? { body: submit } : {}),
+        }),
+      );
+    }
     case "restore":
       return unwrap(api.POST("/api/v1/content/{type}/{id}/restore", { params }));
     case "trash":
       return unwrap(api.DELETE("/api/v1/content/{type}/{id}", { params }));
     case "schedule":
-      if (body === undefined) {
+      if (body === undefined || !("at" in body)) {
         return Promise.reject(new TypeError("lifecycle(schedule) needs { at }"));
       }
       return unwrap(api.POST("/api/v1/content/{type}/{id}/schedule", { params, body }));
