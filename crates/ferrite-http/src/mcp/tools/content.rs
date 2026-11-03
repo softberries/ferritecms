@@ -163,6 +163,42 @@ pub struct VersionedInput {
     pub version: i64,
 }
 
+/// The input of `content_submit_for_review`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitInput {
+    /// The item's content type (`post`, `page`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The item's id.
+    pub id: Uuid,
+    /// The `version` you last read.
+    #[schemars(range(min = 1))]
+    pub version: i64,
+    /// In a type with an approval workflow: user ids of editors or admins to ask first
+    /// (at most 10). Anyone who may approve can still decide.
+    #[serde(default)]
+    pub reviewers: Vec<Uuid>,
+    /// A note for the reviewers (at most 2000 characters).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// The input of `content_preview_link`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewInput {
+    /// The item's content type (`post`, `page`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The item's id.
+    pub id: Uuid,
+    /// How long the link works, 1 to 168 hours (default 24).
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 168))]
+    pub expires_in_hours: Option<u32>,
+}
+
 /// The input of `content_schedule`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -494,11 +530,9 @@ pub struct RevisionsOut {
 #[derive(Debug, Serialize)]
 pub struct PreviewOut {
     pub url: String,
-    /// The link does not expire: it works for as long as the item exists and the
-    /// signed-in viewer may read it.
+    /// When the signed link stops working.
     pub expires_at: Option<DateTime<Utc>>,
-    /// The preview is shown only to a browser signed in to the site; opening it with
-    /// the API token fails.
+    /// Always `false`: the signed link needs no session (M6-3).
     pub requires_sign_in: bool,
     pub note: String,
 }
@@ -749,8 +783,11 @@ impl FerriteMcp {
     }
 
     /// Offers a draft for review: it becomes `pending` and waits for someone who may
-    /// publish. This is how contributors finish their work. Send the `version` you last
-    /// read.
+    /// publish. This is how contributors finish their work. In a type with an approval
+    /// workflow it also starts the review (optionally with `reviewers` and a `note`);
+    /// a person then approves it in the admin, and only then can it be published.
+    /// Calling it on a pending item whose review went stale starts a new one. Send the
+    /// `version` you last read.
     #[tool(annotations(
         title = "Submit content for review",
         read_only_hint = false,
@@ -761,16 +798,50 @@ impl FerriteMcp {
     pub async fn content_submit_for_review(
         &self,
         caller: Caller,
-        Parameters(input): Parameters<VersionedInput>,
+        Parameters(input): Parameters<SubmitInput>,
     ) -> CallToolResult {
-        self.run_transition(
-            &caller,
-            input,
-            Transition::Submit,
-            "content_submit_for_review",
-            "Submitted for review",
-        )
-        .await
+        let run = async {
+            let actor = caller.actor();
+            let id = load(&self.api, actor, &input.kind, input.id).await?.id;
+            let extras = ferrite_core::workflow::SubmitInput {
+                reviewers: input
+                    .reviewers
+                    .into_iter()
+                    .map(ferrite_domain::UserId::from_uuid)
+                    .collect(),
+                note: input.note,
+            };
+            match self
+                .api
+                .content
+                .submit_with(actor, id, input.version, extras)
+                .await
+            {
+                Ok(item) => {
+                    self.audit(
+                        &caller,
+                        "content_submit_for_review",
+                        "content",
+                        Some(item.id.to_string()),
+                        json!({"type": item.kind, "status": item.status.as_str(),
+                            "version": item.version}),
+                    )
+                    .await;
+                    Ok(self.written(actor, item, Vec::new()).await)
+                }
+                Err(e) => Err(self.write_problem(actor, id, e).await),
+            }
+        };
+        match run.await {
+            Ok(out) => {
+                let summary = format!(
+                    "Submitted for review {:?} (now {}, version {}).",
+                    out.title, out.status, out.version
+                );
+                results::ok(out.value, summary)
+            }
+            Err(p) => results::from_problem(p),
+        }
     }
 
     /// Schedules a draft or pending item to be published automatically at `at` (an RFC
@@ -905,15 +976,21 @@ impl FerriteMcp {
         }
     }
 
-    /// Returns the link at which the item shows as it will look, drafts and scheduled
-    /// items included. Give it to the user: the preview opens only in a browser where
-    /// they are signed in to the site (it does not work with the API token), and it
-    /// does not expire. Not available for trashed items.
-    #[tool(annotations(title = "Preview link", read_only_hint = true, open_world_hint = false))]
+    /// Returns a signed link at which the item shows as it is stored, drafts and
+    /// scheduled items included. Give it to the user: it opens in any browser without
+    /// signing in, until it expires (1 to 168 hours, default 24). Not available for
+    /// trashed items.
+    #[tool(annotations(
+        title = "Preview link",
+        read_only_hint = false,
+        destructive_hint = false,
+        idempotent_hint = false,
+        open_world_hint = false
+    ))]
     pub async fn content_preview_link(
         &self,
         caller: Caller,
-        Parameters(input): Parameters<ItemInput>,
+        Parameters(input): Parameters<PreviewInput>,
     ) -> CallToolResult {
         match self.preview_link(&caller, input).await {
             Ok(out) => {
@@ -955,18 +1032,18 @@ fn with_notes(mut summary: String, notes: &[String]) -> String {
 }
 
 /// A body converted for a write.
-struct Body {
+pub(crate) struct Body {
     /// The new body; `None` when the call sends none.
-    body: Option<Value>,
+    pub(crate) body: Option<Value>,
     /// The argument it came from (`body_markdown` or `body_blocks`), for errors.
-    field: &'static str,
+    pub(crate) field: &'static str,
     /// The title lifted from a leading `# H1` (only when the call gave no title).
-    title: Option<String>,
-    notes: Vec<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) notes: Vec<String>,
 }
 
 /// Converts the body argument of a write (see the module docs for the H1 rule).
-fn resolve_body(
+pub(crate) fn resolve_body(
     markdown: Option<String>,
     blocks: Option<Value>,
     title: Option<&str>,
@@ -1696,7 +1773,11 @@ impl FerriteMcp {
         }
     }
 
-    async fn preview_link(&self, caller: &Caller, input: ItemInput) -> Result<PreviewOut, Problem> {
+    async fn preview_link(
+        &self,
+        caller: &Caller,
+        input: PreviewInput,
+    ) -> Result<PreviewOut, Problem> {
         let item = load(&self.api, caller.actor(), &input.kind, input.id).await?;
         if item.status == ferrite_domain::ContentStatus::Trash {
             return Err(bad_input(
@@ -1704,15 +1785,23 @@ impl FerriteMcp {
                 "a trashed item has no preview; restore it with content_restore first",
             ));
         }
+        let v = self
+            .signed_link(
+                caller,
+                ferrite_domain::PreviewTarget::Item(item.id),
+                input.expires_in_hours,
+            )
+            .await?;
         Ok(PreviewOut {
-            url: format!("{}/_preview/{}", self.api.site_url, item.id),
-            expires_at: None,
-            requires_sign_in: true,
-            note: format!(
-                "Open it in a browser where the user is signed in to {}; the preview is not \
-                 available to API tokens, and the link does not expire.",
-                self.api.site_url
-            ),
+            url: v["url"].as_str().unwrap_or_default().to_owned(),
+            expires_at: v["expires_at"]
+                .as_str()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&Utc)),
+            requires_sign_in: false,
+            note: "Anyone with the link can open the preview until it expires; it can be \
+                   revoked in the admin."
+                .to_owned(),
         })
     }
 

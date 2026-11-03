@@ -248,6 +248,7 @@ deletes expired requests, codes, grants and OAuth access tokens.
 | Plugins | `plugins_list`, `plugin_enable`, `plugin_disable`, `plugin_settings_get`, `plugin_settings_update` (secrets write-only, as in the API) |
 | Users | `users_list`, `user_get` (no tokens, sessions or TOTP data) |
 | System | `system_status`, `jobs_list`, `audit_list` |
+| Releases and reviews (M6-3, design 15 §12) | `releases_list`, `release_get`, `release_create`, `release_stage`, `release_unstage`, `release_check`, `release_schedule`, `release_apply`, `release_preview_link`, `reviews_list`; `content_submit_for_review` takes `reviewers` and `note`, `content_preview_link` returns a signed link (`expires_in_hours`) |
 
 ### 5.3 Markdown out
 
@@ -264,7 +265,8 @@ to the given title it is dropped; different, the tool asks the model to move it.
 No tool installs, uninstalls or purges plugins or themes (installation needs a person to
 read the permission report and approve its fingerprint), creates, deletes or changes users,
 roles or passwords, manages tokens, sessions, TOTP or OAuth grants, changes `mcp.enabled`,
-runs imports, backups or restores, or retries jobs. The assistant can point the user to the
+runs imports, backups or restores, or retries jobs; nor does one approve or reject reviews,
+override approvals or configure workflows (M6-3). The assistant can point the user to the
 admin screen for these (`site_overview` returns the admin URL).
 
 ### 5.5 Resources and prompts

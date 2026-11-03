@@ -21,6 +21,7 @@ mod mcp;
 mod mcp_admin;
 mod mcp_content;
 mod mcp_reference;
+mod mcp_releases;
 mod mcp_structure;
 mod media;
 mod media_filters;

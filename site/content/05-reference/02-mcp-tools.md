@@ -6,7 +6,7 @@ description = "Every tool the FerriteCMS MCP server offers an AI assistant: what
 # MCP tools
 
 These are the tools an AI assistant sees when it connects to a site's `/mcp` endpoint:
-57 of them, in 13 areas. To connect an assistant, see
+67 of them, in 14 areas. To connect an assistant, see
 [AI assistants (MCP)](../02-guides/08-ai-assistants.md).
 
 How to read the tables:
@@ -30,7 +30,8 @@ How to read the tables:
 
 Installing or removing plugins and themes, managing users, tokens, sessions and connected
 apps, switching the MCP endpoint, imports, backups, restores and retrying jobs are not
-offered: they stay with a person in the admin.
+offered: they stay with a person in the admin. So do approving or rejecting reviews,
+overriding approvals and configuring approval workflows.
 
 ## Site
 
@@ -49,13 +50,13 @@ offered: they stay with a person in the admin.
 | `content_update` | Changes an item; what is left out is kept, and a stale `version` is refused with the current item. | `content:write` | write |
 | `content_publish` | Publishes a draft, pending or scheduled item now. | `content:write` | write |
 | `content_unpublish` | Takes a published item off the site and turns it back into a draft. | `content:write` | write |
-| `content_submit_for_review` | Offers a draft for review as `pending`. | `content:write` | write |
+| `content_submit_for_review` | Offers a draft for review as `pending`; in a type with an approval workflow it starts the review, optionally naming reviewers and a note. | `content:write` | write |
 | `content_schedule` | Schedules a draft or pending item to publish at a future time. | `content:write` | write |
 | `content_trash` | Moves an item to the trash. | `content:write` | write |
 | `content_restore` | Brings a trashed item back as a draft. | `content:write` | write |
 | `content_revisions` | Lists an item's saved revisions. | `content:read` | read |
 | `content_restore_revision` | Brings an earlier revision back as a new version of the item. | `content:write` | write |
-| `content_preview_link` | Returns the preview link of an item, for a signed-in browser. | `content:read` | read |
+| `content_preview_link` | Makes a signed preview link of an item that opens without signing in until it expires (1 to 168 hours). | `content:write` | write |
 | `content_translate` | Makes a draft copy of an item in another of the site's languages, linked to it as its translation, and returns it with notes on what it could not carry over. | `content:write` | write |
 
 ## Media
@@ -148,6 +149,21 @@ the admin or the CLI: no tool does them.
 |---|---|---|---|
 | `users_list` | Lists user accounts with their role and status, never sign-in data. | `users:read` | read |
 | `user_get` | Reads one user account. | `users:read` | read |
+
+## Releases and reviews
+
+| Tool | What it does | Scope | Access |
+|---|---|---|---|
+| `releases_list` | Lists the releases the caller may see, with status, schedule and entry count. | `content:read` | read |
+| `release_get` | Returns a release with its entries: actions, staged changes (Markdown), conflicts and reviews. | `content:read` | read |
+| `release_create` | Creates an empty release. | `content:write` | write |
+| `release_stage` | Adds or replaces an item's entry: a staged change and/or publish or unpublish. | `content:write` | write |
+| `release_unstage` | Removes an item's entry from a release. | `content:write` | write |
+| `release_check` | Reports what applying the release now would do, entry by entry, without writing. | `content:read` | read |
+| `release_schedule` | Schedules a release (its items are locked) or takes it off the schedule. | `content:write` | write |
+| `release_apply` | Applies a release now, all entries in one transaction. | `content:write` | write |
+| `release_preview_link` | Makes a signed link showing the whole site as the release will make it. | `content:write` | write |
+| `reviews_list` | Lists open reviews: what waits for approval, at which step. | `content:read` | read |
 
 ## System
 

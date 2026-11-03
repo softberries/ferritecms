@@ -305,7 +305,12 @@ impl Api {
             })
             .expect("app state")
             // Sessions are resolved for `/_preview/<id>`.
-            .with_auth(auth.clone()),
+            .with_auth(auth.clone())
+            // Link and whole-site previews (M6-3).
+            .with_editorial(
+                editorial_api(store.clone()).releases,
+                editorial_api(store.clone()).preview_links,
+            ),
         );
         let mailer = Arc::new(MemoryMailer::new());
         let content = Arc::new(ContentService::new(

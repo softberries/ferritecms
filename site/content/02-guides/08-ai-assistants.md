@@ -202,13 +202,17 @@ assistant cannot be used anywhere else.
 
 ## What an assistant can do
 
-57 tools cover what an editor or administrator does in the admin:
+67 tools cover what an editor or administrator does in the admin:
 
 - **Content**: list, search, read, write, publish, schedule, submit for review, trash
   and restore posts, pages and custom types, with revisions and preview links. Bodies are
   Markdown both ways; images are `![alt](ferrite:media/<id>)`.
 - **Media**: upload a file (up to 6 MiB, as data or from a public `https` URL), set titles
   and alt text, trash and restore.
+- **Releases**: group changes in a release, check it, schedule or apply it, and hand out
+  a signed link that previews the whole site as the release will make it. Approvals stay
+  with people: an assistant submits for review and lists the queue, but cannot approve,
+  request changes or override.
 - **Structure**: terms, menus, content types with their custom fields, redirects.
 - **Comments**: moderate and reply.
 - **Site**: settings, the active theme and its settings, turning plugins on or off and

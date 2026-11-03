@@ -674,7 +674,6 @@ pub async fn delete_content(
 pub(crate) enum Transition {
     Publish,
     Unpublish,
-    Submit,
     Restore,
 }
 
@@ -691,7 +690,6 @@ pub(crate) async fn apply_transition(
     match t {
         Transition::Publish => svc.publish(actor, id, version).await,
         Transition::Unpublish => svc.unpublish(actor, id, version).await,
-        Transition::Submit => svc.submit(actor, id, version).await,
         Transition::Restore => svc.restore(actor, id, version).await,
     }
 }

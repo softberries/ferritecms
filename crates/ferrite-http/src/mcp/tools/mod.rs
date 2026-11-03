@@ -16,6 +16,7 @@ pub mod media;
 pub mod menus;
 pub mod plugins;
 pub mod redirects;
+pub mod releases;
 pub mod settings;
 pub mod site;
 pub mod system;

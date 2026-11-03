@@ -45,6 +45,29 @@ pub fn from_core(e: CoreError) -> CallToolResult {
 pub fn from_problem(p: Problem) -> CallToolResult {
     let doc = p.document();
     let mut text = format!("{}: {}", doc.title, doc.detail);
+    // What the model should do next for the M6-3 refusals.
+    let hint = match p.slug {
+        "approval-required" => Some(
+            "Submit it for review with content_submit_for_review; a person approves it in \
+             the admin, then it can be published.",
+        ),
+        "staging-required" => Some(
+            "This published item changes through a release: stage the change with \
+             release_stage (release_create first if needed).",
+        ),
+        "release-locked" => Some(
+            "The item is in a scheduled release; unschedule that release first \
+             (release_schedule with at: null).",
+        ),
+        "release-conflict" | "release-not-ready" => Some(
+            "See `entries`: release_get shows the entries; a moved item needs a rebase in the admin.",
+        ),
+        _ => None,
+    };
+    if let Some(h) = hint {
+        text.push('\n');
+        text.push_str(h);
+    }
     for e in &doc.errors {
         match &e.field {
             Some(field) => text.push_str(&format!("\n- {field}: {}", e.detail)),
