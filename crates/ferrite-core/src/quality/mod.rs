@@ -10,8 +10,10 @@
 //! found (`context`) and a rule-specific `detail`; the admin and the MCP layer word it.
 
 mod check;
+pub mod external;
 pub mod facts;
 pub mod gate;
+mod health;
 pub mod robots;
 pub mod rules;
 mod service;
@@ -24,6 +26,7 @@ use serde_json::Value;
 use crate::fields::FieldDef;
 
 pub use check::check_document;
+pub use health::{HealthRunner, MAX_RUN_FINDINGS};
 pub use rules::{Category, RULES, Rule, RuleScope, Severity, rule};
 pub use service::{
     CheckDraft, CheckReport, CheckedFinding, Counts, GateState, MAX_CHECK_PATHS, MAX_REASON,

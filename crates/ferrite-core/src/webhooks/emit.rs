@@ -147,6 +147,28 @@ impl NewWebhookEvent {
     }
 }
 
+impl NewWebhookEvent {
+    /// `health.completed` for `run` (M6-4, design 16 §9): its totals, counters and
+    /// times; no findings.
+    pub fn health(run: &ferrite_domain::HealthRun) -> Self {
+        Self {
+            kind: "health.completed",
+            content_type: None,
+            data: json!({
+                "run": run.id.to_string(),
+                "trigger": run.trigger.as_str(),
+                "started_at": ts(Some(run.started_at)),
+                "finished_at": ts(run.finished_at),
+                "items_checked": run.counters.items,
+                "paths_checked": run.counters.paths,
+                "urls_checked": run.counters.urls,
+                "truncated": run.truncated,
+                "totals": run.totals,
+            }),
+        }
+    }
+}
+
 /// The content `data` (design 18 §3.2) of `item` with its permalink `path`; `public`
 /// tells the renderer to add `url` (`site.url + path`) at delivery.
 fn content_data(item: &ContentItem, path: String, actor: Option<UserId>) -> Value {

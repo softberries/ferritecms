@@ -89,6 +89,11 @@ pub const EVENT_TYPES: &[EventTypeInfo] = &[
     t("user.updated", "user", "A user account changed."),
     t("user.deleted", "user", "A user account was deleted."),
     t("import.finished", "import", "An import run finished."),
+    t(
+        "health.completed",
+        "health",
+        "A content health run finished.",
+    ),
 ];
 
 /// The group of an event type (`content` for `content.published`).

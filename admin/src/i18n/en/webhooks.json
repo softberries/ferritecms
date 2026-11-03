@@ -49,7 +49,8 @@
       "media": "Media",
       "comment": "Comments",
       "user": "Users",
-      "import": "Imports"
+      "import": "Imports",
+      "health": "Content health"
     }
   },
   "form": {
