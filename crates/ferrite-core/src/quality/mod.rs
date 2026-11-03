@@ -12,6 +12,7 @@
 mod check;
 pub mod facts;
 pub mod gate;
+pub mod robots;
 pub mod rules;
 mod service;
 mod vague;
@@ -154,6 +155,49 @@ pub enum PathStatus {
 pub trait PathProbe: Send + Sync {
     /// `path_and_query`: a local path, starting with `/`.
     async fn probe(&self, path_and_query: &str) -> PathStatus;
+}
+
+/// What one external URL check found (design 16 §6.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkOutcome {
+    /// `2xx` (after redirects).
+    Ok(u16),
+    /// `401` or `403`: it exists, access is restricted (counts as ok).
+    Restricted(u16),
+    /// `404` (or another `4xx` the checker treats as missing).
+    NotFound(u16),
+    /// `410`.
+    Gone,
+    /// The name does not resolve.
+    NoSuchHost,
+    /// `429`: try again next run.
+    RateLimited,
+    /// `5xx`, a timeout, a connect or TLS error: the class (`timeout`, `http 503`).
+    Failed(String),
+    /// The address or URL rules refused it (`address`, `credentials`, `scheme`).
+    Refused(&'static str),
+    /// Not checked (`port`, `robots`).
+    Unchecked(&'static str),
+}
+
+/// What a host's robots.txt says for this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RobotsFetch {
+    /// The file (cut at [`robots::MAX_ROBOTS`]).
+    Body(Vec<u8>),
+    /// `4xx`: everything allowed.
+    AllowAll,
+    /// `5xx`, a timeout or a refused address: the host is skipped this run.
+    SkipHost,
+}
+
+/// Checks external URLs over the SSRF-checked egress client (`ferrite-http`'s
+/// `LinkChecker`). Only the health job holds one (D12).
+#[async_trait::async_trait]
+pub trait LinkProbe: Send + Sync {
+    async fn check(&self, url: &url::Url) -> LinkOutcome;
+    /// `scheme://host/robots.txt` of `url`.
+    async fn robots(&self, url: &url::Url) -> RobotsFetch;
 }
 
 /// The first `max` characters of `s`.

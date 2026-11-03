@@ -15,6 +15,7 @@ pub mod extensions;
 pub mod head;
 pub mod import_blobs;
 pub mod import_fetch;
+pub mod link_check;
 pub mod mail;
 pub mod mcp;
 pub mod media;
