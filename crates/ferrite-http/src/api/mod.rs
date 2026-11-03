@@ -283,6 +283,9 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             quality::create_suppression
         ))
         .routes(routes!(quality::delete_suppression))
+        .routes(routes!(quality::health_summary))
+        .routes(routes!(quality::health_findings))
+        .routes(routes!(quality::start_health_run))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

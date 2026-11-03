@@ -355,3 +355,139 @@ mod tests {
         assert_eq!(ours, names);
     }
 }
+
+/// One health run.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthRunDto {
+    pub id: Uuid,
+    /// `running`, `done`, `failed` or `abandoned`.
+    pub status: String,
+    /// `schedule` or `manual`.
+    pub trigger: String,
+    pub requested_by: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub items_checked: i64,
+    pub paths_checked: i64,
+    pub urls_checked: i64,
+    /// Unsuppressed findings: `{"rules": {"<rule>": n}, "severity": {"error": n, …}}`.
+    #[schema(value_type = Object)]
+    pub totals: Value,
+    pub truncated: bool,
+}
+
+impl From<&ferrite_domain::HealthRun> for HealthRunDto {
+    fn from(r: &ferrite_domain::HealthRun) -> Self {
+        Self {
+            id: r.id.as_uuid(),
+            status: r.status.as_str().to_owned(),
+            trigger: r.trigger.as_str().to_owned(),
+            requested_by: r.requested_by.map(|u| u.as_uuid()),
+            started_at: r.started_at.as_datetime(),
+            finished_at: r.finished_at.map(|t| t.as_datetime()),
+            items_checked: r.counters.items,
+            paths_checked: r.counters.paths,
+            urls_checked: r.counters.urls,
+            totals: r.totals.clone(),
+            truncated: r.truncated,
+        }
+    }
+}
+
+/// `GET /health/summary`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthSummaryDto {
+    /// The newest finished run.
+    pub last: Option<HealthRunDto>,
+    /// The run going on now.
+    pub running: Option<HealthRunDto>,
+    /// The next daily run (04:00 UTC).
+    pub next_at: DateTime<Utc>,
+    /// Whether external links are checked (`health.external_links`).
+    pub external_links: bool,
+}
+
+/// The item a health finding is on.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthItemRefDto {
+    pub id: Uuid,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    pub status: String,
+    pub locale: String,
+    /// The item's editor in the admin.
+    pub admin_url: String,
+}
+
+/// The redirect a health finding is on.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RedirectRefDto {
+    pub id: Uuid,
+    pub source: String,
+    pub target: String,
+}
+
+/// One finding of the health report.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthFindingDto {
+    #[schema(value_type = RuleId)]
+    pub rule: String,
+    #[schema(value_type = SeverityDto)]
+    pub severity: String,
+    #[schema(value_type = CategoryDto)]
+    pub category: String,
+    pub wcag: Vec<&'static str>,
+    pub key: String,
+    pub context: Option<String>,
+    /// Rule-specific facts; `location` says where in the item.
+    #[schema(value_type = Object)]
+    pub detail: Value,
+    pub item: Option<HealthItemRefDto>,
+    pub redirect: Option<RedirectRefDto>,
+    pub suppressed: Option<SuppressionDto>,
+}
+
+impl From<&ferrite_core::quality::HealthFinding> for HealthFindingDto {
+    fn from(h: &ferrite_core::quality::HealthFinding) -> Self {
+        let f = &h.stored.finding;
+        Self {
+            wcag: ferrite_core::quality::rule(&f.rule)
+                .map(|r| r.wcag.to_vec())
+                .unwrap_or_default(),
+            rule: f.rule.clone(),
+            severity: f.severity.clone(),
+            category: f.category.clone(),
+            key: f.key.clone(),
+            context: f.context.clone(),
+            detail: f.detail.clone(),
+            item: h.item.as_ref().map(|i| HealthItemRefDto {
+                id: i.id.as_uuid(),
+                admin_url: format!("/admin/content/{}/{}", i.kind, i.id),
+                kind: i.kind.clone(),
+                title: i.title.clone(),
+                status: i.status.as_str().to_owned(),
+                locale: i.locale.clone(),
+            }),
+            redirect: h.redirect.as_ref().map(|r| RedirectRefDto {
+                id: r.id.as_uuid(),
+                source: r.source_path.clone(),
+                target: r.target.clone(),
+            }),
+            suppressed: h.suppressed.as_ref().map(Into::into),
+        }
+    }
+}
+
+/// `GET /health/findings`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthFindingList {
+    pub items: Vec<HealthFindingDto>,
+    pub next_cursor: Option<String>,
+}
+
+/// `POST /health/runs`: the queued job.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HealthRunQueuedDto {
+    pub job_id: Uuid,
+}

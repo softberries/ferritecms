@@ -14,6 +14,7 @@ pub mod external;
 pub mod facts;
 pub mod gate;
 mod health;
+mod report;
 pub mod robots;
 pub mod rules;
 mod service;
@@ -27,6 +28,7 @@ use crate::fields::FieldDef;
 
 pub use check::check_document;
 pub use health::{HealthRunner, MAX_RUN_FINDINGS};
+pub use report::{HealthFinding, HealthFindings, HealthSummary, ItemRef};
 pub use rules::{Category, RULES, Rule, RuleScope, Severity, rule};
 pub use service::{
     CheckDraft, CheckReport, CheckedFinding, Counts, GateState, MAX_CHECK_PATHS, MAX_REASON,

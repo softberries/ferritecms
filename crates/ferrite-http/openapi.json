@@ -3769,6 +3769,245 @@
         ]
       }
     },
+    "/api/v1/health/findings": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health_findings",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "description": "`accessibility`, `links`, `media`, `site` or `freshness`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "A rule id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "`error`, `warning` or `notice`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "A content type.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the newest run's findings, each with its item or redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthFindingList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation` (`errors[0].field`: `limit` or `cursor`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `category`, `rule` or `severity`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health/runs": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "start_health_run",
+        "responses": {
+          "202": {
+            "description": "Queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthRunQueuedDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`conflict`: a run is queued or running",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health/summary": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health_summary",
+        "responses": {
+          "200": {
+            "description": "The newest run, the running one, the next run and whether external links are checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`edit_others`, `content:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/import/jobs/{job_id}": {
       "get": {
         "tags": [
@@ -13978,6 +14217,253 @@
           }
         }
       },
+      "HealthFindingDto": {
+        "type": "object",
+        "description": "One finding of the health report.",
+        "required": [
+          "rule",
+          "severity",
+          "category",
+          "wcag",
+          "key",
+          "detail"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/CategoryDto"
+          },
+          "context": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "object",
+            "description": "Rule-specific facts; `location` says where in the item."
+          },
+          "item": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthItemRefDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "redirect": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RedirectRefDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/SeverityDto"
+          },
+          "suppressed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SuppressionDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wcag": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "HealthFindingList": {
+        "type": "object",
+        "description": "`GET /health/findings`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HealthFindingDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "HealthItemRefDto": {
+        "type": "object",
+        "description": "The item a health finding is on.",
+        "required": [
+          "id",
+          "type",
+          "title",
+          "status",
+          "locale",
+          "admin_url"
+        ],
+        "properties": {
+          "admin_url": {
+            "type": "string",
+            "description": "The item's editor in the admin."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthRunDto": {
+        "type": "object",
+        "description": "One health run.",
+        "required": [
+          "id",
+          "status",
+          "trigger",
+          "started_at",
+          "items_checked",
+          "paths_checked",
+          "urls_checked",
+          "totals",
+          "truncated"
+        ],
+        "properties": {
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items_checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "paths_checked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`running`, `done`, `failed` or `abandoned`."
+          },
+          "totals": {
+            "type": "object",
+            "description": "Unsuppressed findings: `{\"rules\": {\"<rule>\": n}, \"severity\": {\"error\": n, …}}`."
+          },
+          "trigger": {
+            "type": "string",
+            "description": "`schedule` or `manual`."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "urls_checked": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "HealthRunQueuedDto": {
+        "type": "object",
+        "description": "`POST /health/runs`: the queued job.",
+        "required": [
+          "job_id"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "HealthSummaryDto": {
+        "type": "object",
+        "description": "`GET /health/summary`.",
+        "required": [
+          "next_at",
+          "external_links"
+        ],
+        "properties": {
+          "external_links": {
+            "type": "boolean",
+            "description": "Whether external links are checked (`health.external_links`)."
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthRunDto",
+                "description": "The newest finished run."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The next daily run (04:00 UTC)."
+          },
+          "running": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HealthRunDto",
+                "description": "The run going on now."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "HookStatsDto": {
         "type": "object",
         "description": "One hook's calls on the answering node since it started.",
@@ -16542,6 +17028,27 @@
           }
         }
       },
+      "RedirectRefDto": {
+        "type": "object",
+        "description": "The redirect a health finding is on.",
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
       "RegistryDto": {
         "type": "object",
         "description": "`GET /plugins/registry`.",
@@ -19059,6 +19566,10 @@
     {
       "name": "webhooks",
       "description": "Outgoing webhooks: endpoints, the event catalogue, test deliveries, secret rotation, the delivery log and redelivery (admins)"
+    },
+    {
+      "name": "health",
+      "description": "The content health report and runs (M6-4; editors and admins)"
     }
   ]
 }

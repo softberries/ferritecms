@@ -548,6 +548,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/health/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["health_findings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["start_health_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["health_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/import/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -2541,6 +2589,77 @@ export interface components {
             plugin: string;
             version: string;
         };
+        /** @description One finding of the health report. */
+        HealthFindingDto: {
+            category: components["schemas"]["CategoryDto"];
+            context?: string | null;
+            /** @description Rule-specific facts; `location` says where in the item. */
+            detail: Record<string, never>;
+            item?: components["schemas"]["HealthItemRefDto"] | null;
+            key: string;
+            redirect?: components["schemas"]["RedirectRefDto"] | null;
+            rule: components["schemas"]["RuleId"];
+            severity: components["schemas"]["SeverityDto"];
+            suppressed?: components["schemas"]["SuppressionDto"] | null;
+            wcag: string[];
+        };
+        /** @description `GET /health/findings`. */
+        HealthFindingList: {
+            items: components["schemas"]["HealthFindingDto"][];
+            next_cursor?: string | null;
+        };
+        /** @description The item a health finding is on. */
+        HealthItemRefDto: {
+            /** @description The item's editor in the admin. */
+            admin_url: string;
+            /** Format: uuid */
+            id: string;
+            locale: string;
+            status: string;
+            title: string;
+            type: string;
+        };
+        /** @description One health run. */
+        HealthRunDto: {
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            items_checked: number;
+            /** Format: int64 */
+            paths_checked: number;
+            /** Format: uuid */
+            requested_by?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            /** @description `running`, `done`, `failed` or `abandoned`. */
+            status: string;
+            /** @description Unsuppressed findings: `{"rules": {"<rule>": n}, "severity": {"error": n, …}}`. */
+            totals: Record<string, never>;
+            /** @description `schedule` or `manual`. */
+            trigger: string;
+            truncated: boolean;
+            /** Format: int64 */
+            urls_checked: number;
+        };
+        /** @description `POST /health/runs`: the queued job. */
+        HealthRunQueuedDto: {
+            /** Format: uuid */
+            job_id: string;
+        };
+        /** @description `GET /health/summary`. */
+        HealthSummaryDto: {
+            /** @description Whether external links are checked (`health.external_links`). */
+            external_links: boolean;
+            last?: components["schemas"]["HealthRunDto"] | null;
+            /**
+             * Format: date-time
+             * @description The next daily run (04:00 UTC).
+             */
+            next_at: string;
+            running?: components["schemas"]["HealthRunDto"] | null;
+        };
         /** @description One hook's calls on the answering node since it started. */
         HookStatsDto: {
             /** @description Calls that ran by duration: at most 1, 5, 25, 100 and 500 ms, and longer. */
@@ -3650,6 +3769,13 @@ export interface components {
             source?: string;
             target?: string;
         };
+        /** @description The redirect a health finding is on. */
+        RedirectRefDto: {
+            /** Format: uuid */
+            id: string;
+            source: string;
+            target: string;
+        };
         /** @description `GET /plugins/registry`. */
         RegistryDto: {
             /**
@@ -4745,6 +4871,12 @@ export type SchemaGateDto = components['schemas']['GateDto'];
 export type SchemaGrantDto = components['schemas']['GrantDto'];
 export type SchemaGrantList = components['schemas']['GrantList'];
 export type SchemaGrantReportDto = components['schemas']['GrantReportDto'];
+export type SchemaHealthFindingDto = components['schemas']['HealthFindingDto'];
+export type SchemaHealthFindingList = components['schemas']['HealthFindingList'];
+export type SchemaHealthItemRefDto = components['schemas']['HealthItemRefDto'];
+export type SchemaHealthRunDto = components['schemas']['HealthRunDto'];
+export type SchemaHealthRunQueuedDto = components['schemas']['HealthRunQueuedDto'];
+export type SchemaHealthSummaryDto = components['schemas']['HealthSummaryDto'];
 export type SchemaHookStatsDto = components['schemas']['HookStatsDto'];
 export type SchemaImportCountsDto = components['schemas']['ImportCountsDto'];
 export type SchemaImportJobDto = components['schemas']['ImportJobDto'];
@@ -4821,6 +4953,7 @@ export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
 export type SchemaRedirectOriginDto = components['schemas']['RedirectOriginDto'];
 export type SchemaRedirectPatch = components['schemas']['RedirectPatch'];
+export type SchemaRedirectRefDto = components['schemas']['RedirectRefDto'];
 export type SchemaRegistryDto = components['schemas']['RegistryDto'];
 export type SchemaRegistryInspectRequest = components['schemas']['RegistryInspectRequest'];
 export type SchemaRegistryInstallRequest = components['schemas']['RegistryInstallRequest'];
@@ -7585,6 +7718,160 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    health_findings: {
+        parameters: {
+            query?: {
+                /** @description `accessibility`, `links`, `media`, `site` or `freshness`. */
+                category?: string;
+                /** @description A rule id. */
+                rule?: string;
+                /** @description `error`, `warning` or `notice`. */
+                severity?: string;
+                /** @description A content type. */
+                type?: string;
+                locale?: string;
+                /** @description 1 to 200 (default 50). */
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the newest run's findings, each with its item or redirect */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthFindingList"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `limit` or `cursor`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `category`, `rule` or `severity`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    start_health_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthRunQueuedDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `conflict`: a run is queued or running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    health_summary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest run, the running one, the next run and whether external links are checked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthSummaryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`edit_others`, `content:read`) or `password-reset-required` */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -87,7 +87,7 @@ pub struct CheckReport {
 
 /// Checks drafts and items, and keeps suppressions.
 pub struct QualityService {
-    store: Arc<dyn Store>,
+    pub(super) store: Arc<dyn Store>,
     site_origin: String,
 }
 
