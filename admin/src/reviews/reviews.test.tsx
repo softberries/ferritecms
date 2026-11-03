@@ -12,7 +12,7 @@ import type { MeDto } from "@/auth/session";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { json, renderWithRouter, stubRoutes } from "@/test/render";
 import { DecisionDialog } from "./decision-dialog";
-import { AUTHOR_ID, ITEM, REVIEW, me, review } from "./fixtures";
+import { AUTHOR_ID, EDITOR_ID, ITEM, REVIEW, me, review } from "./fixtures";
 import { ReviewQueue } from "./review-queue";
 import { ReviewDetail } from "./review-section";
 import { ReviewsCard } from "@/dashboard/reviews-card";
@@ -200,4 +200,37 @@ test("the_dashboard_card_counts_and_lists_the_oldest_three", async () => {
     expect.stringContaining("Item 3"),
   ]);
   expect(links[0]).toHaveAttribute("href", `/admin/content/post/${ITEM}`);
+});
+
+test("the_submitter_assigns_reviewers_from_the_steps_approvers", async () => {
+  const puts: unknown[] = [];
+  const seen = stubRoutes({
+    [`/api/v1/reviews/${REVIEW}`]: () => json(review()),
+    "/api/v1/workflows/post/approvers": () =>
+      json({
+        items: [
+          { id: EDITOR_ID, display_name: "Eve Editor" },
+          { id: AUTHOR_ID, display_name: "The submitter" },
+        ],
+      }),
+    [`/api/v1/reviews/${REVIEW}/assignees`]: async (_url, req) => {
+      puts.push(await req.json());
+      return json({ items: [{ step: 0, user_id: EDITOR_ID }] });
+    },
+  });
+  // An author has no `manage_users`: the picker comes from the approvers endpoint.
+  renderWithRouter(
+    <TooltipProvider>
+      <ReviewDetail id={REVIEW} title="Spring notes" onChanged={() => {}} />
+    </TooltipProvider>,
+    client(me("author")),
+  );
+  await userEvent.click(await screen.findByRole("button", { name: "Assign…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Assign reviewers" });
+  await userEvent.click(await within(dialog).findByLabelText("Eve Editor"));
+  expect(within(dialog).queryByLabelText("The submitter")).toBeNull();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(puts).toEqual([{ step: 0, users: [EDITOR_ID] }]));
+  const asked = seen.find((u) => u.pathname === "/api/v1/workflows/post/approvers");
+  expect(asked?.searchParams.get("step")).toBe("0");
 });

@@ -7,6 +7,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { ifMatch } from "./content";
 import type {
+  SchemaApproverDto,
   SchemaAssigneeDto,
   SchemaDecisionDto,
   SchemaReviewDto,
@@ -22,6 +23,7 @@ export type DecisionDto = SchemaDecisionDto;
 export type AssigneeDto = SchemaAssigneeDto;
 export type WorkflowDto = SchemaWorkflowDto;
 export type WorkflowStep = SchemaWorkflowStepDto;
+export type ApproverDto = SchemaApproverDto;
 
 export const MAX_STEPS = 5;
 export const MAX_REQUIRED = 5;
@@ -42,6 +44,7 @@ export const reviewKeys = {
 export const workflowKeys = {
   all: ["workflows"] as const,
   item: (type: string) => ["workflows", type] as const,
+  approvers: (type: string, step: number) => ["workflows", type, "approvers", step] as const,
 };
 
 export function listReviews(tab: QueueTab, limit = 100): Promise<SchemaReviewList> {
@@ -96,6 +99,24 @@ export function withdraw(id: string, version: number): Promise<ReviewDto> {
       params: { path: { id }, header: ifMatch(version) },
     }),
   );
+}
+
+/** Who may approve `step` of the type's workflow: anyone who may submit may ask. */
+export async function listApprovers(type: string, step: number): Promise<ApproverDto[]> {
+  const list = await unwrap(
+    api.GET("/api/v1/workflows/{type}/approvers", {
+      params: { path: { type }, query: { step } },
+    }),
+  );
+  return list.items;
+}
+
+export function approversQuery(type: string, step: number) {
+  return queryOptions({
+    queryKey: workflowKeys.approvers(type, step),
+    queryFn: () => listApprovers(type, step),
+    staleTime: 60_000,
+  });
 }
 
 /**

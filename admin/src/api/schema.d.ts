@@ -2116,6 +2116,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{type}/approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_workflow_approvers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2154,6 +2170,17 @@ export interface components {
         ApproveInput: {
             /** @description At least one, each in the request's `grantable`. */
             scopes: string[];
+        };
+        /** @description Someone who may approve a workflow step (a reviewer picker's entry). */
+        ApproverDto: {
+            /** @description The display name, or the login when it is empty. */
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+        };
+        /** @description The approvers of a workflow step, by display name (at most 200). */
+        ApproverList: {
+            items: components["schemas"]["ApproverDto"][];
         };
         /** @description Who may approve a step. */
         ApproversDto: {
@@ -5671,6 +5698,8 @@ export interface components {
 }
 export type SchemaAllowedActionsDto = components['schemas']['AllowedActionsDto'];
 export type SchemaApproveInput = components['schemas']['ApproveInput'];
+export type SchemaApproverDto = components['schemas']['ApproverDto'];
+export type SchemaApproverList = components['schemas']['ApproverList'];
 export type SchemaApproversDto = components['schemas']['ApproversDto'];
 export type SchemaAssigneeDto = components['schemas']['AssigneeDto'];
 export type SchemaAssigneeList = components['schemas']['AssigneeList'];
@@ -16941,6 +16970,67 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_workflow_approvers: {
+        parameters: {
+            query?: {
+                /** @description The step (0-based), default 0: the first step, whose reviewers a submit picks. */
+                step?: number;
+            };
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active users who may approve the step (`edit_others`, named by its roles or users), by display name; for anyone who may submit for review (`edit_own`, `content:read`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproverList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: the type has no workflow */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field` = `step`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

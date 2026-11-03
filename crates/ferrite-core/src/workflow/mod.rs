@@ -6,7 +6,9 @@ mod review;
 
 use std::{collections::HashSet, sync::Arc};
 
-use ferrite_domain::{MEDIA_KIND, Role, Timestamp, UserStatus, Workflow, WorkflowStep};
+use ferrite_domain::{
+    MAX_PAGE, MEDIA_KIND, Role, Timestamp, UserId, UserQuery, UserStatus, Workflow, WorkflowStep,
+};
 use ferrite_store::{Store, StoreError};
 
 use crate::{
@@ -29,6 +31,16 @@ pub const MAX_REQUIRED: u32 = 5;
 pub const MAX_STEP_LABEL: usize = 80;
 /// Longest step key.
 pub const MAX_STEP_KEY: usize = 40;
+/// Most approvers [`WorkflowService::approvers`] lists.
+pub const MAX_APPROVERS_LISTED: usize = 200;
+
+/// Someone who may approve a step: what a reviewer picker shows, nothing more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approver {
+    pub id: UserId,
+    /// The display name, or the login when it is empty.
+    pub display_name: String,
+}
 
 /// The preset "One editor approves" (one step, editors and admins, one approval).
 pub fn one_editor_preset() -> Vec<WorkflowStep> {
@@ -62,6 +74,69 @@ impl WorkflowService {
             .get(type_name)
             .await?
             .ok_or(CoreError::NotFound)
+    }
+
+    /// The active users who may approve step `step` of `type_name`'s workflow (named by
+    /// the step's roles or users, with `edit_others`), by display name, at most
+    /// [`MAX_APPROVERS_LISTED`]: the reviewer pickers. Anyone who may submit for review
+    /// (`edit_own`, a content read scope) may list them; `NotFound` without a workflow,
+    /// `InvalidField("step")` for a step it does not have.
+    pub async fn approvers(
+        &self,
+        actor: &Actor,
+        type_name: &str,
+        step: u32,
+    ) -> Result<Vec<Approver>, CoreError> {
+        require(actor, Capability::EditOwn)?;
+        require_read(actor, Area::Content)?;
+        let repos = self.store.read();
+        let w = repos
+            .workflows()
+            .get(type_name)
+            .await?
+            .ok_or(CoreError::NotFound)?;
+        let s = w
+            .steps
+            .get(step as usize)
+            .ok_or_else(|| CoreError::invalid_field("step", "no such step"))?;
+        let mut users = repos.users().get_many(&s.approvers.users).await?;
+        for role in &s.approvers.roles {
+            let mut cursor = None;
+            loop {
+                let page = repos
+                    .users()
+                    .list(&UserQuery {
+                        q: None,
+                        role: Some(*role),
+                        status: Some(UserStatus::Active),
+                        limit: MAX_PAGE,
+                        cursor,
+                    })
+                    .await?;
+                users.extend(page.items);
+                cursor = page.next_cursor;
+                if cursor.is_none() || users.len() > MAX_APPROVERS_LISTED * 2 {
+                    break;
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        let mut out: Vec<Approver> = users
+            .into_iter()
+            .filter(|u| u.status == UserStatus::Active && review::eligible(s, u.id, u.role))
+            .filter(|u| seen.insert(u.id))
+            .map(|u| Approver {
+                id: u.id,
+                display_name: if u.display_name.trim().is_empty() {
+                    u.login
+                } else {
+                    u.display_name
+                },
+            })
+            .collect();
+        out.sort_by(|a, b| a.display_name.cmp(&b.display_name).then(a.id.cmp(&b.id)));
+        out.truncate(MAX_APPROVERS_LISTED);
+        Ok(out)
     }
 
     /// Every workflow, by type name.

@@ -678,3 +678,26 @@ pub struct AssigneesInput {
 pub struct AssigneeList {
     pub items: Vec<AssigneeDto>,
 }
+
+/// Someone who may approve a workflow step (a reviewer picker's entry).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ApproverDto {
+    pub id: Uuid,
+    /// The display name, or the login when it is empty.
+    pub display_name: String,
+}
+
+impl From<ferrite_core::workflow::Approver> for ApproverDto {
+    fn from(a: ferrite_core::workflow::Approver) -> Self {
+        Self {
+            id: a.id.as_uuid(),
+            display_name: a.display_name,
+        }
+    }
+}
+
+/// The approvers of a workflow step, by display name (at most 200).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ApproverList {
+    pub items: Vec<ApproverDto>,
+}

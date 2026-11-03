@@ -326,6 +326,7 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
             reviews::put_workflow,
             reviews::delete_workflow
         ))
+        .routes(routes!(reviews::list_workflow_approvers))
         .routes(routes!(reviews::list_reviews))
         .routes(routes!(reviews::get_review))
         .routes(routes!(reviews::decide_review))

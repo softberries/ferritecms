@@ -671,6 +671,7 @@ versioned rows, `Idempotency-Key` on `POST` creates and apply.
 | `GET/POST /content/{type}/{id}/preview-links` | list / create |
 | `DELETE /preview-links/{id}` | revoke |
 | `GET /workflows`, `GET/PUT/DELETE /workflows/{type}` | workflow config (admin) |
+| `GET /workflows/{type}/approvers` | `?step=` (default 0): `{items: [{id, display_name}]}`, the active users who may approve the step, for anyone who may submit (`edit_own`, `content:read`); the reviewer pickers (final review, 2026-11-03) |
 | `GET /reviews` | `?status=&assigned=me&submitted=me&type=` queue |
 | `GET /reviews/{id}` | review with steps, decisions, assignees, target summary |
 | `POST /reviews/{id}/decisions` | `{decision, comment?}` |

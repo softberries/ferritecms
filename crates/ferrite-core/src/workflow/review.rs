@@ -61,7 +61,7 @@ fn check_text(field: &'static str, text: Option<String>) -> Result<Option<String
 
 /// Whether `user` (role `role`) may approve `step` (D17: in its roles or users, with
 /// `edit_others`).
-fn eligible(step: &WorkflowStep, user: UserId, role: ferrite_domain::Role) -> bool {
+pub(super) fn eligible(step: &WorkflowStep, user: UserId, role: ferrite_domain::Role) -> bool {
     can(role, Capability::EditOthers)
         && (step.approvers.roles.contains(&role) || step.approvers.users.contains(&user))
 }

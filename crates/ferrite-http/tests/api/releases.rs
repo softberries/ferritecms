@@ -20,6 +20,7 @@ api_tests!(
     workflow_put_validates_and_is_admin_only,
     gated_publish_review_and_override,
     staging_required_for_live_items,
+    approvers_for_submitters,
 );
 
 const RELEASES: &str = "/api/v1/releases";
@@ -568,5 +569,37 @@ async fn staging_required_for_live_items(api: Api) -> Api {
         )
         .await;
     assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    api
+}
+
+/// `GET /workflows/{type}/approvers`: who may approve a step, `{id, display_name}` only,
+/// for anyone who may submit for review (an author here).
+async fn approvers_for_submitters(api: Api) -> Api {
+    let _admin = with_workflow(&api).await;
+    let author = bearer(&api, "au", Role::Author, &["*"]).await;
+    let editor = api.user("ed", Role::Editor, false).await;
+    let r = author.get(&api, "/api/v1/workflows/post/approvers").await;
+    assert_eq!(r.status, StatusCode::OK, "{r:?}");
+    let items = r.json()["items"].as_array().unwrap().clone();
+    let ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&editor.id.to_string().as_str()), "{items:?}");
+    for i in &items {
+        let keys: Vec<&String> = i.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["display_name", "id"], "{i}");
+    }
+    author
+        .get(&api, "/api/v1/workflows/post/approvers?step=1")
+        .await
+        .assert_problem(422, "validation");
+    author
+        .get(&api, "/api/v1/workflows/page/approvers")
+        .await
+        .assert_problem(404, "not-found");
+    // A token without a content read scope.
+    let narrow = bearer(&api, "narrow", Role::Editor, &["media:read"]).await;
+    narrow
+        .get(&api, "/api/v1/workflows/post/approvers")
+        .await
+        .assert_problem(403, "forbidden");
     api
 }

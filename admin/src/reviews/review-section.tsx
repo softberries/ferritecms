@@ -1,9 +1,10 @@
 // The side panel's Review section (design 15 §6.2, §11.2), in a type with an approval
 // workflow: the open review's steps with their state, the decisions with their comments,
 // the submitter's note, the assignees; Approve / Request changes for editors and admins
-// (the server refuses anyone not eligible, and says why), Withdraw, Assign… (for accounts
-// that can list users), and Submit / Resubmit with a note (and reviewers) when there is no
-// open review. After every change the item is read again, so `allowed` stays the server's.
+// (the server refuses anyone not eligible, and says why), Withdraw, Assign… (the submitter
+// and editors), and Submit / Resubmit with a note and reviewers when there is no open
+// review. The reviewer pickers list the step's approvers from
+// `GET /workflows/{type}/approvers`. After every change the item is read again, so `allowed` stays the server's.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckIcon, CircleDotIcon, CircleIcon, SendIcon, UserPlusIcon } from "lucide-react";
@@ -15,14 +16,15 @@ import { getContent } from "@/api/content";
 import {
   MAX_ASSIGNEES,
   MAX_COMMENT,
+  type ApproverDto,
   type ReviewDto,
+  approversQuery,
   assign,
   decide,
   reviewKeys,
   reviewQuery,
   withdraw,
 } from "@/api/reviews";
-import { listUsers } from "@/api/users";
 import { useMe } from "@/auth/session";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -83,6 +85,7 @@ export function ReviewSection({ doc, type }: { doc: EditorDocument; type: string
           <ReviewDetail
             id={summary.id}
             title={doc.title || item.title}
+            type={type}
             onChanged={() => void refresh()}
           />
         </>
@@ -102,6 +105,7 @@ export function ReviewSection({ doc, type }: { doc: EditorDocument; type: string
         </Button>
       ) : null}
       <SubmitDialog
+        type={type}
         open={submitting}
         onOpenChange={setSubmitting}
         onSubmit={async (submit) => {
@@ -118,10 +122,13 @@ export function ReviewSection({ doc, type }: { doc: EditorDocument; type: string
 export function ReviewDetail({
   id,
   title,
+  type,
   onChanged,
 }: {
   id: string;
   title: string;
+  /** The item's type, for the approvers (default: the review's own `item_type`). */
+  type?: string;
   onChanged: () => void;
 }) {
   const { t } = useTranslation("reviews");
@@ -137,7 +144,9 @@ export function ReviewDetail({
   const open = r.status === "in_review" || r.status === "approved";
   const editor = me?.capabilities.includes("edit_others") === true;
   const submitter = me?.id !== undefined && r.submitted_by === me.id;
-  const canAssign = me?.capabilities.includes("manage_users") === true;
+  // As the server: the submitter or someone with `edit_others`.
+  const canAssign = submitter || editor;
+  const itemType = type ?? r.item_type ?? null;
 
   const run = async (fn: () => Promise<ReviewDto>, done?: string) => {
     setBusy(true);
@@ -296,9 +305,10 @@ export function ReviewDetail({
           void run(() => decide(id, r.version, d, comment), t("section.decided"));
         }}
       />
-      {canAssign ? (
+      {canAssign && itemType ? (
         <AssignDialog
           review={r}
+          type={itemType}
           open={assigning}
           onOpenChange={setAssigning}
           onSaved={() => {
@@ -310,20 +320,9 @@ export function ReviewDetail({
   );
 }
 
-/** Active editors and admins (who may approve), for accounts that may list users. */
-function useApprovers(enabled: boolean) {
-  return useQuery({
-    queryKey: ["users", "list", "approvers"],
-    enabled,
-    staleTime: 60_000,
-    queryFn: async () => {
-      const [editors, admins] = await Promise.all([
-        listUsers({ role: "editor", status: "active", limit: 200 }),
-        listUsers({ role: "admin", status: "active", limit: 200 }),
-      ]);
-      return [...editors.items, ...admins.items];
-    },
-  });
+/** The active users who may approve `step` of the type's workflow (the server's list). */
+function useApprovers(type: string, step: number, enabled: boolean) {
+  return useQuery({ ...approversQuery(type, step), enabled });
 }
 
 function UserChecks({
@@ -332,7 +331,7 @@ function UserChecks({
   onChange,
   max,
 }: {
-  users: { id: string; login: string; display_name: string }[];
+  users: ApproverDto[];
   selected: string[];
   onChange: (next: string[]) => void;
   max: number;
@@ -353,8 +352,7 @@ function UserChecks({
               }
             />
             <Label htmlFor={id} className="font-normal">
-              {u.display_name || u.login}
-              <span className="text-muted-foreground"> ({u.login})</span>
+              {u.display_name}
             </Label>
           </li>
         );
@@ -365,17 +363,19 @@ function UserChecks({
 
 function AssignDialog({
   review,
+  type,
   open,
   onOpenChange,
   onSaved,
 }: {
   review: ReviewDto;
+  type: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
   const { t } = useTranslation("reviews");
-  const users = useApprovers(open);
+  const users = useApprovers(type, review.step, open);
   const [selected, setSelected] = useState<string[]>(() =>
     (review.assignees ?? []).filter((a) => a.step === review.step).map((a) => a.user_id),
   );
@@ -430,12 +430,14 @@ function AssignDialog({
   );
 }
 
-/** Submit for review with a note (and reviewers, for accounts that can list users). */
+/** Submit for review with a note and, optionally, reviewers of the first step. */
 function SubmitDialog({
+  type,
   open,
   onOpenChange,
   onSubmit,
 }: {
+  type: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (submit: { reviewers?: string[]; note?: string }) => Promise<boolean>;
@@ -443,23 +445,25 @@ function SubmitDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-slot="submit-dialog" className="sm:max-w-md">
-        {open ? <SubmitBody onOpenChange={onOpenChange} onSubmit={onSubmit} /> : null}
+        {open ? <SubmitBody type={type} onOpenChange={onOpenChange} onSubmit={onSubmit} /> : null}
       </DialogContent>
     </Dialog>
   );
 }
 
 function SubmitBody({
+  type,
   onOpenChange,
   onSubmit,
 }: {
+  type: string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (submit: { reviewers?: string[]; note?: string }) => Promise<boolean>;
 }) {
   const { t } = useTranslation("reviews");
   const me = useMe();
-  const canPick = me?.capabilities.includes("manage_users") === true;
-  const users = useApprovers(canPick);
+  const users = useApprovers(type, 0, true);
+  const canPick = !users.isError;
   const [reviewers, setReviewers] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);

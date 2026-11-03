@@ -931,6 +931,7 @@ backend_tests!(
     entry_edit_marks_entry_review_stale,
     notify_job_enqueued_in_same_tx,
     withdraw_and_request_changes_emit_content_updated,
+    approvers_lists_eligible_active_users_of_a_step,
 );
 
 /// A `content.*` endpoint; the `content.updated` events written so far.
@@ -1013,4 +1014,70 @@ async fn withdraw_and_request_changes_emit_content_updated(db: &TestDb) {
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!(got[0]["status"], "draft");
     assert_eq!(got[0]["actor"], s.editor.user.to_string());
+}
+
+async fn approvers_lists_eligible_active_users_of_a_step(db: &TestDb) {
+    let s = site(db).await;
+    let gone = actor(s.store.as_ref(), Role::Editor).await;
+    let mut u = s
+        .store
+        .read()
+        .users()
+        .get(gone.user)
+        .await
+        .unwrap()
+        .unwrap();
+    u.status = UserStatus::Disabled;
+    s.store.read().users().update(&u).await.unwrap();
+    let named = actor(s.store.as_ref(), Role::Editor).await;
+    let demoted = actor(s.store.as_ref(), Role::Editor).await;
+    let w = s.workflows.get(&s.admin, "post").await.unwrap();
+    let mut steps = w.steps.clone();
+    steps.push(WorkflowStep {
+        key: "legal".into(),
+        label: "Legal".into(),
+        approvers: Approvers {
+            roles: vec![],
+            users: vec![named.user, demoted.user],
+        },
+        required: 1,
+    });
+    s.workflows
+        .put(&s.admin, "post", steps, Some(w.version))
+        .await
+        .unwrap();
+    // Named, then made an author: cannot approve (no edit_others), so not listed.
+    let mut u = s
+        .store
+        .read()
+        .users()
+        .get(demoted.user)
+        .await
+        .unwrap()
+        .unwrap();
+    u.role = Role::Author;
+    s.store.read().users().update(&u).await.unwrap();
+    // An author may submit, so may list who approves.
+    let ids = |v: Vec<ferrite_core::workflow::Approver>| {
+        let mut ids: Vec<UserId> = v.into_iter().map(|a| a.id).collect();
+        ids.sort();
+        ids
+    };
+    let mut want = vec![s.admin.user, s.editor.user, s.editor2.user, named.user];
+    want.sort();
+    let got = s.workflows.approvers(&s.author, "post", 0).await.unwrap();
+    assert!(got.iter().all(|a| a.display_name == "Test"), "{got:?}");
+    assert_eq!(ids(got), want, "editors and admins, active only");
+    assert_eq!(
+        ids(s.workflows.approvers(&s.author, "post", 1).await.unwrap()),
+        vec![named.user]
+    );
+    assert!(matches!(
+        s.workflows.approvers(&s.author, "post", 2).await,
+        Err(CoreError::InvalidField { field: "step", .. })
+    ));
+    assert!(matches!(
+        s.workflows.approvers(&s.author, "page", 0).await,
+        Err(CoreError::NotFound)
+    ));
 }

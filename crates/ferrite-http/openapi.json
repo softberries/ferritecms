@@ -15258,6 +15258,95 @@
           }
         ]
       }
+    },
+    "/api/v1/workflows/{type}/approvers": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "operationId": "list_workflow_approvers",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step",
+            "in": "query",
+            "description": "The step (0-based), default 0: the first step, whose reviewers a submit picks.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active users who may approve the step (`edit_others`, named by its roles or users), by display name; for anyone who may submit for review (`edit_own`, `content:read`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproverList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (capability or scope named in `detail`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`: the type has no workflow",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field` = `step`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -15341,6 +15430,39 @@
           }
         },
         "additionalProperties": false
+      },
+      "ApproverDto": {
+        "type": "object",
+        "description": "Someone who may approve a workflow step (a reviewer picker's entry).",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "The display name, or the login when it is empty."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ApproverList": {
+        "type": "object",
+        "description": "The approvers of a workflow step, by display name (at most 200).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApproverDto"
+            }
+          }
+        }
       },
       "ApproversDto": {
         "type": "object",

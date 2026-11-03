@@ -20,8 +20,8 @@ use uuid::Uuid;
 use super::{
     ApiState, Authed,
     dto::editorial::{
-        AssigneeDto, AssigneeList, AssigneesInput, DecisionDto, DecisionInput, ReviewDto,
-        ReviewList, WorkflowDto, WorkflowInput, WorkflowList,
+        ApproverList, AssigneeDto, AssigneeList, AssigneesInput, DecisionDto, DecisionInput,
+        ReviewDto, ReviewList, WorkflowDto, WorkflowInput, WorkflowList,
     },
     extract::{
         ApiJson, ApiPath, ApiQuery, DEFAULT_LIMIT, IfMatch, check_limit, etag, invalid_param,
@@ -81,6 +81,45 @@ pub async fn get_workflow(
     Ok(workflow_response(
         api.editorial.workflows.get(&who.actor, &kind).await?,
     ))
+}
+
+/// `GET /workflows/{type}/approvers` query.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ApproverParams {
+    /// The step (0-based), default 0: the first step, whose reviewers a submit picks.
+    pub step: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/workflows/{type}/approvers",
+    tag = "workflows",
+    operation_id = "list_workflow_approvers",
+    security(("session" = []), ("bearer" = [])),
+    params(("type" = String, Path), ApproverParams),
+    responses(
+        (status = 200, description = "The active users who may approve the step (`edit_others`, named by its roles or users), by display name; for anyone who may submit for review (`edit_own`, `content:read`)", body = ApproverList),
+        (status = 401, description = "`unauthenticated`", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 403, description = DENIED, body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 404, description = "`not-found`: the type has no workflow", body = ProblemDocument, content_type = "application/problem+json"),
+        (status = 422, description = "`validation` (`errors[0].field` = `step`)", body = ProblemDocument, content_type = "application/problem+json"),
+    ),
+)]
+pub async fn list_workflow_approvers(
+    State(api): State<Arc<ApiState>>,
+    Authed(who): Authed,
+    ApiPath(kind): ApiPath<String>,
+    ApiQuery(params): ApiQuery<ApproverParams>,
+) -> Result<Json<ApproverList>, Problem> {
+    let items = api
+        .editorial
+        .workflows
+        .approvers(&who.actor, &kind, params.step.unwrap_or(0))
+        .await?;
+    Ok(Json(ApproverList {
+        items: items.into_iter().map(Into::into).collect(),
+    }))
 }
 
 #[utoipa::path(
