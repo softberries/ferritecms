@@ -74,6 +74,33 @@ pub struct PublicItem {
     /// Custom fields, filtered: `featured_image` is kept only if it resolved to public
     /// media, and UUID strings naming non-public content items are removed.
     pub fields: serde_json::Value,
+    /// The item's locale (13 §5).
+    pub locale: String,
+    /// The item's translation group (not shown to templates).
+    #[serde(skip)]
+    pub translation_group: ContentId,
+}
+
+/// Which locale a [`SiteReader`](crate::SiteReader) reads (13 §5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ReadLocale {
+    /// Every locale, with no locale predicate: what a one-locale site reads (D4).
+    #[default]
+    All,
+    /// Only this locale's items.
+    Only(String),
+}
+
+/// One public translation of an item ([`SiteReader::translations`](crate::SiteReader::translations)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TranslationLink {
+    pub locale: String,
+    pub label: String,
+    /// Public path (the locale's root for a front page translation).
+    pub url: String,
+    pub title: String,
+    /// The item asked about.
+    pub current: bool,
 }
 
 /// A content item ready for a template.
@@ -312,6 +339,9 @@ pub struct SitemapEntry {
     pub url: String,
     /// The item's `updated_at`.
     pub lastmod: Timestamp,
+    /// `(locale tag, path)` of every public member of the item's translation group, the
+    /// item included; empty on a one-locale site (13 §5).
+    pub alternates: Vec<(String, String)>,
 }
 
 #[cfg(test)]

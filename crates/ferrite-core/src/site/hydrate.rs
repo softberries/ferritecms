@@ -176,6 +176,8 @@ impl Hydrator<'_> {
                     menu_order: item.menu_order,
                     parent_id: item.parent_id,
                     fields,
+                    locale: item.locale,
+                    translation_group: item.translation_group,
                 },
             });
         }

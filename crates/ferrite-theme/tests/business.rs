@@ -91,6 +91,8 @@ fn item(kind: &str, slug: &str, title: &str) -> PageItem {
             menu_order: 0,
             parent_id: None,
             fields: json!({}),
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         },
         url: format!("/{slug}/"),
         html: format!("<p>Body of {slug}</p>"),

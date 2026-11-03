@@ -22,6 +22,8 @@ fn item(title: &str, excerpt: &str) -> PageItem {
             menu_order: 0,
             parent_id: None,
             fields: serde_json::json!({}),
+            locale: "en".into(),
+            translation_group: ContentId::new(),
         },
         url: "/hello/".into(),
         html: String::new(),

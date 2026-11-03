@@ -69,14 +69,14 @@ use crate::{
     Actor, Capability, CoreError, MAX_PARENT_DEPTH,
     actor::can_read,
     comments::{self, CommentThread},
-    events::{archive_key, option_key, post_key, term_key, user_key},
+    events::{archive_key, group_key, option_key, post_key, term_key, user_key},
     permalink::{PermalinkInput, Permalinks, primary_term},
 };
 use hydrate::{Hydrator, Nodes, chain, load_ancestors, unique};
 pub use model::{
     DepKeys, FeedSource, FrontPage, ItemLink, Listing, MediaFile, MediaPublic, MediaVariant,
-    PageItem, Previewed, PublicItem, SiteRead, SitemapEntry, SitemapFile, SitemapPage, TermPublic,
-    UserPublic, srcset,
+    PageItem, Previewed, PublicItem, ReadLocale, SiteRead, SitemapEntry, SitemapFile, SitemapPage,
+    TermPublic, TranslationLink, UserPublic, srcset,
 };
 pub use tree::{ContentTree, TreeNode};
 
@@ -275,6 +275,15 @@ async fn walk_paths(
     Ok(())
 }
 
+/// One public member of a translation group, with its path.
+#[derive(Debug, Clone)]
+struct GroupMember {
+    id: ContentId,
+    locale: String,
+    url: String,
+    title: String,
+}
+
 /// The published-only read facade; see the module docs.
 pub struct SiteReader {
     store: Arc<dyn Store>,
@@ -286,6 +295,9 @@ pub struct SiteReader {
     /// The served theme's widest image size in pixels, 0 for none
     /// ([`set_image_width`](Self::set_image_width)).
     image_width: AtomicU32,
+    /// The locale reads are scoped to (13 §5); [`ReadLocale::All`] (no locale
+    /// predicate) unless made with [`in_locale`](Self::in_locale).
+    locale: ReadLocale,
 }
 
 impl SiteReader {
@@ -302,6 +314,36 @@ impl SiteReader {
             media_url,
             clock,
             image_width: AtomicU32::new(0),
+            locale: ReadLocale::All,
+        }
+    }
+
+    /// This reader scoped to `locale` (13 §5): singles, listings, search, feeds and the
+    /// theme's queries read only that locale's items; the front page is the
+    /// `reading.front_page` item's translation. A one-locale site reads with
+    /// [`ReadLocale::All`], which adds no locale predicate to any query (D4).
+    pub fn in_locale(&self, locale: ReadLocale) -> SiteReader {
+        SiteReader {
+            store: self.store.clone(),
+            permalinks: self.permalinks.clone(),
+            sitemap_file_len: self.sitemap_file_len,
+            media_url: self.media_url.clone(),
+            clock: self.clock.clone(),
+            image_width: AtomicU32::new(self.image_width.load(Ordering::Relaxed)),
+            locale,
+        }
+    }
+
+    /// The locale reads are scoped to.
+    pub fn locale(&self) -> &ReadLocale {
+        &self.locale
+    }
+
+    /// The locale tag of [`ReadLocale::Only`], `None` for [`ReadLocale::All`].
+    fn tag(&self) -> Option<&str> {
+        match &self.locale {
+            ReadLocale::All => None,
+            ReadLocale::Only(tag) => Some(tag),
         }
     }
 
@@ -381,7 +423,7 @@ impl SiteReader {
         for (i, slug) in path_parts.iter().enumerate() {
             let Some(node) = repos
                 .content()
-                .get_by_slug(kind, None, parent, slug)
+                .get_by_slug(kind, self.tag(), parent, slug)
                 .await?
             else {
                 return Ok(public(None, deps));
@@ -417,7 +459,27 @@ impl SiteReader {
         if let Some(id) = front_page_id(repos).await? {
             // Recorded even while it is not public: publishing it must flush the root.
             deps.insert(post_key(id));
-            if let Some(item) = repos.content().get(id).await?
+            let mut shown = repos.content().get(id).await?;
+            // Under a locale: the front page's translation into it (13 §4, D9).
+            if let (Some(tag), Some(item)) = (self.tag(), &shown)
+                && item.locale != tag
+            {
+                deps.insert(group_key(item.translation_group));
+                let member = repos
+                    .content()
+                    .group_members(&[item.translation_group])
+                    .await?
+                    .into_iter()
+                    .find(|m| m.locale == tag);
+                shown = match member {
+                    Some(m) => {
+                        deps.insert(post_key(m.id));
+                        repos.content().get(m.id).await?
+                    }
+                    None => None,
+                };
+            }
+            if let Some(item) = shown
                 && item.kind != MEDIA_KIND
                 && is_public(&item, now)
             {
@@ -442,8 +504,26 @@ impl SiteReader {
     pub async fn is_front_page(&self, item: &PublicItem) -> Result<SiteRead<bool>, CoreError> {
         let mut deps = DepKeys::default();
         deps.insert(option_key(FRONT_PAGE_OPTION));
-        let id = front_page_id(self.store.read()).await?;
-        Ok(public(item.kind != MEDIA_KIND && id == Some(item.id), deps))
+        let repos = self.store.read();
+        let id = front_page_id(repos).await?;
+        if item.kind == MEDIA_KIND {
+            return Ok(public(false, deps));
+        }
+        if id == Some(item.id) {
+            return Ok(public(true, deps));
+        }
+        // A translation of the front page is its locale's front page (13 §4).
+        if let Some(id) = id
+            && item.translation_group != item.id
+            && let Some(front) = repos.content().get(id).await?
+        {
+            deps.insert(post_key(id));
+            return Ok(public(
+                front.translation_group == item.translation_group,
+                deps,
+            ));
+        }
+        Ok(public(false, deps))
     }
 
     /// Page `page` of all public items of `kind`, newest first. Media is never listed.
@@ -503,7 +583,11 @@ impl SiteReader {
         let rules = pinned.as_ref();
         let repos = self.store.read();
         let mut deps = DepKeys::default();
-        let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
+        let Some(term) = repos
+            .terms()
+            .get_by_slug(taxonomy, self.tag(), slug)
+            .await?
+        else {
             return Ok(public(None, deps));
         };
         deps.insert(term_key(term.id));
@@ -639,7 +723,7 @@ impl SiteReader {
             readable_by: None,
             limit: MAX_PAGE,
             cursor: None,
-            locale: None,
+            locale: self.tag().map(str::to_owned),
         };
         while ids.len() < SEARCH_CAP {
             query.limit =
@@ -719,7 +803,11 @@ impl SiteReader {
                 q.kind = Some(kind.clone());
             }
             FeedSource::Term { taxonomy, slug } => {
-                let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
+                let Some(term) = repos
+                    .terms()
+                    .get_by_slug(taxonomy, self.tag(), slug)
+                    .await?
+                else {
                     return Ok(public(None, deps));
                 };
                 deps.insert(term_key(term.id));
@@ -729,6 +817,7 @@ impl SiteReader {
             }
         }
         q.limit = FEED_LEN;
+        q.locale = self.tag().map(str::to_owned);
         let rows = repos.content().list(&q).await?.items;
         if rows.is_empty() && matches!(source, FeedSource::Term { .. }) {
             return Ok(public(None, deps));
@@ -773,7 +862,9 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.cursor = cursor.map(str::to_owned);
+        let mut groups = Vec::new();
         walk_paths(repos, rules, &mut q, self.sitemap_file_len, |item, url| {
+            groups.push(item.translation_group);
             out.entries.push(SitemapEntry {
                 url: if front == Some(item.id) {
                     "/".to_owned()
@@ -781,11 +872,149 @@ impl SiteReader {
                     url
                 },
                 lastmod: item.updated_at,
+                alternates: Vec::new(),
             });
         })
         .await?;
         out.next_cursor = q.cursor;
+        // Alternates only on a multilingual site (13 §5); a one-locale sitemap is as it was.
+        let locales = crate::locales::read(repos).await?;
+        if locales.is_multilingual() {
+            deps.insert(option_key(ferrite_domain::locale::LOCALES_OPTION));
+            let members = self
+                .public_members(repos, rules, now, &groups, &locales, &mut deps)
+                .await?;
+            for (entry, group) in out.entries.iter_mut().zip(&groups) {
+                if let Some(list) = members.get(group)
+                    && list.len() > 1
+                {
+                    entry.alternates = list
+                        .iter()
+                        .map(|m| (m.locale.clone(), m.url.clone()))
+                        .collect();
+                }
+            }
+        }
         Ok(public(out, deps))
+    }
+
+    /// The public translations of `item` (13 §5): the members of its translation group
+    /// that are public, in the order of `site.locales`, with their URLs (the locale's
+    /// root for a front page translation); empty on a one-locale site and for an item
+    /// without translations. One `group_members` read; records `group:<group>` and
+    /// `option:site.locales`.
+    pub async fn translations(
+        &self,
+        item: &PageItem,
+    ) -> Result<SiteRead<Vec<TranslationLink>>, CoreError> {
+        let now = (self.clock)();
+        let pinned = self.permalinks.pin();
+        let rules = pinned.as_ref();
+        let repos = self.store.read();
+        let mut deps = DepKeys::default();
+        deps.insert(option_key(ferrite_domain::locale::LOCALES_OPTION));
+        let locales = crate::locales::read(repos).await?;
+        if !locales.is_multilingual() {
+            return Ok(public(Vec::new(), deps));
+        }
+        let group = item.item.translation_group;
+        let members = self
+            .public_members(repos, rules, now, &[group], &locales, &mut deps)
+            .await?;
+        let list = members.get(&group).cloned().unwrap_or_default();
+        if list.len() < 2 {
+            return Ok(public(Vec::new(), deps));
+        }
+        let links = list
+            .into_iter()
+            .map(|m| TranslationLink {
+                label: locales
+                    .get(&m.locale)
+                    .map_or_else(|| m.locale.clone(), |d| d.label.clone()),
+                current: m.id == item.item.id,
+                locale: m.locale,
+                url: m.url,
+                title: m.title,
+            })
+            .collect();
+        Ok(public(links, deps))
+    }
+
+    /// The public members of each of `groups` (deduplicated, in batches of
+    /// [`MAX_GROUPS`](ferrite_store::MAX_GROUPS)), each group's in `locales` order, with
+    /// their paths; members in a locale `locales` does not list are left out. Records
+    /// `group:<g>` for each group and the keys of the paths' ancestors and terms.
+    async fn public_members(
+        &self,
+        repos: &dyn Repos,
+        rules: &dyn Permalinks,
+        now: Timestamp,
+        groups: &[ContentId],
+        locales: &ferrite_domain::locale::SiteLocales,
+        deps: &mut DepKeys,
+    ) -> Result<HashMap<ContentId, Vec<GroupMember>>, CoreError> {
+        let mut wanted: Vec<ContentId> = groups.to_vec();
+        wanted.sort_by_key(|g| g.as_uuid());
+        wanted.dedup();
+        for g in &wanted {
+            deps.insert(group_key(*g));
+        }
+        let mut ids = Vec::new();
+        for chunk in wanted.chunks(ferrite_store::MAX_GROUPS) {
+            for m in repos.content().group_members(chunk).await? {
+                if m.status == ContentStatus::Published
+                    && m.published_at.is_some_and(|at| at <= now)
+                    && locales.contains(&m.locale)
+                {
+                    ids.push(m.id);
+                }
+            }
+        }
+        let mut items = Vec::new();
+        for chunk in ids.chunks(MAX_ID_FILTER) {
+            items.extend(
+                repos
+                    .content()
+                    .get_many(chunk)
+                    .await?
+                    .into_iter()
+                    .filter(|i| has_public_page(i, now)),
+            );
+        }
+        let front = front_page_id(repos).await?;
+        let front_group = match front {
+            Some(id) => repos.content().get(id).await?.map(|f| f.translation_group),
+            None => None,
+        };
+        let mut out: HashMap<ContentId, Vec<GroupMember>> = HashMap::new();
+        for (item, url) in public_paths(repos, rules, items, deps).await? {
+            let url = if front_group == Some(item.translation_group) {
+                match locales.prefix_of(&item.locale) {
+                    Some(p) => format!("/{p}/"),
+                    None => "/".to_owned(),
+                }
+            } else {
+                url
+            };
+            out.entry(item.translation_group)
+                .or_default()
+                .push(GroupMember {
+                    id: item.id,
+                    locale: item.locale.clone(),
+                    url,
+                    title: item.title.clone(),
+                });
+        }
+        let order = |tag: &str| {
+            locales
+                .all()
+                .position(|d| d.tag == tag)
+                .unwrap_or(usize::MAX)
+        };
+        for list in out.values_mut() {
+            list.sort_by_key(|m| order(&m.locale));
+        }
+        Ok(out)
     }
 
     /// Up to `n` (at most [`MAX_RELATED`]) public items of the same type sharing a term
@@ -813,6 +1042,7 @@ impl SiteReader {
             q.kind = Some(item.item.kind.clone());
             q.term = Some(term.id);
             q.exclude = exclude.clone();
+            q.locale = self.tag().map(str::to_owned);
             q.limit = u32::try_from(n - found.len()).unwrap_or(1);
             for row in repos.content().list(&q).await?.items {
                 exclude.push(row.id);
@@ -1150,6 +1380,7 @@ impl SiteReader {
         let mut q = published(now);
         q.kind = Some(kind.to_owned());
         q.order = order.content_order();
+        q.locale = self.tag().map(str::to_owned);
         if skip_rows(repos, &mut q, u64::from(offset)).await?.is_err() {
             return Ok(public(Vec::new(), deps));
         }
@@ -1190,7 +1421,11 @@ impl SiteReader {
         let repos = self.store.read();
         let mut deps = DepKeys::default();
         deps.insert(archive_key(kind));
-        let Some(term) = repos.terms().get_by_slug(taxonomy, None, slug).await? else {
+        let Some(term) = repos
+            .terms()
+            .get_by_slug(taxonomy, self.tag(), slug)
+            .await?
+        else {
             return Ok(public(Vec::new(), deps));
         };
         deps.insert(term_key(term.id));
@@ -1202,6 +1437,7 @@ impl SiteReader {
         q.term = Some(term.id);
         q.order = order.content_order();
         q.limit = limit;
+        q.locale = self.tag().map(str::to_owned);
         let mut rows = repos.content().list(&q).await?.items;
         order.sort(&mut rows);
         let items = self
@@ -1298,6 +1534,7 @@ impl SiteReader {
         q.term = filter.term;
         q.author = filter.author;
         q.published_after = filter.published_after;
+        q.locale = self.tag().map(str::to_owned);
         if let (Some(before), Some(limit)) = (filter.published_before, q.published_before) {
             q.published_before = Some(before.min(limit));
         }

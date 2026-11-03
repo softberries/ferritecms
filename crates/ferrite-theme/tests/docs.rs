@@ -78,6 +78,8 @@ fn page(id: ContentId, title: &str) -> PageItem {
             menu_order: 0,
             parent_id: None,
             fields: json!({}),
+            locale: "en".into(),
+            translation_group: id,
         },
         url: format!("/{}/", title.to_lowercase().replace(' ', "-")),
         html: "<h2 id=\"install-step\">Install step</h2><p>Body <em>html</em></p>\
