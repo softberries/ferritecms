@@ -487,9 +487,8 @@ impl WebhookRepo for PgRepos {
     ) -> Result<u64, StoreError> {
         validate_text("webhook delivery error", error)?;
         let limit = check_prune_limit(limit)?;
-        let done =
-            run!(&self.exec, |x| {
-                sqlx::query(
+        let done = run!(&self.exec, |x| {
+            sqlx::query(
             "UPDATE webhook_deliveries SET status = 'failed', last_error = $1, finished_at = $2, \
              next_attempt_at = NULL WHERE id IN (SELECT id FROM webhook_deliveries \
              WHERE status = 'pending' AND next_attempt_at < $3 LIMIT $4 FOR UPDATE SKIP LOCKED)"
@@ -499,7 +498,7 @@ impl WebhookRepo for PgRepos {
         .bind(pg(before))
         .bind(limit)
         .execute(x)
-            })?;
+        })?;
         Ok(done.rows_affected())
     }
 
