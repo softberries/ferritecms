@@ -38,6 +38,7 @@ import {
   MinimizeIcon,
   PackageIcon,
   PanelRightIcon,
+  PenLineIcon,
   ShieldAlertIcon,
 } from "lucide-react";
 import { cn } from "cn";
@@ -1366,10 +1367,19 @@ function EditorBar({
               <ToggleGroupItem
                 key={v}
                 value={v}
+                aria-label={v === "write" ? t("preview.write") : t("preview.show")}
                 aria-keyshortcuts="Meta+Alt+P Control+Alt+P"
-                className="h-7 rounded-md! border-0 px-2.5 text-xs text-muted-foreground pointer-coarse:h-11 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-(--shadow-1)"
+                className="h-7 rounded-md! border-0 px-2.5 text-xs text-muted-foreground pointer-coarse:h-11 pointer-coarse:min-w-11 max-sm:px-2 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-(--shadow-1)"
               >
-                {v === "write" ? t("preview.write") : t("preview.show")}
+                {/* Phones: icons only (the bar has no room for the words). */}
+                {v === "write" ? (
+                  <PenLineIcon aria-hidden="true" className="size-4 sm:hidden" />
+                ) : (
+                  <EyeIcon aria-hidden="true" className="size-4 sm:hidden" />
+                )}
+                <span className="max-sm:hidden">
+                  {v === "write" ? t("preview.write") : t("preview.show")}
+                </span>
               </ToggleGroupItem>
             ))}
           </ToggleGroup>

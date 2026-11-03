@@ -216,7 +216,7 @@ export function SplitDivider({ value, onChange, container }: SplitDividerProps) 
         dragging.current = false;
         e.currentTarget.releasePointerCapture?.(e.pointerId);
       }}
-      className="group relative z-10 w-2 shrink-0 cursor-col-resize touch-none bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group relative z-10 w-2 shrink-0 cursor-col-resize self-stretch touch-none bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span
         aria-hidden="true"

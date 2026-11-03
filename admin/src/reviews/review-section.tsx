@@ -47,7 +47,8 @@ function inWorkflow(doc: EditorDocument): boolean {
   const item = doc.item;
   if (!item) return false;
   const a = item.allowed;
-  return Boolean(item.review) || a.needs_approval || a.stage || a.override;
+  const open = item.status === "draft" || item.status === "pending";
+  return Boolean(item.review) || (open && (a.needs_approval || a.override));
 }
 
 export function ReviewSection({ doc, type }: { doc: EditorDocument; type: string }) {

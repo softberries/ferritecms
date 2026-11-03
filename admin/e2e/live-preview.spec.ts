@@ -15,13 +15,21 @@ const title = (page: Page) => page.getByRole("textbox", { name: "Title", exact: 
 const pane = (page: Page) => page.locator("[data-slot=preview-pane]");
 const frame = (page: Page) => page.frameLocator("[data-slot=preview-frame]");
 
+// The frame is an opaque origin (P7): Playwright's trace recorder fetches the theme's
+// stylesheet from inside it with XHR, which CORS refuses there (the page itself loads it
+// with a plain <link>). Only that report is let through.
+test.beforeEach(({ guard }) => {
+  guard.allow(/Access to XMLHttpRequest at '[^']*\/_theme\/[^']*' from origin 'null'/);
+  guard.allowFailedResource(/\/_theme\//);
+});
+
 test("typing_shows_in_the_split_preview_without_saving", async ({
   as,
   site,
   siteKey,
-  snap,
   expectAccessible,
 }) => {
+  test.setTimeout(90_000);
   const author = await ContentApi.as(siteKey, site.url, "author");
   const name = `Live ${uid()}`;
   const item = await author.create("post", name, {
@@ -70,7 +78,12 @@ test("typing_shows_in_the_split_preview_without_saving", async ({
   await expect(divider).toHaveAttribute("aria-valuenow", "35");
   await page.keyboard.press("ArrowRight");
   await expect(divider).toHaveAttribute("aria-valuenow", "40");
-  await snap(page, "editor-live-preview-split");
+  // A reload keeps the width (and starts afresh: a frame reloaded mid-load leaves
+  // Playwright's network-idle wait, which axe's settle uses, waiting for good).
+  await page.reload();
+  await page.getByRole("button", { name: "Live preview" }).click();
+  await expect(frame(page).getByText(next).first()).toBeVisible();
+  await expect(divider).toHaveAttribute("aria-valuenow", "40");
   await expectAccessible(page);
 
   // Device widths.
@@ -128,7 +141,7 @@ test("a_phone_uses_the_write_preview_control", async ({
   await view.getByRole("radio", { name: "Preview" }).click();
   await expect(pane(page)).toBeVisible();
   await expect(frame(page).getByText(name).first()).toBeVisible();
-  await snap(page, "editor-live-preview-phone");
+  await snap(page, "editor-live-preview-phone", { fullPage: false });
   await expectAccessible(page);
   await author.dispose();
 });

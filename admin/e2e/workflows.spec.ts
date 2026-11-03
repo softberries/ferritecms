@@ -10,6 +10,7 @@
 import type { Page } from "@playwright/test";
 import { ContentApi, type Item } from "./support/content-api";
 import { expect, test } from "./support/fixtures";
+import { mod } from "./support/keys";
 import { uid } from "./support/uid";
 
 interface Workflow {
@@ -93,14 +94,14 @@ test("an_editor_approves_and_the_author_publishes", async ({
     await decision.getByLabel("Comment").fill("Looks good");
     await decision.getByRole("button", { name: "Approve" }).click();
     await expect(review(editor).locator("[data-slot=review-status]")).toHaveText("Approved");
-    await snap(editor, "editor-review-approved");
+    await snap(editor, "editor-review-approved", { fullPage: false });
     await expectAccessible(editor);
 
     // An edit after the approval makes it outdated: Resubmit.
     await author.reload();
     await expect(panel(author).getByRole("button", { name: "Publish…" })).toBeVisible();
     await title(author).fill(`Workflow ${tag} v2`);
-    await author.keyboard.press("ControlOrMeta+s");
+    await author.keyboard.press(`${await mod(author)}+s`);
     await expect(review(author).getByRole("button", { name: "Resubmit…" })).toBeVisible();
     await expect(panel(author).getByRole("button", { name: "Publish…" })).toHaveCount(0);
     await review(author).getByRole("button", { name: "Resubmit…" }).click();

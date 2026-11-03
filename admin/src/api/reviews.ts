@@ -6,7 +6,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api, unwrap } from "./client";
 import { ifMatch } from "./content";
-import { ApiError } from "./problem";
 import type {
   SchemaAssigneeDto,
   SchemaDecisionDto,
@@ -99,14 +98,13 @@ export function withdraw(id: string, version: number): Promise<ReviewDto> {
   );
 }
 
-/** The type's workflow, or `null` when it has none. */
+/**
+ * The type's workflow, or `null` when it has none. Read from the list: a type without one
+ * is a `404` on `GET /workflows/{type}`, which the browser would log as an error.
+ */
 export async function getWorkflow(type: string): Promise<WorkflowDto | null> {
-  try {
-    return await unwrap(api.GET("/api/v1/workflows/{type}", { params: { path: { type } } }));
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return null;
-    throw e;
-  }
+  const list = await unwrap(api.GET("/api/v1/workflows"));
+  return list.items.find((w) => w.type === type) ?? null;
 }
 
 export function workflowQuery(type: string) {

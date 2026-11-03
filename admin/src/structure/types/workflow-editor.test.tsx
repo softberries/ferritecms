@@ -27,12 +27,9 @@ function routes(start: unknown) {
   const calls: { method: string; body: unknown; ifMatch: string | null }[] = [];
   let current = start;
   stubRoutes({
+    // Read from the list (a type without one would be a 404 on its own path).
+    "/api/v1/workflows": () => json({ items: current ? [current] : [] }),
     [WF]: async (_u, req) => {
-      if (req.method === "GET") {
-        return current
-          ? json(current)
-          : json({ type: "about:blank", title: "Not found", status: 404 }, 404);
-      }
       const text = await req.text();
       calls.push({
         method: req.method,
