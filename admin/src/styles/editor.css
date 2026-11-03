@@ -548,8 +548,9 @@ img.ProseMirror-separator {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  inline-size: 1.25rem;
-  block-size: 1.25rem;
+  /* 24 px: the WCAG 2.2 target size (axe `target-size`). */
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
   margin-inline-end: 0.25rem;
   border-radius: 9999px;
   font-size: 0.75rem;

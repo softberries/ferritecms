@@ -27,7 +27,7 @@ import { RelativeTime } from "@/components/kit/relative-time";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { messageFor, titleFor } from "@/editor/quality/findings";
 import { useSiteLocales } from "@/lib/locales";
 import { CATEGORIES, type Tab, findingHref, runState, severityTotals } from "./health-model";
@@ -111,16 +111,19 @@ export function HealthScreen() {
                 </TabsTrigger>
               ))}
             </TabsList>
+            {/* One panel for the selected tab, so its trigger's `aria-controls` names it. */}
+            <TabsContent value={tab} className="flex flex-col gap-4">
+              <Filters
+                type={type}
+                setType={setType}
+                locale={locale}
+                setLocale={setLocale}
+                severity={severity}
+                setSeverity={setSeverity}
+              />
+              <FindingsTable filters={filters} />
+            </TabsContent>
           </Tabs>
-          <Filters
-            type={type}
-            setType={setType}
-            locale={locale}
-            setLocale={setLocale}
-            severity={severity}
-            setSeverity={setSeverity}
-          />
-          <FindingsTable filters={filters} />
         </>
       )}
     </div>
