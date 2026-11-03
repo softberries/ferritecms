@@ -106,7 +106,7 @@ packs the plugins unsigned; `pages.yml` skips the index with a notice.
   on this branch), fixed by R-2-2 and then 38/38 passing; the remaining one,
   `import_cli::import_site_a_end_to_end_sqlite`, fails only because it serves on the fixed
   port 127.0.0.1:8080, which the user's own local site holds on this machine (unrelated to
-  M6-2; it passed before the port was taken).
+  M6-2; not re-run with the port free).
 - Admin: `pnpm -C admin typecheck`, `lint`, `test` (Vitest 848/848, including the E2E support
   unit tests: the Node minisign signer verified by the `minisign` CLI 0.12).
 - E2E (release build, `pnpm -C admin build`), Chromium on SQLite and Postgres:

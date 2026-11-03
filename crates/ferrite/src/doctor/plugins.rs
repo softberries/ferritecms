@@ -66,6 +66,10 @@ pub(super) async fn trust(db: Option<&Database>, config: Option<&Config>) -> Fin
         Ok(Some(f)) => f,
         // A schema before 0015 (db.schema says so).
         Ok(None) => return Finding::skip(ID, "the database has no plugin trust tables yet"),
+        // Postgres before 0015: the table is missing (db.schema says the schema is old).
+        Err(e) if e.contains("plugin_owners") && e.contains("does not exist") => {
+            return Finding::skip(ID, "the database has no plugin trust tables yet");
+        }
         Err(e) => return Finding::error(ID, e),
     };
     let mut warnings = Vec::new();
