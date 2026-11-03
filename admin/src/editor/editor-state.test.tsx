@@ -203,6 +203,27 @@ describe("autosave_slot", () => {
     await waitFor(() => expect(log.at(-1)).toEqual({ method: "PUT", title: "Second edit" }));
   });
 
+  test("the_live_preview_debounce_writes_2s_after_typing_and_reports_it", async () => {
+    // Design 15 §3.2: while the preview pane is open the slot takes the draft after 2 s
+    // idle, and the pane hears of each completed write (it reloads then).
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const log = slotLog();
+    renderWithRouter(<Harness start={item(4, "Stored text")} />);
+    await waitFor(() => expect(doc).not.toBeNull());
+    const heard = vi.fn();
+    const off = doc!.onAutosaved(heard);
+    act(() => doc?.setAutosaveDebounce(2_000));
+    act(() => doc?.setTitle("Live title"));
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    await waitFor(() => expect(log).toEqual([{ method: "PUT", title: "Live title" }]));
+    await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
+    off();
+    act(() => doc?.setTitle("Live title 2"));
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    await waitFor(() => expect(log).toHaveLength(2));
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
   test("an_edit_undone_before_the_slot_took_it_writes_nothing", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const log = slotLog();

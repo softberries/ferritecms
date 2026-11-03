@@ -34,6 +34,7 @@ import {
   ArrowLeftIcon,
   ImagePlusIcon,
   MaximizeIcon,
+  EyeIcon,
   MinimizeIcon,
   PanelRightIcon,
   ShieldAlertIcon,
@@ -68,7 +69,7 @@ import { uiLocale } from "@/lib/locale";
 import { useShortcut } from "@/lib/shortcuts";
 import { UNDO_TOAST_MS } from "@/content/list-actions";
 import { useShellChrome } from "@/shell/chrome-context";
-import { type Draft, newDraftKey, pendingDrafts } from "./autosave";
+import { type Draft, PREVIEW_DEBOUNCE_MS, newDraftKey, pendingDrafts } from "./autosave";
 import { EditorBubbleMenu } from "./bubble-menu";
 import { onPreconditionFailed } from "./conflict";
 import { ConflictDialog, type OpenConflict } from "./conflict-dialog";
@@ -92,10 +93,13 @@ import { useLeaveGuard } from "./leave-guard";
 import { RestoreBanner } from "./restore-banner";
 import { RestoreConfirmDialog, RevisionsDrawer } from "./revisions/revisions-drawer";
 import { undoTarget, whenOf } from "./revisions/revision-model";
-import { useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
+import { useSplit, useTermsById, useTypeTaxonomies, useWide } from "./panel/panel-state";
 import { PublishDialog, type PublishMode } from "./panel/publish-dialog";
 import { PublishBar } from "./panel/publish-bar";
 import { PANEL_ID, SidePanel } from "./panel/side-panel";
+import { PreviewPane, SplitDivider } from "./preview/preview-pane";
+import { storeSplit, storedSplit } from "./preview/preview-prefs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { blockText } from "./text";
 import { WordStats } from "./word-stats";
 
@@ -215,9 +219,20 @@ export function EditorScreen({
   const fieldDefs = typeDto ? fieldsFor(typeDto) : null;
   const { focusMode, setFocusMode } = useShellChrome();
 
+  // The live preview (design 15 §3.3): beside the text from 1280 px (a split view, the
+  // side panel then a sheet), else in place of it ("Write | Preview"). Focus mode hides it.
+  const screenWide = useWide();
+  const split = useSplit();
+  const [previewOn, setPreviewOn] = useState(false);
+  const previewShown = previewOn && !focusMode;
+  const splitView = previewShown && split;
+  const [splitAt, setSplitAt] = useState(storedSplit);
+  const splitBox = useRef<HTMLDivElement>(null);
+
   // The side panel: beside the text from 1024 px (open unless closed before), else a
-  // sheet (closed until asked for). Focus mode hides it.
-  const wide = useWide();
+  // sheet (closed until asked for). Focus mode hides it; so does the split preview (the
+  // panel is a sheet then).
+  const wide = screenWide && !splitView;
   const [wideOpen, setWideOpen] = useState(storedEditorPanelOpen);
   const [sheetOpen, setSheetOpen] = useState(false);
   const panelOpen = wide ? wideOpen && !focusMode : sheetOpen;
@@ -337,6 +352,32 @@ export function EditorScreen({
   });
   const group = t("shortcuts.group");
 
+  // The preview reloads after each completed autosave (2 s idle while it shows) and each
+  // save (a new item version).
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [previewAt, setPreviewAt] = useState<Date | null>(null);
+  const { onAutosaved } = doc;
+  useEffect(
+    () =>
+      onAutosaved(() => {
+        setPreviewAt(new Date());
+        setRefreshKey((k) => k + 1);
+      }),
+    [onAutosaved],
+  );
+  const shownVersion = doc.item?.version;
+  const firstVersion = useRef(shownVersion);
+  useEffect(() => {
+    if (shownVersion === undefined || shownVersion === firstVersion.current) return;
+    firstVersion.current = shownVersion;
+    setPreviewAt(null);
+    setRefreshKey((k) => k + 1);
+  }, [shownVersion]);
+  const { setAutosaveDebounce } = doc;
+  useEffect(() => {
+    setAutosaveDebounce(previewShown ? PREVIEW_DEBOUNCE_MS : null);
+  }, [previewShown, setAutosaveDebounce]);
+
   const me = queryClient.getQueryData<MeDto>(qk.me);
   const canUploadMedia = me?.capabilities.includes("upload_media") === true;
   const drops = useImageDrops(doc.editor, {
@@ -415,6 +456,17 @@ export function EditorScreen({
       const modal = '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"]';
       if (document.querySelector(modal) !== null) return;
       void doc.save();
+    },
+  });
+  useShortcut({
+    id: "editor.preview",
+    keys: "mod+alt+p",
+    label: t("shortcuts.preview"),
+    group,
+    allowInInput: true,
+    run: () => {
+      if (focusMode) setFocusMode(false);
+      setPreviewOn(!previewShown);
     },
   });
   useShortcut({
@@ -793,10 +845,21 @@ export function EditorScreen({
         panelOpen={panelOpen}
         onPanel={() => setPanelOpen(!panelOpen)}
         toggleRef={toggleRef}
-        wide={wide}
+        wide={screenWide}
+        split={split}
+        previewOn={previewShown}
+        onPreview={(on) => {
+          if (on && focusMode) setFocusMode(false);
+          setPreviewOn(on);
+        }}
       />
-      <div className="flex flex-1 items-start">
-        <div className="min-w-0 flex-1 px-page">
+      <div ref={splitBox} className="flex flex-1 items-start">
+        <div
+          data-slot="writing-column"
+          hidden={previewShown && !split}
+          style={splitView ? { width: `${splitAt}%` } : undefined}
+          className={cn("min-w-0 px-page", splitView ? "shrink-0" : "flex-1")}
+        >
           <WritingSurface
             doc={doc}
             typeLabel={typeLabel}
@@ -812,6 +875,34 @@ export function EditorScreen({
             fieldsCard={placement === "card" && !focusMode}
           />
         </div>
+        {previewShown ? (
+          <>
+            {splitView ? (
+              <SplitDivider
+                value={splitAt}
+                container={splitBox}
+                onChange={(n) => {
+                  setSplitAt(n);
+                  storeSplit(n);
+                }}
+              />
+            ) : null}
+            <PreviewPane
+              type={type}
+              itemId={doc.item?.id ?? null}
+              title={doc.title}
+              refreshKey={refreshKey}
+              updatedAt={previewAt}
+              onSave={() => {
+                void doc.save();
+              }}
+              className={cn(
+                "sticky top-[calc(var(--sticky-top)+3rem)] h-[calc(100svh-var(--sticky-top)-5.5rem)] flex-1",
+                !split && "max-lg:h-[calc(100svh-var(--sticky-top)-6.5rem)]",
+              )}
+            />
+          </>
+        ) : null}
         {focusMode && wide ? null : (
           <SidePanel
             doc={doc}
@@ -964,6 +1055,9 @@ function EditorBar({
   onPanel,
   toggleRef,
   wide,
+  split,
+  previewOn,
+  onPreview,
 }: {
   type: string;
   typeLabel: string;
@@ -975,6 +1069,10 @@ function EditorBar({
   toggleRef: RefObject<HTMLButtonElement | null>;
   /** Below 1024 px the status and the settings button live in the publish bar. */
   wide: boolean;
+  /** From 1280 px the preview sits beside the text (a toggle); below, Write | Preview. */
+  split: boolean;
+  previewOn: boolean;
+  onPreview: (on: boolean) => void;
 }) {
   const { t } = useTranslation("editor");
   const status = doc.item?.status;
@@ -1031,6 +1129,52 @@ function EditorBar({
             <TooltipContent side="bottom">{t("image.insert")}</TooltipContent>
           </Tooltip>
         ) : null}
+        {split ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-pressed={previewOn}
+                aria-label={t("preview.toggle")}
+                aria-keyshortcuts="Meta+Alt+P Control+Alt+P"
+                data-slot="preview-toggle"
+                onClick={() => onPreview(!previewOn)}
+                className={cn("text-muted-foreground", previewOn && "bg-muted text-foreground")}
+              >
+                <EyeIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="flex items-center gap-2">
+              {t("preview.toggle")}
+              <KbdCombo keys="mod+alt+p" />
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <ToggleGroup
+            type="single"
+            spacing={0}
+            value={previewOn ? "preview" : "write"}
+            aria-label={t("preview.view")}
+            data-slot="preview-switch"
+            onValueChange={(v) => {
+              if (v === "write" || v === "preview") onPreview(v === "preview");
+            }}
+            className="rounded-lg bg-muted p-0.5"
+          >
+            {(["write", "preview"] as const).map((v) => (
+              <ToggleGroupItem
+                key={v}
+                value={v}
+                aria-keyshortcuts="Meta+Alt+P Control+Alt+P"
+                className="h-7 rounded-md! border-0 px-2.5 text-xs text-muted-foreground pointer-coarse:h-11 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-(--shadow-1)"
+              >
+                {v === "write" ? t("preview.write") : t("preview.show")}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

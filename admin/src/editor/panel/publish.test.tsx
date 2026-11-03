@@ -133,6 +133,9 @@ function fakeDoc(
     fieldErrors: {},
     clearFieldError: vi.fn(),
     saveAttempted: false,
+    onAutosaved: () => () => {},
+    setAutosaveDebounce: vi.fn(),
+    autosaves: true,
     editor: {} as EditorDocument["editor"],
     ...extra,
   };

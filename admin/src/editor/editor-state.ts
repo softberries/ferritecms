@@ -565,6 +565,12 @@ export interface EditorDocument {
   clearFieldError: (path: string) => void;
   /** A save was refused for field values since the last successful save. */
   saveAttempted: boolean;
+  /** Calls `listener` after each write the slot took (the live preview reloads); unsubscribes. */
+  onAutosaved: (listener: () => void) => () => void;
+  /** The slot's idle debounce while the live preview is open (`null`: the 10 s interval). */
+  setAutosaveDebounce: (ms: number | null) => void;
+  /** Whether this screen writes the autosave slot (an existing, editable item). */
+  autosaves: boolean;
 }
 
 function bodyReadOnly(item: ContentDto | null, body: unknown): ReadOnlyReason | null {
@@ -887,6 +893,20 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     [draftNow],
   );
 
+  // The live preview's hooks into the slot: who hears of a write, and its debounce.
+  const savedListeners = useRef(new Set<() => void>());
+  const debounce = useRef<number | null>(null);
+  const onAutosaved = useCallback((listener: () => void) => {
+    savedListeners.current.add(listener);
+    return () => {
+      savedListeners.current.delete(listener);
+    };
+  }, []);
+  const setAutosaveDebounce = useCallback((ms: number | null) => {
+    debounce.current = ms;
+    autosaver.current?.setDebounce(ms);
+  }, []);
+
   useEffect(() => {
     if (!autosaves || itemId === null) return;
     const a = createAutosaver({
@@ -895,6 +915,9 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
         await putAutosave(type, itemId, autosaveInput(d));
         slotHolds.current = true;
       },
+      onSaved: () => {
+        for (const listener of [...savedListeners.current]) listener();
+      },
       onError: (e) => {
         if (!needsSignIn(e)) return;
         a.dispose();
@@ -902,6 +925,7 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
       },
     });
     autosaver.current = a;
+    if (debounce.current !== null) a.setDebounce(debounce.current);
     const off = a.state.subscribe((s) => {
       setAutoState(s);
       const at = a.savedAt();
@@ -1635,5 +1659,8 @@ export function useEditorDocument(opts: EditorDocumentOptions): EditorDocument {
     fieldErrors,
     clearFieldError,
     saveAttempted,
+    onAutosaved,
+    setAutosaveDebounce,
+    autosaves,
   };
 }

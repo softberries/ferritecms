@@ -44,7 +44,8 @@
     "panel": "Toggle the side panel",
     "publish": "Publish…",
     "panelClose": "Close the side panel",
-    "revisions": "Version history"
+    "revisions": "Version history",
+    "preview": "Toggle the live preview"
   },
   "bubble": {
     "label": "Format",
@@ -596,5 +597,26 @@
       "termUntranslated": "Some terms have no translation in that language and were left off.",
       "other": "Some details could not be carried over."
     }
+  },
+  "preview": {
+    "label": "Live preview",
+    "heading": "Preview",
+    "toggle": "Live preview",
+    "write": "Write",
+    "show": "Preview",
+    "view": "Writing or preview",
+    "device": "Device width",
+    "devices": {
+      "desktop": "Desktop",
+      "tablet": "Tablet",
+      "phone": "Phone"
+    },
+    "frameTitle": "Preview of {{title}}",
+    "updated": "Updated {{time}}",
+    "saved": "Showing the saved version",
+    "saveFirst": "Save once to preview",
+    "failed": "The preview could not be loaded.",
+    "retry": "Try again",
+    "resize": "Resize the preview"
   }
 }

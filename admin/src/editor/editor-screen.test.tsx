@@ -5,7 +5,8 @@
 
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createElement } from "react";
+import { type ReactNode, createElement, useState } from "react";
+import { ShellChromeContext } from "@/shell/chrome-context";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SchemaContentDto } from "@/api/schema";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -59,17 +60,31 @@ function itemWith(allowed: { publish: boolean; schedule: boolean }): SchemaConte
   };
 }
 
+/** The shell's focus mode, as the real shell keeps it. */
+function Chrome({ children }: { children: ReactNode }) {
+  const [focusMode, setFocusMode] = useState(false);
+  return createElement(
+    ShellChromeContext.Provider,
+    { value: { focusMode, setFocusMode } },
+    children,
+  );
+}
+
 function open(props: Partial<EditorScreenProps> & { item: SchemaContentDto | null }) {
   renderWithRouter(
     createElement(
-      TooltipProvider,
+      Chrome,
       null,
-      createElement(EditorScreen, {
-        uploads: newBodyUploadQueue(),
-        type: "post",
-        typeLabel: "Posts",
-        ...props,
-      }),
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(EditorScreen, {
+          uploads: newBodyUploadQueue(),
+          type: "post",
+          typeLabel: "Posts",
+          ...props,
+        }),
+      ),
     ),
   );
   // (`hidden`: a dialog open at once hides the screen from the accessibility tree.)
@@ -146,6 +161,44 @@ describe("editor screen", () => {
     await waitFor(() =>
       expect(document.querySelector("[data-slot=publish-dialog]")).not.toBeNull(),
     );
+  });
+
+  test("the_live_preview_toggles_with_mod_alt_p_and_focus_mode_hides_it", async () => {
+    // Below 1280 px (jsdom has no `matchMedia` match): the bar's Write | Preview control.
+    stubRoutes({
+      ...sideRoutes,
+      [`/api/v1/content/post/${ID}/preview-links`]: () =>
+        json(
+          {
+            id: "l1",
+            token: `ferp_${"a".repeat(43)}`,
+            url: `http://localhost/_preview/link/ferp_${"a".repeat(43)}`,
+            target_kind: "item",
+            target_id: ID,
+            created_by: "u",
+            created_at: "2026-10-01T10:00:00Z",
+            expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+          201,
+        ),
+    });
+    await open({ item: itemWith({ publish: true, schedule: true }) });
+    const user = userEvent.setup();
+    const write = screen.getByRole("radio", { name: "Write" });
+    expect(write).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{Control>}{Alt>}p{/Alt}{/Control}");
+    const frame = await screen.findByTitle("Preview of Spring notes");
+    expect(screen.getByRole("radio", { name: "Preview" })).toHaveAttribute("aria-checked", "true");
+    // The writing surface stays mounted (the editor's view lives in it), hidden.
+    expect(screen.getByRole("textbox", { name: "Body", hidden: true })).not.toBeVisible();
+    await waitFor(() => expect(frame.getAttribute("src")).toMatch(/working=1/));
+    // Focus mode hides the pane and shows the text again.
+    await user.keyboard("{Control>}{Shift>}f{/Shift}{/Control}");
+    expect(screen.queryByTitle("Preview of Spring notes")).toBeNull();
+    await user.keyboard("{Escape}");
+    await screen.findByTitle("Preview of Spring notes");
+    await user.click(screen.getByRole("radio", { name: "Write" }));
+    expect(screen.queryByTitle("Preview of Spring notes")).toBeNull();
   });
 
   test("the_handed_over_dialog_stays_shut_without_publish_or_schedule", async () => {
