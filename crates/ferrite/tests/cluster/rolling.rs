@@ -110,24 +110,30 @@ async fn rolling_version_coexistence() {
             .iter()
             .all(|r| r.node == OLD && r.v == 1 && r.kind == "k1")
     );
-    pg.close().await.unwrap();
-
-    // The new node joins: both versions now run side by side.
+    // The new node joins: both versions now run side by side. Only the test's own kinds
+    // are counted: the nodes' periodic jobs (prunes, `content.health`) finish as `done`
+    // rows too.
     c.start(NEW, new).await;
-    let took = wait_until(Duration::from_secs(60), "30 jobs done", || {
-        let store = store.clone();
-        async move {
-            store
-                .read()
-                .jobs()
-                .counts()
-                .await
-                .unwrap()
-                .get(&JobStatus::Done)
-                == Some(&30)
+    let started = Instant::now();
+    loop {
+        let (done,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM jobs WHERE kind IN ('k1', 'k2') AND status = 'done'",
+        )
+        .fetch_one(&mut pg)
+        .await
+        .unwrap();
+        if done == 30 {
+            break;
         }
-    })
-    .await;
+        let counts = store.read().jobs().counts().await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "30 jobs done: {done} within 60s, all jobs {counts:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let took = started.elapsed();
+    pg.close().await.unwrap();
     let counts = store.read().jobs().counts().await.unwrap();
     assert_eq!(
         counts.get(&JobStatus::Dead).copied().unwrap_or(0),
