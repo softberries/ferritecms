@@ -119,6 +119,14 @@ pub(crate) fn mcp_user(user: UserId) -> String {
     format!("mcp:user:{user}")
 }
 
+/// Webhook test deliveries per user and [`WINDOW`] (design 18 §4.5).
+pub(crate) const WEBHOOK_TEST_PER_USER: u32 = 10;
+
+/// `webhook-test:user:<id>`.
+pub(crate) fn webhook_test_user(user: UserId) -> String {
+    format!("webhook-test:user:{user}")
+}
+
 /// `token:ip:<hash>`.
 pub(crate) fn token_ip(key: &SiteKey, ip: IpAddr) -> String {
     format!("token:ip:{}", limit_ip_hash(key, ip))

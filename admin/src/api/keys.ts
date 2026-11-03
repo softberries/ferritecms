@@ -144,4 +144,15 @@ export const qk = {
     runs: ["import", "runs"] as const,
     job: (id: string) => ["import", "job", id] as const,
   },
+  /** Outgoing webhooks (M6-6). `all` covers the list, every endpoint and its log. */
+  webhooks: {
+    all: ["webhooks"] as const,
+    list: ["webhooks", "list"] as const,
+    events: ["webhooks", "events"] as const,
+    item: (id: string) => ["webhooks", "item", id] as const,
+    deliveries: (id: string, status: string) =>
+      ["webhooks", "item", id, "deliveries", status] as const,
+    delivery: (id: string, delivery: string) =>
+      ["webhooks", "item", id, "delivery", delivery] as const,
+  },
 } as const;

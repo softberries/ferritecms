@@ -14,6 +14,7 @@ mod gc;
 mod import;
 pub(crate) mod media;
 mod permalinks;
+mod webhooks;
 
 use std::{sync::Arc, time::Duration};
 
@@ -46,6 +47,10 @@ pub use import::{IMPORT_TIMEOUT, ImportWordpressHandler};
 pub use media::ImageProcessor;
 pub use media::{MediaVariantsHandler, VariantSpecs};
 pub use permalinks::PermalinkRedirectsHandler;
+pub use webhooks::{
+    WEBHOOK_DELIVER_TIMEOUT, WEBHOOKS_PRUNE_EVERY, WebhookDeliverHandler, WebhookNotice,
+    WebhooksPruneHandler, notice_mail, webhook_slots, webhooks_prune_periodic,
+};
 
 /// Period of the [`PUBLISH_DUE_KIND`] safety net.
 pub const PUBLISH_DUE_EVERY: Duration = Duration::from_secs(30);
@@ -349,13 +354,14 @@ pub fn handlers(
 }
 
 /// The periodics `serve` schedules besides `ferrite-cluster`'s built-ins:
-/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`] and
-/// [`artifacts_gc_periodic`].
+/// [`publish_due_periodic`], [`plugin_purge_sweep_periodic`],
+/// [`artifacts_gc_periodic`] and [`webhooks_prune_periodic`].
 pub fn core_periodics() -> Vec<Periodic> {
     vec![
         publish_due_periodic(),
         plugin_purge_sweep_periodic(),
         artifacts_gc_periodic(),
+        webhooks_prune_periodic(),
     ]
 }
 

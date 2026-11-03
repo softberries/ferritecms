@@ -694,6 +694,9 @@ impl Repos for FaultyRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.read().webhooks()
+    }
 }
 
 #[async_trait]

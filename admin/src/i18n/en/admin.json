@@ -197,7 +197,8 @@
         "redirects": "Redirects",
         "extensions": "Extensions",
         "import": "Import",
-        "system": "System"
+        "system": "System",
+        "webhooks": "Webhooks"
       },
       "expires": "Expires",
       "expiry": {
@@ -1113,6 +1114,17 @@
           "create": "Created a taxonomy",
           "update": "Changed a taxonomy",
           "delete": "Deleted a taxonomy"
+        },
+        "webhook": {
+          "create": "Created a webhook",
+          "update": "Changed a webhook",
+          "enable": "Enabled a webhook",
+          "disable": "Disabled a webhook",
+          "delete": "Deleted a webhook",
+          "rotate_secret": "Rotated a webhook's secret",
+          "test": "Sent a test delivery",
+          "redeliver": "Redelivered webhook deliveries",
+          "auto_disabled": "Disabled a failing webhook automatically"
         }
       },
       "areas": {
@@ -1126,7 +1138,8 @@
         "plugin": "plugin",
         "theme": "theme",
         "type": "content type",
-        "taxonomy": "taxonomy"
+        "taxonomy": "taxonomy",
+        "webhook": "webhook"
       },
       "areaTitles": {
         "user": "Users",
@@ -1139,7 +1152,8 @@
         "plugin": "Plugins",
         "theme": "Themes",
         "type": "Content types",
-        "taxonomy": "Taxonomies"
+        "taxonomy": "Taxonomies",
+        "webhook": "Webhooks"
       },
       "targets": {
         "user": "User",
@@ -1149,7 +1163,8 @@
         "plugin": "Plugin",
         "theme": "Theme",
         "type": "Content type",
-        "taxonomy": "Taxonomy"
+        "taxonomy": "Taxonomy",
+        "webhook": "Webhook"
       }
     }
   }

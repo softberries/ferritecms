@@ -54,6 +54,9 @@ mod media;
 #[path = "node/node_metrics.rs"]
 mod node_metrics;
 
+#[path = "node/webhooks.rs"]
+mod webhooks;
+
 const SITE_URL: &str = "http://127.0.0.1:8080";
 /// How long a test waits for a change to reach the node (solo: a 250 ms poll; cluster: a
 /// notice), then a reload and a render. A ceiling for a loaded host, not a latency bound:
@@ -478,6 +481,8 @@ async fn job_kinds_are_in_meta(db: Arc<TestDb>) {
         "media.variants",
         "content.publish_scheduled",
         "artifacts.gc",
+        "webhook.deliver",
+        "webhooks.prune",
     ] {
         assert!(kinds.contains(&kind), "{kind}: {m}");
     }

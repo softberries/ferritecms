@@ -44,6 +44,7 @@ pub mod taxonomy;
 pub mod tx;
 pub mod user;
 pub mod user_filters;
+pub mod webhooks;
 pub mod window;
 
 pub use counting::CountingStore;

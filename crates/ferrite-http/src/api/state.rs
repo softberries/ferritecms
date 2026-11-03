@@ -63,6 +63,8 @@ pub struct ApiParts {
     /// `ferrite.toml` `site.title`: the fallback when the `site.title` option is unset
     /// (the test mail reads the option at use time, P51).
     pub site_title: String,
+    /// Outgoing webhooks (M6-6).
+    pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
 }
 
 /// The API's shared state (see [`ApiParts`] for the services).
@@ -108,6 +110,8 @@ pub struct ApiState {
     pub site_url: String,
     /// `ferrite.toml` `site.title`, the fallback of the `site.title` option.
     pub site_title: String,
+    /// Outgoing webhooks (M6-6).
+    pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
     /// browser sends as `Origin` for the site's own pages (P8).
     pub origin: String,
@@ -147,6 +151,7 @@ impl ApiState {
             mail,
             site_url,
             site_title,
+            webhooks,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
         Ok(Self {
@@ -174,6 +179,7 @@ impl ApiState {
             mail,
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
+            webhooks,
             origin,
             cookie_secure,
         })

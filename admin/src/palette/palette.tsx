@@ -35,6 +35,7 @@ import {
   UploadIcon,
   UserRoundIcon,
   UserPlusIcon,
+  WebhookIcon,
   XIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -166,6 +167,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
   const redirectsItem = navItems.find((i) => i.id === "redirects");
   // "New user" (Create): the nav shows Users (`manage_users`).
   const usersItem = navItems.find((i) => i.id === "users");
+  // "New webhook" (Create): the nav shows Webhooks (`manage_webhooks`).
+  const webhooksItem = navItems.find((i) => i.id === "webhooks");
 
   const query = q.trim();
   const active = searchable(query) && types.length > 0;
@@ -354,7 +357,8 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
           taxonomiesItem ||
           menusItem ||
           redirectsItem ||
-          usersItem ? (
+          usersItem ||
+          webhooksItem ? (
             <CommandGroup heading={t("group.create")}>
               {createTypes.map((item) => {
                 const type = item.contentType ?? "";
@@ -445,6 +449,18 @@ function PaletteBody({ me, sections, close, onShortcuts }: BodyProps) {
                   onSelect={() => {
                     close();
                     void navigate({ to: "/users", search: { new: true } });
+                  }}
+                />
+              ) : null}
+              {webhooksItem ? (
+                <Row
+                  value={t("create.webhook")}
+                  keywords={[t("create.webhookKeywords")]}
+                  icon={WebhookIcon}
+                  label={t("create.webhook")}
+                  onSelect={() => {
+                    close();
+                    void navigate({ to: "/webhooks", search: { new: true } });
                   }}
                 />
               ) : null}

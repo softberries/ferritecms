@@ -353,6 +353,7 @@ impl Api {
                 }),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
             })
             .expect("api state"),
         );
@@ -520,6 +521,7 @@ impl Api {
             mail: a.mail.clone(),
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
+            webhooks: a.webhooks.clone(),
         }
     }
 
@@ -575,6 +577,7 @@ impl Api {
                 mail: self.api.mail.clone(),
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
+                webhooks: webhook_service(store.clone()),
             })
             .expect("api state"),
         );
@@ -1118,4 +1121,20 @@ macro_rules! api_tests {
             }
         }
     )*};
+}
+
+/// The webhook service of the API tests: any address allowed (the transport is a fake
+/// or not used), so URLs like `https://hooks.example.com/` pass.
+pub fn webhook_service(store: Arc<dyn Store>) -> Arc<ferrite_core::webhooks::WebhookService> {
+    fn any(_: std::net::IpAddr) -> bool {
+        true
+    }
+    Arc::new(ferrite_core::webhooks::WebhookService::new(
+        store,
+        SiteKey::from_hex(&"cd".repeat(32)).expect("key"),
+        ferrite_core::webhooks::UrlPolicy {
+            local_targets: false,
+            allow_ip: any,
+        },
+    ))
 }

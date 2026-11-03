@@ -178,6 +178,9 @@ impl Repos for FailingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.store.read().oauth()
     }
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.store.read().webhooks()
+    }
 }
 
 #[async_trait]

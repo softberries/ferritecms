@@ -16,6 +16,7 @@ mod repos;
 mod search;
 mod session;
 mod text;
+mod webhook;
 
 pub use error::StoreError;
 pub use export::{ExportReader, MAX_EXPORT_PAGE, check_export_limit};
@@ -69,6 +70,10 @@ pub use search::{
 };
 pub use session::session_public_id;
 pub use text::{email_key, validate_text};
+pub use webhook::{
+    MAX_WEBHOOK_ENDPOINTS_READ, WEBHOOK_DELIVERY_CURSOR_TAG, WebhookRepo, check_webhook_attempt,
+    check_webhook_endpoint, encode_webhook_delivery_cursor, webhook_delivery_cursor,
+};
 
 /// Attempts a job gets by default.
 pub use ferrite_domain::DEFAULT_MAX_ATTEMPTS;

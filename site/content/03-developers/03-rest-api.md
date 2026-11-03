@@ -99,7 +99,9 @@ curl -s -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/api/v1/content/
 
 A scope is `<area>:read` or `<area>:write`; `write` includes `read`. The areas are
 `content`, `media`, `terms`, `menus`, `comments`, `users`, `settings`, `redirects`,
-`extensions`, `import` and `system`. A token can hold only scopes its creator holds, and
+`extensions`, `import`, `system` and `webhooks`. `webhooks:read` and `webhooks:write`
+cover `/api/v1/webhooks` ([Webhooks](../02-guides/09-webhooks.md)) and nothing else:
+`system:write` or `settings:write` does not include them. A token can hold only scopes its creator holds, and
 the role still applies: an admin's `content:read` token can list drafts but cannot
 create or publish (`403` with the detail `missing content:write`), and a contributor's
 token cannot publish whatever its scopes. A session holds every scope.
@@ -118,6 +120,7 @@ or deleting the user removes them.
 | Upload media | yes | yes | yes | no |
 | Manage terms, menus and comments | yes | yes | no | no |
 | Manage users, settings, themes, plugins, import, redirects and the system | yes | no | no | no |
+| Manage webhooks (`manage_webhooks`) | yes | no | no | no |
 
 ## Errors
 

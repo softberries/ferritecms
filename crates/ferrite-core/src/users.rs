@@ -32,6 +32,7 @@ use ferrite_domain::{NewAudit, NewUser, Page, Role, Secret, User, UserId, UserQu
 use ferrite_store::{Repos, Store, StoreError};
 use serde_json::{Value, json};
 
+use crate::webhooks::{self, NewWebhookEvent};
 use crate::{
     Actor, CoreError, actions,
     actor::{Area, Capability, Scope, can, require, require_scope},
@@ -305,6 +306,9 @@ impl UserService {
                 details["status"] = json!(new.status.as_str());
             }
             audit(tx.as_ref(), Some(actor.user), "user.update", id, details).await?;
+            let ev =
+                NewWebhookEvent::user("user.updated", &new, Some(changed), None, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
             Ok(new)
         }
         .await;
@@ -470,6 +474,9 @@ impl UserService {
                 other => other.into(),
             })?;
             tx.events().append(&events::invalidate(keys)).await?;
+            let ev =
+                NewWebhookEvent::user("user.deleted", &user, None, reassign_to, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
             let details = json!({
                 "login": user.login,
                 "reassign_to": reassign_to.map(|h| h.to_string()),
@@ -559,6 +566,8 @@ impl UserService {
                 json!({ "user": id }),
             )
             .await?;
+            let ev = NewWebhookEvent::user("user.created", &user, None, None, actor);
+            webhooks::emit(tx.as_ref(), ev).await?;
             Ok(user)
         }
         .await;

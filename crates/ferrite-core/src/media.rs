@@ -27,6 +27,7 @@ use ferrite_domain::{
 use ferrite_store::{Repos, Store};
 use serde_json::Value;
 
+use crate::webhooks::{self, NewWebhookEvent};
 use crate::{
     Actor, ContentDraft, ContentService, CoreError, Permalinks,
     actor::{Area, Capability, Scope, Scopes, can, can_read, require, require_read, require_scope},
@@ -183,6 +184,8 @@ impl MediaService {
             let item =
                 ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?;
             let media = record_upload_in(tx.as_ref(), item.id, &checked, &upload).await?;
+            let ev = NewWebhookEvent::media("media.uploaded", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -405,6 +408,8 @@ impl MediaService {
                 media.alt = alt;
                 tx.media().update(&media).await?;
             }
+            let ev = NewWebhookEvent::media("media.updated", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
             Ok(MediaItem { item, media })
         }
         .await;
@@ -451,6 +456,10 @@ impl MediaService {
             tx.meta()
                 .set(id, TRASHED_FROM_META, &Value::from(from.as_str()))
                 .await?;
+            if let Some(media) = tx.media().get(id).await? {
+                let ev = NewWebhookEvent::media("media.trashed", &item, &media, Some(actor.user));
+                webhooks::emit(tx.as_ref(), ev).await?;
+            }
             Ok(item)
         }
         .await;
@@ -504,6 +513,8 @@ impl MediaService {
                 ContentService::publish_in(tx.as_ref(), rules.as_ref(), &writer, item).await?
             };
             let media = tx.media().get(id).await?.ok_or(CoreError::NotFound)?;
+            let ev = NewWebhookEvent::media("media.restored", &item, &media, Some(actor.user));
+            webhooks::emit(tx.as_ref(), ev).await?;
             Ok(MediaItem { item, media })
         }
         .await;

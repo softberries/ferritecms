@@ -1635,3 +1635,35 @@ fn tls_config_parses_and_validates() {
     };
     assert_eq!(a.redirect_http, Some("0.0.0.0:80".parse().unwrap()));
 }
+
+#[test]
+fn webhooks_local_targets() {
+    // Off by default, without a warning.
+    let (_d, r) = run(Some(MIN), &[]);
+    let c = r.unwrap();
+    assert!(!c.webhooks.local_targets);
+    assert!(c.warnings.iter().all(|w| !w.path.starts_with("webhooks")));
+    // On from the file and from the environment, with a warning.
+    let (_d, r) = run(
+        Some(&format!("{MIN}[webhooks]\nlocal_targets = true\n")),
+        &[],
+    );
+    let c = r.unwrap();
+    assert!(c.webhooks.local_targets);
+    let w = c
+        .warnings
+        .iter()
+        .find(|w| w.path == "webhooks.local_targets")
+        .expect("a warning");
+    assert!(w.message.contains("development only"), "{}", w.message);
+    let (_d, r) = run(Some(MIN), &[("FERRITE_WEBHOOKS__LOCAL_TARGETS", "true")]);
+    assert!(r.unwrap().webhooks.local_targets);
+    // Not a bool, or an unknown key: a problem.
+    let (_d, r) = run(
+        Some(&format!("{MIN}[webhooks]\nlocal_targets = \"yes\"\n")),
+        &[],
+    );
+    assert_eq!(paths(&r.unwrap_err()), ["webhooks.local_targets"]);
+    let (_d, r) = run(Some(&format!("{MIN}[webhooks]\nschedule = 1\n")), &[]);
+    assert_eq!(paths(&r.unwrap_err()), ["webhooks.schedule"]);
+}

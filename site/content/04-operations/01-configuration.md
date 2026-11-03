@@ -15,7 +15,7 @@ touching the database or the media:
 ferrite config check --data ./mysite
 ```
 
-It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…` and
+It prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…` and
 exits 0, or lists every problem and exits 1.
 
 ## Values
@@ -184,3 +184,12 @@ Scheduled backups while `serve` runs ([Backups and moves](02-backups.md)).
 | `to` | required unless off | a folder outside the data folder (`"../backups"`) or `s3://bucket[/prefix]` |
 | `keep` | `7` | snapshots (or, on Postgres, export archives) kept, 1 to 1000 |
 | `with_media` | `true` | include the media files |
+
+## [webhooks]
+
+Outgoing webhooks ([Webhooks](../02-guides/09-webhooks.md)). Retries, timeouts and the
+log's retention are fixed; there is one switch, for development.
+
+| Key | Default | |
+|---|---|---|
+| `local_targets` | `false` | allow `http` URLs and loopback and private addresses (link-local and cloud metadata addresses stay refused); `config check` prints `webhooks=local` and `ferrite doctor` warns |

@@ -76,6 +76,13 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ("users.email_key", "users_email_uq"),
     ("users.id", "users_pkey"),
     ("users.login", "users_login_uq"),
+    (
+        "webhook_attempts.delivery_id, webhook_attempts.attempt",
+        "webhook_attempts_pkey",
+    ),
+    ("webhook_deliveries.id", "webhook_deliveries_pkey"),
+    ("webhook_endpoints.id", "webhook_endpoints_pkey"),
+    ("webhook_events.id", "webhook_events_pkey"),
 ];
 
 /// The neutral name for the text after `UNIQUE constraint failed: `.

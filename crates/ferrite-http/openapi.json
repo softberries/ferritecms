@@ -9872,6 +9872,935 @@
           }
         ]
       }
+    },
+    "/api/v1/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "list_webhooks",
+        "responses": {
+          "200": {
+            "description": "Every webhook, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "create_webhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created (`Location`); the secret is shown this once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedWebhookDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `name`, `url`, `events`, `content_types` or `secret`), or at most 20 webhooks",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/events": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "list_webhook_events",
+        "responses": {
+          "200": {
+            "description": "The event types endpoints can subscribe to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventCatalogueDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "get_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "delete_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, with its deliveries"
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "update_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`errors[0].field`: `name`, `url`, `events` or `content_types`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "list_webhook_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only deliveries in this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryStatusDto"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1..=200; default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page of the same query.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of deliveries, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`validation`: `limit`, `cursor` or `status`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/deliveries/{delivery}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "get_webhook_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The delivery with its event and attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found` (also a delivery of another webhook)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/deliveries/{delivery}/redeliver": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "redeliver_webhook_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A new delivery of the same event is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedDeliveryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the webhook is disabled or paused",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/redeliver": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "redeliver_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeliverInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Deliveries since the time queued again (at most 1 000, oldest first)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeliveredDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`malformed-json`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: `statuses` (`pending`), or the webhook is disabled or paused",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "rotate_webhook_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A new secret, shown this once; the old one signs too for 24 hours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedSecretDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "operationId": "test_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A `webhook.ping` delivery is queued (poll it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueuedDeliveryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not-found`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: paused (a copied or restored database)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate-limited`: 10 test deliveries per user and minute (`Retry-After`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -9940,6 +10869,49 @@
           }
         },
         "additionalProperties": false
+      },
+      "AttemptDto": {
+        "type": "object",
+        "description": "One attempt of a delivery.",
+        "required": [
+          "attempt",
+          "started_at",
+          "duration_ms"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "At most 1 KiB of the receiver's answer, as plain text (show it escaped)."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
       },
       "AuditActorDto": {
         "type": "object",
@@ -11182,6 +12154,232 @@
             }
           },
           "token": {
+            "type": "string"
+          }
+        }
+      },
+      "CreatedWebhookDto": {
+        "type": "object",
+        "description": "`201` of `POST /webhooks`: the endpoint and its secret, shown this once.",
+        "required": [
+          "webhook",
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "`whsec_…`: store it now; it is never shown again."
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookDto"
+          }
+        }
+      },
+      "DeliveryCountsDto": {
+        "type": "object",
+        "description": "Deliveries by status.",
+        "required": [
+          "delivered",
+          "failed",
+          "pending",
+          "skipped"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DeliveryDetailDto": {
+        "type": "object",
+        "description": "`GET /webhooks/{id}/deliveries/{delivery}`.",
+        "required": [
+          "delivery",
+          "event",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttemptDto"
+            }
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/DeliveryDto"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WebhookEventDto"
+          }
+        }
+      },
+      "DeliveryDto": {
+        "type": "object",
+        "description": "One delivery (one event for this endpoint).",
+        "required": [
+          "id",
+          "event_id",
+          "event_type",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The event id, also the `webhook-id` header of every attempt."
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The error class of the last attempt (`status 503`, `timed out`, …)."
+          },
+          "last_status_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "redelivery_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The delivery this one redelivers."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatusDto"
+          }
+        }
+      },
+      "DeliveryList": {
+        "type": "object",
+        "description": "`GET /webhooks/{id}/deliveries`: one page, newest first.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryDto"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DeliveryStatusDto": {
+        "type": "string",
+        "description": "A delivery's status.",
+        "enum": [
+          "pending",
+          "delivered",
+          "failed",
+          "skipped"
+        ]
+      },
+      "DisabledReasonDto": {
+        "type": "string",
+        "description": "Why an endpoint is disabled.",
+        "enum": [
+          "manual",
+          "failing",
+          "gone"
+        ]
+      },
+      "EventCatalogueDto": {
+        "type": "object",
+        "description": "`GET /webhooks/events`.",
+        "required": [
+          "version",
+          "types"
+        ],
+        "properties": {
+          "types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventTypeDto"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The payload version."
+          }
+        }
+      },
+      "EventTypeDto": {
+        "type": "object",
+        "description": "One event type of the catalogue.",
+        "required": [
+          "type",
+          "group",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "type": {
             "type": "string"
           }
         }
@@ -13371,6 +14569,58 @@
           }
         }
       },
+      "QueuedDeliveryDto": {
+        "type": "object",
+        "description": "`202` of a test delivery or a redelivery.",
+        "required": [
+          "delivery"
+        ],
+        "properties": {
+          "delivery": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "RedeliverInput": {
+        "type": "object",
+        "description": "`POST /webhooks/{id}/redeliver`.",
+        "required": [
+          "since"
+        ],
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Deliveries created at or after this time."
+          },
+          "statuses": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeliveryStatusDto"
+            },
+            "description": "Default `[\"failed\", \"skipped\"]`; `pending` is refused."
+          }
+        }
+      },
+      "RedeliveredDto": {
+        "type": "object",
+        "description": "`202` of `POST /webhooks/{id}/redeliver`.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Deliveries queued again (at most 1 000).",
+            "minimum": 0
+          }
+        }
+      },
       "RedirectDto": {
         "type": "object",
         "description": "A redirect.",
@@ -13656,6 +14906,25 @@
           "author",
           "contributor"
         ]
+      },
+      "RotatedSecretDto": {
+        "type": "object",
+        "description": "`200` of `POST /webhooks/{id}/secret`.",
+        "required": [
+          "secret",
+          "previous_valid_until"
+        ],
+        "properties": {
+          "previous_valid_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until then deliveries carry a signature with the previous secret too."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new secret, shown this once."
+          }
+        }
       },
       "ScheduleRequest": {
         "type": "object",
@@ -14965,6 +16234,258 @@
           "active",
           "disabled"
         ]
+      },
+      "WebhookDto": {
+        "type": "object",
+        "description": "An endpoint. Never its secret.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "events",
+          "enabled",
+          "state",
+          "consecutive_failures",
+          "payload_version",
+          "created_at",
+          "updated_at",
+          "counts_24h"
+        ],
+        "properties": {
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "content_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Content types `content.*` events are narrowed to; `null` for all."
+          },
+          "counts_24h": {
+            "$ref": "#/components/schemas/DeliveryCountsDto",
+            "description": "Deliveries created in the last 24 hours, by status."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "disabled_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DisabledReasonDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subscription patterns: exact types, `<group>.*` or `*`."
+          },
+          "failing_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Since the first failed attempt after a success (cleared by a `2xx`)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_failure_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "payload_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "secret_rotating_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the previous secret still signs (a rotation in progress)."
+          },
+          "state": {
+            "$ref": "#/components/schemas/WebhookStateDto"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string",
+            "description": "The whole URL (a deploy hook may carry a token in it): shown to `webhooks:read`\ncallers only; the audit log holds its host."
+          }
+        }
+      },
+      "WebhookEventDto": {
+        "type": "object",
+        "description": "The event a delivery carries.",
+        "required": [
+          "id",
+          "type",
+          "timestamp",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "description": "The event's `data` as stored (`url` is added at delivery): a JSON object."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookInput": {
+        "type": "object",
+        "description": "`POST /webhooks`.",
+        "required": [
+          "name",
+          "url",
+          "events"
+        ],
+        "properties": {
+          "content_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Narrows `content.*` events to these content types (1 to 50); absent or `null`\nfor all."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Default `true`."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1 to 50 patterns: exact types, `<group>.*` or `*`."
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "description": "Bring your own secret: `whsec_` + base64 of 24 to 64 bytes. Generated when\nabsent."
+          },
+          "url": {
+            "type": "string",
+            "description": "Absolute `https` URL (no user information, no fragment, at most 2048 bytes)."
+          }
+        }
+      },
+      "WebhookList": {
+        "type": "object",
+        "description": "`GET /webhooks`: every endpoint, by name.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDto"
+            }
+          }
+        }
+      },
+      "WebhookPatch": {
+        "type": "object",
+        "description": "`PATCH /webhooks/{id}`: absent members keep the stored value; `content_types: null`\nclears the filter; `enabled: true` re-enables (and un-pauses) the endpoint.",
+        "properties": {
+          "content_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookStateDto": {
+        "type": "string",
+        "description": "What state an endpoint is in.",
+        "enum": [
+          "active",
+          "failing",
+          "disabled",
+          "paused"
+        ]
       }
     },
     "securitySchemes": {
@@ -15044,6 +16565,10 @@
     {
       "name": "oauth",
       "description": "AI assistants: the consent screen's pending authorization requests and the connected apps (OAuth grants)"
+    },
+    {
+      "name": "webhooks",
+      "description": "Outgoing webhooks: endpoints, the event catalogue, test deliveries, secret rotation, the delivery log and redelivery (admins)"
     }
   ]
 }

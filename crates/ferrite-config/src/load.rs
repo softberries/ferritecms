@@ -62,6 +62,7 @@ pub fn load(
     let (auth, key_given) = parse_auth(&mut cx, &mut table);
     let mail = parse_mail(&mut cx, &mut table);
     let backup = parse_backup(&mut cx, &mut table);
+    let webhooks = parse_webhooks(&mut cx, &mut table);
     cx.unknown(table, "");
 
     validate_cluster(&mut cx, &cluster, &database, &media);
@@ -98,6 +99,7 @@ pub fn load(
             auth,
             mail,
             backup,
+            webhooks,
             warnings: cx.warnings,
         }),
         _ => Err(ConfigError {
@@ -1021,6 +1023,24 @@ fn parse_auth(cx: &mut Cx, root: &mut Table) -> (AuthConfig, bool) {
     });
     cx.unknown(t, "auth");
     (AuthConfig { secret_key }, given)
+}
+
+/// The `[webhooks]` section (M6-6): `local_targets`, with a warning when it is on.
+fn parse_webhooks(cx: &mut Cx, root: &mut Table) -> WebhooksConfig {
+    let mut t = section(cx, root, "webhooks");
+    let local_targets = cx
+        .boolean(&mut t, "webhooks", "local_targets")
+        .unwrap_or(false);
+    cx.unknown(t, "webhooks");
+    if local_targets {
+        cx.warnings.push(ConfigProblem {
+            path: "webhooks.local_targets".to_owned(),
+            message: "on: webhooks may call http URLs and loopback or private addresses; \
+                      for development only"
+                .to_owned(),
+        });
+    }
+    WebhooksConfig { local_targets }
 }
 
 /// The `[backup]` section (M4-1 P15). `to` stays as written (the job resolves it against

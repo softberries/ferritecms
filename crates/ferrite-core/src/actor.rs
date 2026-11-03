@@ -44,11 +44,13 @@ pub enum Area {
     Extensions,
     Import,
     System,
+    /// Outgoing webhooks (M6-6, design 18 §6.2), after `system` so older bits stay.
+    Webhooks,
 }
 
 impl Area {
     /// Every area, in scope-bit order.
-    pub const ALL: [Area; 11] = [
+    pub const ALL: [Area; 12] = [
         Area::Content,
         Area::Media,
         Area::Terms,
@@ -60,6 +62,7 @@ impl Area {
         Area::Extensions,
         Area::Import,
         Area::System,
+        Area::Webhooks,
     ];
 
     const fn index(self) -> u32 {
@@ -82,7 +85,7 @@ pub struct Scope {
 }
 
 /// Scope names indexed by bit (`area * 2 + access`).
-const SCOPE_NAMES: [&str; 22] = [
+const SCOPE_NAMES: [&str; 24] = [
     "content:read",
     "content:write",
     "media:read",
@@ -105,6 +108,8 @@ const SCOPE_NAMES: [&str; 22] = [
     "import:write",
     "system:read",
     "system:write",
+    "webhooks:read",
+    "webhooks:write",
 ];
 
 impl Scope {
@@ -159,12 +164,15 @@ impl Scopes {
     pub const NONE: Scopes = Scopes(0);
     /// What an OAuth client can be granted (design 12 §3.3): every scope except the
     /// writes no MCP tool uses, `users:write`, `import:write` and `system:write` (their
-    /// reads stay), so a grant cannot be stretched beyond what assistants do.
+    /// reads stay), so a grant cannot be stretched beyond what assistants do, and both
+    /// `webhooks:*` scopes (design 18 §9: a webhook is an exfiltration channel).
     pub const OAUTH: Scopes = Scopes(
         Scopes::ALL.0
             & !(1 << Scope::write(Area::Users).bit()
                 | 1 << Scope::write(Area::Import).bit()
-                | 1 << Scope::write(Area::System).bit()),
+                | 1 << Scope::write(Area::System).bit()
+                | 1 << Scope::read(Area::Webhooks).bit()
+                | 1 << Scope::write(Area::Webhooks).bit()),
     );
 
     /// The set holding `scope` alone.
@@ -249,11 +257,13 @@ pub enum Capability {
     ManageRedirects,
     /// System status, nodes, audit and jobs (M2a-2b P15).
     ManageSystem,
+    /// Outgoing webhooks (M6-6, design 18 §6.2): administrators only.
+    ManageWebhooks,
 }
 
 impl Capability {
     /// Every capability, in the order of 07 §1.
-    pub const ALL: [Capability; 16] = [
+    pub const ALL: [Capability; 17] = [
         Self::ReadAdmin,
         Self::EditOwn,
         Self::PublishOwn,
@@ -270,6 +280,7 @@ impl Capability {
         Self::Import,
         Self::ManageRedirects,
         Self::ManageSystem,
+        Self::ManageWebhooks,
     ];
 
     /// The capability's name as in 07 §1, e.g. `edit_own`.
@@ -291,6 +302,7 @@ impl Capability {
             Self::Import => "import",
             Self::ManageRedirects => "manage_redirects",
             Self::ManageSystem => "manage_system",
+            Self::ManageWebhooks => "manage_webhooks",
         }
     }
 
@@ -311,6 +323,7 @@ impl Capability {
             Import => Area::Import,
             ManageRedirects => Area::Redirects,
             ManageSystem => Area::System,
+            ManageWebhooks => Area::Webhooks,
         };
         Some(Scope::write(area))
     }
@@ -327,7 +340,7 @@ pub fn can(role: Role, cap: Capability) -> bool {
             matches!(role, Role::Admin | Role::Editor)
         }
         ManageUsers | ManageSettings | ManageThemes | ManagePlugins | Import | ManageRedirects
-        | ManageSystem => role == Role::Admin,
+        | ManageSystem | ManageWebhooks => role == Role::Admin,
     }
 }
 
@@ -603,7 +616,7 @@ mod tests {
         assert!(set(&["content:write"]).covers(set(&["content:read"])));
         assert!(!set(&["content:read"]).covers(set(&["content:write"])));
         assert!(Scopes::ALL.covers(Scopes::ALL));
-        assert_eq!(Scopes::ALL.iter().count(), 22);
+        assert_eq!(Scopes::ALL.iter().count(), 24);
     }
 
     #[test]
@@ -675,13 +688,13 @@ mod tests {
                 names.push(scope.as_str().to_owned());
             }
         }
-        assert_eq!(names.len(), 22);
+        assert_eq!(names.len(), 24);
         assert_eq!(
             names
                 .iter()
                 .collect::<std::collections::BTreeSet<_>>()
                 .len(),
-            22
+            24
         );
         assert_eq!(Scopes::from_strs(&names).unwrap(), Scopes::ALL);
         assert_eq!(Scopes::ALL.to_strings(), names);
@@ -726,11 +739,36 @@ mod tests {
             (Import, Some("import:write")),
             (ManageRedirects, Some("redirects:write")),
             (ManageSystem, Some("system:write")),
+            (ManageWebhooks, Some("webhooks:write")),
         ];
         assert_eq!(expect.len(), Capability::ALL.len());
         for (cap, scope) in expect {
             assert_eq!(cap.scope().map(Scope::as_str), scope, "{cap:?}");
         }
+    }
+
+    #[test]
+    fn webhooks_are_admin_only_and_never_oauth() {
+        for role in [Role::Editor, Role::Author, Role::Contributor] {
+            assert!(!can(role, ManageWebhooks), "{role:?}");
+        }
+        assert!(can(Role::Admin, ManageWebhooks));
+        assert!(!Scopes::OAUTH.allows(Scope::read(Area::Webhooks)));
+        assert!(!Scopes::OAUTH.allows(Scope::write(Area::Webhooks)));
+        // Appended after `system`: the older scope bits keep their positions.
+        assert_eq!(Scope::write(Area::System).bit(), 21);
+        assert_eq!(Scope::read(Area::Webhooks).as_str(), "webhooks:read");
+        let system = Actor::new(UserId::new(), Role::Admin).with_scopes(
+            Scopes::from_strs(&["system:write".into(), "settings:write".into()]).unwrap(),
+        );
+        assert!(matches!(
+            require(&system, ManageWebhooks),
+            Err(CoreError::Forbidden("webhooks:write"))
+        ));
+        assert!(matches!(
+            require_reader(&system, ManageWebhooks),
+            Err(CoreError::Forbidden("webhooks:read"))
+        ));
     }
 
     #[test]

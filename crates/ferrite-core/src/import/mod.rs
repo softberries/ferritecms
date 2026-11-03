@@ -389,6 +389,14 @@ impl ImportHandle {
                 return Err(CoreError::Changed(TAKEN_OVER));
             }
             imports.set_state(self.run.id, state, stats, now).await?;
+            let run = ImportRun {
+                state,
+                stats: stats.clone(),
+                finished_at: Some(now),
+                ..self.run.clone()
+            };
+            crate::webhooks::emit(tx.as_ref(), crate::webhooks::NewWebhookEvent::import(&run))
+                .await?;
             Ok(())
         }
         .await;

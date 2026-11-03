@@ -109,7 +109,15 @@ serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless) 
 2 resources, 1 resource template and 4 prompts, a built-in OAuth 2.1 authorization server (PKCE, dynamic registration
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
-card; migration `0013_oauth`; design 12, roadmap "M5". Work top-down in
+card; migration `0013_oauth`; design 12, roadmap "M5". M6-6 (outgoing webhooks) is built
+(`m6-6-exit.md`): `ferrite_core::webhooks` (catalogue, Standard Webhooks signing, sealed
+rotating secrets, `WebhookService`, `emit` from the content, media, comment, user and import
+writes in their `Tx`), the `webhook.deliver` (one job per attempt, 8-step schedule,
+auto-disable at 5 days + 10 failures or a `410`, mail to admins) and hourly `webhooks.prune`
+jobs, `ferrite_http::webhook_send::WebhookClient` over the egress SSRF rules, `[webhooks]
+local_targets`, `/api/v1/webhooks` (`manage_webhooks`, scopes `webhooks:read|write`, never
+OAuth), the admin's Webhooks screens (`g w`), doctor's `webhooks.endpoints`; migration
+`0016_webhooks`; design 18. Work top-down in
 `docs/ROADMAP.md`; per-milestone rulings are in `docs/superpowers/rulings/` (M2a-2a:
 `m2a2.md`, M2a-2b: `m2a2b.md`, M2b: `m2b.md`, M3: `m3.md`, M4: `m4.md`, M5: `m5.md`).
 
@@ -197,13 +205,19 @@ Claude.ai/Desktop connectors and ChatGPT connect from the vendor's cloud and nee
 public HTTPS. Probe it with curl: `POST /mcp` with `Authorization: Bearer …`, `Content-Type:
 application/json`, `Accept: application/json, text/event-stream` and a JSON-RPC body
 (`tools/list`, `tools/call`); a missing token answers `401` with the `resource_metadata`
-challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`). `cargo run -p ferrite -- migrate status
+challenge. Settings → AI assistants holds the `mcp.enabled` switch (off: `404`).
+Webhooks (M6-6): admin → Webhooks (`/admin/webhooks`) or `POST /api/v1/webhooks` with `{name,
+url, events: ["content.*"]}` (the `201` shows the `whsec_` secret once); deliveries need
+`serve` running (the job runner sends them). To try them against a local receiver, start
+`serve` with `FERRITE_WEBHOOKS__LOCAL_TARGETS=true` (allows `http` and loopback; otherwise
+only public `https` targets) and point a webhook at e.g. `http://127.0.0.1:9000/`; guide
+`site/content/02-guides/09-webhooks.md`. `cargo run -p ferrite -- migrate status
 --data /tmp/site` exits 0 ok, 2 pending, 3 incompatible, 1 error; with SQLite it (and `seed`
 and `user`) fails while `serve` holds the data-folder lock. `FERRITE_LOG=debug` sets log
 verbosity; `FERRITE_<SECTION>__<KEY>` overrides config (e.g.
 `FERRITE_SERVER__LISTEN=127.0.0.1:0` for a free port).
 `cargo run -p ferrite -- config check --data /tmp/site` validates config + env without
-touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=…`, exit 1 lists
+touching the database (exit 0 prints `ok: mode=… database=… media=… workers=… mail=… metrics=… tls=… backup=… webhooks=…`, exit 1 lists
 problems).
 Themes and plugins: `ferrite theme install|activate|list` and `ferrite plugin
 check|install|list|enable|disable|remove` (`--dir` holds `ferrite-plugin.toml` and one
@@ -216,7 +230,7 @@ the admin's Appearance and Plugins screens. The example plugins: unpack the rele
 inbox pages (`/_p/analytics/`, `/_p/contact-form/inbox`) need the user's id in the plugin's
 `viewers` setting (each plugin's README). Mail (password reset, plugin `notify-admins`, the
 admin's test mail) needs `[mail] smtp_url` + `from` (01 §4).
-Check a site: `ferrite doctor --data DIR [--offline]` (25 checks that write nothing locally,
+Check a site: `ferrite doctor --data DIR [--offline]` (26 checks that write nothing locally,
 S3 a probe object; `<status> <check-id> <detail>` lines, then a count; works while `serve`
 runs; `--offline` skips the S3, SMTP, ACME and release lookups; 0 ok, 2 warnings, 1 errors,
 3 schema incompatible; 09 §8).

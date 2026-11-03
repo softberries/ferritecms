@@ -16,3 +16,5 @@ Task-oriented guides for running a site day to day.
 - [Import from WordPress](06-import-wordpress.md): move a WordPress site over, with
   redirects from the old addresses.
 - [Import Markdown](07-import-markdown.md): turn a folder of Markdown files into pages.
+- [Webhooks](09-webhooks.md): call your own URLs when content, media, comments, users or
+  imports change, signed and retried: deploy hooks, CDN purges, chat notices.

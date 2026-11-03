@@ -65,7 +65,10 @@ uuid_id!(
     CommentId,
     ImportRunId,
     OAuthRequestId,
-    OAuthGrantId
+    OAuthGrantId,
+    WebhookId,
+    WebhookEventId,
+    DeliveryId
 );
 
 /// SHA-256 content hash: exactly 64 lowercase hex characters.

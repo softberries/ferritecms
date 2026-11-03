@@ -22,6 +22,7 @@ mod search;
 mod site;
 mod taxonomy;
 mod user;
+mod webhook;
 
 use std::sync::Arc;
 
@@ -31,7 +32,7 @@ use ferrite_store::{
     EventRepo, IdempotencyRepo, ImportRepo, JobRepo, MediaRepo, MenuRepo, MetaRepo,
     NodeMetricsRepo, NodeRepo, OAuthRepo, OptionRepo, PluginFailureRepo, PluginKvRepo, PluginRepo,
     RateLimitRepo, RedirectRepo, Repos, RevisionRepo, SchemaMetaRepo, SearchRepo, SessionRepo,
-    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo,
+    StoreError, TaxonomyRepo, TermRepo, ThemeRepo, Tx, UserRepo, WebhookRepo,
 };
 use sqlx::PgPool;
 
@@ -150,6 +151,9 @@ impl Repos for PgRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self
     }
+    fn webhooks(&self) -> &dyn WebhookRepo {
+        self
+    }
 }
 
 /// A write transaction (or a nested savepoint) on a pool connection; dropping it rolls
@@ -237,4 +241,5 @@ delegate_repos!(
     imports: ImportRepo,
     node_metrics: NodeMetricsRepo,
     oauth: OAuthRepo,
+    webhooks: WebhookRepo,
 );

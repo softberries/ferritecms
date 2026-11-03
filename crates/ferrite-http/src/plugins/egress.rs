@@ -617,6 +617,105 @@ pub(crate) fn address_refused(e: &reqwest::Error) -> bool {
     in_chain::<Refused>(e)
 }
 
+/// The class of a failed request, as stored and shown ("address not allowed", "timed
+/// out", "TLS error", "connection failed", "request failed"); never an address.
+pub(crate) fn error_class(e: &reqwest::Error) -> &'static str {
+    if in_chain::<Refused>(e) {
+        ADDRESS_NOT_ALLOWED
+    } else if in_chain::<Busy>(e) {
+        RESOLVER_BUSY
+    } else if e.is_timeout() {
+        TIMED_OUT
+    } else if in_chain::<rustls::Error>(e) {
+        TLS_ERROR
+    } else if e.is_connect() {
+        CONNECT_FAILED
+    } else {
+        REQUEST_FAILED
+    }
+}
+
+/// The whole webhook request, connects, TLS, send, headers and the body read (design 18
+/// §4.5).
+pub const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The address rule of `[webhooks] local_targets` (design 18 §6.1, D9): every public
+/// address, plus loopback and the private ranges (`10/8`, `172.16/12`, `192.168/16`,
+/// `fc00::/7`), judged on the canonical form of IPv4-mapped addresses. Link-local (and
+/// with it the cloud metadata address `169.254.169.254`), the AWS IPv6 metadata address
+/// `fd00:ec2::254`, the Alibaba one `100.100.100.200`, multicast, broadcast, reserved and
+/// unspecified addresses stay refused.
+pub fn is_local_target_ip(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            v4 != Ipv4Addr::new(100, 100, 100, 200)
+                && (public_v4(v4) || v4.is_loopback() || v4.is_private())
+        }
+        IpAddr::V6(v6) => {
+            let ula = (u128::from(v6) >> 121) == (0xfc00_u128 >> 9);
+            v6 != Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)
+                && (public_v6(v6) || v6.is_loopback() || ula)
+        }
+    }
+}
+
+/// The client webhooks are sent with ([`WebhookClient`](crate::webhook_send::WebhookClient)):
+/// the checked resolver with `allow_ip`, no redirects, no proxy, no cookie store, no
+/// `Referer`, no decompression, `https` only unless `https_only` is off (`local_targets`),
+/// [`WEBHOOK_TIMEOUT`], the platform roots with the `webpki-roots` fallback.
+pub(crate) fn webhook_client(
+    allow_ip: fn(IpAddr) -> bool,
+    https_only: bool,
+) -> Result<reqwest::Client, String> {
+    with_fallback(
+        || {
+            build(
+                Lookup::System,
+                allow_ip,
+                Roots::Platform,
+                https_only,
+                WEBHOOK_TIMEOUT,
+            )
+        },
+        || {
+            build(
+                Lookup::System,
+                allow_ip,
+                Roots::WebPki(Vec::new()),
+                https_only,
+                WEBHOOK_TIMEOUT,
+            )
+        },
+    )
+}
+
+/// Test seam: [`webhook_client`] with `overrides`' resolver, roots (empty: the platform
+/// roots) and address rule, and `timeout` in place of [`WEBHOOK_TIMEOUT`].
+#[cfg(feature = "test-seams")]
+pub(crate) fn webhook_client_for_tests(
+    overrides: EgressOverrides,
+    https_only: bool,
+    timeout: Duration,
+) -> Result<reqwest::Client, String> {
+    let EgressOverrides {
+        resolver,
+        roots,
+        allow_ip,
+    } = overrides;
+    let roots = if roots.is_empty() {
+        Roots::Platform
+    } else {
+        Roots::Only(roots)
+    };
+    build(
+        Lookup::Custom(resolver),
+        allow_ip,
+        roots,
+        https_only,
+        timeout,
+    )
+}
+
 /// A client with the checked resolver, no redirects, no proxy and no `Referer`.
 fn build(
     lookup: Lookup,

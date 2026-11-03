@@ -66,6 +66,11 @@
       "read": "See site health, background jobs and the audit log.",
       "write": "Nothing more than reading: jobs and backups stay in the admin."
     },
+    "webhooks": {
+      "label": "Webhooks",
+      "read": "Never granted to assistants: webhooks stay in the admin.",
+      "write": "Never granted to assistants: webhooks stay in the admin."
+    },
     "off": "Not allowed."
   },
   "consent": {

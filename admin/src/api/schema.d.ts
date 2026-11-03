@@ -1364,6 +1364,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhooks"];
+        put?: never;
+        post: operations["create_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhook_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_webhook"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_webhook"];
+        options?: never;
+        head?: never;
+        patch: operations["update_webhook"];
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_webhook_deliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries/{delivery}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_webhook_delivery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/deliveries/{delivery}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeliver_webhook_delivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeliver_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rotate_webhook_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["test_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1396,6 +1540,20 @@ export interface components {
         ApproveInput: {
             /** @description At least one, each in the request's `grantable`. */
             scopes: string[];
+        };
+        /** @description One attempt of a delivery. */
+        AttemptDto: {
+            /** Format: int32 */
+            attempt: number;
+            /** Format: int32 */
+            duration_ms: number;
+            error?: string | null;
+            /** @description At most 1 KiB of the receiver's answer, as plain text (show it escaped). */
+            response_excerpt?: string | null;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: int32 */
+            status_code?: number | null;
         };
         /** @description Who wrote an audit row. */
         AuditActorDto: {
@@ -1920,6 +2078,88 @@ export interface components {
             name: string;
             scopes: string[];
             token: string;
+        };
+        /** @description `201` of `POST /webhooks`: the endpoint and its secret, shown this once. */
+        CreatedWebhookDto: {
+            /** @description `whsec_…`: store it now; it is never shown again. */
+            secret: string;
+            webhook: components["schemas"]["WebhookDto"];
+        };
+        /** @description Deliveries by status. */
+        DeliveryCountsDto: {
+            /** Format: int64 */
+            delivered: number;
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            skipped: number;
+        };
+        /** @description `GET /webhooks/{id}/deliveries/{delivery}`. */
+        DeliveryDetailDto: {
+            attempts: components["schemas"]["AttemptDto"][];
+            delivery: components["schemas"]["DeliveryDto"];
+            event: components["schemas"]["WebhookEventDto"];
+        };
+        /** @description One delivery (one event for this endpoint). */
+        DeliveryDto: {
+            /** Format: int32 */
+            attempts: number;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The event id, also the `webhook-id` header of every attempt.
+             */
+            event_id: string;
+            event_type: string;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** @description The error class of the last attempt (`status 503`, `timed out`, …). */
+            last_error?: string | null;
+            /** Format: int32 */
+            last_status_code?: number | null;
+            /** Format: date-time */
+            next_attempt_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The delivery this one redelivers.
+             */
+            redelivery_of?: string | null;
+            status: components["schemas"]["DeliveryStatusDto"];
+        };
+        /** @description `GET /webhooks/{id}/deliveries`: one page, newest first. */
+        DeliveryList: {
+            items: components["schemas"]["DeliveryDto"][];
+            next_cursor?: string | null;
+        };
+        /**
+         * @description A delivery's status.
+         * @enum {string}
+         */
+        DeliveryStatusDto: "pending" | "delivered" | "failed" | "skipped";
+        /**
+         * @description Why an endpoint is disabled.
+         * @enum {string}
+         */
+        DisabledReasonDto: "manual" | "failing" | "gone";
+        /** @description `GET /webhooks/events`. */
+        EventCatalogueDto: {
+            types: components["schemas"]["EventTypeDto"][];
+            /**
+             * Format: int32
+             * @description The payload version.
+             */
+            version: number;
+        };
+        /** @description One event type of the catalogue. */
+        EventTypeDto: {
+            description: string;
+            group: string;
+            type: string;
         };
         /** @description Failures of one hook in one hour, every node's (the shared counters, P20). */
         FailureBucketDto: {
@@ -2913,6 +3153,29 @@ export interface components {
             /** @description `/api/v1/problems/<slug>`. */
             type: string;
         };
+        /** @description `202` of a test delivery or a redelivery. */
+        QueuedDeliveryDto: {
+            /** Format: uuid */
+            delivery: string;
+        };
+        /** @description `POST /webhooks/{id}/redeliver`. */
+        RedeliverInput: {
+            /**
+             * Format: date-time
+             * @description Deliveries created at or after this time.
+             */
+            since: string;
+            /** @description Default `["failed", "skipped"]`; `pending` is refused. */
+            statuses?: components["schemas"]["DeliveryStatusDto"][] | null;
+        };
+        /** @description `202` of `POST /webhooks/{id}/redeliver`. */
+        RedeliveredDto: {
+            /**
+             * Format: int32
+             * @description Deliveries queued again (at most 1 000).
+             */
+            count: number;
+        };
         /** @description A redirect. */
         RedirectDto: {
             /**
@@ -3023,6 +3286,16 @@ export interface components {
          * @enum {string}
          */
         RoleDto: "admin" | "editor" | "author" | "contributor";
+        /** @description `200` of `POST /webhooks/{id}/secret`. */
+        RotatedSecretDto: {
+            /**
+             * Format: date-time
+             * @description Until then deliveries carry a signature with the previous secret too.
+             */
+            previous_valid_until: string;
+            /** @description The new secret, shown this once. */
+            secret: string;
+        };
         /** @description `POST /content/{type}/{id}/schedule`. */
         ScheduleRequest: {
             /**
@@ -3651,6 +3924,102 @@ export interface components {
          * @enum {string}
          */
         UserStatusDto: "active" | "disabled";
+        /** @description An endpoint. Never its secret. */
+        WebhookDto: {
+            /** Format: int32 */
+            consecutive_failures: number;
+            /** @description Content types `content.*` events are narrowed to; `null` for all. */
+            content_types?: string[] | null;
+            /** @description Deliveries created in the last 24 hours, by status. */
+            counts_24h: components["schemas"]["DeliveryCountsDto"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            disabled_at?: string | null;
+            disabled_reason?: components["schemas"]["DisabledReasonDto"] | null;
+            enabled: boolean;
+            /** @description Subscription patterns: exact types, `<group>.*` or `*`. */
+            events: string[];
+            /**
+             * Format: date-time
+             * @description Since the first failed attempt after a success (cleared by a `2xx`).
+             */
+            failing_since?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_failure_at?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            name: string;
+            /** Format: int32 */
+            payload_version: number;
+            /**
+             * Format: date-time
+             * @description Until when the previous secret still signs (a rotation in progress).
+             */
+            secret_rotating_until?: string | null;
+            state: components["schemas"]["WebhookStateDto"];
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * @description The whole URL (a deploy hook may carry a token in it): shown to `webhooks:read`
+             *     callers only; the audit log holds its host.
+             */
+            url: string;
+        };
+        /** @description The event a delivery carries. */
+        WebhookEventDto: {
+            /** @description The event's `data` as stored (`url` is added at delivery): a JSON object. */
+            data: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            timestamp: string;
+            type: string;
+        };
+        /** @description `POST /webhooks`. */
+        WebhookInput: {
+            /**
+             * @description Narrows `content.*` events to these content types (1 to 50); absent or `null`
+             *     for all.
+             */
+            content_types?: string[] | null;
+            /** @description Default `true`. */
+            enabled?: boolean | null;
+            /** @description 1 to 50 patterns: exact types, `<group>.*` or `*`. */
+            events: string[];
+            /** @description 1 to 100 characters. */
+            name: string;
+            /**
+             * Format: password
+             * @description Bring your own secret: `whsec_` + base64 of 24 to 64 bytes. Generated when
+             *     absent.
+             */
+            secret?: string | null;
+            /** @description Absolute `https` URL (no user information, no fragment, at most 2048 bytes). */
+            url: string;
+        };
+        /** @description `GET /webhooks`: every endpoint, by name. */
+        WebhookList: {
+            items: components["schemas"]["WebhookDto"][];
+        };
+        /**
+         * @description `PATCH /webhooks/{id}`: absent members keep the stored value; `content_types: null`
+         *     clears the filter; `enabled: true` re-enables (and un-pauses) the endpoint.
+         */
+        WebhookPatch: {
+            content_types?: string[] | null;
+            enabled?: boolean;
+            events?: string[];
+            name?: string;
+            url?: string;
+        };
+        /**
+         * @description What state an endpoint is in.
+         * @enum {string}
+         */
+        WebhookStateDto: "active" | "failing" | "disabled" | "paused";
     };
     responses: never;
     parameters: never;
@@ -3660,6 +4029,7 @@ export interface components {
 }
 export type SchemaAllowedActionsDto = components['schemas']['AllowedActionsDto'];
 export type SchemaApproveInput = components['schemas']['ApproveInput'];
+export type SchemaAttemptDto = components['schemas']['AttemptDto'];
 export type SchemaAuditActorDto = components['schemas']['AuditActorDto'];
 export type SchemaAuditDto = components['schemas']['AuditDto'];
 export type SchemaAuditList = components['schemas']['AuditList'];
@@ -3690,6 +4060,15 @@ export type SchemaContentTypeInput = components['schemas']['ContentTypeInput'];
 export type SchemaContentTypeList = components['schemas']['ContentTypeList'];
 export type SchemaContentTypePatch = components['schemas']['ContentTypePatch'];
 export type SchemaCreatedTokenDto = components['schemas']['CreatedTokenDto'];
+export type SchemaCreatedWebhookDto = components['schemas']['CreatedWebhookDto'];
+export type SchemaDeliveryCountsDto = components['schemas']['DeliveryCountsDto'];
+export type SchemaDeliveryDetailDto = components['schemas']['DeliveryDetailDto'];
+export type SchemaDeliveryDto = components['schemas']['DeliveryDto'];
+export type SchemaDeliveryList = components['schemas']['DeliveryList'];
+export type SchemaDeliveryStatusDto = components['schemas']['DeliveryStatusDto'];
+export type SchemaDisabledReasonDto = components['schemas']['DisabledReasonDto'];
+export type SchemaEventCatalogueDto = components['schemas']['EventCatalogueDto'];
+export type SchemaEventTypeDto = components['schemas']['EventTypeDto'];
 export type SchemaFailureBucketDto = components['schemas']['FailureBucketDto'];
 export type SchemaFieldDefDto = components['schemas']['FieldDefDto'];
 export type SchemaFieldError = components['schemas']['FieldError'];
@@ -3754,6 +4133,9 @@ export type SchemaPluginSettingsDto = components['schemas']['PluginSettingsDto']
 export type SchemaPluginTotalsDto = components['schemas']['PluginTotalsDto'];
 export type SchemaPluginUpload = components['schemas']['PluginUpload'];
 export type SchemaProblemDocument = components['schemas']['ProblemDocument'];
+export type SchemaQueuedDeliveryDto = components['schemas']['QueuedDeliveryDto'];
+export type SchemaRedeliverInput = components['schemas']['RedeliverInput'];
+export type SchemaRedeliveredDto = components['schemas']['RedeliveredDto'];
 export type SchemaRedirectDto = components['schemas']['RedirectDto'];
 export type SchemaRedirectInput = components['schemas']['RedirectInput'];
 export type SchemaRedirectList = components['schemas']['RedirectList'];
@@ -3766,6 +4148,7 @@ export type SchemaRevisionList = components['schemas']['RevisionList'];
 export type SchemaRevisionSummaryDto = components['schemas']['RevisionSummaryDto'];
 export type SchemaRobotsDto = components['schemas']['RobotsDto'];
 export type SchemaRoleDto = components['schemas']['RoleDto'];
+export type SchemaRotatedSecretDto = components['schemas']['RotatedSecretDto'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
 export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
@@ -3810,6 +4193,12 @@ export type SchemaUserInput = components['schemas']['UserInput'];
 export type SchemaUserList = components['schemas']['UserList'];
 export type SchemaUserPatchInput = components['schemas']['UserPatchInput'];
 export type SchemaUserStatusDto = components['schemas']['UserStatusDto'];
+export type SchemaWebhookDto = components['schemas']['WebhookDto'];
+export type SchemaWebhookEventDto = components['schemas']['WebhookEventDto'];
+export type SchemaWebhookInput = components['schemas']['WebhookInput'];
+export type SchemaWebhookList = components['schemas']['WebhookList'];
+export type SchemaWebhookPatch = components['schemas']['WebhookPatch'];
+export type SchemaWebhookStateDto = components['schemas']['WebhookStateDto'];
 export type $defs = Record<string, never>;
 export interface operations {
     login: {
@@ -11083,6 +11472,670 @@ export interface operations {
             };
             /** @description `validation`: the request's own account (`errors[0].field` = `id`; use `POST /auth/totp/disable` with the password), or TOTP is not on */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every webhook, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookInput"];
+            };
+        };
+        responses: {
+            /** @description Created (`Location`); the secret is shown this once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedWebhookDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `name`, `url`, `events`, `content_types` or `secret`), or at most 20 webhooks */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhook_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event types endpoints can subscribe to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventCatalogueDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The webhook */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, with its deliveries */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    update_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookPatch"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `name`, `url`, `events` or `content_types`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_webhook_deliveries: {
+        parameters: {
+            query?: {
+                /** @description Only deliveries in this status. */
+                status?: components["schemas"]["DeliveryStatusDto"];
+                /** @description 1..=200; default 50. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page of the same query. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deliveries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryList"];
+                };
+            };
+            /** @description `validation`: `limit`, `cursor` or `status` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    get_webhook_delivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                delivery: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The delivery with its event and attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryDetailDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` (also a delivery of another webhook) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    redeliver_webhook_delivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                delivery: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new delivery of the same event is queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedDeliveryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: the webhook is disabled or paused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    redeliver_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeliverInput"];
+            };
+        };
+        responses: {
+            /** @description Deliveries since the time queued again (at most 1 000, oldest first) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeliveredDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: `statuses` (`pending`), or the webhook is disabled or paused */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    rotate_webhook_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new secret, shown this once; the old one signs too for 24 hours */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedSecretDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    test_webhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A `webhook.ping` delivery is queued (poll it) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedDeliveryDto"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`manage_webhooks`, `webhooks:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation`: paused (a copied or restored database) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `rate-limited`: 10 test deliveries per user and minute (`Retry-After`) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

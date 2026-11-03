@@ -219,6 +219,9 @@ impl Repos for CountingRepos {
     fn oauth(&self) -> &dyn OAuthRepo {
         self.inner.read().oauth()
     }
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.inner.read().webhooks()
+    }
 }
 
 #[async_trait]
@@ -655,6 +658,9 @@ impl Repos for CountingTx {
     }
     fn oauth(&self) -> &dyn OAuthRepo {
         self.tx.oauth()
+    }
+    fn webhooks(&self) -> &dyn ferrite_store::WebhookRepo {
+        self.tx.webhooks()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

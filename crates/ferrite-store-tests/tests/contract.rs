@@ -5,7 +5,7 @@ use ferrite_store_tests::{
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*, lock::*,
     menu::*, migration_dirs, migration_files, migrations::*, node::*, node_metrics::*, notify::*,
     oauth::*, plugin::*, plugin_failure::*, pool::*, search::*, semantics::*, site::*, taxonomy::*,
-    tx::*, user::*, user_filters::*,
+    tx::*, user::*, user_filters::*, webhooks::*,
 };
 
 backend_tests!(
@@ -416,4 +416,17 @@ backend_tests!(
     import_writer_rollback_leaves_nothing,
     import_writer_self_refs_any_order,
     import_writer_site_id_batches_refusals,
+);
+
+backend_tests!(
+    migration_0016_roundtrip,
+    endpoint_crud_and_cascade,
+    active_for_emit_needs_enabled_and_install_id,
+    record_attempt_is_single_use,
+    set_status_only_from_pending,
+    deliveries_page_newest_first,
+    delivery_counts_by_status_since,
+    prune_keeps_events_with_pending_deliveries,
+    nul_in_text_is_invalid,
+    fail_stale_pending_only_old_pending,
 );
