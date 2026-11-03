@@ -5,7 +5,8 @@ use ferrite_store_tests::{
     event::*, export::*, idempotency::*, import::*, import_writer::*, job::*, job_list::*,
     locale::*, lock::*, menu::*, migration_dirs, migration_files, migrations::*, node::*,
     node_metrics::*, notify::*, oauth::*, plugin::*, plugin_failure::*, plugin_trust::*, pool::*,
-    search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*, webhooks::*,
+    quality::*, search::*, semantics::*, site::*, taxonomy::*, tx::*, user::*, user_filters::*,
+    webhooks::*,
 };
 
 backend_tests!(
@@ -465,4 +466,18 @@ backend_tests!(
     prune_keeps_events_with_pending_deliveries,
     nul_in_text_is_invalid,
     fail_stale_pending_only_old_pending,
+);
+
+backend_tests!(
+    migration_0019_roundtrip,
+    quality_gate_defaults_off_and_round_trips,
+    suppression_upsert_and_delete,
+    suppressions_cascade_with_item,
+    published_page_skips_drafts_media_and_trash,
+    last_revision_at_groups_per_item,
+    findings_page_filters_and_cursor,
+    findings_cascade_with_run_and_item,
+    delete_findings_except_keeps_one_run,
+    abandon_running_marks_old_runs,
+    link_cache_put_get_prune,
 );

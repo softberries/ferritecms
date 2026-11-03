@@ -39,6 +39,7 @@ pub mod plugin;
 pub mod plugin_failure;
 pub mod plugin_trust;
 pub mod pool;
+pub mod quality;
 pub mod search;
 pub mod semantics;
 pub mod site;

@@ -23,6 +23,9 @@ pub const LOCK_GC: &str = "artifacts.gc";
 /// Held by one scheduled backup run (the `site.backup` job, M4-1 P15), taken with
 /// [`Store::try_lock`]: a second run is refused, not queued.
 pub const LOCK_BACKUP: &str = "site.backup";
+/// Held by one content health run (the `content.health` job, M6-4), taken with
+/// [`Store::try_lock`]: a run that finds it held goes back to the queue.
+pub const LOCK_HEALTH: &str = "content.health";
 
 /// How often the default [`Store::lock_wait`] retries [`Store::try_lock`] while the lock is taken.
 pub const LOCK_POLL: Duration = Duration::from_millis(250);
@@ -90,6 +93,7 @@ mod tests {
             LOCK_GC,
             LOCK_BACKUP,
             LOCK_TYPES,
+            LOCK_HEALTH,
             "a.b_c-9",
             &"x".repeat(64),
         ] {

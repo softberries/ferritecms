@@ -239,6 +239,7 @@ pub(crate) fn check_new_type(new: &NewType) -> Result<ContentType, CoreError> {
         fields: stored_schema(new.fields.as_deref()),
         built_in: false,
         created_at: Timestamp::now(),
+        quality_gate: ferrite_domain::QualityGate::Off,
     })
 }
 

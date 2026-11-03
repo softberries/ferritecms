@@ -107,7 +107,7 @@ pub(crate) fn content_item(row: &SqliteRow) -> Result<ContentItem, StoreError> {
 }
 
 pub(crate) const TYPE_COLUMNS: &str =
-    "name, label, hierarchical, has_archive, fields, built_in, created_at";
+    "name, label, hierarchical, has_archive, fields, built_in, created_at, quality_gate";
 
 /// Maps a row selected with [`TYPE_COLUMNS`].
 pub(crate) fn content_type(row: &SqliteRow) -> Result<ContentType, StoreError> {
@@ -120,6 +120,10 @@ pub(crate) fn content_type(row: &SqliteRow) -> Result<ContentType, StoreError> {
         fields: json_from_db(&fields)?,
         built_in: row.try_get("built_in").map_err(map_db_err)?,
         created_at: ts(row.try_get("created_at").map_err(map_db_err)?)?,
+        quality_gate: {
+            let g: String = row.try_get("quality_gate").map_err(map_db_err)?;
+            g.parse()?
+        },
     })
 }
 

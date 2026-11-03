@@ -1643,6 +1643,7 @@ async fn book_genre(store: &dyn Store) {
             fields: json!({}),
             built_in: false,
             created_at: at(-HOUR),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

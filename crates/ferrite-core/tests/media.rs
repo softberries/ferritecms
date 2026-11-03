@@ -909,6 +909,9 @@ impl Repos for FailingTx {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.plugin_trust()
     }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.quality()
+    }
 }
 
 #[async_trait]

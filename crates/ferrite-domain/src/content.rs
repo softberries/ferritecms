@@ -42,6 +42,22 @@ impl MediaKind {
     }
 }
 
+string_enum!(
+    /// A type's publish gate (design 16 §5, column `content_types.quality_gate`): `off`
+    /// only reports; `errors` refuses publishing while accessibility errors remain.
+    QualityGate {
+        Off => "off",
+        Errors => "errors",
+    }
+);
+
+impl QualityGate {
+    /// The gate of a type that never set one.
+    pub fn off() -> Self {
+        Self::Off
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContentType {
     pub name: String,
@@ -52,6 +68,9 @@ pub struct ContentType {
     pub fields: Value,
     pub built_in: bool,
     pub created_at: Timestamp,
+    /// The publish gate (M6-4); `off` when absent.
+    #[serde(default = "QualityGate::off")]
+    pub quality_gate: QualityGate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

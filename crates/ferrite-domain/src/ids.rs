@@ -71,6 +71,11 @@ uuid_id!(
     DeliveryId
 );
 
+uuid_id!(
+    /// A content health run (M6-4, `health_runs`).
+    HealthRunId
+);
+
 /// SHA-256 content hash: exactly 64 lowercase hex characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

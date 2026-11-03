@@ -26,6 +26,11 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("content_types.name", "content_types_pkey"),
     (
+        "health_findings.run_id, health_findings.seq",
+        "health_findings_pkey",
+    ),
+    ("health_runs.id", "health_runs_pkey"),
+    (
         "idempotency_keys.user_id, idempotency_keys.key_hash",
         "idempotency_keys_pkey",
     ),
@@ -37,6 +42,7 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     // The partial unique index "at most one running run" (its column is `state`).
     ("import_runs.state", "import_runs_running_uq"),
     ("jobs.id", "jobs_pkey"),
+    ("link_checks.url_hash", "link_checks_pkey"),
     ("jobs.unique_key", "jobs_unique_key_uq"),
     ("media.item_id", "media_pkey"),
     (
@@ -70,6 +76,10 @@ const UNIQUE_NAMES: &[(&str, &str)] = &[
     ),
     ("plugin_registry.url", "plugin_registry_pkey"),
     ("plugins.name", "plugins_pkey"),
+    (
+        "quality_suppressions.item_id, quality_suppressions.rule, quality_suppressions.key",
+        "quality_suppressions_pkey",
+    ),
     ("rate_limits.bucket", "rate_limits_pkey"),
     ("redirects.id", "redirects_pkey"),
     ("redirects.source_path", "redirects_source_path_uq"),

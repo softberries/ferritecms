@@ -189,6 +189,9 @@ impl Repos for FailingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.store.read().plugin_trust()
     }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.store.read().quality()
+    }
 }
 
 #[async_trait]

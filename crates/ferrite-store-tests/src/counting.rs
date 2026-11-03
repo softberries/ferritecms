@@ -241,6 +241,9 @@ impl Repos for CountingRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.read().quality()
+    }
 }
 
 #[async_trait]
@@ -736,6 +739,9 @@ impl Repos for CountingTx {
 
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.tx.plugin_trust()
+    }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.tx.quality()
     }
     fn types(&self) -> &dyn ContentTypeRepo {
         self

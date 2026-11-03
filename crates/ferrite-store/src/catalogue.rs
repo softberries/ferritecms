@@ -112,7 +112,7 @@ pub const BACKEND_SPECIFIC: &[&str] = &["search_docs"];
 
 use ColType::{Bool, Bytes, Id, Int, Json, Text, Timestamp as Ts};
 
-/// Every table of the latest schema (migrations 0001–0016), in foreign-key order: each
+/// Every table of the latest schema (migrations 0001–0016 and 0019), in foreign-key order: each
 /// table comes after the tables it references. Not listed: SQLite's FTS5 `search_fts`
 /// and its shadow tables, and sqlx's `_sqlx_migrations`.
 pub static TABLES: &[TableSpec] = &[
@@ -126,6 +126,7 @@ pub static TABLES: &[TableSpec] = &[
             ("fields", Json),
             ("built_in", Bool),
             ("created_at", Ts),
+            ("quality_gate", Text),
         ],
         key: &["name"],
         self_ref: None,
@@ -927,6 +928,86 @@ pub static TABLES: &[TableSpec] = &[
         nullable: &["last_error", "last_error_at"],
         export: Export::Rows,
     },
+    // M6-4 (0019): suppressions are a person's judgement and travel with the site; the
+    // health runs, their findings and the link cache are derived (the next run rebuilds
+    // them).
+    TableSpec {
+        name: "quality_suppressions",
+        columns: &[
+            ("item_id", Id),
+            ("rule", Text),
+            ("key", Text),
+            ("reason", Text),
+            ("user_id", Id),
+            ("created_at", Ts),
+        ],
+        key: &["item_id", "rule", "key"],
+        self_ref: None,
+        nullable: &["user_id"],
+        export: Export::Rows,
+    },
+    TableSpec {
+        name: "health_runs",
+        columns: &[
+            ("id", Id),
+            ("status", Text),
+            ("trigger", Text),
+            ("requested_by", Id),
+            ("node", Text),
+            ("started_at", Ts),
+            ("finished_at", Ts),
+            ("items_checked", Int),
+            ("paths_checked", Int),
+            ("urls_checked", Int),
+            ("totals", Json),
+            ("truncated", Bool),
+            ("error", Text),
+        ],
+        key: &["id"],
+        self_ref: None,
+        nullable: &["requested_by", "finished_at", "error"],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "health_findings",
+        columns: &[
+            ("run_id", Id),
+            ("seq", Int),
+            ("rule", Text),
+            ("severity", Text),
+            ("category", Text),
+            ("item_id", Id),
+            ("redirect_id", Id),
+            ("item_type", Text),
+            ("locale", Text),
+            ("key", Text),
+            ("context", Text),
+            ("detail", Json),
+        ],
+        key: &["run_id", "seq"],
+        self_ref: None,
+        nullable: &["item_id", "redirect_id", "item_type", "locale", "context"],
+        export: Export::Skip,
+    },
+    TableSpec {
+        name: "link_checks",
+        columns: &[
+            ("url_hash", Bytes),
+            ("url", Text),
+            ("host", Text),
+            ("status", Text),
+            ("http_status", Int),
+            ("detail", Text),
+            ("failures", Int),
+            ("first_failed_at", Ts),
+            ("checked_at", Ts),
+            ("last_seen_at", Ts),
+        ],
+        key: &["url_hash"],
+        self_ref: None,
+        nullable: &["http_status", "detail", "first_failed_at"],
+        export: Export::Skip,
+    },
 ];
 
 /// The catalogue entry of table `name`.
@@ -1108,7 +1189,7 @@ mod tests {
                 assert!(t.is_nullable(c), "{}: {c} is not nullable", t.name);
             }
         }
-        assert_eq!(TABLES.len(), 46);
+        assert_eq!(TABLES.len(), 50);
     }
 
     #[test]
@@ -1137,6 +1218,9 @@ mod tests {
                 "webhook_events",
                 "webhook_deliveries",
                 "webhook_attempts",
+                "health_runs",
+                "health_findings",
+                "link_checks",
             ]
         );
         assert_eq!(

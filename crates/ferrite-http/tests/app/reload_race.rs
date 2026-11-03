@@ -201,6 +201,9 @@ impl Repos for HookRepos {
     fn plugin_trust(&self) -> &dyn ferrite_store::PluginTrustRepo {
         self.inner.read().plugin_trust()
     }
+    fn quality(&self) -> &dyn ferrite_store::QualityRepo {
+        self.inner.read().quality()
+    }
 }
 
 #[async_trait]
@@ -272,6 +275,7 @@ async fn route_swap_during_lookup_is_not_cached(app: App) -> App {
             fields: json!({}),
             built_in: false,
             created_at: Timestamp::now(),
+            quality_gate: ferrite_domain::QualityGate::Off,
         })
         .await
         .unwrap();

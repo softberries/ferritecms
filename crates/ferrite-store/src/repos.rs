@@ -203,6 +203,8 @@ pub trait Repos: Send + Sync {
     fn webhooks(&self) -> &dyn crate::WebhookRepo;
     /// Plugin trust (M6-2): publisher keys, owners, the registry cache.
     fn plugin_trust(&self) -> &dyn crate::PluginTrustRepo;
+    /// Content quality (M6-4): suppressions, health runs and findings, the link cache.
+    fn quality(&self) -> &dyn crate::QualityRepo;
 }
 
 /// Most translation groups one `group_members` call takes.

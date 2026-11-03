@@ -85,7 +85,7 @@ pub fn rich_site() -> Dump {
                 json!({"name": "Book_x", "label": "Books", "hierarchical": true,
                        "has_archive": true,
                        "fields": {"isbn": {"type": "text", "required": true}},
-                       "created_at": T_NOW}),
+                       "created_at": T_NOW, "quality_gate": "errors"}),
             ]),
         ),
         (
@@ -353,6 +353,16 @@ pub fn rich_site() -> Dump {
                        "disabled_reason": "gone", "disabled_at": T_NOW,
                        "install_id": "install-rich", "secret_sealed": "sealed2",
                        "created_at": T_NOW, "updated_at": T_NOW}),
+            ]),
+        ),
+        (
+            "quality_suppressions",
+            rows(vec![
+                json!({"item_id": uid(POST), "rule": "image-alt-missing", "key": "/a.png",
+                       "reason": "a decorative divider", "user_id": uid(U1),
+                       "created_at": T_NOW}),
+                json!({"item_id": uid(POST), "rule": "link-text-vague", "key": "",
+                       "reason": "the design asks for it", "created_at": T_PRE_1970}),
             ]),
         ),
         (

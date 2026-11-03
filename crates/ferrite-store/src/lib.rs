@@ -14,6 +14,7 @@ mod node_metrics;
 mod notify;
 mod paging;
 mod plugin_trust;
+mod quality;
 mod repos;
 mod search;
 mod session;
@@ -29,8 +30,8 @@ pub use import_writer::{
 pub use json::validate_json;
 pub use locale::{LocaleFilter, check_groups, kinds_locale_filter, locale_filter};
 pub use lock::{
-    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL, LOCK_TYPES,
-    LockGuard, check_lock_name, lock,
+    LOCK_BACKUP, LOCK_EXTENSIONS, LOCK_GC, LOCK_HEALTH, LOCK_IMPORT, LOCK_MIGRATE, LOCK_POLL,
+    LOCK_TYPES, LockGuard, check_lock_name, lock,
 };
 pub use menu::{check_redirect_code, insertion_order, tree_order};
 pub use migrate::{
@@ -61,6 +62,11 @@ pub use paging::{
 };
 pub use plugin_trust::{
     PluginTrustRepo, check_plugin_owner, check_registry_row, check_trusted_key,
+};
+pub use quality::{
+    FINDING_CURSOR_TAG, MAX_FINDING_BATCH, MAX_LINK_BATCH, QualityRepo, RunEnd, check_finding,
+    check_finding_query, check_link, check_run, check_suppression, encode_finding_cursor,
+    finding_cursor, link_url_hash,
 };
 pub use repos::{
     ApiTokenRepo, ApprovedTotals, ArtifactRepo, AuditRepo, AutosaveRepo, Backend, CommentRepo,
