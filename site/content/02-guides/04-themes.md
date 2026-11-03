@@ -54,6 +54,11 @@ A theme with settings has **Customize** on its card. The form shows the theme's 
 (colours, switches, text); saving refreshes every page of the site. Menus are set under
 **Structure → Menus**, per location.
 
+On a site with more than one language the built-in themes show a language switcher and
+translate their own interface text; templates get `site.locales`, `translations(post)`,
+`locale_links(post)` and `t("text")` with `[strings.<tag>]` tables in `theme.toml` (see
+[Multilingual sites](09-multilingual.md#themes)).
+
 To change a theme's templates or CSS, copy its folder (the built-in ones are in the
 repository under `themes/`), give it a new `name` in `theme.toml`, edit it, and install
 it as below.

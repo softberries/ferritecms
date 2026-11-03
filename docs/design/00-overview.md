@@ -22,6 +22,7 @@ the brief gets updated.
 | 10 | [Testing strategy](10-testing.md) | Test layers, dual-backend contract tests, hostile plugins, CI |
 | 11 | [Admin UI design language](11-admin-ui.md) | Admin study notes, typography, colour tokens and contrast gate, density, motion, keyboard map, components, review checklist |
 | 12 | [AI assistants: the MCP server](12-mcp.md) | `/mcp` (Streamable HTTP, stateless), the built-in OAuth 2.1 authorization server and audience-bound tokens, scopes, tools/resources/prompts, what stays human, the off switch, admin screens, the product story |
+| 13 | [Multilingual content](13-multilingual.md) | `site.locales`, translation groups, locale prefixes in permalinks and the router, locale-scoped reads, hreflang and sitemaps, theme helpers, the API, MCP, admin and import (M6-1) |
 
 ## Goals
 

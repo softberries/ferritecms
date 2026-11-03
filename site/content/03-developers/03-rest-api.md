@@ -142,6 +142,10 @@ Errors are `application/problem+json` (RFC 9457) with `type`
 - Content carries a `version`. Updates send `If-Match: "<version>"`; without it the
   answer is `428`, with a stale one `412`.
 - JSON bodies need `Content-Type: application/json` and are at most 4 MiB.
+- On a multilingual site, items, terms and menus carry `locale`; lists of content and
+  terms take `?locale=`, and `POST /content/{type}/{id}/translations` and `POST
+  /terms/{id}/translations` make translations. `GET /meta` lists the site's languages
+  ([Multilingual sites](../02-guides/09-multilingual.md)).
 
 ## Rate limits
 

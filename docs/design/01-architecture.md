@@ -33,6 +33,7 @@ ferritecms/
 │   ├── ferrite-config/           # (built) ferrite.toml + env parsing, validation, init template
 │   ├── ferrite-domain/           # (built) pure types: ids, Post, Term, User, Role, Block, errors;
 │   │                             #   M4-2: `metrics` (`MetricCounts`, `SeriesBucket`, page p95)
+│   │                             #   M6-1: `locale` (`parse_tag`, `SiteLocales`, `LocaleDef`)
 │   ├── ferrite-store/            # (built) repository traits + Store facade (no SQL); M4-1:
 │   │                             #   the table `catalogue`, `export` reader, `import_writer`;
 │   │                             #   M4-2: `MigrateReport`, `NodeMetricsRepo` (`node_metrics`,
@@ -47,6 +48,8 @@ ferritecms/
 │   ├── ferrite-cluster/          # (built, M1.5) job runner, periodic scheduler, built-in
 │   │                             #   prune jobs, node registry (join checks, heartbeat)
 │   ├── ferrite-core/             # (built) services: content (+ lifecycle, revisions, redirects on
+│   │                             #   M6-1: `locales` (read, settle, check_change, texts),
+│   │                             #   `content/translate` (translate, relocate, groups)
 │   │                             #   permalink change, search indexing), taxonomy, menus, options,
 │   │                             #   redirects, content types + field schemas, settings allowlist;
 │   │                             #   users (`UserService`) and auth (`AuthService`: site key,
@@ -91,6 +94,7 @@ ferritecms/
 │   │                             #   metrics registry and `/metrics` text (`metrics`), HSTS
 │   │                             #   and the redirect app (`tls`), the series endpoint))
 │   ├── ferrite-import-wp/        # (M3-1) WXR importer: reader, IR, conversion, passes,
+│   │                             #   M6-1: `lang` (Polylang/WPML languages and groups)
 │   │                             #   report; `ferrite import wordpress` runs it; M3-2: step
 │   │                             #   progress, the partial report (`RunFailed`), `ZipSource`
 │   ├── ferrite-import-md/        # (built, M4-3b) Markdown importer: folder scan, TOML front

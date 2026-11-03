@@ -30,6 +30,9 @@ A WordPress-style CMS shipped as **one Rust binary**, where every plugin runs in
   types, roles.
 - **Brings your WordPress content**: posts, pages, media, taxonomies, users, comments,
   menus and 301 redirects from a WXR export.
+- **Multilingual**: up to 20 languages, each translation its own item, `/de/` style
+  addresses, hreflang links, per-language menus and feeds, and a language switcher in the
+  built-in themes.
 
 **Documentation: [softberries.github.io/ferritecms](https://softberries.github.io/ferritecms/)** · Built by [SOFTBERRIES](https://softberries.dev)
 

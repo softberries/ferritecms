@@ -20,7 +20,10 @@ WordPress plugins and themes do not run here.
 - Yoast and Rank Math SEO titles, descriptions, canonical URLs and robots settings;
 - featured images, and ACF fields on custom post types;
 - **301 redirects** from the old address of each published item, category and tag (and
-  each attachment page) whose address changed.
+  each attachment page) whose address changed;
+- each item's language from Polylang or WPML's "Export and Import" add-on, with its
+  translations linked, for the languages the site lists (see
+  [Multilingual sites](09-multilingual.md#import)).
 
 Gutenberg blocks, the classic editor's HTML and the common shortcodes (`[caption]`,
 `[gallery]`, `[embed]`, `[video]`, `[audio]`) are converted to the editor's blocks.
