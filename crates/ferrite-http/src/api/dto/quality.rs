@@ -61,7 +61,9 @@ pub enum CategoryDto {
 }
 
 /// A type's publish gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityGateDto {
     /// Checks only report.

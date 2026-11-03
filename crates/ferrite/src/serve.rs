@@ -644,6 +644,11 @@ async fn boot(
             site_url: state.config.site_url.clone(),
             site_title: config.site.title.clone(),
             webhooks: webhooks.clone(),
+            quality: Arc::new(ferrite_core::quality::QualityService::new(
+                store.clone(),
+                state.config.site_url.clone(),
+            )),
+            probe: None,
         })
         .context("site.url")?,
     );

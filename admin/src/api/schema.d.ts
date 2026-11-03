@@ -292,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/content/{type}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["check_content"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/content/{type}/counts": {
         parameters: {
             query?: never;
@@ -463,6 +479,38 @@ export interface paths {
         put?: never;
         post: operations["submit_content"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/content/{type}/{id}/suppressions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_suppressions"];
+        put?: never;
+        post: operations["create_suppression"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/content/{type}/{id}/suppressions/{rule}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete_suppression"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1813,6 +1861,32 @@ export interface components {
             misses: number;
         };
         /**
+         * @description The category of a rule.
+         * @enum {string}
+         */
+        CategoryDto: "accessibility" | "links" | "media" | "site" | "freshness";
+        /** @description `POST /content/{type}/check`: the editor's working draft. */
+        CheckRequestDto: {
+            /** @description The block tree. */
+            body: Record<string, never>;
+            /** @description Custom fields (rich-text fields are checked; `featured_image` too). */
+            fields?: Record<string, never> | null;
+            /**
+             * Format: uuid
+             * @description The stored item this is a draft of (its suppressions and locale apply).
+             */
+            id?: string | null;
+            /** @description The locale of a new item; the site's default when absent. */
+            locale?: string | null;
+            title?: string;
+        };
+        /** @description What a check found. */
+        CheckResponseDto: {
+            counts: components["schemas"]["CountsDto"];
+            findings: components["schemas"]["FindingDto"][];
+            gate: components["schemas"]["GateDto"];
+        };
+        /**
          * @description How a client is known.
          * @enum {string}
          */
@@ -2187,6 +2261,8 @@ export interface components {
             hierarchical: boolean;
             label: string;
             name: string;
+            /** @description The publish gate (M6-4, design 16 §5). */
+            quality_gate: components["schemas"]["QualityGateDto"];
         };
         /** @description `POST /types`. */
         ContentTypeInput: {
@@ -2204,6 +2280,7 @@ export interface components {
              *     page slug, and not a first segment of a permalink structure.
              */
             name: string;
+            quality_gate?: components["schemas"]["QualityGateDto"] | null;
         };
         /** @description `GET /types`: every type, by name. */
         ContentTypeList: {
@@ -2220,6 +2297,22 @@ export interface components {
             fields?: components["schemas"]["FieldDefDto"][] | null;
             has_archive?: boolean;
             label?: string;
+            /**
+             * @description The publish gate (M6-4): `errors` refuses publishing while accessibility errors
+             *     remain; the `media` type refuses it (`422`, field `quality_gate`).
+             */
+            quality_gate?: components["schemas"]["QualityGateDto"];
+        };
+        /** @description Unsuppressed findings per severity, and the suppressed ones. */
+        CountsDto: {
+            /** Format: int32 */
+            error: number;
+            /** Format: int32 */
+            notice: number;
+            /** Format: int32 */
+            suppressed: number;
+            /** Format: int32 */
+            warning: number;
         };
         /**
          * @description The created token. `token` is the bearer value (`Authorization: Bearer <token>`),
@@ -2371,6 +2464,27 @@ export interface components {
          * @enum {string}
          */
         FieldKindDto: "text" | "rich_text" | "number" | "date" | "bool" | "select" | "relation" | "media" | "repeater";
+        /** @description One finding. */
+        FindingDto: {
+            category: components["schemas"]["CategoryDto"];
+            /** @description What was found: link text, alt, href or heading text (at most 120 characters). */
+            context?: string | null;
+            /** @description Rule-specific facts, e.g. `{"href": "/x/", "status": 404}`. */
+            detail: Record<string, never>;
+            /** @description The suppression key of this finding. */
+            key: string;
+            location: components["schemas"]["LocationDto"];
+            rule: components["schemas"]["RuleId"];
+            severity: components["schemas"]["SeverityDto"];
+            suppressed?: components["schemas"]["SuppressionDto"] | null;
+            /** @description WCAG 2.2 success criteria, e.g. `1.1.1`. */
+            wcag: string[];
+        };
+        /** @description The type's publish gate and whether it refuses this draft now. */
+        GateDto: {
+            blocked: boolean;
+            mode: components["schemas"]["QualityGateDto"];
+        };
         /** @description A connected app: one grant of a user to a client. */
         GrantDto: {
             client: components["schemas"]["OAuthClientDto"];
@@ -2723,6 +2837,20 @@ export interface components {
             description?: string | null;
             /** @description At most 200 characters. */
             title?: string | null;
+        };
+        /** @description Where a finding is. */
+        LocationDto: {
+            /** @description For `field`: the field's path, e.g. `chapters[1].summary`. */
+            field?: string | null;
+            /** @description `title`, `body`, `field`, `featured_image`, `item` or `redirect`. */
+            kind: string;
+            /** @description For `body` and `field`: the child indices from the document root. */
+            path?: number[] | null;
+            /**
+             * Format: uuid
+             * @description For `redirect`: the redirect's id.
+             */
+            redirect_id?: string | null;
         };
         /** @description `POST /auth/login`. */
         LoginRequest: {
@@ -3395,6 +3523,11 @@ export interface components {
             /** @description Omitted when empty. */
             errors?: components["schemas"]["FieldError"][];
             /**
+             * @description The blocking findings (`FindingDto`); only on `content-quality` (422), when the
+             *     type's publish gate refuses the item (M6-4).
+             */
+            findings?: components["schemas"]["FindingDto"][] | null;
+            /**
              * @description The permission report (`PermissionReportDto`) of the refused upload; only on a
              *     `validation` (422) of `POST /plugins` whose `approve` does not match, so the
              *     admin can review what this upload asks for and approve it.
@@ -3441,6 +3574,11 @@ export interface components {
             id: string;
             name: string;
         };
+        /**
+         * @description A type's publish gate.
+         * @enum {string}
+         */
+        QualityGateDto: "off" | "errors";
         /** @description `202` of a test delivery or a redelivery. */
         QueuedDeliveryDto: {
             /** Format: uuid */
@@ -3668,6 +3806,12 @@ export interface components {
             /** @description The new secret, shown this once. */
             secret: string;
         };
+        /**
+         * @description Every rule id (`ferrite_core::quality::RULES`, design 16 §3); a test keeps the two
+         *     equal.
+         * @enum {string}
+         */
+        RuleId: "image-alt-missing" | "image-alt-empty" | "image-alt-filename" | "heading-empty" | "heading-level-skipped" | "link-text-empty" | "link-text-vague" | "link-text-url" | "table-header-missing" | "table-header-empty" | "html-unchecked" | "media-missing" | "featured-alt-missing" | "link-internal-broken" | "link-internal-redirected" | "link-anchor-missing" | "link-external-broken" | "orphan" | "redirect-chain" | "redirect-loop" | "redirect-target-broken" | "stale" | "check-truncated" | "findings-truncated";
         /** @description `POST /content/{type}/{id}/schedule`. */
         ScheduleRequest: {
             /**
@@ -3914,6 +4058,11 @@ export interface components {
          *     default (for a secret: deletes it). Keys not in the body stay as they are.
          */
         SettingsPatch: Record<string, never>;
+        /**
+         * @description The severity of a rule.
+         * @enum {string}
+         */
+        SeverityDto: "error" | "warning" | "notice";
         /** @description The key that signed a plugin. */
         SignerDto: {
             /** @description The manifest's `plugin.publisher` (text; verified only when `publisher` is set). */
@@ -3935,6 +4084,29 @@ export interface components {
             url?: string | null;
             /** @description The registry version, for `registry`. */
             version?: string | null;
+        };
+        /** @description `POST /content/{type}/{id}/suppressions`. */
+        SuppressInput: {
+            /** @description One finding's key, or `""` for every finding of the rule on the item. */
+            key?: string;
+            /** @description Why (1 to 500 characters). */
+            reason: string;
+            rule: components["schemas"]["RuleId"];
+        };
+        /** @description Who accepted a finding, and why. */
+        SuppressionDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** @description `""`: every finding of the rule on the item. */
+            key: string;
+            reason: string;
+            rule: components["schemas"]["RuleId"];
+            /** Format: uuid */
+            user_id?: string | null;
+        };
+        /** @description An item's suppressions. */
+        SuppressionList: {
+            items: components["schemas"]["SuppressionDto"][];
         };
         /** @description `GET /system/status`. */
         SystemStatusDto: {
@@ -4517,6 +4689,9 @@ export type SchemaAuthorRefDto = components['schemas']['AuthorRefDto'];
 export type SchemaAutosaveDto = components['schemas']['AutosaveDto'];
 export type SchemaAutosaveInput = components['schemas']['AutosaveInput'];
 export type SchemaCacheStatsDto = components['schemas']['CacheStatsDto'];
+export type SchemaCategoryDto = components['schemas']['CategoryDto'];
+export type SchemaCheckRequestDto = components['schemas']['CheckRequestDto'];
+export type SchemaCheckResponseDto = components['schemas']['CheckResponseDto'];
 export type SchemaClientKindDto = components['schemas']['ClientKindDto'];
 export type SchemaCommentCountsDto = components['schemas']['CommentCountsDto'];
 export type SchemaCommentDto = components['schemas']['CommentDto'];
@@ -4539,6 +4714,7 @@ export type SchemaContentTypeDto = components['schemas']['ContentTypeDto'];
 export type SchemaContentTypeInput = components['schemas']['ContentTypeInput'];
 export type SchemaContentTypeList = components['schemas']['ContentTypeList'];
 export type SchemaContentTypePatch = components['schemas']['ContentTypePatch'];
+export type SchemaCountsDto = components['schemas']['CountsDto'];
 export type SchemaCreatedTokenDto = components['schemas']['CreatedTokenDto'];
 export type SchemaCreatedWebhookDto = components['schemas']['CreatedWebhookDto'];
 export type SchemaDeliveryCountsDto = components['schemas']['DeliveryCountsDto'];
@@ -4553,6 +4729,8 @@ export type SchemaFailureBucketDto = components['schemas']['FailureBucketDto'];
 export type SchemaFieldDefDto = components['schemas']['FieldDefDto'];
 export type SchemaFieldError = components['schemas']['FieldError'];
 export type SchemaFieldKindDto = components['schemas']['FieldKindDto'];
+export type SchemaFindingDto = components['schemas']['FindingDto'];
+export type SchemaGateDto = components['schemas']['GateDto'];
 export type SchemaGrantDto = components['schemas']['GrantDto'];
 export type SchemaGrantList = components['schemas']['GrantList'];
 export type SchemaGrantReportDto = components['schemas']['GrantReportDto'];
@@ -4571,6 +4749,7 @@ export type SchemaJobList = components['schemas']['JobList'];
 export type SchemaLimitItemDto = components['schemas']['LimitItemDto'];
 export type SchemaLocaleEntryDto = components['schemas']['LocaleEntryDto'];
 export type SchemaLocaleTextDto = components['schemas']['LocaleTextDto'];
+export type SchemaLocationDto = components['schemas']['LocationDto'];
 export type SchemaLoginRequest = components['schemas']['LoginRequest'];
 export type SchemaLoginResponse = components['schemas']['LoginResponse'];
 export type SchemaMailStatusDto = components['schemas']['MailStatusDto'];
@@ -4622,6 +4801,7 @@ export type SchemaProblemDocument = components['schemas']['ProblemDocument'];
 export type SchemaPublisherKeyDto = components['schemas']['PublisherKeyDto'];
 export type SchemaPublisherKeyList = components['schemas']['PublisherKeyList'];
 export type SchemaPublisherRefDto = components['schemas']['PublisherRefDto'];
+export type SchemaQualityGateDto = components['schemas']['QualityGateDto'];
 export type SchemaQueuedDeliveryDto = components['schemas']['QueuedDeliveryDto'];
 export type SchemaRedeliverInput = components['schemas']['RedeliverInput'];
 export type SchemaRedeliveredDto = components['schemas']['RedeliveredDto'];
@@ -4646,6 +4826,7 @@ export type SchemaRevokeKeyRequest = components['schemas']['RevokeKeyRequest'];
 export type SchemaRobotsDto = components['schemas']['RobotsDto'];
 export type SchemaRoleDto = components['schemas']['RoleDto'];
 export type SchemaRotatedSecretDto = components['schemas']['RotatedSecretDto'];
+export type SchemaRuleId = components['schemas']['RuleId'];
 export type SchemaScheduleRequest = components['schemas']['ScheduleRequest'];
 export type SchemaSchemaStatusDto = components['schemas']['SchemaStatusDto'];
 export type SchemaSchemaVerdict = components['schemas']['SchemaVerdict'];
@@ -4659,8 +4840,12 @@ export type SchemaSessionsRevoked = components['schemas']['SessionsRevoked'];
 export type SchemaSettingDefDto = components['schemas']['SettingDefDto'];
 export type SchemaSettingsDto = components['schemas']['SettingsDto'];
 export type SchemaSettingsPatch = components['schemas']['SettingsPatch'];
+export type SchemaSeverityDto = components['schemas']['SeverityDto'];
 export type SchemaSignerDto = components['schemas']['SignerDto'];
 export type SchemaSourceDto = components['schemas']['SourceDto'];
+export type SchemaSuppressInput = components['schemas']['SuppressInput'];
+export type SchemaSuppressionDto = components['schemas']['SuppressionDto'];
+export type SchemaSuppressionList = components['schemas']['SuppressionList'];
 export type SchemaSystemStatusDto = components['schemas']['SystemStatusDto'];
 export type SchemaTaxonomyDto = components['schemas']['TaxonomyDto'];
 export type SchemaTaxonomyInput = components['schemas']['TaxonomyInput'];
@@ -5822,6 +6007,68 @@ export interface operations {
             };
         };
     };
+    check_content: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckRequestDto"];
+            };
+        };
+        responses: {
+            /** @description The findings of the draft, their counts and the type's gate */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckResponseDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such type, or `id` names no item of this type you may read */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
     count_content: {
         parameters: {
             query?: {
@@ -6115,7 +6362,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation` */
+            /** @description `validation`; `content-quality` (`findings`): an edit of a live item of a gated type adds accessibility errors */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6489,7 +6736,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: illegal transition */
+            /** @description `validation`: illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item's accessibility errors */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6874,7 +7121,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDocument"];
                 };
             };
-            /** @description `validation`: `at` not in the future, or illegal transition */
+            /** @description `validation`: `at` not in the future, or illegal transition; `content-quality` (`findings`): the type's publish gate refuses the item */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6974,6 +7221,189 @@ export interface operations {
             };
             /** @description `precondition-required` */
             428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    list_suppressions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item's suppressions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionList"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (`content:read`) or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    create_suppression: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SuppressInput"];
+            };
+        };
+        responses: {
+            /** @description Suppressed (an existing one for the same rule and key is replaced) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuppressionDto"];
+                };
+            };
+            /** @description `malformed-json` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden` (the right to edit the item; `edit_others` for an error on a gated type; `content:write`), `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `rule`, `key` or `reason`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+        };
+    };
+    delete_suppression: {
+        parameters: {
+            query?: {
+                /** @description The finding's key; absent or empty: the suppression of the whole rule. */
+                key?: string;
+            };
+            header?: never;
+            path: {
+                type: string;
+                id: string;
+                rule: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `forbidden`, `csrf` or `password-reset-required` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `not-found`: no such item or suppression */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDocument"];
+                };
+            };
+            /** @description `validation` (`errors[0].field`: `rule` or `key`) */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

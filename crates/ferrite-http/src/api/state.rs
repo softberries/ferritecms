@@ -65,6 +65,10 @@ pub struct ApiParts {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// Content checks and suppressions (M6-4).
+    pub quality: Arc<ferrite_core::quality::QualityService>,
+    /// The node's internal link probe for checks (`None`: links are not probed).
+    pub probe: Option<Arc<dyn ferrite_core::quality::PathProbe>>,
 }
 
 /// The API's shared state (see [`ApiParts`] for the services).
@@ -112,6 +116,10 @@ pub struct ApiState {
     pub site_title: String,
     /// Outgoing webhooks (M6-6).
     pub webhooks: Arc<ferrite_core::webhooks::WebhookService>,
+    /// Content checks and suppressions (M6-4).
+    pub quality: Arc<ferrite_core::quality::QualityService>,
+    /// The node's internal link probe for checks (`None`: links are not probed).
+    pub probe: Option<Arc<dyn ferrite_core::quality::PathProbe>>,
     /// `scheme://host[:port]` of `site_url` (lowercase, default port left out): what a
     /// browser sends as `Origin` for the site's own pages (P8).
     pub origin: String,
@@ -152,6 +160,8 @@ impl ApiState {
             site_url,
             site_title,
             webhooks,
+            quality,
+            probe,
         } = parts;
         let (origin, cookie_secure) = origin_of(&site_url)?;
         Ok(Self {
@@ -180,6 +190,8 @@ impl ApiState {
             site_url: site_url.trim_end_matches('/').to_owned(),
             site_title,
             webhooks,
+            quality,
+            probe,
             origin,
             cookie_secure,
         })

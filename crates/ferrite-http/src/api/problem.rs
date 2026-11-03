@@ -130,15 +130,22 @@ pub struct Problem {
     /// The current resource (412 only). Boxed: keeps `Result<_, Problem>` small (clippy
     /// `result_large_err`).
     pub current: Option<Box<serde_json::Value>>,
-    /// The permission report of the upload (an approval mismatch of `POST /plugins`
-    /// only). Boxed like `current`.
-    pub report: Option<Box<serde_json::Value>>,
-    /// The blocking findings (`content-quality` only). Boxed like `current`.
-    pub findings: Option<Box<serde_json::Value>>,
+    /// The permission report of an upload or the findings of a refused publish. Boxed
+    /// like `current`.
+    pub attached: Option<Box<Attached>>,
     /// Seconds for the `Retry-After` header.
     pub retry_after: Option<u64>,
     /// The `WWW-Authenticate` value of a 401 ([`Challenge::Bearer`] when `None`).
     pub challenge: Option<Challenge>,
+}
+
+/// What a few problems carry besides `errors` ([`Problem::attached`]).
+#[derive(Debug, Clone, Default)]
+pub struct Attached {
+    /// The permission report of the upload (an approval mismatch of `POST /plugins`).
+    pub report: Option<serde_json::Value>,
+    /// The blocking findings (`content-quality`, M6-4).
+    pub findings: Option<serde_json::Value>,
 }
 
 /// The `WWW-Authenticate` challenge of a 401 (RFC 6750 §3).
@@ -203,8 +210,7 @@ impl Problem {
             detail: detail.into(),
             errors: Vec::new(),
             current: None,
-            report: None,
-            findings: None,
+            attached: None,
             retry_after: None,
             challenge: None,
         }
@@ -227,7 +233,7 @@ impl Problem {
 
     /// Sets `report` (a plugin upload's permission report).
     pub fn with_report(mut self, report: serde_json::Value) -> Self {
-        self.report = Some(Box::new(report));
+        self.attached.get_or_insert_with(Default::default).report = Some(report);
         self
     }
 
@@ -318,7 +324,8 @@ impl Problem {
                 findings.len()
             ),
         );
-        p.findings = Some(Box::new(super::dto::quality::findings_json(findings)));
+        p.attached.get_or_insert_with(Default::default).findings =
+            Some(super::dto::quality::findings_json(findings));
         p
     }
 
@@ -351,8 +358,8 @@ impl Problem {
             detail: self.detail.clone(),
             errors: self.errors.clone(),
             current: self.current.as_deref().cloned(),
-            report: self.report.as_deref().cloned(),
-            findings: self.findings.as_deref().cloned(),
+            report: self.attached.as_ref().and_then(|a| a.report.clone()),
+            findings: self.attached.as_ref().and_then(|a| a.findings.clone()),
         }
     }
 }

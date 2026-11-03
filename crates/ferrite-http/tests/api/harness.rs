@@ -354,6 +354,11 @@ impl Api {
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
                 webhooks: webhook_service(store.clone()),
+                quality: Arc::new(ferrite_core::quality::QualityService::new(
+                    store.clone(),
+                    SITE_URL.into(),
+                )),
+                probe: None,
             })
             .expect("api state"),
         );
@@ -539,6 +544,8 @@ impl Api {
             site_url: a.site_url.clone(),
             site_title: a.site_title.clone(),
             webhooks: a.webhooks.clone(),
+            quality: a.quality.clone(),
+            probe: a.probe.clone(),
         }
     }
 
@@ -595,6 +602,11 @@ impl Api {
                 site_url: SITE_URL.into(),
                 site_title: SITE_TITLE.into(),
                 webhooks: webhook_service(store.clone()),
+                quality: Arc::new(ferrite_core::quality::QualityService::new(
+                    store.clone(),
+                    SITE_URL.into(),
+                )),
+                probe: None,
             })
             .expect("api state"),
         );

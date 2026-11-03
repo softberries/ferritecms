@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::{
     api::dto::{
         content::{nullable, present},
+        quality::QualityGateDto,
         types::{ContentTypeDto, ContentTypeInput, ContentTypePatch, FieldDefDto},
     },
     mcp::{Caller, FerriteMcp, results},
@@ -53,6 +54,10 @@ pub struct CreateInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Vec<FieldDefDto>>")]
     pub fields: Option<Option<Vec<FieldDefDto>>>,
+    /// The publish gate: `off` (default, checks only report) or `errors` (accessibility
+    /// errors such as images without alt text block publishing; see content_check).
+    #[serde(default)]
+    pub quality_gate: Option<QualityGateDto>,
 }
 
 /// The input of `content_type_update`.
@@ -78,6 +83,11 @@ pub struct UpdateInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Vec<FieldDefDto>>")]
     pub fields: Option<Option<Vec<FieldDefDto>>>,
+    /// The publish gate: `off` or `errors` (accessibility errors block publishing; the
+    /// `media` type refuses it). Leave out to keep it; `null` is refused.
+    #[serde(default, deserialize_with = "present")]
+    #[schemars(with = "Option<QualityGateDto>")]
+    pub quality_gate: Option<QualityGateDto>,
 }
 
 // ---- outputs -----------------------------------------------------------------------------
@@ -162,6 +172,7 @@ impl FerriteMcp {
             hierarchical: input.hierarchical,
             has_archive: input.has_archive,
             fields: input.fields,
+            quality_gate: input.quality_gate,
         }
         .into_new();
         match self.api.types.create(caller.actor(), new).await {
@@ -205,13 +216,21 @@ impl FerriteMcp {
         caller: Caller,
         Parameters(input): Parameters<UpdateInput>,
     ) -> CallToolResult {
-        if input.label.is_none() && input.has_archive.is_none() && input.fields.is_none() {
-            return results::invalid(None, "send at least one of label, has_archive, fields");
+        if input.label.is_none()
+            && input.has_archive.is_none()
+            && input.fields.is_none()
+            && input.quality_gate.is_none()
+        {
+            return results::invalid(
+                None,
+                "send at least one of label, has_archive, fields, quality_gate",
+            );
         }
         let patch = ContentTypePatch {
             label: input.label,
             has_archive: input.has_archive,
             fields: input.fields,
+            quality_gate: input.quality_gate,
         }
         .into_patch();
         match self

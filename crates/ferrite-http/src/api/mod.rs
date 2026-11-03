@@ -45,6 +45,7 @@ pub mod openapi;
 pub mod plugin_registry;
 pub mod plugins;
 pub mod problem;
+pub mod quality;
 pub mod redirects;
 pub mod settings;
 mod state;
@@ -276,6 +277,12 @@ fn v1() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(webhooks::get_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook_delivery))
         .routes(routes!(webhooks::redeliver_webhook))
+        .routes(routes!(quality::check_content))
+        .routes(routes!(
+            quality::list_suppressions,
+            quality::create_suppression
+        ))
+        .routes(routes!(quality::delete_suppression))
 }
 
 /// `routes` with the body limit `max` instead of [`MAX_JSON_BODY`] (larger for uploads,

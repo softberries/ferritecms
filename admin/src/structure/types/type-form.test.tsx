@@ -23,6 +23,7 @@ const typeOf = (
   built_in: false,
   hierarchical: false,
   has_archive: false,
+  quality_gate: "off",
   fields,
   ...extra,
 });

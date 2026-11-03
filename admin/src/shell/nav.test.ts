@@ -7,6 +7,7 @@ import { navFor, navItemAt, withBadges, type ScreenEntry } from "./nav";
 const type = (name: string, label: string, built_in = false): ContentTypeDto => ({
   name,
   label,
+  quality_gate: "off",
   built_in,
   hierarchical: false,
   has_archive: false,

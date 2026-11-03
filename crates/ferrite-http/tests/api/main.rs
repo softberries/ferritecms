@@ -30,6 +30,7 @@ mod oauth;
 mod plugin_registry;
 mod plugins;
 mod plugins_trust;
+mod quality;
 mod redirect_search;
 #[path = "../support/registry_fixture.rs"]
 mod registry_fixture;
