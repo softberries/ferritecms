@@ -156,7 +156,7 @@ impl WebhookRepo for PgRepos {
         id: WebhookId,
     ) -> Result<Option<WebhookEndpoint>, StoreError> {
         let row = run!(&self.exec, |x| sqlx::query(AssertSqlSafe(format!(
-            "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE id = $1 FOR UPDATE"
+            "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE id = $1 FOR NO KEY UPDATE"
         )))
         .bind(id.as_uuid())
         .fetch_optional(x))?;
@@ -232,7 +232,7 @@ impl WebhookRepo for PgRepos {
         let rows = run!(&self.exec, |x| sqlx::query(AssertSqlSafe(format!(
             "SELECT {ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE enabled \
              AND install_id = (SELECT value FROM schema_meta WHERE key = $1) \
-             ORDER BY name COLLATE \"C\", id LIMIT $2"
+             ORDER BY name COLLATE \"C\", id LIMIT $2 FOR KEY SHARE"
         )))
         .bind(SCHEMA_META_INSTALL_ID)
         .bind(i64::from(MAX_WEBHOOK_ENDPOINTS_READ))
@@ -476,6 +476,31 @@ impl WebhookRepo for PgRepos {
         .bind(delivery_id.as_uuid())
         .fetch_all(x))?;
         rows.iter().map(attempt).collect()
+    }
+
+    async fn fail_stale_pending(
+        &self,
+        before: Timestamp,
+        error: &str,
+        now: Timestamp,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        validate_text("webhook delivery error", error)?;
+        let limit = check_prune_limit(limit)?;
+        let done =
+            run!(&self.exec, |x| {
+                sqlx::query(
+            "UPDATE webhook_deliveries SET status = 'failed', last_error = $1, finished_at = $2, \
+             next_attempt_at = NULL WHERE id IN (SELECT id FROM webhook_deliveries \
+             WHERE status = 'pending' AND next_attempt_at < $3 LIMIT $4 FOR UPDATE SKIP LOCKED)"
+        )
+        .bind(error)
+        .bind(pg(now))
+        .bind(pg(before))
+        .bind(limit)
+        .execute(x)
+            })?;
+        Ok(done.rows_affected())
     }
 
     async fn prune_events(&self, before: Timestamp, limit: u32) -> Result<u64, StoreError> {

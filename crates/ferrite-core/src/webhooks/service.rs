@@ -706,6 +706,18 @@ impl WebhookService {
         finish(tx, done).await
     }
 
+    /// Fails the pending deliveries whose next attempt was due before `before` and whose
+    /// job gave up (`ABANDONED`), so their events can be pruned and redelivered; returns
+    /// the count. The prune job calls it with [`STALE_PENDING`](super::STALE_PENDING).
+    pub async fn fail_abandoned(&self, before: Timestamp, batch: u32) -> Result<u64, CoreError> {
+        Ok(self
+            .store
+            .read()
+            .webhooks()
+            .fail_stale_pending(before, ABANDONED, Timestamp::now(), batch)
+            .await?)
+    }
+
     /// Deletes delivery-log events created before `before` (with their deliveries and
     /// attempts) in batches; returns the count. The prune job calls it.
     pub async fn prune(&self, before: Timestamp, batch: u32) -> Result<u64, CoreError> {
@@ -717,6 +729,9 @@ impl WebhookService {
             .await?)
     }
 }
+
+/// The error of a delivery whose job gave up without recording a final attempt.
+pub const ABANDONED: &str = "the delivery job gave up";
 
 /// The message for a paused endpoint (a copied or restored database).
 pub const PAUSED: &str =

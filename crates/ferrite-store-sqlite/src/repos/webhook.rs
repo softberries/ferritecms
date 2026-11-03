@@ -486,6 +486,28 @@ impl WebhookRepo for SqliteRepos {
         rows.iter().map(attempt).collect()
     }
 
+    async fn fail_stale_pending(
+        &self,
+        before: Timestamp,
+        error: &str,
+        now: Timestamp,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        validate_text("webhook delivery error", error)?;
+        let limit = check_prune_limit(limit)?;
+        let done = run!(&self.writer, |x| sqlx::query(
+            "UPDATE webhook_deliveries SET status = 'failed', last_error = ?, finished_at = ?, \
+             next_attempt_at = NULL WHERE id IN (SELECT id FROM webhook_deliveries \
+             WHERE status = 'pending' AND next_attempt_at < ? LIMIT ?)"
+        )
+        .bind(error)
+        .bind(now.as_micros())
+        .bind(before.as_micros())
+        .bind(limit)
+        .execute(x))?;
+        Ok(done.rows_affected())
+    }
+
     async fn prune_events(&self, before: Timestamp, limit: u32) -> Result<u64, StoreError> {
         let limit = check_prune_limit(limit)?;
         let done = run!(&self.writer, |x| sqlx::query(

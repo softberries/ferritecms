@@ -130,14 +130,17 @@ impl WebhookClient {
             .header(USER_AGENT, &self.agent)
             .body(request.body);
         for (name, value) in &request.headers {
-            let name = HeaderName::from_static(name);
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| REQUEST_FAILED)?;
             let value = HeaderValue::from_str(value).map_err(|_| REQUEST_FAILED)?;
             builder = builder.header(name, value);
         }
         let started = Instant::now();
         let mut response = builder.send().await.map_err(|e| {
-            tracing::debug!(error = ?e, "webhook request failed");
-            error_class(&e)
+            let class = error_class(&e);
+            // Without the URL: its path or query may hold a token (host only in logs).
+            let host = request.url.host_str().unwrap_or_default();
+            tracing::debug!(host, error = %e.without_url(), "webhook request failed");
+            class
         })?;
         if let Some(peer) = response.remote_addr()
             && !(self.allow_ip)(peer.ip())

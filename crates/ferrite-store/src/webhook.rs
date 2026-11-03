@@ -72,7 +72,8 @@ pub trait WebhookRepo: Send + Sync {
     /// Inserts an endpoint; a known id is `UniqueViolation`.
     async fn insert_endpoint(&self, endpoint: &WebhookEndpoint) -> Result<(), StoreError>;
     async fn get_endpoint(&self, id: WebhookId) -> Result<Option<WebhookEndpoint>, StoreError>;
-    /// The endpoint, its row locked until the `Tx` ends (Postgres `FOR UPDATE`; SQLite
+    /// The endpoint, its row locked until the `Tx` ends (Postgres `FOR NO KEY UPDATE`,
+    /// which does not block the delivery inserts of emitting writes; SQLite
     /// serialises writers anyway), for a read-modify-write of the whole row.
     async fn get_endpoint_for_update(
         &self,
@@ -87,7 +88,9 @@ pub trait WebhookRepo: Send + Sync {
     /// Deletes an endpoint with its deliveries and attempts; `true` if it existed.
     async fn delete_endpoint(&self, id: WebhookId) -> Result<bool, StoreError>;
     /// The enabled endpoints whose `install_id` is the database's
-    /// `schema_meta.install_id` (one statement), by name.
+    /// `schema_meta.install_id` (one statement), by name. Postgres locks them `FOR KEY
+    /// SHARE` for the rest of the `Tx`, so an endpoint deleted concurrently cannot make the
+    /// delivery inserts of an emitting write fail their foreign key.
     async fn active_for_emit(&self) -> Result<Vec<WebhookEndpoint>, StoreError>;
 
     async fn insert_event(&self, event: &WebhookEventRow) -> Result<(), StoreError>;
@@ -137,6 +140,17 @@ pub trait WebhookRepo: Send + Sync {
     ) -> Result<DeliveryCounts, StoreError>;
     /// The attempts of a delivery, oldest first.
     async fn attempts(&self, delivery: DeliveryId) -> Result<Vec<Attempt>, StoreError>;
+    /// Marks `failed` (with `error`, `finished_at` = `now`) up to `limit`
+    /// (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) `pending` deliveries whose
+    /// `next_attempt_at` is before `before`: their job gave up (runner attempts used up, a
+    /// permanent error) and nothing will move them any more. Returns the count.
+    async fn fail_stale_pending(
+        &self,
+        before: Timestamp,
+        error: &str,
+        now: Timestamp,
+        limit: u32,
+    ) -> Result<u64, StoreError>;
     /// Deletes up to `limit` (1..=[`MAX_PRUNE_BATCH`](crate::MAX_PRUNE_BATCH)) events
     /// created before `before` that have no `pending` delivery (their deliveries and
     /// attempts by cascade); returns the count.

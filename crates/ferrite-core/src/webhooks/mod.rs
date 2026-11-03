@@ -19,7 +19,8 @@ pub use catalogue::{EVENT_TYPES, EventTypeInfo, PAYLOAD_VERSION, PING, check_pat
 pub use deliver::{Delivered, render_body};
 pub use emit::{NewWebhookEvent, emit, emit_comment, emit_content};
 pub use service::{
-    DeliveryDetail, PAUSED, WebhookInput, WebhookPatch, WebhookService, WebhookState, WebhookView,
+    ABANDONED, DeliveryDetail, PAUSED, WebhookInput, WebhookPatch, WebhookService, WebhookState,
+    WebhookView,
 };
 pub use transport::{NoTransport, OutgoingWebhook, SendOutcome, WebhookTransport};
 pub use url::{MAX_URL, UrlPolicy, check_url, host_of};
@@ -44,6 +45,9 @@ pub const RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 pub const AUTO_DISABLE_AFTER: Duration = Duration::from_secs(5 * 24 * 3600);
 /// ... with at least this many failed attempts in a row is disabled (`failing`).
 pub const AUTO_DISABLE_FAILURES: i32 = 10;
+/// A pending delivery whose next attempt was due longer ago than this is failed by the
+/// prune job: its job gave up (runner attempts, a permanent error), nothing moves it.
+pub const STALE_PENDING: Duration = Duration::from_secs(6 * 3600);
 /// How long the previous secret keeps signing after a rotation.
 pub const ROTATION_WINDOW: Duration = Duration::from_secs(24 * 3600);
 /// Titles in payloads are cut at this many characters.

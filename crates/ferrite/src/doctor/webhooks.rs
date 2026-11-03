@@ -44,9 +44,17 @@ async fn endpoints(db: &Database) -> Result<Vec<Endpoint>, String> {
                 .collect())
         }
         Database::Postgres { store, .. } => {
-            let rows = db
+            // A schema before `0016_webhooks` has no table: nothing to report.
+            let rows = match db
                 .read(async { Ok(store.read().webhooks().list_endpoints().await?) })
-                .await?;
+                .await
+            {
+                Ok(rows) => rows,
+                Err(e) if e.contains("webhook_endpoints") && e.contains("does not exist") => {
+                    Vec::new()
+                }
+                Err(e) => return Err(e),
+            };
             Ok(rows
                 .into_iter()
                 .map(|e| Endpoint {

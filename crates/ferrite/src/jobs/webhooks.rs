@@ -12,7 +12,7 @@ use ferrite_core::{
     jobs::{WEBHOOK_DELIVER_KIND, WEBHOOK_DELIVER_VERSION, WEBHOOKS_PRUNE_KIND, WebhookDeliver},
     mail::{Mailer, OutgoingMail, check_address, subject_title},
     settings,
-    webhooks::{Delivered, RETENTION, WebhookService, WebhookTransport, host_of},
+    webhooks::{Delivered, RETENTION, STALE_PENDING, WebhookService, WebhookTransport, host_of},
 };
 use ferrite_domain::{DisabledReason, Job, Timestamp, WebhookEndpoint};
 use ferrite_store::{MAX_PRUNE_BATCH, Store};
@@ -225,6 +225,19 @@ impl JobHandler for WebhooksPruneHandler {
                 .saturating_sub(i64::try_from(RETENTION.as_micros()).unwrap_or(i64::MAX)),
         )
         .map_err(|e| JobError::Permanent(e.to_string()))?;
+        let stale = Timestamp::from_micros(
+            now.as_micros()
+                .saturating_sub(i64::try_from(STALE_PENDING.as_micros()).unwrap_or(i64::MAX)),
+        )
+        .map_err(|e| JobError::Permanent(e.to_string()))?;
+        let failed = self
+            .service
+            .fail_abandoned(stale, MAX_PRUNE_BATCH)
+            .await
+            .map_err(|e| JobError::Retry(e.to_string()))?;
+        if failed > 0 {
+            tracing::warn!(failed, "failed webhook deliveries whose job gave up");
+        }
         let started = Instant::now();
         let mut total = 0;
         loop {

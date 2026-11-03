@@ -481,7 +481,28 @@ async fn prune_deletes_old_events(db: Arc<TestDb>) {
         created_at: Timestamp::now(),
         finished_at: None,
     };
+    // A delivery whose job gave up a day ago, on a fresh event.
+    let hook = w.list_endpoints().await.unwrap().remove(0);
+    let stuck = ferrite_domain::Delivery {
+        id: ferrite_domain::DeliveryId::new(),
+        endpoint_id: hook.id,
+        event_id: fresh.id,
+        status: DeliveryStatus::Pending,
+        attempts: 1,
+        next_attempt_at: Some(
+            Timestamp::from_micros(Timestamp::now().as_micros() - 86_400_000_000).unwrap(),
+        ),
+        last_status_code: None,
+        last_error: None,
+        redelivery_of: None,
+        created_at: Timestamp::now(),
+        finished_at: None,
+    };
+    w.insert_delivery(&stuck).await.unwrap();
     handler.run(&job).await.unwrap();
+    let got = w.get_delivery(stuck.id).await.unwrap().unwrap();
+    assert_eq!(got.status, DeliveryStatus::Failed);
+    assert_eq!(got.last_error.as_deref(), Some("the delivery job gave up"));
     assert_eq!(w.get_event(ev.id).await.unwrap(), None);
     assert!(w.get_event(fresh.id).await.unwrap().is_some());
 }

@@ -428,4 +428,5 @@ backend_tests!(
     delivery_counts_by_status_since,
     prune_keeps_events_with_pending_deliveries,
     nul_in_text_is_invalid,
+    fail_stale_pending_only_old_pending,
 );

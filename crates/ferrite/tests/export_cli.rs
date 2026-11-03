@@ -556,8 +556,13 @@ fn v10_archive(ex: &Exported) -> Vec<u8> {
         entry.1 = lines;
         reseal(&mut entries, table);
     }
+    // No table a later migration added (`webhook_endpoints`, 0016).
+    entries.retain(|(p, _)| p != "tables/webhook_endpoints.ndjson");
     let mut m = manifest(&entries);
     m["schema_version"] = Value::from(10);
+    if let Some(tables) = m["tables"].as_array_mut() {
+        tables.retain(|t| t["name"] != "webhook_endpoints");
+    }
     set_manifest(&mut entries, &m);
     pack(&entries)
 }
@@ -574,7 +579,7 @@ fn import_site_failure_after_migrate_down_restores_the_schema() {
     init(&target);
     let out = import_site(&target, &cut, &[]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
-    assert_eq!(schema_version(&target), 13, "the migrate-down is undone");
+    assert_eq!(schema_version(&target), 16, "the migrate-down is undone");
     assert_eq!(count(&target, "users"), 0);
     let out = import_site(&target, &whole, &[]);
     assert!(out.status.success(), "{}", text(&out));

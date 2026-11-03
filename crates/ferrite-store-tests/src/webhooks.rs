@@ -602,3 +602,48 @@ pub async fn nul_in_text_is_invalid(db: &TestDb) {
         Err(StoreError::Invalid(_))
     ));
 }
+
+pub async fn fail_stale_pending_only_old_pending(db: &TestDb) {
+    let store = db.store();
+    let w = store.read().webhooks();
+    let now = Timestamp::now();
+    let e = endpoint("stale", &install_id(store).await, now);
+    w.insert_endpoint(&e).await.unwrap();
+    let ev = event("content.created", now);
+    w.insert_event(&ev).await.unwrap();
+    let mut old = delivery(&e, &ev, now);
+    old.next_attempt_at = Some(plus(now, -DAY));
+    let mut fresh = delivery(&e, &ev, now);
+    fresh.next_attempt_at = Some(plus(now, 60 * SECOND));
+    let mut done = delivery(&e, &ev, now);
+    done.next_attempt_at = Some(plus(now, -DAY));
+    done.status = DeliveryStatus::Delivered;
+    for d in [&old, &fresh, &done] {
+        w.insert_delivery(d).await.unwrap();
+    }
+    let cutoff = plus(now, -3600 * SECOND);
+    assert_eq!(
+        w.fail_stale_pending(cutoff, "gave up", now, 100)
+            .await
+            .unwrap(),
+        1
+    );
+    let got = w.get_delivery(old.id).await.unwrap().unwrap();
+    assert_eq!(got.status, DeliveryStatus::Failed);
+    assert_eq!(got.last_error.as_deref(), Some("gave up"));
+    assert_eq!(got.next_attempt_at, None);
+    assert_eq!(
+        w.get_delivery(fresh.id).await.unwrap().unwrap().status,
+        DeliveryStatus::Pending
+    );
+    assert_eq!(
+        w.get_delivery(done.id).await.unwrap().unwrap().status,
+        DeliveryStatus::Delivered
+    );
+    assert_eq!(
+        w.fail_stale_pending(cutoff, "gave up", now, 100)
+            .await
+            .unwrap(),
+        0
+    );
+}
