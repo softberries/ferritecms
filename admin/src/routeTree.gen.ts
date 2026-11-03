@@ -21,6 +21,8 @@ import { Route as AppStyleguideRouteImport } from './routes/_app/[_]styleguide'
 import { Route as AppAccountRouteImport } from './routes/_app/account'
 import { Route as AppImportRouteImport } from './routes/_app/import'
 import { Route as LoginTotpRouteImport } from './routes/login_.totp'
+import { Route as AppAiActivityIndexRouteImport } from './routes/_app/ai-activity.index'
+import { Route as AppAiActivityIdRouteImport } from './routes/_app/ai-activity.$id'
 import { Route as AppAppearanceThemesRouteImport } from './routes/_app/appearance.themes'
 import { Route as AppCommentsIndexRouteImport } from './routes/_app/comments.index'
 import { Route as AppMediaIndexRouteImport } from './routes/_app/media.index'
@@ -103,6 +105,16 @@ const LoginTotpRoute = LoginTotpRouteImport.update({
   id: '/login_/totp',
   path: '/login/totp',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppAiActivityIndexRoute = AppAiActivityIndexRouteImport.update({
+  id: '/ai-activity/',
+  path: '/ai-activity/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAiActivityIdRoute = AppAiActivityIdRouteImport.update({
+  id: '/ai-activity/$id',
+  path: '/ai-activity/$id',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppAppearanceThemesRoute = AppAppearanceThemesRouteImport.update({
   id: '/appearance/themes',
@@ -234,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/account': typeof AppAccountRoute
   '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
+  '/ai-activity/$id': typeof AppAiActivityIdRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
   '/plugins/publishers': typeof AppPluginsPublishersRoute
@@ -241,6 +254,7 @@ export interface FileRoutesByFullPath {
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
   '/webhooks/$id': typeof AppWebhooksIdRoute
+  '/ai-activity/': typeof AppAiActivityIndexRoute
   '/comments/': typeof AppCommentsIndexRoute
   '/media/': typeof AppMediaIndexRoute
   '/plugins/': typeof AppPluginsIndexRoute
@@ -270,6 +284,7 @@ export interface FileRoutesByTo {
   '/import': typeof AppImportRoute
   '/login/totp': typeof LoginTotpRoute
   '/': typeof AppIndexRoute
+  '/ai-activity/$id': typeof AppAiActivityIdRoute
   '/appearance/themes': typeof AppAppearanceThemesRoute
   '/plugins/$name': typeof AppPluginsNameRoute
   '/plugins/publishers': typeof AppPluginsPublishersRoute
@@ -277,6 +292,7 @@ export interface FileRoutesByTo {
   '/structure/redirects': typeof AppStructureRedirectsRoute
   '/system/$tab': typeof AppSystemTabRoute
   '/webhooks/$id': typeof AppWebhooksIdRoute
+  '/ai-activity': typeof AppAiActivityIndexRoute
   '/comments': typeof AppCommentsIndexRoute
   '/media': typeof AppMediaIndexRoute
   '/plugins': typeof AppPluginsIndexRoute
@@ -308,6 +324,7 @@ export interface FileRoutesById {
   '/_app/import': typeof AppImportRoute
   '/login_/totp': typeof LoginTotpRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/ai-activity/$id': typeof AppAiActivityIdRoute
   '/_app/appearance/themes': typeof AppAppearanceThemesRoute
   '/_app/plugins/$name': typeof AppPluginsNameRoute
   '/_app/plugins/publishers': typeof AppPluginsPublishersRoute
@@ -315,6 +332,7 @@ export interface FileRoutesById {
   '/_app/structure/redirects': typeof AppStructureRedirectsRoute
   '/_app/system/$tab': typeof AppSystemTabRoute
   '/_app/webhooks/$id': typeof AppWebhooksIdRoute
+  '/_app/ai-activity/': typeof AppAiActivityIndexRoute
   '/_app/comments/': typeof AppCommentsIndexRoute
   '/_app/media/': typeof AppMediaIndexRoute
   '/_app/plugins/': typeof AppPluginsIndexRoute
@@ -346,6 +364,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/import'
     | '/login/totp'
+    | '/ai-activity/$id'
     | '/appearance/themes'
     | '/plugins/$name'
     | '/plugins/publishers'
@@ -353,6 +372,7 @@ export interface FileRouteTypes {
     | '/structure/redirects'
     | '/system/$tab'
     | '/webhooks/$id'
+    | '/ai-activity/'
     | '/comments/'
     | '/media/'
     | '/plugins/'
@@ -382,6 +402,7 @@ export interface FileRouteTypes {
     | '/import'
     | '/login/totp'
     | '/'
+    | '/ai-activity/$id'
     | '/appearance/themes'
     | '/plugins/$name'
     | '/plugins/publishers'
@@ -389,6 +410,7 @@ export interface FileRouteTypes {
     | '/structure/redirects'
     | '/system/$tab'
     | '/webhooks/$id'
+    | '/ai-activity'
     | '/comments'
     | '/media'
     | '/plugins'
@@ -419,6 +441,7 @@ export interface FileRouteTypes {
     | '/_app/import'
     | '/login_/totp'
     | '/_app/'
+    | '/_app/ai-activity/$id'
     | '/_app/appearance/themes'
     | '/_app/plugins/$name'
     | '/_app/plugins/publishers'
@@ -426,6 +449,7 @@ export interface FileRouteTypes {
     | '/_app/structure/redirects'
     | '/_app/system/$tab'
     | '/_app/webhooks/$id'
+    | '/_app/ai-activity/'
     | '/_app/comments/'
     | '/_app/media/'
     | '/_app/plugins/'
@@ -539,6 +563,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/login/totp'
       preLoaderRoute: typeof LoginTotpRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_app/ai-activity/': {
+      id: '/_app/ai-activity/'
+      path: '/ai-activity'
+      fullPath: '/ai-activity/'
+      preLoaderRoute: typeof AppAiActivityIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ai-activity/$id': {
+      id: '/_app/ai-activity/$id'
+      path: '/ai-activity/$id'
+      fullPath: '/ai-activity/$id'
+      preLoaderRoute: typeof AppAiActivityIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/appearance/themes': {
       id: '/_app/appearance/themes'
@@ -710,6 +748,7 @@ interface AppRouteChildren {
   AppAccountRoute: typeof AppAccountRoute
   AppImportRoute: typeof AppImportRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAiActivityIdRoute: typeof AppAiActivityIdRoute
   AppAppearanceThemesRoute: typeof AppAppearanceThemesRoute
   AppPluginsNameRoute: typeof AppPluginsNameRoute
   AppPluginsPublishersRoute: typeof AppPluginsPublishersRoute
@@ -717,6 +756,7 @@ interface AppRouteChildren {
   AppStructureRedirectsRoute: typeof AppStructureRedirectsRoute
   AppSystemTabRoute: typeof AppSystemTabRoute
   AppWebhooksIdRoute: typeof AppWebhooksIdRoute
+  AppAiActivityIndexRoute: typeof AppAiActivityIndexRoute
   AppCommentsIndexRoute: typeof AppCommentsIndexRoute
   AppMediaIndexRoute: typeof AppMediaIndexRoute
   AppPluginsIndexRoute: typeof AppPluginsIndexRoute
@@ -741,6 +781,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAccountRoute: AppAccountRoute,
   AppImportRoute: AppImportRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAiActivityIdRoute: AppAiActivityIdRoute,
   AppAppearanceThemesRoute: AppAppearanceThemesRoute,
   AppPluginsNameRoute: AppPluginsNameRoute,
   AppPluginsPublishersRoute: AppPluginsPublishersRoute,
@@ -748,6 +789,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStructureRedirectsRoute: AppStructureRedirectsRoute,
   AppSystemTabRoute: AppSystemTabRoute,
   AppWebhooksIdRoute: AppWebhooksIdRoute,
+  AppAiActivityIndexRoute: AppAiActivityIndexRoute,
   AppCommentsIndexRoute: AppCommentsIndexRoute,
   AppMediaIndexRoute: AppMediaIndexRoute,
   AppPluginsIndexRoute: AppPluginsIndexRoute,

@@ -3,6 +3,7 @@
 // token (`TokenDialog`). At most 50 per user: past that the server's `422` shows in the
 // dialog. Token names are the user's own text and render as text.
 
+import { ActivityLink } from "./connected-apps-card";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react";
@@ -183,7 +184,8 @@ function TokenRow({ token, onRevoke }: { token: TokenDto; onRevoke: () => void }
       <TableCell className="hidden py-3 text-muted-foreground sm:table-cell">
         <Expiry token={token} />
       </TableCell>
-      <TableCell className="py-2 pr-4 text-right">
+      <TableCell className="py-2 pr-4 text-right whitespace-nowrap">
+        <ActivityLink agent={token.id} own name={token.name} />
         <Button
           variant="ghost"
           size="icon"
