@@ -1,6 +1,7 @@
 # 14 — Plugin trust: signed plugins, publisher-bound data, the registry
 
-Status: **design for M6-2** · Date: 2026-11-02
+Status: **built in M6-2** (ruling P5 applied; execution notes `R-2-*` in
+`docs/superpowers/m6-2-exit.md`) · Date: 2026-11-02
 
 Today a plugin is two files, `ferrite-plugin.toml` and a `.wasm`, and nothing says who
 made them. The manifest's `publisher` is unverified text, and plugin data (KV, settings,
@@ -368,6 +369,7 @@ Validation (`RegistryIndex::parse`, every rule a unit test with a hostile index)
 registry = "https://softberries.github.io/ferritecms/registry/v1/index.json"  # default; "" = off
 registry_key = "RWQ…"   # required for any other registry; default: the embedded key
 signatures = "any"      # any | signed | trusted (§3.2)
+registry_check = "off"  # off (default) | daily (ruling P5, D18)
 ```
 
 - The default URL uses the key embedded from `crates/ferrite/registry.pub` (like
@@ -513,7 +515,8 @@ tool; the MCP reference page notes it.
 
 ## 8. Update checks
 
-- **Job `plugins.registry_check`** (daily periodic, `core_periodics()`), handler in
+- **Job `plugins.registry_check`** (daily periodic only with `registry_check = "daily"`,
+  ruling P5; not in `core_periodics()`), handler in
   `crates/ferrite/src/jobs/registry.rs`: when a registry is configured, fetch the index and
   signature, verify, check the serial, store the cache row, then **apply revocations**
   (`ExtensionService::apply_registry_revocations`: insert missing revocation rows, disable
@@ -530,10 +533,13 @@ tool; the MCP reference page notes it.
   published by FerriteCMS; updating binds this plugin's data to it").
 - Nothing installs by itself. An update is an install with its own report and approval.
 
-- **D18. Daily check on by default, nothing automatic.** Revocations must arrive without an
-  admin looking; automatic installs would skip the permission report (P3). The daily fetch
-  tells GitHub Pages the site's address once a day, like WordPress's update check; `registry
-  = ""` turns it off.
+- **D18 (changed by ruling P5). The daily check is off by default, nothing is automatic.**
+  A site makes no outbound request it was not configured for (as with `self-update
+  --check`): `[plugins] registry_check = "daily"` schedules the job (04:00 UTC, after the
+  artifacts GC); otherwise the index is fetched only on demand: the Plugins screen's "Check
+  for updates" (`POST /plugins/registry/refresh`) and every CLI `search|install NAME|update`.
+  Revocations therefore arrive at the next check, scheduled or on demand. Automatic
+  installs would skip the permission report (P3). `registry = ""` turns the registry off.
 
 ## 9. CLI and doctor
 
@@ -554,12 +560,13 @@ tool; the MCP reference page notes it.
 Exit codes: 0 done, 1 error (refusals included), 2 only for `update --check`. `install`
 with both `NAME` and `--dir` is a usage error.
 
-`ferrite doctor` gains one check, `plugins.trust` (database only, no network; works with
-`--offline`): `warn` when an installed plugin does not meet `plugins.signatures`, when an
-installed plugin is signed by a revoked key, or when the configured registry's last check
-failed or is older than 3 days; `info` "registry off" when none is configured; else `ok`
-("3 plugins, 3 verified; registry serial 3 checked 5 h ago"). Doctor's check count becomes
-26.
+`ferrite doctor` gains one check, `plugins.trust` (after `db.identity`; database only, no
+network; works with `--offline`): `warn` when an installed plugin does not meet
+`plugins.signatures`, when an installed plugin is signed by a revoked key, or when the
+configured registry's last check failed, or (with `registry_check = "daily"`, ruling P5) its
+last successful check is older than 3 days or never happened; `info` "registry off" when none
+is configured (or this build has no key for the default registry); else `ok` ("3 plugins, 3
+verified; registry serial 3 checked 5 h ago"). Doctor's check count becomes 26.
 
 ## 10. Admin
 
@@ -605,7 +612,15 @@ D19), in Chromium on both backends; the axe check of the new screens.
 
 ## 11. Publishing the official plugins (CI)
 
-Keys (made once by the user, like the release key; secrets of the `release` environment):
+Keys (made once by the user, like the release key; secrets of the `release` environment).
+Ruling P5: until they exist, `crates/ferrite/registry.pub` is a comment-only placeholder,
+`registry/publishers.json` lists no key, and `plugins-sign` packs the plugins unsigned and
+publishes no index (a notice says so); every test uses throwaway keys. As built, the
+signing steps are `.github/scripts/sign-plugins.sh` (payload, `minisign -S`, the tarball and
+per-plugin assets through `package-plugins.sh` with `SIGNATURES_DIR` and `ASSETS=1`, the
+index through `registry-index.py`, then every signature verified with
+`.github/scripts/verify-file.sh`), shared by `plugins-sign`, `plugins-sign-dry-run` and the CI
+`packaging` job:
 
 - `PLUGINS_SECRET_KEY` / `PLUGINS_PASSWORD`: the publisher key of `ferritecms.dev`, which
   signs the three example plugins. Its public half is `registry/publishers.json`'s key.

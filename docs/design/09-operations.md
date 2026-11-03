@@ -99,6 +99,30 @@ key (`.github/scripts/verify-sig.sh`), so a secret key that does not match fails
 before anything is published. A binary built before the key was committed has no key and
 can never self-update; install a release build.
 
+**Plugin keys** (M6-2, design 14 §11; ruling P5: the user's to create, like the release
+key). Two more minisign keys, made once by a maintainer:
+
+```sh
+minisign -G -p plugins.pub -s plugins.key       # the ferritecms.dev publisher key
+minisign -G -p registry.pub -s registry.key     # the registry index key
+cp registry.pub crates/ferrite/registry.pub     # replaces the placeholder; commit it
+```
+
+Put the base64 line of `plugins.pub` (its second line) into `registry/publishers.json` as
+the `keys` of `ferritecms.dev`, and commit both files. Store `plugins.key` and its password
+as `PLUGINS_SECRET_KEY` / `PLUGINS_PASSWORD`, and `registry.key` and its password as
+`REGISTRY_SECRET_KEY` / `REGISTRY_PASSWORD`, in the environment `release`; keep offline
+copies. Until all of this exists the binaries have the default registry off, and
+`plugins-sign` packs the plugins unsigned and publishes no index (a notice in the run).
+Releases after it sign the three example plugins and publish the index, which
+`pages.yml` places at `https://softberries.github.io/ferritecms/registry/v1/index.json`.
+Revoking the plugin key: move it to `revoked_keys` in `registry/publishers.json`
+(`revoked_at`, `reason`, `compromised`) and add the new key to `keys` in the same PR; the
+next release's index carries both, and sites apply the revocation at their next registry
+check. Rotating the registry key needs a release whose binaries embed the new
+`registry.pub` (sites on older binaries keep verifying with the old key until they
+update).
+
 ### `upgrade.json` (as built, M4-2 P30)
 
 ```json
@@ -974,6 +998,21 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     because every plugin install needs an approval (05 §2). `ferrite self-update` is
     unaffected: it picks `ferrite-<version>-<target>.tar.gz` by exact name, and the other
     assets only take lines in `SHA256SUMS`.
+  - `plugins-sign` (M6-2, publishing runs, environment `release`) and
+    `plugins-sign-dry-run`: since M6-2 the `plugins` job only builds and checks the wasm
+    (artifact `plugins-wasm`), and the sign jobs pack. `.github/scripts/sign-plugins.sh`
+    signs each plugin's payload (`plugin-payload.sh`) with the plugin key into
+    `ferrite-plugin.minisig`, adds `ferrite-plugin.pub`, packs the tarball from the signed
+    folders and the per-plugin registry assets `ferrite-plugin-<name>-<version>.{toml,wasm}`
+    (`package-plugins.sh` with `SIGNATURES_DIR` and `ASSETS=1`), merges the published index
+    (fetched from Pages and verified with `crates/ferrite/registry.pub` first; a 404 starts
+    at serial 1 only when no earlier release carries `ferrite-registry-index.json`) with
+    this release's versions (`registry-index.py`, which applies `registry/yanked.json` and
+    refuses a signer that is not a current key of the plugin's publisher in
+    `registry/publishers.json`), signs it as `ferrite-registry-index.json(.minisig)` and
+    verifies every signature (`verify-file.sh`). Without the `PLUGINS_*` / `REGISTRY_*`
+    secrets `plugins-sign` packs the plugins unsigned and writes no index. The dry run
+    uses two throwaway keys (their `.pub` files go into the artifact).
   - **Reproducible archives** (M4-4 P83): `package.sh` and `package-plugins.sh` pack through
     `.github/scripts/repro-tar.sh`, so the same files give the same bytes whatever the
     stage folder, the umask or the copy times (the bytes still depend on the runner image's
@@ -992,16 +1031,20 @@ yet: the first tag is the release gate in `docs/superpowers/m4-2-exit.md`.
     unaffected (`self_update_installs_an_archive_made_by_package_sh`). Each `build` job of
     `release.yml` runs `test-repro.sh` before packing, so every runner's tar (GNU 1.34 and
     1.35, bsdtar) proves the property on its first run.
-  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the seven assets
-    (`.github/scripts/sums.sh` refuses any other count), signed with minisign
+  - `sign` (publishing runs, environment `release`): `SHA256SUMS` over the seven tarballs
+    (`.github/scripts/sums.sh` refuses any other count) and, since M6-2, the per-plugin
+    registry assets and the index when present, signed with minisign
     (prehashed, the default) using the environment secrets `MINISIGN_SECRET_KEY` and
     `MINISIGN_PASSWORD`, then checked against the committed key
     (`.github/scripts/verify-sig.sh`). `sign-dry-run` does the same with a throwaway key.
   - `release` (environment `release`): a draft GitHub Release (a draft left by a failed
     run of the same tag is reused; an already published one stops the run), the nine
-    assets (seven tarballs, `SHA256SUMS` and its signature) uploaded and counted, then
+    assets (seven tarballs, `SHA256SUMS` and its signature; seventeen with the signed
+    plugins' six assets and the index, M6-2) uploaded and counted, then
     published, marked "latest" only when `latest` (so a backport never becomes the release
-    `self-update` installs; prereleases are marked as such).
+    `self-update` installs; prereleases are marked as such); for the latest release it then
+    starts `pages.yml` (`gh workflow run`, `actions: write`), which places the release's
+    registry index on Pages after verifying it with `registry.pub`.
   - `image` and `image-tags` (environment `release`, `packages: write`): the image built
     natively per platform (`linux/amd64` on `ubuntu-24.04`, `linux/arm64` on
     `ubuntu-24.04-arm`, no QEMU; R5), pushed by digest with the OCI labels `source`

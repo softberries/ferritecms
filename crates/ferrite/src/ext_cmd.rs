@@ -205,7 +205,7 @@ pub enum PluginCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum KeysCommand {
-    /// List the site's keys: `<key_id>  <source>  <label>  [revoked: <reason>]`.
+    /// List the site's keys: `<key_id>  <source>  <label>  [revoked[, compromised]: <reason>]`.
     List(DataArg),
     /// Trust a minisign public key file as an operator key (clears a local revocation).
     Trust {

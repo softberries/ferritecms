@@ -13,7 +13,8 @@ and writes it. The caller signs the output with the registry key.
 
 `--previous -` (or a missing file) starts at serial 1. DIR holds one folder per plugin
 (`<name>/ferrite-plugin.toml`, `<name>/<name>.wasm`, `<name>/ferrite-plugin.minisig`); each
-version's files are named `ferrite-plugin-<name>-<version>.{toml,wasm}` under URL.
+version's files are named `ferrite-plugin-<name>-<version>.{toml,wasm}` under URL (an empty
+URL names them relative to the index: a `file://` registry made from a release's assets).
 `--extra-key` adds a public key file to the publisher of the plugins (the dry run's
 throwaway key). Python 3 standard library only.
 """
@@ -205,12 +206,12 @@ def main():
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
                 "manifest": {
-                    "url": f"{base}/ferrite-plugin-{name}-{version}.toml",
+                    "url": f"{base}/ferrite-plugin-{name}-{version}.toml" if base else f"ferrite-plugin-{name}-{version}.toml",
                     "sha256": sha256(manifest),
                     "bytes": len(manifest),
                 },
                 "component": {
-                    "url": f"{base}/ferrite-plugin-{name}-{version}.wasm",
+                    "url": f"{base}/ferrite-plugin-{name}-{version}.wasm" if base else f"ferrite-plugin-{name}-{version}.wasm",
                     "sha256": sha256(component),
                     "bytes": len(component),
                 },

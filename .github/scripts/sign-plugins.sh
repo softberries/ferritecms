@@ -13,7 +13,11 @@
 # assets packed (package-plugins.sh), the index merged with PREVIOUS_INDEX (already
 # verified by the caller; `-` for the first) by registry-index.py and signed as
 # `ferrite-registry-index.json(.minisig)`; then every signature is verified with the
-# public keys. The wasm comes from WASM_DIR as for package-plugins.sh.
+# public keys. The wasm comes from WASM_DIR as for package-plugins.sh. BASE_URL (default:
+# this release's GitHub download URL) is where the index says the assets are; an empty
+# BASE_URL names them relative to the index (a `file://` registry made from OUT_DIR).
+# EXTRA_KEY adds a public key file to the plugins' publisher (the throwaway key of a dry
+# run).
 set -euo pipefail
 
 if [ "$#" -ne 7 ]; then
@@ -62,7 +66,7 @@ SIGNATURES_DIR="$signed" ASSETS=1 "$here/package-plugins.sh" "$version" "$out"
 python3 "$here/registry-index.py" --previous "$previous" \
   --publishers registry/publishers.json --yanked registry/yanked.json \
   --version "$version" \
-  --base-url "https://github.com/${GITHUB_REPOSITORY:-softberries/ferritecms}/releases/download/v$version" \
+  --base-url "${BASE_URL-https://github.com/${GITHUB_REPOSITORY:-softberries/ferritecms}/releases/download/v$version}" \
   --plugins "$signed" --out "$out/ferrite-registry-index.json" \
   ${EXTRA_KEY:+--extra-key "$EXTRA_KEY"}
 sign "$registry_key" "${REGISTRY_PASSWORD:-}" "$out/ferrite-registry-index.json" \

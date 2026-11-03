@@ -137,14 +137,22 @@ ferrite theme pack --dir THEME_DIR --out FILE
 
 ```text
 ferrite plugin check --data DIR --dir PLUGIN_DIR
-ferrite plugin install --data DIR --dir PLUGIN_DIR [--enable] [--yes]
+ferrite plugin install --data DIR (--dir PLUGIN_DIR | NAME[@VERSION]) [--enable] [--yes]
 ferrite plugin list --data DIR
 ferrite plugin enable --data DIR NAME
 ferrite plugin disable --data DIR NAME
 ferrite plugin remove --data DIR NAME [--purge]
+ferrite plugin search --data DIR [QUERY]
+ferrite plugin update --data DIR [NAME...] [--check] [--yes]
+ferrite plugin digest --dir PLUGIN_DIR [--out FILE]
+ferrite plugin keys list --data DIR
+ferrite plugin keys trust --data DIR FILE --label TEXT
+ferrite plugin keys revoke --data DIR KEY_ID --reason TEXT [--compromised]
+ferrite plugin unbind --data DIR NAME
 ```
 
-- A plugin folder holds `ferrite-plugin.toml` and one `*.wasm`.
+- A plugin folder holds `ferrite-plugin.toml` and one `*.wasm`, and for a signed plugin
+  `ferrite-plugin.minisig` and optionally `ferrite-plugin.pub`.
 - `check` prints the permission report and stores nothing; exit 1 when the manifest or
   the component is refused.
 - `install` prints the report and asks before installing (or updating); `--yes` approves
@@ -152,6 +160,17 @@ ferrite plugin remove --data DIR NAME [--purge]
 - `list` prints `<name>  <version>  <enabled|disabled>  [<reason>]`.
 - `remove` keeps the plugin's stored data and settings for 30 days; `--purge` deletes
   them now.
+- `install NAME[@VERSION]`, `search` and `update` use the configured registry and fetch it
+  first; exit 1 without one or when it cannot be fetched. `install` takes either `NAME`
+  or `--dir` (both is a usage error).
+- `update --check` prints `<name>  <installed> -> <available>` and exits 2 when there are
+  updates, 0 when there are none.
+- `digest` prints the signing payload of a folder (what `minisign -S -m` signs) and needs
+  no data folder.
+- `keys list` prints `<key_id>  <source>  <label>  [revoked[, compromised]: <reason>]`; `keys trust` adds
+  an operator key (and clears a local revocation); `keys revoke` refuses installs and
+  updates signed by the key, and `--compromised` also disables its plugins.
+- `unbind` frees a plugin name's owner binding and keeps its data.
 
 ## Imports
 

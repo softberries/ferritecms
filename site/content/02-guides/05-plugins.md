@@ -51,11 +51,76 @@ ferrite plugin disable --data ./mysite seo
 ferrite plugin remove --data ./mysite seo
 ```
 
+## Who made a plugin
+
+A plugin can be **signed** by its publisher: the folder then also holds
+`ferrite-plugin.minisig` (a minisign signature over the two files) and, for a publisher the
+site does not know yet, `ferrite-plugin.pub` (the publisher's public key). The report then
+starts with the publisher:
+
+- **Verified publisher**: the key is listed by the plugin registry the site uses (see
+  below), and the report names that publisher.
+- **New publisher key**: a valid signature by a key the site has not seen. Approving the
+  report trusts that key for this plugin's updates.
+- **Unsigned**: nothing confirms who made it; the manifest's `publisher` is only a claim.
+
+A signature that does not match the files, or one by an unknown key without its
+`ferrite-plugin.pub`, is refused: it is never treated as unsigned.
+
+A plugin's stored data belongs to the publisher whose signed version was installed
+first. An update must be signed by the same publisher; a plugin of the same name from
+anyone else (signed by another key, or unsigned) is refused until you remove the plugin and
+erase its data. A plugin installed unsigned keeps working as before, and the first signed
+version of it takes over its data (the report says so).
+
+`[plugins] signatures` in `ferrite.toml` sets what the site accepts: `any` (the default),
+`signed` (no unsigned plugins) or `trusted` (only keys from the registry or added with
+`ferrite plugin keys trust`). It is the operator's setting; the admin only shows it.
+
+## The plugin registry
+
+A registry is a signed list of plugins and their versions. With one configured, the CLI
+and the admin can search it, install from it, and show updates:
+
+```sh
+ferrite plugin search --data ./mysite seo
+ferrite plugin install --data ./mysite seo --enable
+ferrite plugin update --data ./mysite --check
+ferrite plugin update --data ./mysite --yes
+```
+
+Each of these fetches the registry first. `update --check` prints
+`<name>  <installed> -> <available>` and exits 2 when there are updates. Nothing updates by
+itself: an update is an install with its own report. In the admin, **Check for updates**
+fetches the registry, the **Registry** tab lists its plugins, and an installed plugin with
+a newer version shows an **Update** chip.
+
+The site fetches the registry only when asked, unless `registry_check = "daily"` is set
+(see [Configuration](../04-operations/01-configuration.md)). The official registry is not
+published yet; until it is, set `registry` and `registry_key` to use another one, or
+`registry = ""` to turn it off.
+
+## Publisher keys
+
+**Plugins → Publisher keys** in the admin (and `ferrite plugin keys list`) lists the keys
+the site knows. **Revoke** stops installs and updates signed by a key; "the key was stolen
+or leaked" also disables every installed plugin it signed. The operator can trust a key
+again or add one:
+
+```sh
+ferrite plugin keys trust --data ./mysite ./publisher.pub --label "Example Ltd"
+ferrite plugin keys revoke --data ./mysite 5A1C3D2E4F5A6B7C --reason "key lost"
+```
+
+`ferrite plugin unbind --data ./mysite NAME` frees a plugin name and keeps its data (for a
+publisher that lost its key): the next install of that name takes it.
+
 ## Install in the admin
 
 Open **Plugins** and choose **Install plugin**. Pick (or drop) the `ferrite-plugin.toml`
-and the `.wasm`; the admin shows the permission report, with high-risk items first, and
-**Approve and install** installs it. A new plugin is installed disabled; the last step
+and the `.wasm`, and for a signed plugin `ferrite-plugin.minisig` and `ferrite-plugin.pub`;
+the admin shows the permission report, with the publisher and the high-risk items first,
+and **Approve and install** installs it. A new plugin is installed disabled; the last step
 offers **Enable**.
 
 <figure><img src="../images/admin-plugins.webp" alt="The Plugins screen: the seo, analytics and contact-form plugins, all enabled"><figcaption>The installed plugins.</figcaption></figure>
