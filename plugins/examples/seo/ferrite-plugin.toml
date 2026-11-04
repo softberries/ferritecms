@@ -1,6 +1,6 @@
 [plugin]
 name        = "seo"
-version     = "0.3.0"
+version     = "0.3.1"
 publisher   = "ferritecms.dev"
 description = "Open Graph site name and locale, Twitter cards, article tags, JSON-LD and verification metas"
 world       = "ferrite:plugin/plugin@0.1.0"

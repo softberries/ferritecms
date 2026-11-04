@@ -110,7 +110,7 @@ serves an MCP endpoint at `<site.url>/mcp` (`rmcp`, Streamable HTTP, stateless; 
 and Client ID Metadata Documents, refresh rotation, `fera_` access tokens bound to `/mcp`), the `mcp.enabled`
 switch, and the admin's consent screen, Connected apps, Settings → AI assistants and dashboard
 card; migration `0013_oauth`; design 12, roadmap "M5". M6 (the editorial platform) is done
-and released in `v0.3.0` (2026-11-03; the current release; `m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
+and released in `v0.3.0` (2026-11-03; `m6-exit.md`, which lists the final review's fixes, the gates and what was not verified;
 the parts' exits are `m6-1-exit.md` … `m6-6-exit.md`; designs 13–18; migrations
 `0014`–`0019`). Its six parts:
 M6-6 (outgoing webhooks) is done
@@ -177,8 +177,9 @@ doctor `plugins.trust`, the admin's Registry tab and Publisher keys; migration
 `0015_plugin_publishers`; the real keys exist since 2026-11-04 (09 §7 "Plugin keys": plugins
 key `B1AE6DB7CD1D85B2` in `registry/publishers.json`, registry key `B1D92B9335F48FD5` in
 `crates/ferrite/registry.pub`, so the default registry is on in builds after 0.3.0; the
-secrets live in the `release` environment, and the next `v*` tag publishes the signed
-plugins and the first index).
+secrets live in the `release` environment; `v0.3.1` (2026-11-04, the current release: the
+signed example plugins, the first registry index and the redesigned starter themes) is the
+first release that publishes them).
 M6-1 (multilingual content) is done
 (`m6-1-exit.md`; design 13; migration `0014_locales`): `site.locales` (`{tag, label}`, the
 default first, settled at startup), a locale and a translation group on content items, terms

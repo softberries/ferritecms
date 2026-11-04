@@ -88,7 +88,7 @@ Download a release for your platform from
 [Releases](https://github.com/softberries/ferritecms/releases), unpack it and start a site:
 
 ```sh
-VERSION=0.3.0
+VERSION=0.3.1
 TARGET=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, *-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -LO https://github.com/softberries/ferritecms/releases/download/v$VERSION/ferrite-$VERSION-$TARGET.tar.gz
 tar -xzf ferrite-$VERSION-$TARGET.tar.gz
@@ -109,7 +109,7 @@ shows how to check a download.
 ### Docker
 
 ```sh
-IMAGE=ghcr.io/softberries/ferritecms:0.3.0
+IMAGE=ghcr.io/softberries/ferritecms:0.3.1
 docker run --rm -v ferrite-data:/data $IMAGE init --data /data --url http://localhost:8080
 docker run --rm -v ferrite-data:/data $IMAGE user create --data /data --login me --email me@example.com
 docker run -d --name ferrite -p 8080:8080 -v ferrite-data:/data \
@@ -141,7 +141,15 @@ downloads the media from the old site instead. The import writes a report of eve
 it converted, skipped or redirected. The admin's Import screen does the same while the
 site runs. See [Import from WordPress](https://softberries.github.io/ferritecms/guides/import-wordpress/).
 
-## What's in 0.3.0
+## What's in 0.3.1
+
+New in 0.3.1:
+
+- The official plugin registry is on: the three example plugins are signed as
+  `ferritecms.dev` and listed at
+  `https://softberries.github.io/ferritecms/registry/v1/index.json`, which
+  `ferrite plugin search|install|update` and the admin's Registry tab use by default.
+- Redesigned starter themes: `blog`, `docs` and `business`.
 
 New in 0.3.0, the editorial platform:
 

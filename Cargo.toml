@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/ferrite-domain", "crates/ferrite-store", "crates/ferrite-store-postgres", "crates/ferrite-store-sqlite", "crates/ferrite-store-tests", "crates/ferrite-plugin-host", "crates/ferrite-sdk", "crates/ferrite-media", "crates/ferrite-config", "crates/ferrite-core", "crates/ferrite-http", "crates/ferrite-theme", "crates/ferrite-cache", "crates/ferrite-cluster", "crates/ferrite-import-wp", "crates/ferrite-import-md", "crates/ferrite"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
