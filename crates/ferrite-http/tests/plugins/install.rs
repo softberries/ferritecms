@@ -334,7 +334,7 @@ async fn themes_stage_and_load_from_artifacts(site: Site) -> Site {
         .collect();
     assert_eq!(keys, ["accent_color", "show_author", "show_excerpts"]);
     assert_eq!(row.manifest["settings"][0]["type"], "color");
-    assert_eq!(row.manifest["settings"][0]["default"], "#c2410c");
+    assert_eq!(row.manifest["settings"][0]["default"], "#be185d");
     assert!(row.manifest["images"].is_object(), "{}", row.manifest);
     assert_eq!(row.manifest["name"], "blog");
     assert!(site.store.read().themes().list().await.unwrap().is_empty());

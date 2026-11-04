@@ -6,8 +6,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_core::{
-    DepKeys, blocks::TocEntry, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
-    site::ListOrder,
+    DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    blocks::TocEntry, site::ListOrder,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
 use ferrite_theme::{
@@ -1055,7 +1055,10 @@ fn front_page_lead_story_and_card_meta() {
         assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
     }
     assert_eq!(html.matches("class=\"lead__title\"").count(), 1, "{html}");
-    assert!(!html.contains("card__title\"><a href=\"&#x2f;a&#x2f;\""), "{html}");
+    assert!(
+        !html.contains("card__title\"><a href=\"&#x2f;a&#x2f;\""),
+        "{html}"
+    );
 
     // Page 2 and archives: no lead story.
     let mut c = ctx(&t, "/page/2/");

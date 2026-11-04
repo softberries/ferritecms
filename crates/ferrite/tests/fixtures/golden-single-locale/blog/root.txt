@@ -14,9 +14,10 @@
 <meta property="og:type" content="website">
 <link rel="canonical" href="http://127.0.0.1:8080/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;newsreader.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
-<style>:root{--accent:#c2410c}</style>
+<style>:root{--accent:#be185d}</style>
 
 </head>
 <body class="is-index">
@@ -56,87 +57,113 @@
     <h1 class="page-title visually-hidden">Latest posts</h1>
   </header>
   
+<article class="lead lead--media">
+  <div class="lead__media">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="1280" height="640" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 72rem) 44rem, (min-width: 48rem) 60vw, 100vw" decoding="async" fetchpriority="high">
+  </div>
+  <div class="lead__body">
+    <p class="lead__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
+    <h2 class="lead__title"><a href="&#x2f;welcome-to-ferritecms&#x2f;">Welcome to FerriteCMS</a></h2>
+    <p class="lead__excerpt">This site runs on a single binary with one data folder. Everything you see was created by the demo seeder. What you get A single binary and a single data folder…</p>
+    <p class="byline"><span class="avatar" aria-hidden="true">S</span><span class="byline__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
+  </div>
+</article>
 <ul class="card-grid" role="list">
   <li><article class="card">
-  <div class="card__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
-  </div>
+  <div class="card__media card__media--plate" aria-hidden="true"><span>W</span></div>
   <div class="card__body">
-    <h2 class="card__title"><a href="&#x2f;welcome-to-ferritecms&#x2f;">Welcome to FerriteCMS</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
-    <p class="card__excerpt">This site runs on a single binary with one data folder. Everything you see was created by the demo seeder. What you get A single binary and a single data folder…</p>
-  </div>
-</article></li>
-  <li><article class="card">
-  <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;writing-your-first-plugin&#x2f;">Writing your first plugin</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Plugins are WebAssembly components. They get only the capabilities their manifest declares. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
   <div class="card__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
   </div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;themes-without-code&#x2f;">Themes without code</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">A theme is a folder of templates and assets. Templates get data and a fixed set of safe helpers. What you get A single binary and a single data folder Plugins…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>W</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;why-webassembly-sandboxes&#x2f;">Why WebAssembly sandboxes</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Every hook call is bounded by memory, fuel and a deadline, so a failing plugin never breaks a page. What you get A single binary and a single data folder…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>I</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;importing-from-wordpress&#x2f;">Importing from WordPress</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Posts, pages, terms and media come over from a WXR export; PHP plugins and themes do not. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
   <div class="card__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
   </div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;solo-or-cluster&#x2f;">Solo or cluster</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">SQLite and a local folder for one node, or Postgres and S3 for many: the same binary runs both. What you get A single binary and a single data folder Plugins in…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>C</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;caching-pages-safely&#x2f;">Caching pages safely</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Every cached page records what it depends on, and every write says what it changed. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>P</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;permalinks-the-wordpress-way&#x2f;">Permalinks the WordPress way</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Structures such as &#x2f;%year%&#x2f;%month%&#x2f;%slug%&#x2f; work as you know them, with redirects when slugs change. What you get A single binary and a single data folder…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
   <div class="card__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
   </div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;media-and-image-variants&#x2f;">Media and image variants</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Uploads are stored by content hash, and every image gets resized variants for themes to use. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>A</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;a-tour-of-the-block-format&#x2f;">A tour of the block format</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Post bodies are structured blocks, rendered to safe HTML on the server. What you get A single binary and a single data folder Plugins in a capability-scoped…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
 </ul>
@@ -150,6 +177,10 @@
 </main>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">FerriteCMS Demo</p>
+      <p class="site-footer__description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
     
     
     <nav class="footer-nav" aria-label="Footer">
@@ -166,7 +197,7 @@
 </ul>
     </nav>
     
-    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+    <p class="site-credit">Powered by FerriteCMS</p>
   </div>
 </footer>
 

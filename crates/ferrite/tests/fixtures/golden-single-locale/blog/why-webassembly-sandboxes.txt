@@ -14,9 +14,10 @@
 <meta property="og:type" content="article">
 <link rel="canonical" href="http://127.0.0.1:8080/why-webassembly-sandboxes/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;newsreader.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
-<style>:root{--accent:#c2410c}</style>
+<style>:root{--accent:#be185d}</style>
 
 </head>
 <body class="is-single">
@@ -53,15 +54,18 @@
 
 <article class="entry">
   <header class="entry-header wrap wrap--prose">
+    <p class="entry-kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h1 class="entry-title">Why WebAssembly sandboxes</h1>
-    <p class="entry-meta"><time datetime="<date>"><date></time><span class="entry-meta__author">by <a class="author" href="/author/admin/" rel="author">Site Admin</a></span>
+    <p class="entry-meta byline"><span class="avatar" aria-hidden="true">S</span><span class="entry-meta__author">by <a class="author" href="/author/admin/" rel="author">Site Admin</a></span><time datetime="<date>"><date></time><span class="entry-meta__reading">1 min read</span>
     </p>
   </header>
   
-  <div class="entry-content prose wrap wrap--prose">
-    <p>Every hook call is bounded by memory, fuel and a deadline, so a failing plugin never breaks a page.</p><h2 id="what-you-get">What you get</h2><ul><li><p>A single binary and a single data folder</p></li><li><p>Plugins in a capability-scoped sandbox</p></li><li><p>Themes that are templates, not programs</p></li></ul><p>Try it on your own machine:</p><pre tabindex="0"><code class="language-sh">ferrite init --data ./site --url http://localhost:8080
+  <div class="entry-body wrap">
+    <div class="entry-content prose">
+      <p>Every hook call is bounded by memory, fuel and a deadline, so a failing plugin never breaks a page.</p><h2 id="what-you-get">What you get</h2><ul><li><p>A single binary and a single data folder</p></li><li><p>Plugins in a capability-scoped sandbox</p></li><li><p>Themes that are templates, not programs</p></li></ul><p>Try it on your own machine:</p><pre tabindex="0"><code class="language-sh">ferrite init --data ./site --url http://localhost:8080
 ferrite seed demo --data ./site
 ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. They get only what their manifest declares.</p></blockquote><p>Read more in <a href="/about/">the about page</a>.</p>
+    </div>
   </div>
   <footer class="entry-footer wrap wrap--prose">
     <h2 class="visually-hidden">Topics</h2>
@@ -69,6 +73,10 @@ ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. Th
       <li><a href="&#x2f;category&#x2f;news&#x2f;" rel="tag">News</a></li>
       <li><a href="&#x2f;tag&#x2f;rust&#x2f;" rel="tag">rust</a></li>
     </ul>
+    <div class="author-card">
+      <span class="avatar avatar--large" aria-hidden="true">S</span>
+      <p class="author-card__text">Written by <strong>Site Admin</strong>. <a href="/author/admin/">More posts by Site Admin</a></p>
+    </div>
   </footer>
 </article>
 <section class="comments wrap wrap--prose" id="comments" aria-labelledby="comments-title">
@@ -78,6 +86,7 @@ ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. Th
   
 <form class="comment-form" method="post" action="&#x2f;_comment">
   <input type="hidden" name="post" value="<uuid>">
+  <div class="comment-form__grid">
   <p class="comment-form__field">
     <label for="comment-form-author">Name</label>
     <input type="text" id="comment-form-author" name="author" maxlength="100" autocomplete="name" required>
@@ -90,6 +99,7 @@ ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. Th
     <label for="comment-form-url">Website <span class="comment-form__hint">(optional)</span></label>
     <input type="url" id="comment-form-url" name="url" maxlength="200" autocomplete="url">
   </p>
+  </div>
   <div class="comment-form__trap" aria-hidden="true">
     <label for="comment-form-trap">Leave this field empty</label>
     <input type="text" id="comment-form-trap" name="website" tabindex="-1" autocomplete="off">
@@ -101,39 +111,53 @@ ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. Th
   <p><button type="submit">Post comment</button></p>
 </form>
 </section>
-<section class="related wrap" aria-labelledby="related-title">
-  <h2 id="related-title" class="section-title">Related posts</h2>
-  <ul class="card-grid" role="list">
-    <li><article class="card">
+<section class="related" aria-labelledby="related-title">
+  <div class="wrap">
+    <h2 id="related-title" class="section-title">Related posts</h2>
+    <ul class="card-grid" role="list">
+      <li><article class="card">
   <div class="card__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
+    <img src="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png" alt="" width="640" height="360" srcset="&#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;sample-gradient.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
   </div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h3 class="card__title"><a href="&#x2f;welcome-to-ferritecms&#x2f;">Welcome to FerriteCMS</a></h3>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">This site runs on a single binary with one data folder. Everything you see was created by the demo seeder. What you get A single binary and a single data folder…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
-    <li><article class="card">
+      <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>C</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h3 class="card__title"><a href="&#x2f;caching-pages-safely&#x2f;">Caching pages safely</a></h3>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Every cached page records what it depends on, and every write says what it changed. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
-    <li><article class="card">
+      <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>A</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h3 class="card__title"><a href="&#x2f;a-tour-of-the-block-format&#x2f;">A tour of the block format</a></h3>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Post bodies are structured blocks, rendered to safe HTML on the server. What you get A single binary and a single data folder Plugins in a capability-scoped…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
-  </ul>
+    </ul>
+  </div>
 </section>
 
 </main>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">FerriteCMS Demo</p>
+      <p class="site-footer__description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
     
     
     <nav class="footer-nav" aria-label="Footer">
@@ -150,7 +174,7 @@ ferrite serve --data ./site</code></pre><blockquote><p>Plugins are untrusted. Th
 </ul>
     </nav>
     
-    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+    <p class="site-credit">Powered by FerriteCMS</p>
   </div>
 </footer>
 

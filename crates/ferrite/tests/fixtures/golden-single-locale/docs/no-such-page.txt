@@ -9,6 +9,7 @@
 <title>Page not found – My Site</title>
 <meta name="robots" content="noindex">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 <script src="&#x2f;_theme&#x2f;<hash>&#x2f;docs.js" defer></script>
 
@@ -18,11 +19,12 @@
 <a class="skip-link" href="#content">Skip to content</a>
 <header class="site-header">
   <div class="site-header__inner">
-    <a class="site-title" href="/" rel="home">My Site</a>
+    <a class="site-title" href="/" rel="home"><span class="site-title__mark" aria-hidden="true">M</span><span class="site-title__text">My Site</span></a>
     <form class="search-form search-form--compact" role="search" aria-label="Site" method="get" action="/">
   <label class="search-form__label visually-hidden" for="search">Search the documentation</label>
   <div class="search-form__row">
-    <input type="search" id="search" name="s" value="" placeholder="Search" autocomplete="off" required>
+    <svg class="search-form__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" id="search" name="s" value="" placeholder="Search" autocomplete="off" required><kbd class="search-form__key" aria-hidden="true">/</kbd>
     <button type="submit">Search</button>
   </div>
 </form>
@@ -62,6 +64,7 @@
   <form class="search-form" role="search" aria-label="Search the documentation" method="get" action="/">
   <label class="search-form__label" for="docs-search-error">Search the documentation</label>
   <div class="search-form__row">
+    <svg class="search-form__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
     <input type="search" id="docs-search-error" name="s" value="" placeholder="Search" autocomplete="off" required>
     <button type="submit">Search</button>
   </div>

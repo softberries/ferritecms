@@ -69,7 +69,7 @@ fn blog_schema() -> Value {
     json!([
         {"key": "accent_color", "type": "color",
          "label": "Accent colour (mid-tones keep links readable in light and dark mode)",
-         "default": "#c2410c", "options": []},
+         "default": "#be185d", "options": []},
         {"key": "show_author", "type": "bool", "label": "Show post authors",
          "default": true, "options": []},
         {"key": "show_excerpts", "type": "bool", "label": "Show excerpts in listings",
@@ -96,7 +96,7 @@ async fn theme_settings_change_shows_on_page(api: Api) -> Api {
     assert_eq!(dto["schema"], blog_schema(), "{dto}");
     assert_eq!(
         dto["values"],
-        json!({"accent_color": "#c2410c", "show_author": true, "show_excerpts": true})
+        json!({"accent_color": "#be185d", "show_author": true, "show_excerpts": true})
     );
 
     // Activated: the row stores the schema (pre-flight F10), and `/` shows the default.
@@ -113,9 +113,9 @@ async fn theme_settings_change_shows_on_page(api: Api) -> Api {
     assert_eq!(row.manifest["settings"], blog_schema(), "{}", row.manifest);
     let mut poller = api.poller().await;
     swap_to_active(&api, &mut poller).await;
-    assert!(api.get("/").await.body.contains("--accent:#c2410c"));
+    assert!(api.get("/").await.body.contains("--accent:#be185d"));
     // Cached now: the second view is a hit and still shows the default.
-    assert!(api.get("/").await.body.contains("--accent:#c2410c"));
+    assert!(api.get("/").await.body.contains("--accent:#be185d"));
 
     // PATCH: one `options.changed` naming the dependency key every page records; after
     // one poll `/` shows the new colour.
@@ -173,9 +173,9 @@ async fn theme_settings_change_shows_on_page(api: Api) -> Api {
 
     // `null` resets to the default.
     let r = patch(&mut c, &api, BLOG_SETTINGS, json!({"accent_color": null})).await;
-    assert_eq!(r.json()["values"]["accent_color"], "#c2410c");
+    assert_eq!(r.json()["values"]["accent_color"], "#be185d");
     poller.poll_once().await.unwrap();
-    assert!(api.get("/").await.body.contains("--accent:#c2410c"));
+    assert!(api.get("/").await.body.contains("--accent:#be185d"));
 
     // A row stored before rows carried the schema (M1.5): the schema comes from the
     // row's artifact (pre-flight F22).

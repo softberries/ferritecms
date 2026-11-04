@@ -530,7 +530,7 @@ async fn theme_activate_and_settings(api: Api) -> Api {
         ["accent_color", "show_author", "show_excerpts"],
         "{r}"
     );
-    assert_eq!(ok(&r)["values"]["accent_color"], "#c2410c", "{r}");
+    assert_eq!(ok(&r)["values"]["accent_color"], "#be185d", "{r}");
 
     let r = tool(
         &api,
@@ -568,7 +568,7 @@ async fn theme_activate_and_settings(api: Api) -> Api {
         json!({"name": "blog", "changes": {"accent_color": null}}),
     )
     .await;
-    assert_eq!(ok(&r)["values"]["accent_color"], "#c2410c", "reset: {r}");
+    assert_eq!(ok(&r)["values"]["accent_color"], "#be185d", "reset: {r}");
     let r = tool(
         &api,
         &t.0,
