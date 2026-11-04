@@ -634,8 +634,8 @@ M6-2 follow-ups (`docs/superpowers/m6-2-exit.md`):
   and the key in `registry/publishers.json` (2026-11-04; key ids `B1AE6DB7CD1D85B2` plugins,
   `B1D92B9335F48FD5` registry; the secret files are kept outside the repository;
   `m6-2-exit.md` "Keys created").
-- [ ] Store the four secrets in the `release` environment (`PLUGINS_SECRET_KEY`,
-  `PLUGINS_PASSWORD`, `REGISTRY_SECRET_KEY`, `REGISTRY_PASSWORD`).
+- [x] Store the four secrets in the `release` environment (`PLUGINS_SECRET_KEY`,
+  `PLUGINS_PASSWORD`, `REGISTRY_SECRET_KEY`, `REGISTRY_PASSWORD`; 2026-11-04).
 - [ ] The first signed release and the first Pages publication of the index (the next `v*`
   tag after 0.3.0; serial 1).
 - [ ] Content meta under `plugin.<name>.*` is not erased with a plugin's data, so a new owner

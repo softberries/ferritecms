@@ -200,9 +200,8 @@ The two keys of ruling P5 exist: the `ferritecms.dev` publisher key (key id
 `B1AE6DB7CD1D85B2`, its public line in `registry/publishers.json`) and the registry index key
 (key id `B1D92B9335F48FD5`, `crates/ferrite/registry.pub`), each with its own random
 password. The secret halves and passwords are kept outside the repository by the user (and
-offline copies), and go into the `release` environment as `PLUGINS_SECRET_KEY`,
-`PLUGINS_PASSWORD`, `REGISTRY_SECRET_KEY`, `REGISTRY_PASSWORD` (the maintainer's step; until
-they are set, `plugins-sign` packs the plugins unsigned with a notice). Builds from this
+offline copies), and are stored in the `release` environment as `PLUGINS_SECRET_KEY`,
+`PLUGINS_PASSWORD`, `REGISTRY_SECRET_KEY`, `REGISTRY_PASSWORD` (2026-11-04). Builds from this
 commit on have the default registry on. `release.yml`'s first-index check (no earlier
 release carries `ferrite-registry-index.json`) no longer depends on a pipeline's status.
 Verified locally with the real keys: `sign-plugins.sh` into a scratch folder,
