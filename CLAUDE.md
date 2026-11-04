@@ -174,8 +174,11 @@ signer), plugin data bound to its publisher (`plugin_owners`), the signed static
 (`[plugins] registry|registry_key|signatures|registry_check`, off-by-default daily check per
 ruling P5), publisher keys and revocation, `ferrite plugin search|install NAME|update|digest|keys|unbind`,
 doctor `plugins.trust`, the admin's Registry tab and Publisher keys; migration
-`0015_plugin_publishers`; the real signing keys are the user's to create (09 §7 "Plugin keys";
-`crates/ferrite/registry.pub` is a placeholder).
+`0015_plugin_publishers`; the real keys exist since 2026-11-04 (09 §7 "Plugin keys": plugins
+key `B1AE6DB7CD1D85B2` in `registry/publishers.json`, registry key `B1D92B9335F48FD5` in
+`crates/ferrite/registry.pub`, so the default registry is on in builds after 0.3.0; the
+secrets live in the `release` environment, and the next `v*` tag publishes the signed
+plugins and the first index).
 M6-1 (multilingual content) is done
 (`m6-1-exit.md`; design 13; migration `0014_locales`): `site.locales` (`{tag, label}`, the
 default first, settled at startup), a locale and a translation group on content items, terms

@@ -159,8 +159,8 @@ With `backend = "s3"`:
 | `registry_check` | `"off"` | `"daily"` checks the registry for updates and revoked keys once a day; otherwise only on demand |
 
 Cluster nodes must use the same `signatures` and `registry` values. The official registry
-needs a key built into the binary; a build without one has it off until `registry_key` is
-set.
+is verified with a key built into the binary (from the releases after 0.3.0); a build
+without one (0.3.0 and older) has it off until `registry_key` is set.
 
 ## [auth]
 

@@ -165,8 +165,9 @@ New in 0.3.0, the editorial platform:
 - Plugin signing: a plugin signed with its publisher's minisign key is verified on install
   and the permission report names the publisher; a plugin's data stays bound to its
   publisher; `ferrite plugin search|install|update` read a signed static registry, which
-  you can host yourself. No official registry is published yet and the example plugins
-  ship unsigned.
+  you can host yourself. Releases after 0.3.0 sign the three example plugins as
+  `ferritecms.dev` and publish them in the official registry, which binaries from those
+  releases use by default (0.3.0 and older have it off).
 - The MCP server lists 70 tools (56 in 0.2.0) and 5 prompts.
 
 From 0.2.0:
