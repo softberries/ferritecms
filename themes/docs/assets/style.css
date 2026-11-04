@@ -696,6 +696,7 @@ pre:focus-visible { outline-offset: 2px; }
 
 @media not (min-width: 60rem) {
   .docs-pages-toggle:not([open]) + .docs-nav { display: none; }
+  .search-form--compact { flex: 1 1 100%; max-width: none; min-width: 0; }
 }
 
 @media (min-width: 80rem) {
