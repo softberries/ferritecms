@@ -24,9 +24,10 @@ name: Release
 # environment may hold PLUGINS_SECRET_KEY / PLUGINS_PASSWORD (the publisher key of
 # ferritecms.dev, whose public half is registry/publishers.json's key) and
 # REGISTRY_SECRET_KEY / REGISTRY_PASSWORD (the index key, whose public half is
-# crates/ferrite/registry.pub). While they are absent, `plugins-sign` packs the plugins
-# unsigned, as before M6-2, and publishes no index (a notice says so); the dry run signs
-# with throwaway keys either way. Creating the keys: docs/design/09-operations.md,
+# crates/ferrite/registry.pub). Both keys exist (2026-11-04; plugins key id
+# B1AE6DB7CD1D85B2, registry key id B1D92B9335F48FD5). If the secrets are absent,
+# `plugins-sign` packs the plugins unsigned and publishes no index (a notice says so); the
+# dry run signs with throwaway keys either way. The keys: docs/design/09-operations.md,
 # "Plugin keys".
 #
 # Every action is pinned by its commit SHA (the comment names the version).
@@ -313,12 +314,16 @@ jobs:
             .github/scripts/verify-file.sh crates/ferrite/registry.pub "$RUNNER_TEMP/previous.json"
             previous="$RUNNER_TEMP/previous.json"
           elif [ "$code" = 404 ]; then
-            if gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
-                gh release view "$tag" --json assets --jq '.assets[].name' | grep -qx ferrite-registry-index.json && echo "$tag"
-              done | grep -q .; then
-              echo "::error::the published index is missing, but an earlier release has one: refusing to start again at serial 1"
-              exit 1
-            fi
+            # The first index (serial 1) only when no earlier release carries one; a
+            # failing `gh` fails the step (an assignment, not a pipeline).
+            tags=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
+            for tag in $tags; do
+              assets=$(gh release view "$tag" --json assets --jq '.assets[].name')
+              if grep -qx ferrite-registry-index.json <<< "$assets"; then
+                echo "::error::the published index is missing, but $tag has one: refusing to start again at serial 1"
+                exit 1
+              fi
+            done
             echo "::notice::no published index yet: starting at serial 1"
           else
             echo "::error::fetching $base answered $code"

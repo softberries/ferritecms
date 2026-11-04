@@ -1,7 +1,8 @@
 //! Which plugin registry this site uses (M6-2, design 14 §5.2): the configured URL with
-//! its key, or the default URL with the key embedded from `crates/ferrite/registry.pub`.
-//! Until the release owner creates that key the file is a placeholder, and a site on the
-//! default URL has no registry (`config check` and doctor say so).
+//! its key, or the default URL with the key embedded from `crates/ferrite/registry.pub`
+//! (the registry index key, key id B1D92B9335F48FD5). A build whose file holds no key (a
+//! comment-only placeholder, as before the key existed) has the default registry off
+//! (`config check` and doctor say so).
 
 use anyhow::{Context, Result, bail};
 use ferrite_config::{DEFAULT_REGISTRY_URL, PluginTrustConfig};
@@ -89,10 +90,14 @@ mod tests {
             .unwrap()
     }
 
+    /// The embedded file holds the registry index key, so the default registry is on.
     #[test]
-    fn embedded_file_parses() {
-        // A placeholder or a real key; never malformed.
-        embedded_key().unwrap();
+    fn embedded_file_holds_the_registry_key() {
+        let key = embedded_key().unwrap().unwrap();
+        assert_eq!(key.key_id.to_string(), "B1D92B9335F48FD5");
+        let t = configured(&PluginTrustConfig::default()).unwrap().unwrap();
+        assert_eq!(t.url.as_str(), DEFAULT_REGISTRY_URL);
+        assert_eq!(t.key.key_id, key.key_id);
         assert!(PublisherKey::parse(PLACEHOLDER).unwrap().is_none());
     }
 
