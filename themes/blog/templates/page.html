@@ -4,6 +4,10 @@
 <article class="entry entry--page">
   <header class="entry-header wrap wrap--prose">
     <h1 class="entry-title">{{ post.title }}</h1>
+    {#- A written excerpt only: one core made from the body starts like the body. #}
+    {%- if post.excerpt and (post.excerpt | excerpt(6)) != (post.body | excerpt(6)) %}
+    <p class="entry-standfirst">{{ post.excerpt }}</p>
+    {%- endif %}
   </header>
   {% include "partials/hero.html" %}
   <div class="entry-content prose wrap wrap--prose">

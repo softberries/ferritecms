@@ -96,9 +96,13 @@ fetches the registry, the **Registry** tab lists its plugins, and an installed p
 a newer version shows an **Update** chip.
 
 The site fetches the registry only when asked, unless `registry_check = "daily"` is set
-(see [Configuration](../04-operations/01-configuration.md)). The official registry is not
-published yet; until it is, set `registry` and `registry_key` to use another one, or
-`registry = ""` to turn it off.
+(see [Configuration](../04-operations/01-configuration.md)). The default is the official
+registry, `https://softberries.github.io/ferritecms/registry/v1/index.json`, published by
+every release after 0.3.0: it lists the three example plugins, signed by the publisher
+`ferritecms.dev`, so `ferrite plugin install seo` installs them as a verified publisher.
+The binary carries the registry's key, so nothing needs configuring; 0.3.0 and older
+binaries have no key and the default registry off. Set `registry` and `registry_key` to
+use another registry, or `registry = ""` to turn it off.
 
 ## Publisher keys
 

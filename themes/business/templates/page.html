@@ -6,7 +6,7 @@
 <article class="entry entry--page">
   <header class="entry-header wrap">
     <h1 class="entry-title">{{ post.title }}</h1>
-    {%- if post.excerpt %}
+    {%- if post.excerpt and (post.excerpt | excerpt(6)) != (post.body | excerpt(6)) %}
     <p class="entry-lede">{{ post.excerpt }}</p>
     {%- endif %}
   </header>

@@ -14,9 +14,10 @@
 <meta property="og:type" content="article">
 <link rel="canonical" href="http://127.0.0.1:8080/about/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;newsreader.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
-<style>:root{--accent:#c2410c}</style>
+<style>:root{--accent:#be185d}</style>
 
 </head>
 <body class="is-page">
@@ -64,6 +65,10 @@
 </main>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">FerriteCMS Demo</p>
+      <p class="site-footer__description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
     
     
     <nav class="footer-nav" aria-label="Footer">
@@ -80,7 +85,7 @@
 </ul>
     </nav>
     
-    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+    <p class="site-credit">Powered by FerriteCMS</p>
   </div>
 </footer>
 

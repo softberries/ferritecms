@@ -1,0 +1,32 @@
+{#- The newest post of the front page's first page, set large. Expects `p` (an item).
+    The image is decorative (alt=""): the linked title names the same post. -#}
+{%- set show_excerpts = site.settings.show_excerpts is not defined or site.settings.show_excerpts -%}
+{%- set show_author = site.settings.show_author is not defined or site.settings.show_author -%}
+{%- set cat = namespace(term=none) -%}
+{%- for t in p.terms or [] %}{% if t.taxonomy == "category" and not cat.term %}{% set cat.term = t %}{% endif %}{% endfor -%}
+{%- set img = image(p.featured, "hero") %}
+<article class="lead{% if img %} lead--media{% endif %}">
+  {%- if img %}
+  <div class="lead__media">
+    <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 72rem) 44rem, (min-width: 48rem) 60vw, 100vw"{% endif %} decoding="async" fetchpriority="high">
+  </div>
+  {%- endif %}
+  <div class="lead__body">
+    {%- if cat.term %}
+    <p class="lead__kicker"><a href="{{ cat.term.url }}">{{ cat.term.name }}</a></p>
+    {%- endif %}
+    <h2 class="lead__title"><a href="{{ p.url }}">{{ p.title }}</a></h2>
+    {%- if show_excerpts %}
+    {%- set summary = p.excerpt or (p.body | excerpt(40)) %}
+    {%- if summary %}
+    <p class="lead__excerpt">{{ summary }}</p>
+    {%- endif %}
+    {%- endif %}
+    {%- if p.date or (show_author and p.author) %}
+    <p class="byline">
+      {%- if show_author and p.author %}<span class="avatar" aria-hidden="true">{{ p.author.display_name[:1] | upper }}</span><span class="byline__author">{{ p.author.display_name }}</span>{% endif %}
+      {%- if p.date %}<time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time>{% endif %}
+    </p>
+    {%- endif %}
+  </div>
+</article>

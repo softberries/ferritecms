@@ -15,6 +15,7 @@
 <meta property="og:image" content="http://127.0.0.1:8080/_media/<hash>/larkspur-hero.png">
 <link rel="canonical" href="http://127.0.0.1:8080/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
 <style>:root{--accent:#0f766e}</style>
@@ -24,7 +25,7 @@
 <a class="skip-link" href="#content">Skip to content</a>
 <header class="site-header">
   <div class="wrap site-header__inner">
-    <a class="site-title" href="/" rel="home">Larkspur Studio</a>
+    <a class="site-title" href="/" rel="home"><span class="site-title__mark" aria-hidden="true"></span>Larkspur Studio</a>
     <nav class="site-nav" aria-label="Primary">
       <ul class="menu" role="list">
   <li class="menu__item">
@@ -48,20 +49,24 @@
 <main id="content" class="site-main" tabindex="-1">
 
 <section class="hero hero--image">
-  <div class="hero__media">
-    <img src="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-hero.png" alt="A deep teal to violet gradient" width="1600" height="700" srcset="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-hero.png 1600w" sizes="100vw" decoding="async" fetchpriority="high">
-  </div>
   <div class="wrap hero__wrap">
-    <div class="hero__panel">
-      <h1 class="hero__title">Gardens that grow with you</h1>
+    <h1 class="hero__title">Gardens that grow with you</h1>
+    <div class="hero__aside">
       <p class="hero__lede">We design, plant and look after small gardens, courtyards and roof terraces across the city.</p>
       
-<a class="button button--light hero__cta" href="&#x2f;contact&#x2f;">Get in touch</a>
+<a class="button hero__cta" href="&#x2f;contact&#x2f;">Get in touch</a>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="hero__media">
+      <img src="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-hero.png" alt="A deep teal to violet gradient" width="1600" height="700" srcset="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-hero.png 1600w" sizes="(min-width: 80rem) 76rem, 100vw" decoding="async" fetchpriority="high">
     </div>
   </div>
 </section>
-<div class="front-intro prose wrap">
-  <p>Larkspur Studio is four garden designers. We take on a handful of projects each season, so every garden gets our full attention from the first sketch to the first flowers.</p>
+<div class="front-intro wrap">
+  <div class="front-intro__body prose">
+    <p>Larkspur Studio is four garden designers. We take on a handful of projects each season, so every garden gets our full attention from the first sketch to the first flowers.</p>
+  </div>
 </div><section class="features" aria-label="Gardens that grow with you: pages">
   <div class="wrap">
     <ul class="features__list" role="list">
@@ -69,22 +74,31 @@
         <div class="feature__media">
           <img src="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-garden-design.png" alt="" width="640" height="400" srcset="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-garden-design.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-garden-design.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-garden-design.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
         </div>
-        <h2 class="feature__title"><a href="&#x2f;home&#x2f;garden-design&#x2f;">Garden design</a></h2>
-        <p class="feature__excerpt">Full garden design, from the first site survey to planting day.</p>
+        <div class="feature__body">
+          <h2 class="feature__title"><a href="&#x2f;home&#x2f;garden-design&#x2f;">Garden design</a></h2>
+          <p class="feature__excerpt">Full garden design, from the first site survey to planting day.</p>
+          <span class="feature__go" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span>
+        </div>
       </li>
       <li class="feature">
         <div class="feature__media">
           <img src="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-consulting.png" alt="" width="640" height="400" srcset="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-consulting.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-consulting.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-consulting.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
         </div>
-        <h2 class="feature__title"><a href="&#x2f;home&#x2f;consulting&#x2f;">Consulting</a></h2>
-        <p class="feature__excerpt">A two-hour visit with a designer and a written plan you can follow yourself.</p>
+        <div class="feature__body">
+          <h2 class="feature__title"><a href="&#x2f;home&#x2f;consulting&#x2f;">Consulting</a></h2>
+          <p class="feature__excerpt">A two-hour visit with a designer and a written plan you can follow yourself.</p>
+          <span class="feature__go" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span>
+        </div>
       </li>
       <li class="feature">
         <div class="feature__media">
           <img src="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-aftercare.png" alt="" width="640" height="400" srcset="&#x2f;_media&#x2f;<hash>&#x2f;larkspur-aftercare.png 640w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-aftercare.png 768w, &#x2f;_media&#x2f;<hash>&#x2f;larkspur-aftercare.png 1280w" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw" loading="lazy" decoding="async">
         </div>
-        <h2 class="feature__title"><a href="&#x2f;home&#x2f;aftercare&#x2f;">Aftercare</a></h2>
-        <p class="feature__excerpt">Seasonal care visits that keep a new garden growing the way it was planned.</p>
+        <div class="feature__body">
+          <h2 class="feature__title"><a href="&#x2f;home&#x2f;aftercare&#x2f;">Aftercare</a></h2>
+          <p class="feature__excerpt">Seasonal care visits that keep a new garden growing the way it was planned.</p>
+          <span class="feature__go" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span>
+        </div>
       </li>
     </ul>
   </div>
@@ -97,25 +111,41 @@
     </div>
     <ul class="news__list" role="list">
       <li class="news__item">
+        <article class="news__card">
         <p class="news__date"><time datetime="<date>"><date></time></p>
         <h3 class="news__title"><a href="&#x2f;spring-consultation-dates&#x2f;">Spring consultation dates are open</a></h3>
         <p class="news__excerpt">We have twelve consultation slots in March and April. Book early if your garden needs planting before summer.</p>
+        </article>
       </li>
       <li class="news__item">
+        <article class="news__card">
         <p class="news__date"><time datetime="<date>"><date></time></p>
         <h3 class="news__title"><a href="&#x2f;planting-for-shade&#x2f;">Planting for shade in north-facing courtyards</a></h3>
         <p class="news__excerpt">Ferns, hellebores and Japanese forest grass do well where the sun never reaches. Here is what we plant and why.</p>
+        </article>
       </li>
       <li class="news__item">
+        <article class="news__card">
         <p class="news__date"><time datetime="<date>"><date></time></p>
         <h3 class="news__title"><a href="&#x2f;what-a-roof-terrace-can-carry&#x2f;">What a roof terrace can carry</a></h3>
         <p class="news__excerpt">Wet soil is heavy. Before we plan a roof garden we ask a structural engineer, and so should you.</p>
+        </article>
       </li>
     </ul>
   </div>
 </section>
 
 </main>
+
+<section class="cta-band">
+  <div class="wrap">
+    <div class="cta-band__inner">
+      <p class="cta-band__text">Garden design, planting and aftercare for small city spaces.</p>
+      
+<a class="button button--on-dark cta-band__button" href="&#x2f;contact&#x2f;">Get in touch</a>
+    </div>
+  </div>
+</section>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
     <div class="site-footer__brand">

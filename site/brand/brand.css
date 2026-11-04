@@ -427,9 +427,12 @@ kbd {
   text-wrap: balance;
 }
 
+/* The docs theme's lead: the page's written excerpt under the title. */
+.docs-lead { margin: -0.5rem 0 1.75rem; color: var(--muted); font-size: 1.1875rem; line-height: 1.55; text-wrap: pretty; }
 .prose { font-size: 1rem; color: var(--ink-2); }
 .prose > :first-child { margin-top: 0; }
 .prose > p:first-child { font-size: 1.125rem; line-height: 1.65; color: var(--muted); }
+.docs-lead + .prose > p:first-child { font-size: 1rem; line-height: inherit; color: inherit; }
 .prose p, .prose ul, .prose ol, .prose table, .prose blockquote, .prose figure, .prose .code-block, .prose pre { margin: 0 0 1.25rem; }
 .prose h2, .prose h3, .prose h4 { color: var(--ink); letter-spacing: -0.02em; text-wrap: balance; }
 .prose h2 { margin: 3rem 0 0.9rem; font-size: 1.5rem; font-weight: 700; line-height: 1.25; }

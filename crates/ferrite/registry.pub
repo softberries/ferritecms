@@ -1,5 +1,2 @@
-# FerriteCMS plugin registry index public key (minisign), embedded by `ferrite` for the
-# default registry (M6-2, design 14 §5.2). This is a placeholder and holds no key: a binary
-# built from it has the default registry off; any registry works with an explicit
-# `[plugins] registry_key`. The release owner replaces this with the public half of the
-# REGISTRY_SECRET_KEY (docs/design/09-operations.md, "Plugin keys").
+untrusted comment: minisign public key B1D92B9335F48FD5
+RWTVj/Q1kyvZsU2IcmgTh4yXFTGNUf+s7aznXFF984Cog2L4cDrBrp2K

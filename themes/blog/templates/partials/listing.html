@@ -1,11 +1,17 @@
-{#- The cards of `posts` plus pagination, or `empty` (a message) when there are none.
+{#- The cards of `posts` plus pagination, or `empty` (a message) when there are none. With
+    `lead` set, the first item of the first page is shown large above the grid.
     `role="list"` keeps list semantics in Safari, which drops them with `list-style: none`. -#}
 {%- if posts and posts.items %}
+{%- set first = lead and posts.page == 1 %}
+{%- if first %}{% with p = posts.items[0] %}{% include "partials/lead.html" %}{% endwith %}{% endif %}
+{%- set rest = posts.items[1:] if first else posts.items %}
+{%- if rest %}
 <ul class="card-grid" role="list">
-  {%- for p in posts.items %}
+  {%- for p in rest %}
   <li>{% include "partials/card.html" %}</li>
   {%- endfor %}
 </ul>
+{%- endif %}
 {% include "partials/pagination.html" %}
 {%- else %}
 <p class="empty">{{ empty or "Nothing has been published here yet." }}</p>

@@ -9,6 +9,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 {{ head() }}
+<link rel="preload" href="{{ asset('fonts/inter.woff2') }}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{ asset('style.css') }}">
 <script src="{{ asset('docs.js') }}" defer></script>
 {% include "partials/accent.html" %}
@@ -18,7 +19,7 @@
 <a class="skip-link" href="#content">{{ t("Skip to content") }}</a>
 <header class="site-header">
   <div class="site-header__inner">
-    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home">{{ site.title or "Home" }}</a>
+    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home"><span class="site-title__mark" aria-hidden="true">{{ (site.title or "Home")[:1] | upper }}</span><span class="site-title__text">{{ site.title or "Home" }}</span></a>
     {%- set primary = menu("primary") %}
     {%- if primary and primary.items %}
     <nav class="site-nav" aria-label="Primary">

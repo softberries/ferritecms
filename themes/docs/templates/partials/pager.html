@@ -4,13 +4,13 @@
 <nav class="docs-pager" aria-label="Previous and next page">
   {%- if tree.prev %}
   <a class="docs-pager__link docs-pager__link--prev" rel="prev" href="{{ tree.prev.url }}">
-    <span class="docs-pager__label">Previous</span>
+    <span class="docs-pager__label"><span aria-hidden="true">← </span>Previous</span>
     <span class="docs-pager__title">{{ tree.prev.title }}</span>
   </a>
   {%- endif %}
   {%- if tree.next %}
   <a class="docs-pager__link docs-pager__link--next" rel="next" href="{{ tree.next.url }}">
-    <span class="docs-pager__label">Next</span>
+    <span class="docs-pager__label">Next<span aria-hidden="true"> →</span></span>
     <span class="docs-pager__title">{{ tree.next.title }}</span>
   </a>
   {%- endif %}

@@ -1,13 +1,25 @@
 // FerriteCMS docs theme: progressive enhancement only (M4-3b P59). Every page works
-// without it. Adds a "link to section" anchor after each heading with an id and a
-// Copy button to code blocks. No network requests. Running it twice adds nothing.
+// without it. Adds a "link to section" anchor after each heading with an id, a Copy
+// button and the language to code blocks, marks the current "On this page" entry, and
+// focuses the header search on "/". No network requests. Running it twice adds nothing.
 (() => {
   "use strict";
   const root = document.documentElement;
   if (root.dataset.docsJs) return;
   root.dataset.docsJs = "1";
+  const search = document.getElementById("search");
+  if (search) {
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      e.preventDefault();
+      search.focus();
+    });
+  }
   const body = document.querySelector(".prose");
   if (!body) return;
+  const heads = [];
   for (const h of body.querySelectorAll("h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]")) {
     // The anchor follows the heading (not inside it), so the heading's accessible name
     // stays its text; the row positions it at the heading's end.
@@ -21,8 +33,24 @@
     a.setAttribute("aria-label", "Link to section: " + h.textContent.trim());
     a.textContent = "#";
     row.append(h, a);
+    heads.push(h);
   }
-  if (!navigator.clipboard || !window.isSecureContext) return;
+  const toc = document.querySelectorAll(".docs-toc a");
+  if (toc.length && "IntersectionObserver" in window) {
+    const links = new Map([...toc].map((a) => [a.hash.slice(1), a]));
+    const seen = new Set();
+    const mark = () => {
+      const top = heads.find((h) => seen.has(h) && links.has(h.id));
+      if (!top) return;
+      for (const a of toc) a.classList.toggle("is-active", a === links.get(top.id));
+    };
+    const io = new IntersectionObserver((es) => {
+      for (const e of es) e.isIntersecting ? seen.add(e.target) : seen.delete(e.target);
+      mark();
+    }, { rootMargin: "0px 0px -65% 0px" });
+    for (const h of heads) io.observe(h);
+  }
+  const copy = navigator.clipboard && window.isSecureContext;
   const status = document.createElement("p");
   status.className = "visually-hidden";
   status.setAttribute("role", "status");
@@ -33,6 +61,9 @@
     wrap.className = "code-block";
     pre.before(wrap);
     wrap.append(pre);
+    const lang = /language-([\w+#-]+)/.exec(pre.firstElementChild?.className || "");
+    if (lang && lang[1] !== "text") wrap.dataset.lang = lang[1];
+    if (!copy) continue;
     const b = document.createElement("button");
     b.type = "button";
     b.className = "copy-button";

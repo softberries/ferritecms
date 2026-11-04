@@ -5,7 +5,7 @@ version     = "0.1.0"
 author      = "FerriteCMS"
 license     = "AGPL-3.0-only"
 homepage    = "https://github.com/softberries/ferritecms"
-description = "A clean, readable blog theme with light and dark modes."
+description = "An editorial blog: a lead story, image cards, long-form articles with a table of contents, comments and related posts. Light and dark modes."
 
 [menus]
 primary = "Primary navigation"
@@ -19,7 +19,7 @@ hero = { width = 1280, height = 640, crop = true }
 # Link and button text use the accent mixed with black (light scheme) or white (dark
 # scheme); a mid-tone accent keeps that text above 4.5:1 in both, a very pale or very
 # dark one may not.
-accent_color  = { type = "color", default = "#c2410c", label = "Accent colour (mid-tones keep links readable in light and dark mode)" }
+accent_color  = { type = "color", default = "#be185d", label = "Accent colour (mid-tones keep links readable in light and dark mode)" }
 show_author   = { type = "bool", default = true, label = "Show post authors" }
 show_excerpts = { type = "bool", default = true, label = "Show excerpts in listings" }
 

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 {{ head() }}
+<link rel="preload" href="{{ asset('fonts/bricolage-grotesque.woff2') }}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{ asset('style.css') }}">
 {% include "partials/accent.html" %}
 {% block head %}{% endblock %}
@@ -13,7 +14,7 @@
 <a class="skip-link" href="#content">{{ t("Skip to content") }}</a>
 <header class="site-header">
   <div class="wrap site-header__inner">
-    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home">{{ site.title or "Home" }}</a>
+    <a class="site-title" href="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}" rel="home"><span class="site-title__mark" aria-hidden="true"></span>{{ site.title or "Home" }}</a>
     {%- set primary = menu("primary") %}
     {%- if primary and primary.items %}
     <nav class="site-nav" aria-label="Primary">
@@ -33,6 +34,11 @@
 <main id="content" class="site-main" tabindex="-1">
 {% block content %}{% endblock %}
 </main>
+{%- block cta_band %}
+{%- if not (request.status == 200 and request.path and request.path == site.settings.cta_url) %}
+{% include "partials/cta-band.html" %}
+{%- endif %}
+{%- endblock %}
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
     <div class="site-footer__brand">

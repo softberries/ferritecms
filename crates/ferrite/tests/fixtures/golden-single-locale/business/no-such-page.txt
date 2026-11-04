@@ -9,6 +9,7 @@
 <title>Page not found – Larkspur Studio</title>
 <meta name="robots" content="noindex">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
 <style>:root{--accent:#0f766e}</style>
@@ -18,7 +19,7 @@
 <a class="skip-link" href="#content">Skip to content</a>
 <header class="site-header">
   <div class="wrap site-header__inner">
-    <a class="site-title" href="/" rel="home">Larkspur Studio</a>
+    <a class="site-title" href="/" rel="home"><span class="site-title__mark" aria-hidden="true"></span>Larkspur Studio</a>
     <nav class="site-nav" aria-label="Primary">
       <ul class="menu" role="list">
   <li class="menu__item">
@@ -56,6 +57,16 @@
 </div>
 
 </main>
+
+<section class="cta-band">
+  <div class="wrap">
+    <div class="cta-band__inner">
+      <p class="cta-band__text">Garden design, planting and aftercare for small city spaces.</p>
+      
+<a class="button button--on-dark cta-band__button" href="&#x2f;contact&#x2f;">Get in touch</a>
+    </div>
+  </div>
+</section>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
     <div class="site-footer__brand">

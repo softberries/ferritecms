@@ -213,8 +213,8 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         ("db.schema", "ok"),
         ("db.identity", "ok"),
         ("webhooks.endpoints", "ok"),
-        // M6-2: no plugins, and this build has no key for the default registry.
-        ("plugins.trust", "info"),
+        // M6-2: no plugins; the default registry (embedded key) is not checked yet.
+        ("plugins.trust", "ok"),
         ("upgrade.record", "ok"),
         // The local probe is not a network check: it runs offline too.
         ("media.store", "ok"),
@@ -238,12 +238,15 @@ fn fresh_site_offline_has_no_errors_and_the_pinned_statuses() {
         assert_eq!(out.status(id), *status, "{id}\n{}", out.stdout);
     }
     assert_eq!(expected.len(), ORDER.len());
+    // plugins.trust's own "registry not checked yet" is a state, not an unwired check.
     assert!(
-        !out.stdout.contains("not checked yet"),
+        !out.stdout
+            .lines()
+            .any(|l| l.contains("not checked yet") && !l.contains("plugins.trust")),
         "every check is wired: {}",
         out.stdout
     );
-    assert_eq!(out.summary, "doctor: 12 ok, 0 warn, 0 error, 6 skip");
+    assert_eq!(out.summary, "doctor: 13 ok, 0 warn, 0 error, 6 skip");
     // The lock is not held, and SQLite has no clock or cluster to compare.
     assert!(
         out.detail("db.lock_state").contains("no node"),
@@ -2359,6 +2362,7 @@ fn append_config(dir: &Path, text: &str) {
 fn trust_info_registry_off() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_sqlite(tmp.path());
+    append_config(tmp.path(), "registry = \"\"\n");
     let out = offline(tmp.path());
     assert_eq!(out.status("plugins.trust"), "info", "{}", out.stdout);
     assert!(
@@ -2367,6 +2371,19 @@ fn trust_info_registry_off() {
         out.stdout
     );
     assert!(out.detail("plugins.trust").contains("0 plugins"));
+}
+
+/// The default registry is on with the embedded key (`crates/ferrite/registry.pub`); doctor
+/// works offline, so it only says the registry was not checked yet.
+#[test]
+fn trust_default_registry_not_checked_yet() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_sqlite(tmp.path());
+    let out = offline(tmp.path());
+    assert_eq!(out.status("plugins.trust"), "ok", "{}", out.stdout);
+    let detail = out.detail("plugins.trust");
+    assert!(detail.contains("0 plugins, 0 verified"), "{detail}");
+    assert!(detail.contains("registry not checked yet"), "{detail}");
 }
 
 #[test]

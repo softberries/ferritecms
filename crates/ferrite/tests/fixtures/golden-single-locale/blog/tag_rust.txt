@@ -14,9 +14,10 @@
 <meta property="og:type" content="website">
 <link rel="canonical" href="http://127.0.0.1:8080/tag/rust/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;newsreader.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 
-<style>:root{--accent:#c2410c}</style>
+<style>:root{--accent:#be185d}</style>
 
 </head>
 <body class="is-archive is-taxonomy">
@@ -61,31 +62,43 @@
   
 <ul class="card-grid" role="list">
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>W</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;guides&#x2f;">Guides</a></p>
     <h2 class="card__title"><a href="&#x2f;writing-your-first-plugin&#x2f;">Writing your first plugin</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Plugins are WebAssembly components. They get only the capabilities their manifest declares. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>W</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;why-webassembly-sandboxes&#x2f;">Why WebAssembly sandboxes</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Every hook call is bounded by memory, fuel and a deadline, so a failing plugin never breaks a page. What you get A single binary and a single data folder…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>C</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;caching-pages-safely&#x2f;">Caching pages safely</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">Every cached page records what it depends on, and every write says what it changed. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
   <li><article class="card">
+  <div class="card__media card__media--plate" aria-hidden="true"><span>R</span></div>
   <div class="card__body">
+    <p class="card__kicker"><a href="&#x2f;category&#x2f;news&#x2f;">News</a></p>
     <h2 class="card__title"><a href="&#x2f;release-notes-0-1&#x2f;">Release notes 0.1</a></h2>
-    <p class="card__meta"><time datetime="<date>"><date></time></p>
     <p class="card__excerpt">The first milestone: storage, media, the plugin host, themes and the public site. What you get A single binary and a single data folder Plugins in a…</p>
+    <p class="card__meta"><span class="card__author">Site Admin</span><time datetime="<date>"><date></time>
+    </p>
   </div>
 </article></li>
 </ul>
@@ -95,6 +108,10 @@
 </main>
 <footer class="site-footer">
   <div class="wrap site-footer__inner">
+    <div class="site-footer__brand">
+      <p class="site-footer__title">FerriteCMS Demo</p>
+      <p class="site-footer__description">A demo site: one Rust binary, sandboxed WebAssembly plugins, themes without code.</p>
+    </div>
     
     
     <nav class="footer-nav" aria-label="Footer">
@@ -111,7 +128,7 @@
 </ul>
     </nav>
     
-    <p class="site-credit">FerriteCMS Demo · Powered by FerriteCMS</p>
+    <p class="site-credit">Powered by FerriteCMS</p>
   </div>
 </footer>
 

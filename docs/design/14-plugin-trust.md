@@ -384,10 +384,10 @@ registry_check = "off"  # off (default) | daily (ruling P5, D18)
 ```
 
 - The default URL uses the key embedded from `crates/ferrite/registry.pub` (like
-  `release.pub`). Until the user creates that key the file is a comment-only placeholder:
-  a binary built from it has the default registry off (`config check` and doctor say so),
-  and any registry works with an explicit `registry_key`, which is what tests do with a
-  throwaway key (D16).
+  `release.pub`): key id `B1D92B9335F48FD5` since 2026-11-04. Before that the file was a
+  comment-only placeholder (0.3.0 and older): a binary built from one has the default
+  registry off (`config check` and doctor say so). Any registry works with an explicit
+  `registry_key`, which is what tests do with a throwaway key (D16).
 - `file:///abs/path/index.json` is accepted for air-gapped sites and tests: relative file
   URLs resolve inside the index's folder and may not leave it (canonicalised, then a
   prefix check); absolute URLs are refused in a file registry.
@@ -628,9 +628,11 @@ D19), in Chromium on both backends; the axe check of the new screens.
 ## 11. Publishing the official plugins (CI)
 
 Keys (made once by the user, like the release key; secrets of the `release` environment).
-Ruling P5: until they exist, `crates/ferrite/registry.pub` is a comment-only placeholder,
-`registry/publishers.json` lists no key, and `plugins-sign` packs the plugins unsigned and
-publishes no index (a notice says so); every test uses throwaway keys. As built, the
+Ruling P5: until they existed (0.3.0 and older), `crates/ferrite/registry.pub` was a
+comment-only placeholder, `registry/publishers.json` listed no key, and `plugins-sign`
+packed the plugins unsigned and published no index (a notice says so; still the case while
+the secrets are missing). Both keys exist since 2026-11-04 (plugins `B1AE6DB7CD1D85B2`,
+registry `B1D92B9335F48FD5`); every test still uses throwaway keys. As built, the
 signing steps are `.github/scripts/sign-plugins.sh` (payload, `minisign -S`, the tarball and
 per-plugin assets through `package-plugins.sh` with `SIGNATURES_DIR` and `ASSETS=1`, the
 index through `registry-index.py`, then every signature verified with

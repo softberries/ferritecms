@@ -193,3 +193,20 @@ Listed in the ROADMAP under M6-2: create the keys and run the first signed relea
 `plugin.<name>.*` content meta with a plugin's data (design 14 §12, P5: Later); record a
 failed first registry fetch; design 14 §14 (third-party submissions, signed themes,
 transparency log, index expiry).
+
+## Keys created (2026-11-04)
+
+The two keys of ruling P5 exist: the `ferritecms.dev` publisher key (key id
+`B1AE6DB7CD1D85B2`, its public line in `registry/publishers.json`) and the registry index key
+(key id `B1D92B9335F48FD5`, `crates/ferrite/registry.pub`), each with its own random
+password. The secret halves and passwords are kept outside the repository by the user (and
+offline copies), and are stored in the `release` environment as `PLUGINS_SECRET_KEY`,
+`PLUGINS_PASSWORD`, `REGISTRY_SECRET_KEY`, `REGISTRY_PASSWORD` (2026-11-04). Builds from this
+commit on have the default registry on. `release.yml`'s first-index check (no earlier
+release carries `ferrite-registry-index.json`) no longer depends on a pipeline's status.
+Verified locally with the real keys: `sign-plugins.sh` into a scratch folder,
+`verify-file.sh` against the committed `registry.pub`, and a `file://` copy of the index
+searched and installed (`seo`, verified publisher `ferritecms.dev`) by a build using only the
+embedded key. Not verified until the next `v*` tag: the publishing `release.yml` run with
+these secrets, the Pages placement and `gh workflow run pages.yml`, and an HTTPS fetch of
+`https://softberries.github.io/ferritecms/registry/v1/index.json`.

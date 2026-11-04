@@ -112,8 +112,11 @@ Put the base64 line of `plugins.pub` (its second line) into `registry/publishers
 the `keys` of `ferritecms.dev`, and commit both files. Store `plugins.key` and its password
 as `PLUGINS_SECRET_KEY` / `PLUGINS_PASSWORD`, and `registry.key` and its password as
 `REGISTRY_SECRET_KEY` / `REGISTRY_PASSWORD`, in the environment `release`; keep offline
-copies. Until all of this exists the binaries have the default registry off, and
-`plugins-sign` packs the plugins unsigned and publishes no index (a notice in the run).
+copies. Done on 2026-11-04: plugins key id `B1AE6DB7CD1D85B2`, registry key id
+`B1D92B9335F48FD5` (0.3.0 and older binaries embed the placeholder and have the default
+registry off). Without the four secrets `plugins-sign` packs the plugins unsigned and
+publishes no index (a notice in the run). The first publishing run finds no index on
+Pages and no earlier release with `ferrite-registry-index.json`, so it starts at serial 1.
 Releases after it sign the three example plugins and publish the index, which
 `pages.yml` places at `https://softberries.github.io/ferritecms/registry/v1/index.json`.
 Revoking the plugin key: move it to `revoked_keys` in `registry/publishers.json`

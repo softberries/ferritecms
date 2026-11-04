@@ -9,24 +9,28 @@
 {%- if post %}
 {%- set hero = image(post.featured, "hero") %}
 <section class="hero{% if hero %} hero--image{% endif %}">
-  {%- if hero %}
-  <div class="hero__media">
-    <img src="{{ hero.url }}" alt="{{ post.featured.alt or '' }}"{% if hero.width %} width="{{ hero.width }}"{% endif %}{% if hero.height %} height="{{ hero.height }}"{% endif %}{% if hero.srcset %} srcset="{{ hero.srcset }}"{% endif %} sizes="100vw" decoding="async" fetchpriority="high">
-  </div>
-  {%- endif %}
   <div class="wrap hero__wrap">
-    <div class="hero__panel">
-      <h1 class="hero__title">{{ post.title }}</h1>
-      {%- if post.excerpt %}
+    <h1 class="hero__title">{{ post.title }}</h1>
+    <div class="hero__aside">
+      {%- if post.excerpt and (post.excerpt | excerpt(6)) != (post.body | excerpt(6)) %}
       <p class="hero__lede">{{ post.excerpt }}</p>
       {%- endif %}
-      {% with cta_class = "button--light hero__cta" %}{% include "partials/cta.html" %}{% endwith %}
+      {% with cta_class = "hero__cta" %}{% include "partials/cta.html" %}{% endwith %}
     </div>
   </div>
+  {%- if hero %}
+  <div class="wrap">
+    <div class="hero__media">
+      <img src="{{ hero.url }}" alt="{{ post.featured.alt or '' }}"{% if hero.width %} width="{{ hero.width }}"{% endif %}{% if hero.height %} height="{{ hero.height }}"{% endif %}{% if hero.srcset %} srcset="{{ hero.srcset }}"{% endif %} sizes="(min-width: 80rem) 76rem, 100vw" decoding="async" fetchpriority="high">
+    </div>
+  </div>
+  {%- endif %}
 </section>
 {%- if post.body %}
-<div class="front-intro prose wrap">
-  {{ post.body | safe }}
+<div class="front-intro wrap">
+  <div class="front-intro__body prose">
+    {{ post.body | safe }}
+  </div>
 </div>
 {%- endif %}
 {%- set tree = page_tree(post) %}
@@ -43,6 +47,7 @@
     <ul class="news__list" role="list">
       {%- for p in news %}
       <li class="news__item">
+        <article class="news__card">
         {%- if p.date %}
         <p class="news__date"><time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time></p>
         {%- endif %}
@@ -51,6 +56,7 @@
         {%- if summary %}
         <p class="news__excerpt">{{ summary }}</p>
         {%- endif %}
+        </article>
       </li>
       {%- endfor %}
     </ul>

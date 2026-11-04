@@ -14,6 +14,7 @@
 <meta property="og:type" content="article">
 <link rel="canonical" href="http://127.0.0.1:8080/guide/first/">
 
+<link rel="preload" href="&#x2f;_theme&#x2f;<hash>&#x2f;fonts&#x2f;inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="&#x2f;_theme&#x2f;<hash>&#x2f;style.css">
 <script src="&#x2f;_theme&#x2f;<hash>&#x2f;docs.js" defer></script>
 
@@ -23,11 +24,12 @@
 <a class="skip-link" href="#content">Skip to content</a>
 <header class="site-header">
   <div class="site-header__inner">
-    <a class="site-title" href="/" rel="home">My Site</a>
+    <a class="site-title" href="/" rel="home"><span class="site-title__mark" aria-hidden="true">M</span><span class="site-title__text">My Site</span></a>
     <form class="search-form search-form--compact" role="search" aria-label="Site" method="get" action="/">
   <label class="search-form__label visually-hidden" for="search">Search the documentation</label>
   <div class="search-form__row">
-    <input type="search" id="search" name="s" value="" placeholder="Search" autocomplete="off" required>
+    <svg class="search-form__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" id="search" name="s" value="" placeholder="Search" autocomplete="off" required><kbd class="search-form__key" aria-hidden="true">/</kbd>
     <button type="submit">Search</button>
   </div>
 </form>
@@ -70,6 +72,7 @@
   </ol>
 </nav>
   <h1 class="docs-title">First steps</h1>
+  <p class="docs-lead">Install and run.</p>
   <div class="prose">
     <p>Install the binary and run it.</p><h2 id="install">Install</h2><pre tabindex="0"><code class="language-sh">ferrite init --data /tmp/site
 </code></pre><h2 id="run">Run</h2><p>Run <code>ferrite serve</code> and open the site.</p>
@@ -78,11 +81,11 @@
   
 <nav class="docs-pager" aria-label="Previous and next page">
   <a class="docs-pager__link docs-pager__link--prev" rel="prev" href="&#x2f;guide&#x2f;">
-    <span class="docs-pager__label">Previous</span>
+    <span class="docs-pager__label"><span aria-hidden="true">← </span>Previous</span>
     <span class="docs-pager__title">Guide</span>
   </a>
   <a class="docs-pager__link docs-pager__link--next" rel="next" href="&#x2f;guide&#x2f;second&#x2f;">
-    <span class="docs-pager__label">Next</span>
+    <span class="docs-pager__label">Next<span aria-hidden="true"> →</span></span>
     <span class="docs-pager__title">Second steps</span>
   </a>
 </nav>

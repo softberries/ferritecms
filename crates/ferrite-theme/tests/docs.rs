@@ -373,7 +373,8 @@ fn loads_cleanly() {
     }
     let (js, mime) = t.asset("docs.js").unwrap();
     assert_eq!(mime, "text/javascript; charset=utf-8");
-    assert!(js.len() < 3 * 1024, "docs.js is {} bytes", js.len());
+    // Ruling T3: 4 KiB since the language labels, the TOC marker and the "/" key.
+    assert!(js.len() < 4 * 1024, "docs.js is {} bytes", js.len());
     let js = std::str::from_utf8(&js).unwrap();
     for needle in [
         "heading-anchor",

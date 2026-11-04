@@ -241,8 +241,9 @@ fn bundle_file_bytes(tar: &[u8]) -> u64 {
     total
 }
 
-/// P65: the starter themes ship inside every binary, so each stays under 150 000 bytes
-/// of files (no images, no font files). Covers every embedded theme by name.
+/// P65, as ruling T1 amends it: the starter themes ship inside every binary, so each
+/// stays under 512 KiB of files (no images; latin-subset woff2 fonts allowed). Covers
+/// every embedded theme by name.
 #[test]
 fn embedded_themes_stay_small() {
     let names = Theme::embedded_names();
@@ -251,6 +252,6 @@ fn embedded_themes_stay_small() {
         let bundle = ferrite_theme::pack_embedded(&name).unwrap();
         let bytes = bundle_file_bytes(&bundle);
         assert!(bytes > 0, "{name}");
-        assert!(bytes < 150_000, "theme {name} embeds {bytes} bytes");
+        assert!(bytes < 512 * 1024, "theme {name} embeds {bytes} bytes");
     }
 }
