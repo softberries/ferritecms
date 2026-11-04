@@ -1,0 +1,15 @@
+{#- The closing call to action above the footer: the site's tagline (or title) and the
+    CTA button from the settings. Nothing when the button would not show (cta.html's
+    rules). -#}
+{%- set cta_class = "button--on-dark cta-band__button" %}
+{%- set band_button %}{% include "partials/cta.html" %}{% endset %}
+{%- if band_button | trim %}
+<section class="cta-band">
+  <div class="wrap">
+    <div class="cta-band__inner">
+      <p class="cta-band__text">{{ site.description or site.title or "" }}</p>
+      {{ band_button }}
+    </div>
+  </div>
+</section>
+{%- endif %}

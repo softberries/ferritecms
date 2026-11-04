@@ -3,7 +3,9 @@
 <form class="search-form{% if compact %} search-form--compact{% endif %}" role="search" aria-label="{{ form_label or 'Search' }}" method="get" action="{% if site.locales | length > 1 %}{% for l in site.locales if l.current %}{{ l.url }}{% endfor %}{% else %}/{% endif %}">
   <label class="search-form__label{% if compact %} visually-hidden{% endif %}" for="{{ form_id }}">Search the documentation</label>
   <div class="search-form__row">
+    <svg class="search-form__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
     <input type="search" id="{{ form_id }}" name="s" value="{{ request.s or '' }}" placeholder="Search" autocomplete="off" required>
+    {%- if compact %}<kbd class="search-form__key" aria-hidden="true">/</kbd>{% endif %}
     <button type="submit">Search</button>
   </div>
 </form>

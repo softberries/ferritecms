@@ -1,4 +1,5 @@
-{#- The final fallback (06 §2) and the front page when it lists posts. -#}
+{#- The final fallback (06 §2) and the front page when it lists posts: the newest post set
+    large, then the rest as cards. -#}
 {% extends "base.html" %}
 {% block body_class %}is-index{% endblock %}
 {% block content %}
@@ -20,7 +21,7 @@
     <h1 class="page-title visually-hidden">Latest posts</h1>
     {%- endif %}
   </header>
-  {% include "partials/listing.html" %}
+  {% with lead = true %}{% include "partials/listing.html" %}{% endwith %}
 </div>
 {%- endif %}
 {% endblock %}

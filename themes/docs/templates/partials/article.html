@@ -1,9 +1,14 @@
-{#- One item as a documentation page: breadcrumbs, title, body, "updated" date and the
+{#- One item as a documentation page: breadcrumbs, title, the excerpt as a lead (only a
+    written one: core stores an excerpt made from the body when none was written, which
+    starts like the body), body, "updated" date and the
     previous/next pager. Shared by page, single and index. -#}
 {%- set show_updated = site.settings.show_updated is not defined or site.settings.show_updated %}
 <article class="docs-article">
   {% include "partials/breadcrumbs.html" %}
   <h1 class="docs-title">{{ post.title }}</h1>
+  {%- if post.excerpt and (post.excerpt | excerpt(6)) != (post.body | excerpt(6)) %}
+  <p class="docs-lead">{{ post.excerpt }}</p>
+  {%- endif %}
   <div class="prose">
     {{ post.body | safe }}
   </div>

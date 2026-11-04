@@ -715,10 +715,23 @@ are never cached.
 ## 8. Starter themes
 
 M1: `blog` (built, `themes/blog`, MIT, plain CSS, no build step, light and dark schemes).
+Redesigned on 2026-11-04 (rulings in `docs/superpowers/rulings/themes.md`, T1–T5) as an
+editorial blog: Newsreader for headings and text, Inter for interface text, JetBrains Mono
+for code (self-hosted, T1), accent `#be185d` (T2). The front page's first page sets the
+newest post large (`partials/lead.html`, the `hero` image), the rest as cards with the
+first category, author and date (a card without an image gets a plate with the title's
+initial, hidden from assistive technology); a post shows its category, byline with a
+reading time (the body's words / 230), the hero, "In this article" from `post.toc`'s level
+2 and 3 entries when there are at least two (beside the text from 76rem, sticky), tags, an
+author card, the comments and related posts; a written excerpt is the standfirst (T4). Code blocks keep a dark
+ground in both schemes.
 
 M4-3b: `docs` (built, `themes/docs`, MIT, P59; tests `crates/ferrite-theme/tests/docs.rs`).
-Plain CSS, system font stacks, no font files or images, light and dark from
-`prefers-color-scheme`, contrast ratios stated in the stylesheet's header (as `blog`).
+Plain CSS, Inter and JetBrains Mono self-hosted (T1; system stacks before 2026-11-04), no
+images, light and dark from `prefers-color-scheme`, contrast ratios stated in the
+stylesheet's header (as `blog`). The redesign kept every class the GitHub Pages brand
+layer (`site/brand/`, `site/rewrite-static.py`) relies on; `article` adds the item's
+excerpt as a lead (`docs-lead`) under the title.
 
 - **Layout.** A header (site title, the `primary` menu's top level, a search form; sticky
   from 60rem); the page tree on the left; breadcrumbs, title, body, "Updated" date and a
@@ -758,16 +771,20 @@ Plain CSS, system font stacks, no font files or images, light and dark from
   text and each anchor's name is its own (a list of links tells them apart),
   and, where
   `navigator.clipboard` is available (a secure context), wraps each `<pre>` with a "Copy"
-  button that reports through a visually hidden `role="status"` text. No syntax
-  highlighting (Later).
+  button that reports through a visually hidden `role="status"` text. Since T3 (4 KiB) it
+  also sets `data-lang` on each code block from its `language-*` class (shown as a label
+  bar), marks the "On this page" entry being read (`is-active`) and focuses the header
+  search on `/`. No syntax highlighting (Later).
 
 
 **`business`** (built, M4-3b P60; `themes/business`, MIT, plain CSS, no script, no image
-or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/business.rs`):
+files, Bricolage Grotesque self-hosted since T1; light and dark schemes; tests in
+`crates/ferrite-theme/tests/business.rs`):
 
-- `front-page.html` shows, in order: a hero (the front page's featured image through
-  `image(.., "hero")` with `srcset`, `sizes="100vw"` and `fetchpriority="high"`, then a
-  panel with its title, excerpt and the CTA button), the page's body, its children from
+- `front-page.html` shows, in order: a hero (the title set very large beside the excerpt
+  and the CTA button, then the front page's featured image through `image(.., "hero")`
+  with `srcset`, `sizes` and `fetchpriority="high"` as one wide rounded picture), the
+  page's body, its children from
   `page_tree(post).children` as feature cards (`card` image, title, excerpt, in menu
   order) and, with `show_news`, a "Latest news" strip from `query(type="post",
   limit=3)` linking to `/post/`. Without a static front page it lists posts.
@@ -779,7 +796,8 @@ or font files; light and dark schemes; tests in `crates/ferrite-theme/tests/busi
 - Other templates: `base`, `index`, `page` (also shows its child pages as cards),
   `single` (no comment thread), `archive` (type, term, author and date headings), `search`,
   `404`, `500`. The header shows the CTA except on the (200) page it links to, so the
-  shared 404 body never depends on the path.
+  shared 404 body never depends on the path; a closing band above the footer repeats it
+  with the site's tagline under the same rule (T5).
 - Settings: `accent_color` (`#0f766e`), `cta_label` ("Get in touch"), `cta_url`
   (`/contact/`; a URL naming a scheme other than http(s), `mailto:` or `tel:` shows no
   button, the scheme being the text before the first `:` when no `/`, `?` or `#` comes

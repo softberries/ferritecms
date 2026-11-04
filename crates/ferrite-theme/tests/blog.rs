@@ -6,7 +6,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use ferrite_core::{
-    DepKeys, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
+    DepKeys, blocks::TocEntry, Listing, MediaPublic, MediaVariant, PageItem, PublicItem, TermPublic, UserPublic,
     site::ListOrder,
 };
 use ferrite_domain::{ContentId, TermId, Timestamp, UserId};
@@ -239,7 +239,7 @@ fn assert_frame(theme: &Theme, html: &str) {
         "<nav class=\"site-nav\" aria-label=\"Primary\">",
         "<nav class=\"footer-nav\" aria-label=\"Footer\">",
         "Ferrite &lt;Notes&gt;",
-        "<style>:root{--accent:#c2410c}</style>",
+        "<style>:root{--accent:#be185d}</style>",
         // `footer()` after the site footer, just before `</body>`.
         "</footer>\n<p class=\"plugin-footer\">Plugin footer</p>\n</body>",
     ] {
@@ -269,7 +269,7 @@ fn loads_cleanly_with_declared_manifest() {
         (hero.width, hero.height, hero.crop),
         (1280, Some(640), true)
     );
-    assert_eq!(m.settings["accent_color"].default, Some(json!("#c2410c")));
+    assert_eq!(m.settings["accent_color"].default, Some(json!("#be185d")));
     assert_eq!(m.settings["show_author"].default, Some(json!(true)));
     assert_eq!(m.settings["show_excerpts"].default, Some(json!(true)));
     for name in [
@@ -298,7 +298,7 @@ fn loads_cleanly_with_declared_manifest() {
         "prefers-reduced-motion",
         ":focus-visible",
         "aspect-ratio",
-        "65ch",
+        "--measure",
         "var(--accent)",
     ] {
         assert!(css.contains(needle), "style.css lacks {needle}");
@@ -475,7 +475,7 @@ fn accent_colour_setting_is_applied() {
     c.site = site(&t, json!({ "accent_color": "#};a{b:" }));
     let html = render(&t, "index.html", c);
     assert!(
-        html.contains("<style>:root{--accent:#c2410c}</style>"),
+        html.contains("<style>:root{--accent:#be185d}</style>"),
         "{html}"
     );
 }
@@ -819,7 +819,7 @@ fn server_error_renders_with_an_empty_context() {
     let html = render_with(&t, "500.html", c, Arc::new(NoBridge));
     assert!(html.contains("Ferrite &lt;Notes&gt;"), "{html}");
     assert!(html.contains("<title>Head title</title>"), "{html}");
-    assert!(html.contains("--accent:#c2410c"), "{html}");
+    assert!(html.contains("--accent:#be185d"), "{html}");
 }
 
 #[test]
@@ -1024,5 +1024,118 @@ fn date_archive_heading_ignores_site_timezone() {
         let start = html.find("<h1 class=\"page-title\">").unwrap() + 23;
         let end = html[start..].find("</h1>").unwrap() + start;
         assert_eq!(html[start..end].trim(), "March 2024", "{tz}");
+    }
+}
+
+/// The front page's first page sets the newest post large (the lead story) and the rest
+/// as cards; later pages and archives are cards only. Cards and the lead carry the first
+/// category, the author and the date; a card without an image gets a decorative plate.
+#[test]
+fn front_page_lead_story_and_card_meta() {
+    let t = blog();
+    let items = || {
+        let mut b = item("post", "b", "Post B");
+        b.featured = None;
+        vec![item("post", "a", "Post A"), b]
+    };
+    let mut c = ctx(&t, "/");
+    c.listing = Some(listing(items(), 1, 2));
+    let html = render(&t, "index.html", c);
+    assert_frame(&t, &html);
+    for needle in [
+        "<article class=\"lead lead--media\">",
+        "<h2 class=\"lead__title\"><a href=\"&#x2f;a&#x2f;\">Post A</a></h2>",
+        "src=\"&#x2f;_media&#x2f;h2&#x2f;photo-hero.jpg\" alt=\"\"",
+        "<p class=\"lead__kicker\"><a href=\"&#x2f;category&#x2f;news&#x2f;\">News</a></p>",
+        "<span class=\"byline__author\">Ana Author</span>",
+        "<h2 class=\"card__title\"><a href=\"&#x2f;b&#x2f;\">Post B</a></h2>",
+        "<span class=\"card__author\">Ana Author</span>",
+        "<div class=\"card__media card__media--plate\" aria-hidden=\"true\"><span>P</span></div>",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
+    }
+    assert_eq!(html.matches("class=\"lead__title\"").count(), 1, "{html}");
+    assert!(!html.contains("card__title\"><a href=\"&#x2f;a&#x2f;\""), "{html}");
+
+    // Page 2 and archives: no lead story.
+    let mut c = ctx(&t, "/page/2/");
+    c.listing = Some(listing(items(), 2, 4));
+    assert!(!render(&t, "index.html", c).contains("class=\"lead"));
+    let mut c = ctx(&t, "/category/news/");
+    c.listing = Some(listing(items(), 1, 2));
+    c.archive = Some(ArchiveInfo {
+        term: Some(term("category", "news", "News")),
+        ..archive("term")
+    });
+    let html = render(&t, "taxonomy.html", c);
+    assert!(!html.contains("class=\"lead"), "{html}");
+    assert!(html.contains("<h2 class=\"card__title\"><a href=\"&#x2f;a&#x2f;\">Post A</a></h2>"));
+}
+
+/// A post with two or more level 2/3 headings gets "In this article" from `post.toc`
+/// (level 1 and 4 entries left out), the reading time, the category above the title
+/// and the author card; one heading gives no table of contents.
+#[test]
+fn single_post_toc_reading_time_and_author_card() {
+    let t = blog();
+    let toc = |level: u8, id: &str, text: &str| TocEntry {
+        level,
+        id: id.into(),
+        text: text.into(),
+    };
+    let mut it = item("post", "long", "A long read");
+    it.html = format!("<p>{}</p>", "word ".repeat(460));
+    it.toc = vec![
+        toc(1, "top-1", "Top"),
+        toc(2, "setup", "Set <up>"),
+        toc(3, "install", "Install"),
+        toc(4, "deep", "Deep"),
+    ];
+    let mut c = ctx(&t, "/long/");
+    c.item = Some(it.clone());
+    let html = render(&t, "single.html", c);
+    assert_frame(&t, &html);
+    for needle in [
+        "<nav class=\"entry-toc\" id=\"toc\" aria-label=\"In this article\">",
+        "<li class=\"entry-toc__item entry-toc__item--h2\"><a href=\"#setup\">Set &lt;up&gt;</a></li>",
+        "<a href=\"#install\">Install</a>",
+        "entry-body--toc",
+        "<span class=\"entry-meta__reading\">2 min read</span>",
+        "<p class=\"entry-kicker\"><a href=\"&#x2f;category&#x2f;news&#x2f;\">News</a></p>",
+        "Written by <strong>Ana Author</strong>.",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?} in:\n{html}");
+    }
+    for absent in ["#top-1", "#deep"] {
+        assert!(!html.contains(absent), "{absent}: {html}");
+    }
+    it.toc.truncate(2);
+    let mut c = ctx(&t, "/long/");
+    c.item = Some(it);
+    let html = render(&t, "single.html", c);
+    assert!(!html.contains("entry-toc"), "{html}");
+}
+
+/// Ruling T4: a written excerpt is the standfirst; one that starts like the body (what
+/// core stores when none was written) is not shown.
+#[test]
+fn standfirst_shows_a_written_excerpt_only() {
+    let t = blog();
+    for template in ["single.html", "page.html"] {
+        let mut it = item("post", "s", "Standfirst");
+        it.html = "<p>One two three four five six seven eight.</p>".into();
+        it.item.excerpt = "A written summary of the post".into();
+        let mut c = ctx(&t, "/s/");
+        c.item = Some(it.clone());
+        let html = render(&t, template, c);
+        assert!(
+            html.contains("<p class=\"entry-standfirst\">A written summary of the post</p>"),
+            "{template}: {html}"
+        );
+        it.item.excerpt = "One two three four five six seven…".into();
+        let mut c = ctx(&t, "/s/");
+        c.item = Some(it);
+        let html = render(&t, template, c);
+        assert!(!html.contains("entry-standfirst"), "{template}: {html}");
     }
 }

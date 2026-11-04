@@ -300,7 +300,9 @@ fn loads_cleanly() {
     ] {
         assert!(css.contains(needle), "style.css lacks {needle}");
     }
-    // No script, image or font files (P60, P65): templates, the manifest and CSS only.
+    // No script or image files (P60): templates, the manifest, CSS, and the self-hosted
+    // font with its licence under `assets/fonts/` (ruling T1, superseding P65's "no font
+    // files").
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/business");
     let mut stack = vec![root];
     let mut files = 0;
@@ -313,8 +315,10 @@ fn loads_cleanly() {
             }
             files += 1;
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let font = path.parent().is_some_and(|p| p.ends_with("assets/fonts"))
+                && ["woff2", "txt"].contains(&ext);
             assert!(
-                ["html", "css", "toml"].contains(&ext),
+                font || ["html", "css", "toml"].contains(&ext),
                 "unexpected file {}",
                 path.display()
             );
@@ -823,4 +827,27 @@ fn pages_listings_and_errors_render() {
     c.item = Some(item("page", "contact", "Contact"));
     let page = render(&t, "page-contact.html", c, b());
     assert!(!page.contains("site-header__cta"), "{page}");
+}
+
+/// The closing band repeats the CTA above the footer with the site's tagline, except on
+/// the page the CTA links to (a 200 page only) and when the CTA would not show.
+#[test]
+fn cta_band_follows_the_cta_settings() {
+    let t = business();
+    let (c, b) = front_fixture(&t, json!({}));
+    let html = render(&t, "front-page.html", c, b);
+    let band = &html[html.find("<section class=\"cta-band\">").expect("band")..];
+    assert!(band.contains("<p class=\"cta-band__text\">"), "{band}");
+    let button = tag_with(band, "cta-band__button");
+    assert!(button.contains("href=\"&#x2f;contact&#x2f;\""), "{button}");
+    assert!(html.find("cta-band").unwrap() < html.find("<footer").unwrap());
+
+    let mut c = ctx(&t, "/contact/", json!({}));
+    c.item = Some(item("page", "contact", "Contact"));
+    let html = render(&t, "page-contact.html", c, Arc::new(FakeBridge::default()));
+    assert!(!html.contains("cta-band"), "{html}");
+
+    let (c, b) = front_fixture(&t, json!({ "cta_url": "javascript:x" }));
+    let html = render(&t, "front-page.html", c, b);
+    assert!(!html.contains("cta-band"), "{html}");
 }

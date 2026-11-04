@@ -8,6 +8,7 @@
 <form class="comment-form" method="post" action="{{ thread.action }}">
   <input type="hidden" name="post" value="{{ post.id }}">
   {%- if parent %}<input type="hidden" name="parent" value="{{ parent }}">{% endif %}
+  <div class="comment-form__grid">
   <p class="comment-form__field">
     <label for="{{ form_id }}-author">Name</label>
     <input type="text" id="{{ form_id }}-author" name="author" maxlength="100" autocomplete="name" required>
@@ -20,6 +21,7 @@
     <label for="{{ form_id }}-url">Website <span class="comment-form__hint">(optional)</span></label>
     <input type="url" id="{{ form_id }}-url" name="url" maxlength="200" autocomplete="url">
   </p>
+  </div>
   <div class="comment-form__trap" aria-hidden="true">
     <label for="{{ form_id }}-trap">Leave this field empty</label>
     <input type="text" id="{{ form_id }}-trap" name="{{ thread.honeypot }}" tabindex="-1" autocomplete="off">
@@ -57,6 +59,7 @@
     <li class="comment comment--depth-{{ c.depth }}">
       <article id="comment-{{ c.id }}" class="comment__body">
         <p class="comment__meta">
+          <span class="avatar" aria-hidden="true">{{ c.author_name[:1] | upper }}</span>
           {%- if c.author_url %}<a class="comment__author" href="{{ c.author_url }}" rel="nofollow ugc noopener">{{ c.author_name }}</a>
           {%- else %}<span class="comment__author">{{ c.author_name }}</span>{% endif %}
           <a class="comment__date" href="#comment-{{ c.id }}"><time datetime="{{ c.date }}">{{ c.date | date("%-d %B %Y, %H:%M") }}</time></a>

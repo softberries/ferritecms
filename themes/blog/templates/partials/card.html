@@ -1,24 +1,38 @@
 {#- One listing entry. Expects `p` (an item) and optionally `level` (heading level, default 2).
-    The image is decorative (alt=""): the linked title right below names the same item. -#}
+    The image is decorative (alt=""): the linked title right below names the same item,
+    and the title's link covers the whole card. Without an image a plate with the
+    title's initial keeps the grid's rows even (hidden from assistive technology). The
+    kicker is the first category. -#}
 {%- set level = level or 2 -%}
 {%- set show_excerpts = site.settings.show_excerpts is not defined or site.settings.show_excerpts -%}
+{%- set show_author = site.settings.show_author is not defined or site.settings.show_author -%}
+{%- set cat = namespace(term=none) -%}
+{%- for t in p.terms or [] %}{% if t.taxonomy == "category" and not cat.term %}{% set cat.term = t %}{% endif %}{% endfor -%}
 <article class="card">
   {%- set img = image(p.featured, "card") %}
   {%- if img %}
   <div class="card__media">
-    <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 60rem) 22rem, (min-width: 40rem) 45vw, 100vw"{% endif %} loading="lazy" decoding="async">
+    <img src="{{ img.url }}" alt=""{% if img.width %} width="{{ img.width }}"{% endif %}{% if img.height %} height="{{ img.height }}"{% endif %}{% if img.srcset %} srcset="{{ img.srcset }}" sizes="(min-width: 64rem) 22rem, (min-width: 40rem) 45vw, 100vw"{% endif %} loading="lazy" decoding="async">
   </div>
+  {%- else %}
+  <div class="card__media card__media--plate" aria-hidden="true"><span>{{ p.title[:1] }}</span></div>
   {%- endif %}
   <div class="card__body">
-    <h{{ level }} class="card__title"><a href="{{ p.url }}">{{ p.title }}</a></h{{ level }}>
-    {%- if p.date %}
-    <p class="card__meta"><time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time></p>
+    {%- if cat.term %}
+    <p class="card__kicker"><a href="{{ cat.term.url }}">{{ cat.term.name }}</a></p>
     {%- endif %}
+    <h{{ level }} class="card__title"><a href="{{ p.url }}">{{ p.title }}</a></h{{ level }}>
     {%- if show_excerpts %}
     {%- set summary = p.excerpt or (p.body | excerpt(30)) %}
     {%- if summary %}
     <p class="card__excerpt">{{ summary }}</p>
     {%- endif %}
+    {%- endif %}
+    {%- if p.date or (show_author and p.author) %}
+    <p class="card__meta">
+      {%- if show_author and p.author %}<span class="card__author">{{ p.author.display_name }}</span>{% endif %}
+      {%- if p.date %}<time datetime="{{ p.date }}">{{ p.date | date("%-d %B %Y") }}</time>{% endif %}
+    </p>
     {%- endif %}
   </div>
 </article>

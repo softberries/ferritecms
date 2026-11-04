@@ -1,42 +1,81 @@
+{#- A post: its category, title, a written excerpt as the standfirst, byline with the reading time,
+    hero image, the table of contents (`post.toc`'s level 2 and 3 headings, when there
+    are at least two; beside the text on wide screens), the body, tags, the author, the
+    comments and related posts. -#}
 {% extends "base.html" %}
 {% block body_class %}is-single{% endblock %}
 {% block content %}
 {%- set show_author = site.settings.show_author is not defined or site.settings.show_author %}
+{%- set cat = namespace(term=none) %}
+{%- for t in post.terms or [] %}{% if t.taxonomy == "category" and not cat.term %}{% set cat.term = t %}{% endif %}{% endfor %}
+{%- set words = (post.body | excerpt(100000) | split | length) if post.body else 0 %}
 <article class="entry">
   <header class="entry-header wrap wrap--prose">
+    {%- if cat.term %}
+    <p class="entry-kicker"><a href="{{ cat.term.url }}">{{ cat.term.name }}</a></p>
+    {%- endif %}
     <h1 class="entry-title">{{ post.title }}</h1>
-    {%- if post.date or (show_author and post.author) %}
-    <p class="entry-meta">
+    {#- A written excerpt only: one core made from the body starts like the body. #}
+    {%- if post.excerpt and (post.excerpt | excerpt(6)) != (post.body | excerpt(6)) %}
+    <p class="entry-standfirst">{{ post.excerpt }}</p>
+    {%- endif %}
+    {%- if post.date or (show_author and post.author) or words %}
+    <p class="entry-meta byline">
+      {%- if show_author and post.author %}<span class="avatar" aria-hidden="true">{{ post.author.display_name[:1] | upper }}</span><span class="entry-meta__author">by <a class="author" href="/author/{{ post.author.login | urlencode }}/" rel="author">{{ post.author.display_name }}</a></span>{% endif %}
       {%- if post.date %}<time datetime="{{ post.date }}">{{ post.date | date("%-d %B %Y") }}</time>{% endif %}
-      {%- if show_author and post.author %}<span class="entry-meta__author">by <a class="author" href="/author/{{ post.author.login | urlencode }}/" rel="author">{{ post.author.display_name }}</a></span>{% endif %}
+      {%- if words %}<span class="entry-meta__reading">{{ ((words + 229) // 230) }} min read</span>{% endif %}
     </p>
     {%- endif %}
   </header>
   {% include "partials/hero.html" %}
-  <div class="entry-content prose wrap wrap--prose">
-    {{ post.body | safe }}
+  {%- set ns = namespace(n=0) %}
+  {%- for e in post.toc or [] %}{% if e.level == 2 or e.level == 3 %}{% set ns.n = ns.n + 1 %}{% endif %}{% endfor %}
+  <div class="entry-body wrap{% if ns.n >= 2 %} entry-body--toc{% endif %}">
+    {%- if ns.n >= 2 %}
+    <nav class="entry-toc" id="toc" aria-label="In this article">
+      <p class="entry-toc__title" aria-hidden="true">In this article</p>
+      <ol class="entry-toc__list" role="list">
+        {%- for e in post.toc %}{% if e.level == 2 or e.level == 3 %}
+        <li class="entry-toc__item entry-toc__item--h{{ e.level }}"><a href="#{{ e.id }}">{{ e.text }}</a></li>
+        {%- endif %}{% endfor %}
+      </ol>
+    </nav>
+    {%- endif %}
+    <div class="entry-content prose">
+      {{ post.body | safe }}
+    </div>
   </div>
-  {%- if post.terms %}
+  {%- if post.terms or (show_author and post.author) %}
   <footer class="entry-footer wrap wrap--prose">
+    {%- if post.terms %}
     <h2 class="visually-hidden">Topics</h2>
     <ul class="terms">
       {%- for t in post.terms %}
       <li><a href="{{ t.url }}" rel="tag">{{ t.name }}</a></li>
       {%- endfor %}
     </ul>
+    {%- endif %}
+    {%- if show_author and post.author %}
+    <div class="author-card">
+      <span class="avatar avatar--large" aria-hidden="true">{{ post.author.display_name[:1] | upper }}</span>
+      <p class="author-card__text">Written by <strong>{{ post.author.display_name }}</strong>. <a href="/author/{{ post.author.login | urlencode }}/">More posts by {{ post.author.display_name }}</a></p>
+    </div>
+    {%- endif %}
   </footer>
   {%- endif %}
 </article>
 {%- if post.kind == "post" %}{% include "partials/comments.html" %}{% endif %}
 {%- set rel = related(post, 3) %}
 {%- if rel %}
-<section class="related wrap" aria-labelledby="related-title">
-  <h2 id="related-title" class="section-title">Related posts</h2>
-  <ul class="card-grid" role="list">
-    {%- for p in rel %}
-    <li>{% with level = 3 %}{% include "partials/card.html" %}{% endwith %}</li>
-    {%- endfor %}
-  </ul>
+<section class="related" aria-labelledby="related-title">
+  <div class="wrap">
+    <h2 id="related-title" class="section-title">Related posts</h2>
+    <ul class="card-grid" role="list">
+      {%- for p in rel %}
+      <li>{% with level = 3 %}{% include "partials/card.html" %}{% endwith %}</li>
+      {%- endfor %}
+    </ul>
+  </div>
 </section>
 {%- endif %}
 {% endblock %}
