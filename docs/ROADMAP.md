@@ -578,7 +578,9 @@ has (revisions, the audit log, grant-bound tokens, the job queue, the axe checks
 Done (2026-11-03; exit [`m6-exit.md`](superpowers/m6-exit.md), parts in `m6-1-exit.md` …
 `m6-6-exit.md`; designs 13–18; rulings `rulings/m6.md`; migrations `0014`–`0019`) and
 released in `v0.3.0` (the release commit `release: 0.3.0 — editorial platform`; the tag
-follows its merge; the plugins still ship unsigned until the M6-2 keys exist). After M6
+follows its merge). `v0.3.1` (2026-11-04) is the first release with the M6-2 keys: it
+signs the three example plugins and publishes the first registry index, and ships the
+redesigned starter themes. After M6
 the MCP server lists 70 tools (38 write, 32 read-only), 2 resources, 1 resource template
 and 5 prompts. The unticked items below are follow-ups that stay open. Left out on purpose: a page builder and e-commerce (BRIEF §4), GraphQL (REST
 with OpenAPI and MCP cover headless use).

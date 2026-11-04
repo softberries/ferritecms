@@ -60,7 +60,7 @@ A request looks like this (ids shortened, signature made up):
 ```http
 POST /build-hook HTTP/1.1
 content-type: application/json
-user-agent: ferrite/0.3.0 webhooks
+user-agent: ferrite/0.3.1 webhooks
 webhook-id: 0193f1d2-7c3a-7b40-9e1a-2c0d5f6e8a11
 webhook-timestamp: 1793614530
 webhook-signature: v1,K5tH3mq8QZ0p2u6pRrN6d1o3J8l2yZbqk4wqk6wB1nE=

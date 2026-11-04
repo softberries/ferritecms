@@ -19,7 +19,7 @@ approved, and its changes are recorded in the audit log under the app's name. Se
 FerriteCMS imports WordPress content (a WXR export file) but does not run WordPress PHP
 plugins or themes.
 
-> **Status:** early; current release 0.3.0 (signed binaries for Linux and macOS and a
+> **Status:** early; current release 0.3.1 (signed binaries for Linux and macOS and a
 > Docker image, see [Install](01-getting-started/01-install.md)). Expect changes before 1.0.
 
 ## Principles
